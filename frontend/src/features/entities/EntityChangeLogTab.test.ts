@@ -51,6 +51,7 @@ const LABELS: Record<string, string> = {
   "entities.changeLog.source": "Source",
   "entities.changeLog.subject": "Subject",
   "entities.changeLog.older": "Older",
+  "entities.changeLog.newest": "Newest",
   "entities.changeLog.empty": "No changes recorded.",
   "entities.changeLog.loading": "Loading changes",
   "entities.changeLog.failed": "Could not load changes",
@@ -60,6 +61,9 @@ const LABELS: Record<string, string> = {
   "entities.changeLog.filter.operation": "Operation",
   "entities.changeLog.filter.source": "Source",
   "entities.changeLog.filter.subject": "Subject",
+  "entities.changeLog.filter.subjectHint":
+    "Matches the stored id. A display name does not match.",
+  "entities.changeLog.filter.instantHint": "Interpreted in {{zone}}.",
   "entities.changeLog.filter.rowIdentity": "Row identity",
   "entities.changeLog.filter.from": "From",
   "entities.changeLog.filter.to": "To",
@@ -143,7 +147,14 @@ vi.mock("@/features/jobs/JobDetailModal", () => ({
 }));
 
 vi.mock("@/providers/session-store", () => ({
-  useSessionStore: () => null,
+  useSessionStore: (
+    selector?: (state: {
+      user: { display_timezone: string; locale: string };
+    }) => unknown,
+  ) => {
+    const state = { user: { display_timezone: "UTC", locale: "en-US" } };
+    return selector ? selector(state) : state;
+  },
 }));
 
 function stubDomApis() {
@@ -362,11 +373,19 @@ describe("change log tab", () => {
     ).toBeTruthy();
     expect(within(row as HTMLElement).getByText("Insert")).toBeTruthy();
     expect(within(row as HTMLElement).getByText("Ada")).toBeTruthy();
+    expect(within(row as HTMLElement).getByText("user_ada")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Older" }));
     await waitFor(() => {
       const last = vi.mocked(listEntityChangeLog).mock.calls.at(-1);
       expect(last?.[1]?.before_sequence).toBe(11);
     });
+    fireEvent.click(screen.getByRole("button", { name: "Newest" }));
+    await waitFor(() => {
+      const last = vi.mocked(listEntityChangeLog).mock.calls.at(-1);
+      expect(last?.[1]?.before_sequence).toBeUndefined();
+      expect(last?.[1]?.operation).toBeUndefined();
+    });
+    expect(screen.queryByRole("button", { name: "Newest" })).toBeNull();
   });
 
   it("sends combined filters and shows one entry's physical images", async () => {
@@ -406,8 +425,11 @@ describe("change log tab", () => {
     await renderRecord(entity());
     fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
     await screen.findByRole("button", { name: "8" });
+    expect(screen.getByText("user_ada")).toBeTruthy();
     expect(screen.getByText("usr_missing")).toBeTruthy();
     expect(screen.getByText("run_9")).toBeTruthy();
+    expect(screen.getAllByText("usr_missing")).toHaveLength(1);
+    expect(screen.getAllByText("run_9")).toHaveLength(1);
     expect(document.querySelector('a[href*="run_9"]')).toBeNull();
     const plainRow = screen.getByRole("button", { name: "5" }).closest("tr");
     expect(plainRow).toBeTruthy();
@@ -426,11 +448,15 @@ describe("change log tab", () => {
     fireEvent.change(screen.getByLabelText("Row identity"), {
       target: { value: "7" },
     });
+    expect(
+      screen.getByText("Matches the stored id. A display name does not match."),
+    ).toBeTruthy();
+    expect(screen.getAllByText("Interpreted in UTC.").length).toBe(2);
     fireEvent.change(screen.getByLabelText("From"), {
-      target: { value: "2026-10-02T00:00:00Z" },
+      target: { value: "2026-10-02T00:00:00" },
     });
     fireEvent.change(screen.getByLabelText("To"), {
-      target: { value: "2026-10-03T00:00:00Z" },
+      target: { value: "2026-10-03T00:00:00" },
     });
     await waitFor(() => {
       const last = vi.mocked(listEntityChangeLog).mock.calls.at(-1);

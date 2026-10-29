@@ -87,9 +87,11 @@ import type {
   EntityTag,
   EntityVersion,
 } from "@/features/entities/types";
+import { getJob } from "@/features/jobs/api";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useLiveStatus } from "@/hooks/useLiveStatus";
 import { problemMessage } from "@/lib/problem";
 
 export type { EntityRecordMode };
@@ -100,8 +102,28 @@ type Props =
 
 const EMPTY_TAGS: EntityTag[] = [];
 
-function retentionDays(value: number | ""): number | null {
-  return value === "" ? null : value;
+/** Canonical decimal text of an integer of at least 1. No leading zero, no fraction. */
+const WHOLE_RETENTION_DAYS = /^[1-9]\d*$/;
+
+function retentionDraft(days: number | null | undefined): string {
+  return days == null ? "" : String(days);
+}
+
+/** Empty is never-expire. Call only after the draft has passed validation. */
+function retentionDays(value: string): number | null {
+  if (value === "") return null;
+  return Number(value);
+}
+
+function inflightReconcileJobId(version: EntityVersion | null): string | null {
+  const id = version?.alignment.latest_job_id;
+  const status = version?.alignment.latest_job_status;
+  if (id && (status === "queued" || status === "running")) return id;
+  return null;
+}
+
+function jobIsTerminal(status: string): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
 }
 
 export function EntityRecord(props: Props) {
@@ -151,6 +173,8 @@ export function EntityRecord(props: Props) {
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobOpened, setJobOpened] = useState(false);
+  const [watchedJobId, setWatchedJobId] = useState<string | null>(null);
+  const reloadedJobId = useRef<string | null>(null);
 
   const dropConfirm = useConfirmAction<EntityVersion>();
   const publishConfirm = useConfirmAction<true>();
@@ -205,11 +229,8 @@ export function EntityRecord(props: Props) {
       description: (value) =>
         value.trim() ? null : t("entities.validation.required"),
       change_log_retention_days: (value) => {
-        if (value === "") return null;
-        if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-          return t("entities.validation.changeLogRetention");
-        }
-        return null;
+        if (value === "" || WHOLE_RETENTION_DAYS.test(value)) return null;
+        return t("entities.validation.changeLogRetention");
       },
       attributes: {
         name: (_value, values, path) =>
@@ -228,8 +249,11 @@ export function EntityRecord(props: Props) {
     },
   });
 
+  const loadGeneration = useRef(0);
+
   const load = useCallback(async () => {
     if (!entityId) return;
+    const generation = ++loadGeneration.current;
     setLoading(true);
     setError(null);
     try {
@@ -237,34 +261,57 @@ export function EntityRecord(props: Props) {
         getEntity(entityId),
         listVersions(entityId, { limit: 200 }),
       ]);
+      if (generation !== loadGeneration.current) return;
       const loaded = entityRes.entity;
-      setEntity(loaded);
-      setVersions(versionsRes.items);
       const currentId = loaded.current_version?.id;
       let version: EntityVersion | null = null;
       if (currentId) {
         const versionRes = await getVersion(entityId, currentId);
+        if (generation !== loadGeneration.current) return;
         version = versionRes.version;
-        setCurrent(version);
-      } else {
-        setCurrent(null);
       }
+      setEntity(loaded);
+      setVersions(versionsRes.items);
+      setCurrent(version);
       form.setValues({
         table_name: loaded.table_name,
         name: loaded.name,
         description: loaded.description,
         attributes: version ? draftsFromVersion(version) : [],
         change_log_enabled: version?.change_log_enabled ?? false,
-        change_log_retention_days: version?.change_log_retention_days ?? "",
+        change_log_retention_days: retentionDraft(version?.change_log_retention_days),
       });
       form.markSaved();
     } catch (err) {
+      if (generation !== loadGeneration.current) return;
       setError(problemMessage(t, err, String(err)));
       setEntity(null);
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }, [entityId]);
+
+  const publishJobId = inflightReconcileJobId(current);
+  const followedJobId = publishJobId ?? watchedJobId;
+
+  const watchedJob = useLiveStatus({
+    enabled: followedJobId != null,
+    key: followedJobId,
+    fetch: async (signal) => {
+      const body = await getJob(followedJobId as string, { signal });
+      return body.job;
+    },
+    isTerminal: (job) => jobIsTerminal(job.status),
+  });
+
+  useEffect(() => {
+    const job = watchedJob.data;
+    if (!job || !jobIsTerminal(job.status) || reloadedJobId.current === job.id) {
+      return;
+    }
+    reloadedJobId.current = job.id;
+    void load();
+  }, [load, watchedJob.data]);
 
   useEffect(() => {
     if (mode === "create") return;
@@ -416,6 +463,7 @@ export function EntityRecord(props: Props) {
       if (result.job) {
         open?.({ type: "success", message: t("entities.drop.queued") });
         openJob(result.job.id);
+        setWatchedJobId(result.job.id);
       } else {
         open?.({ type: "success", message: t("entities.drop.noop") });
       }

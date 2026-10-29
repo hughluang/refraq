@@ -3,8 +3,8 @@
 import { useTranslate } from "@refinedev/core";
 import type { ReactNode } from "react";
 
-import { NumberField } from "@/components/form/NumberField";
 import { SwitchField } from "@/components/form/SwitchField";
+import { TextField } from "@/components/form/TextField";
 import type { EntityRecordFormValues } from "@/features/entities/types";
 
 type ChangeLogForm = {
@@ -12,8 +12,9 @@ type ChangeLogForm = {
   errors: Partial<Record<keyof EntityRecordFormValues, ReactNode>>;
   setFieldValue: (
     path: "change_log_enabled" | "change_log_retention_days",
-    value: unknown,
+    value: string | boolean,
   ) => void;
+  validateField: (path: "change_log_retention_days") => unknown;
 };
 
 type Props = {
@@ -40,17 +41,21 @@ export function EntityChangeLogFields({ form, editable }: Props) {
           form.setFieldValue("change_log_enabled", event.currentTarget.checked)
         }
       />
-      <NumberField
+      <TextField
         editable={editable}
         label={t("entities.fields.changeLogRetentionDays")}
         helper={editable ? t("entities.fields.changeLogRetentionHint") : undefined}
-        min={1}
-        allowDecimal={false}
+        inputMode="decimal"
         value={retentionValue}
         error={form.errors.change_log_retention_days}
-        onChange={(value) =>
-          form.setFieldValue("change_log_retention_days", value)
-        }
+        onChange={(event) => {
+          const hadError = Boolean(form.errors.change_log_retention_days);
+          form.setFieldValue(
+            "change_log_retention_days",
+            event.currentTarget.value,
+          );
+          if (hadError) void form.validateField("change_log_retention_days");
+        }}
       />
     </>
   );

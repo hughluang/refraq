@@ -22,7 +22,9 @@ import type {
   ChangeLogEntrySummary,
   ChangeLogPage,
 } from "@/features/entities/types";
+import { useEntryZone } from "@/hooks/useFormatInstant";
 import { problemMessage } from "@/lib/problem";
+import { wallToInstant } from "@/lib/wall-time";
 
 type Props = {
   entityId: string;
@@ -50,6 +52,7 @@ const EMPTY_FILTERS: Filters = {
 
 export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
   const t = useTranslate();
+  const zone = useEntryZone();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [beforeSequence, setBeforeSequence] = useState<number | null>(null);
   const [page, setPage] = useState<ChangeLogPage | null>(null);
@@ -69,8 +72,8 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
       source: filters.source || undefined,
       subject: filters.subject || undefined,
       row_identity: filters.rowIdentity || undefined,
-      occurred_from: filters.occurredFrom || undefined,
-      occurred_to: filters.occurredTo || undefined,
+      occurred_from: wallToInstant(filters.occurredFrom, zone) ?? undefined,
+      occurred_to: wallToInstant(filters.occurredTo, zone) ?? undefined,
       signal: controller.signal,
     })
       .then((next) => {
@@ -85,7 +88,7 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
         if (!controller.signal.aborted) setBusy(false);
       });
     return () => controller.abort();
-  }, [active, beforeSequence, entityId, filters, t]);
+  }, [active, beforeSequence, entityId, filters, t, zone]);
 
   useEffect(() => {
     if (!active || selected == null) return;
@@ -142,6 +145,7 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
         />
         <TextInput
           label={t("entities.changeLog.filter.subject")}
+          description={t("entities.changeLog.filter.subjectHint")}
           value={filters.subject}
           onChange={(event) => setFilter({ subject: event.currentTarget.value })}
         />
@@ -153,14 +157,20 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
           }
         />
         <TextInput
+          type="datetime-local"
+          step={1}
           label={t("entities.changeLog.filter.from")}
+          description={t("entities.changeLog.filter.instantHint", { zone })}
           value={filters.occurredFrom}
           onChange={(event) =>
             setFilter({ occurredFrom: event.currentTarget.value })
           }
         />
         <TextInput
+          type="datetime-local"
+          step={1}
           label={t("entities.changeLog.filter.to")}
+          description={t("entities.changeLog.filter.instantHint", { zone })}
           value={filters.occurredTo}
           onChange={(event) => setFilter({ occurredTo: event.currentTarget.value })}
         />
@@ -202,20 +212,35 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
                 <Table.Td>{rowIdentity(item)}</Table.Td>
                 <Table.Td>{item.physical_table}</Table.Td>
                 <Table.Td>{sourceLabel(t, item.source)}</Table.Td>
-                <Table.Td>{item.subject_label ?? ""}</Table.Td>
+                <Table.Td>
+                  <SubjectCell item={item} />
+                </Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
         </Table>
       ) : null}
-      {page?.next_before_sequence != null ? (
-        <Button
-          variant="default"
-          size="sm"
-          onClick={() => setBeforeSequence(page.next_before_sequence)}
-        >
-          {t("entities.changeLog.older")}
-        </Button>
+      {page?.next_before_sequence != null || beforeSequence != null ? (
+        <Group>
+          {beforeSequence != null ? (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => setBeforeSequence(null)}
+            >
+              {t("entities.changeLog.newest")}
+            </Button>
+          ) : null}
+          {page?.next_before_sequence != null ? (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => setBeforeSequence(page.next_before_sequence)}
+            >
+              {t("entities.changeLog.older")}
+            </Button>
+          ) : null}
+        </Group>
       ) : null}
       {detail ? <ChangeLogImages detail={detail} /> : null}
     </Stack>
@@ -258,6 +283,23 @@ function imageCell(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function SubjectCell({ item }: { item: ChangeLogEntrySummary }) {
+  const label = item.subject_label ?? "";
+  const id = item.subject;
+  const showId = id != null && id !== label;
+  if (!label && !showId) return null;
+  return (
+    <Stack gap={0}>
+      {label ? <Text size="sm">{label}</Text> : null}
+      {showId ? (
+        <Text size="xs" c="dimmed" ff="monospace">
+          {id}
+        </Text>
+      ) : null}
+    </Stack>
+  );
 }
 
 function rowIdentity(item: ChangeLogEntrySummary): string {

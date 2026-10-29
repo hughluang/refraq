@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -26,6 +27,7 @@ from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
 from backend.entity.entity_db import get_entity_engine
 from backend.entity.errors import EntityNotFound, EntityRequestInvalid
 from backend.entity.jobs import enqueue_drop
+from backend.entity.lifecycle import PUBLISHED
 from backend.entity.publish import accept
 from backend.entity.publish_confirmation import (
     change_log_publish_effect,
@@ -73,7 +75,7 @@ from backend.entity.service import (
     replace_entity_tags,
 )
 from backend.entity.store import get_entity_store
-from backend.entity.table_name import physical_table_name, published_attributes
+from backend.entity.table_name import compose_physical_table_name, published_attributes
 from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.store import JobRecord
 
@@ -201,7 +203,7 @@ def http_list_change_log(
             subject=_blank(subject),
             row_identity=_blank(row_identity),
             occurred_from=_bound(occurred_from),
-            occurred_to=_bound(occurred_to),
+            occurred_to=_occurred_to_bound(occurred_to),
         )
     return ChangeLogPageOut(
         items=[_change_log_item(entry, tables) for entry in page.items],
@@ -238,15 +240,22 @@ def http_get_change_log_entry(
 
 
 def _change_log_tables(entity_id: str, user: UserRecord) -> list[ChangeLogTable]:
-    """Physical tables of this entity. Missing or invisible entity is not found."""
+    """Decode targets for published versions, including a dropped table.
+
+    The physical name is composed from the version. An empty snapshot still
+    yields the version's attributes, so an entry stored before the drop
+    decodes. Missing or invisible entity is not found.
+    """
     get_entity(entity_id, user=user)
     entity = get_entity_store().get_entity(entity_id)
     assert entity is not None
     tables: list[ChangeLogTable] = []
     for version in get_entity_store().list_all_versions(entity_id):
-        name = physical_table_name(version, entity.table_name)
-        if name is None:
+        if version.publish_status != PUBLISHED:
             continue
+        name, _comment = compose_physical_table_name(
+            entity.table_name, version.version, version.id
+        )
         attributes = tuple(published_attributes(version))
         key = business_key_attr(attributes)
         tables.append(
@@ -298,14 +307,37 @@ def _blank(value: str | None) -> str | None:
     return value
 
 
+_FRACTIONAL_INSTANT = re.compile(r"\.\d+")
+
+
+def _parse_bound(value: str) -> datetime:
+    try:
+        return parse_instant(value)
+    except ValueError as exc:
+        raise EntityRequestInvalid("occurred_at bound must be an Instant") from exc
+
+
 def _bound(value: str | None) -> datetime | None:
     cleaned = _blank(value)
     if cleaned is None:
         return None
-    try:
-        return parse_instant(cleaned)
-    except ValueError as exc:
-        raise EntityRequestInvalid("occurred_at bound must be an Instant") from exc
+    return _parse_bound(cleaned)
+
+
+def _occurred_to_bound(value: str | None) -> datetime | None:
+    """Inclusive end. A fraction-less Instant names that whole second.
+
+    The wire Instant drops fractional seconds, so the published value is the
+    start of the second that was stored. A fraction-less upper bound includes
+    the rest of that second. A fractional Instant stays that exact moment.
+    """
+    cleaned = _blank(value)
+    if cleaned is None:
+        return None
+    parsed = _parse_bound(cleaned)
+    if _FRACTIONAL_INSTANT.search(cleaned):
+        return parsed
+    return parsed + timedelta(seconds=1) - timedelta(microseconds=1)
 
 
 @router.put(

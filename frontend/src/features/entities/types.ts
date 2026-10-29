@@ -50,7 +50,8 @@ export type EntityRecordFormValues = {
   description: string;
   attributes: AttributeDraft[];
   change_log_enabled: boolean;
-  change_log_retention_days: number | "";
+  /** Empty means never-expire. Any other draft is the text in the box. */
+  change_log_retention_days: string;
 };
 
 export type AttributeDraft = {

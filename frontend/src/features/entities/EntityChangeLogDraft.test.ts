@@ -43,6 +43,8 @@ const LABELS: Record<string, string> = {
   "entities.fields.changeLogEffectiveRetention": "Retention in effect",
   "entities.fields.changeLogRetentionDays": "Retention (days)",
   "entities.fields.changeLogRetentionNever": "Never expire",
+  "entities.validation.changeLogRetention":
+    "Enter a whole number of days of at least 1, or leave empty to never expire.",
   "entities.edit.submit": "Save",
   "entities.create.title": "Create Business Entity",
   "entities.create.submit": "Save",
@@ -274,6 +276,72 @@ describe("entity change-log draft on the record form", () => {
     expect(screen.getByText("No")).toBeTruthy();
     expect(screen.getByText("Never expire")).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
+  });
+
+  it("keeps a typed fraction in the box and refuses to save it", async () => {
+    await renderRecord("edit", { enabled: true, retentionDays: null });
+    const message =
+      "Enter a whole number of days of at least 1, or leave empty to never expire.";
+    const box = () =>
+      screen.getByLabelText("Retention (days)") as HTMLInputElement;
+    fireEvent.change(box(), { target: { value: "1" } });
+    fireEvent.change(box(), { target: { value: `${box().value}.` } });
+    expect(box().value).toBe("1.");
+    fireEvent.change(box(), { target: { value: `${box().value}5` } });
+    expect(box().value).toBe("1.5");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(box().value).toBe("1.5");
+    expect(patchEntity).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("switch", { name: "Record changes" }));
+    expect(screen.getByText(message)).toBeTruthy();
+    fireEvent.change(box(), { target: { value: "7" } });
+    await waitFor(() => {
+      expect(screen.queryByText(message)).toBeNull();
+    });
+    expect(box().value).toBe("7");
+  });
+
+  it("rejects zero and still shows the zero in the box", async () => {
+    await renderRecord("edit", { enabled: true, retentionDays: null });
+    const message =
+      "Enter a whole number of days of at least 1, or leave empty to never expire.";
+    const box = screen.getByLabelText("Retention (days)") as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(box.value).toBe("0");
+    expect(patchEntity).not.toHaveBeenCalled();
+  });
+
+  it("sends null when the retention box is left empty", async () => {
+    vi.mocked(createEntity).mockImplementation(() => new Promise(() => {}));
+    const { EntityRecord } = await import("@/features/entities/EntityRecord");
+    render(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(EntityRecord, { mode: "create" }),
+      ),
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: /Table name/ }), {
+      target: { value: "material" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /^Name/ }), {
+      target: { value: "Material" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /Description/ }), {
+      target: { value: "A material" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(createEntity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          change_log_enabled: false,
+          change_log_retention_days: null,
+        }),
+      );
+    });
   });
 
   it("keeps the retention number when the draft switch is turned off", async () => {

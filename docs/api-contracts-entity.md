@@ -467,12 +467,14 @@ Query parameters, all optional, combine. An omitted parameter does not constrain
 | `source` | `user`, `channel_run`, or `unattributed`. `unattributed` matches a null source |
 | `subject` | Exact stored subject id. A display name does not match |
 | `row_identity` | Exact `row_id` or Business Key text, on every physical table of the entity |
-| `occurred_from` | Inclusive **Instant**. Omit it to leave the start open |
-| `occurred_to` | Inclusive **Instant**. Omit it to leave the end open |
+| `occurred_from` | Inclusive **Instant**. Omit it to leave the start open. The bound is that exact Instant, with or without a fractional second |
+| `occurred_to` | Inclusive **Instant**. Omit it to leave the end open. A value with no fractional seconds includes that whole second. A value with a fractional second is that exact Instant |
 
-Any other `operation`, `source`, or `before_sequence`, or an `occurred_from` / `occurred_to` that is not an **Instant**, is `422 REQUEST_INVALID`.
+Any other `operation`, `source`, or `before_sequence`, or an `occurred_from` / `occurred_to` that is not an **Instant**, is `422 REQUEST_INVALID`. The outbound `occurred_at` is a second-precision **Instant**. Using that text as `occurred_to` includes the entry, because a fraction-less upper bound covers the second.
 
 An item does not include `before` or `after`. `row_id` is the physical row's `row_id`. `business_key` is that physical table's version's **Business Key** value, or null when that version has none. The two versions of one `row_id` are separate items, distinguished by `physical_table`. `physical_table` is the quoted qualified name stored on the entry.
+
+A dropped physical table leaves its entries in place. The list still returns them. `row_id` and `business_key` come from the stored image, decoded with that version's attributes. The read does not select from the relation. `row_identity` still matches those entries by `row_id` or by that version's **Business Key**.
 
 `source` is `user`, `channel_run`, or null. The entry stores the subject id. `subject_label` is resolved on read. A user subject uses the user's name when the user exists, and the stored id when it does not. A missing user does not drop the entry. A channel-run subject uses the stored run id. The response has no channel link. An unattributed entry has `source`, `subject`, and `subject_label` null.
 
@@ -499,6 +501,8 @@ Success `200` is one list item plus the rebuilt physical images:
 ```
 
 `before` and `after` are the full physical row of that table's version. An insert has `before` null. A delete has `after` null. An update's `before` is rebuilt from the stored after image plus the previous value of each column that differed. The images are not a Profile View and are not passed through an access grant. A column an access grant would hide on the data tab is still present here.
+
+A dropped physical table leaves the entry in place. `before` and `after` are rebuilt from the stored image and that version's attributes. The read does not select from the relation.
 
 ## 5. Entity Version And Attribute Endpoints
 
@@ -658,6 +662,8 @@ Permitted on a published version that is not the metadata head, or on the head a
 Enqueue is idempotent with the same in-flight rule as publish (`200` returns the in-flight Job). A version whose snapshot is already empty is `200` `{ "job": null, "version": { … } }`.
 
 Emptiness is checked in the same transaction as the drop. A non-empty table fails the Job with `ENTITY_TABLE_NOT_EMPTY`. The HTTP enqueue does not treat a pre-check as a guarantee.
+
+The drop removes the relation and the triggers on it. Change-log entries that name the table remain until retention removes them or a publish turns recording off. The list and the entry read still return those entries (§4.9, §4.10).
 
 Success envelope:
 

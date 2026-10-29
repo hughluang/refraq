@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
 from backend.core.config import reset_settings_cache
+from backend.core.time import format_instant
 from backend.entity.change_log import (
     ChangeLogTable,
     ensure_shared_relations,
@@ -557,6 +558,67 @@ def _publish(client: TestClient, entity: dict) -> dict:
     return detail.json()["version"]
 
 
+def test_fractionless_occurred_to_includes_the_stored_second(
+    client: TestClient,
+) -> None:
+    entity = _create_logged(client)
+    version = _publish(client, entity)
+    physical = f'"entity_data"."{version["table_name"]}"'
+    second = datetime(2026, 10, 28, 23, 40, 0, tzinfo=timezone.utc)
+    within = second.replace(microsecond=739746)
+    nxt = second + timedelta(seconds=1)
+    with get_entity_engine().begin() as conn:
+        ensure_shared_relations(conn)
+        _insert(
+            conn,
+            entity["id"],
+            sequence=3,
+            physical=physical,
+            operation="insert",
+            image={"after": {"row_id": 1, "sku": "EDGE", "secret": "a"}},
+            occurred_at=second,
+        )
+        _insert(
+            conn,
+            entity["id"],
+            sequence=2,
+            physical=physical,
+            operation="insert",
+            image={"after": {"row_id": 2, "sku": "MID", "secret": "b"}},
+            occurred_at=within,
+        )
+        _insert(
+            conn,
+            entity["id"],
+            sequence=1,
+            physical=physical,
+            operation="insert",
+            image={"after": {"row_id": 3, "sku": "NEXT", "secret": "c"}},
+            occurred_at=nxt,
+        )
+    published = format_instant(within)
+    assert published == "2026-10-28T23:40:00Z"
+    covered = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"occurred_from": published, "occurred_to": published},
+    )
+    assert covered.status_code == 200, covered.text
+    assert [item["sequence"] for item in covered.json()["items"]] == [3, 2]
+    assert covered.json()["items"][0]["occurred_at"] == published
+    exact = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"occurred_to": "2026-10-28T23:40:00.000000Z"},
+    )
+    assert exact.status_code == 200, exact.text
+    assert [item["sequence"] for item in exact.json()["items"]] == [3]
+    later = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"occurred_to": "2026-10-28T23:40:00.739746Z"},
+    )
+    assert later.status_code == 200, later.text
+    assert [item["sequence"] for item in later.json()["items"]] == [3, 2]
+
+
 def test_list_omits_images_and_detail_returns_the_physical_row(
     client: TestClient,
 ) -> None:
@@ -658,6 +720,79 @@ def test_list_omits_images_and_detail_returns_the_physical_row(
     assert entry["after"]["secret"] == "hidden"
     assert entry["after"]["sku"] == "LEFT"
     assert entry["subject_label"] == "Admin"
+
+
+def test_dropped_table_entries_stay_on_the_list_and_the_detail(
+    client: TestClient,
+) -> None:
+    from backend.jobs.store import get_job_store
+
+    entity = _create_logged(client)
+    first = _publish(client, entity)
+    old_physical = f'"entity_data"."{first["table_name"]}"'
+    opened = client.post(f"/entities/{entity['id']}/versions", json={})
+    assert opened.status_code == 201, opened.text
+    current = client.get(f"/entities/{entity['id']}").json()["entity"]
+    second = _publish(client, current)
+    head_physical = f'"entity_data"."{second["table_name"]}"'
+    with get_entity_engine().begin() as conn:
+        ensure_shared_relations(conn)
+        _insert(
+            conn,
+            entity["id"],
+            sequence=1,
+            physical=old_physical,
+            operation="insert",
+            image={"after": {"row_id": 7, "sku": "LEFT", "secret": "hidden"}},
+        )
+        _insert(
+            conn,
+            entity["id"],
+            sequence=2,
+            physical=head_physical,
+            operation="delete",
+            image={"before": {"row_id": 8, "sku": "HEAD", "secret": "kept"}},
+        )
+    dropped = client.post(
+        f"/entities/{entity['id']}/versions/{first['id']}/drop-table"
+    )
+    assert dropped.status_code == 201, dropped.text
+    job = get_job_store().get(dropped.json()["job"]["id"])
+    assert job is not None
+    assert job.status == "succeeded"
+    gone = client.get(f"/entities/{entity['id']}/versions/{first['id']}")
+    assert gone.status_code == 200, gone.text
+    assert gone.json()["version"]["alignment"]["table_present"] is False
+
+    listed = client.get(f"/entities/{entity['id']}/change-log")
+    assert listed.status_code == 200, listed.text
+    assert [item["sequence"] for item in listed.json()["items"]] == [2, 1]
+    by_key = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"row_identity": "LEFT"},
+    )
+    assert by_key.status_code == 200, by_key.text
+    matched = by_key.json()["items"]
+    assert [item["sequence"] for item in matched] == [1]
+    assert matched[0]["business_key"] == "LEFT"
+    assert matched[0]["row_id"] == 7
+    assert matched[0]["physical_table"] == old_physical
+    assert "before" not in matched[0]
+    assert "after" not in matched[0]
+
+    old = client.get(f"/entities/{entity['id']}/change-log/1")
+    assert old.status_code == 200, old.text
+    assert old.json()["before"] is None
+    assert old.json()["after"] == {
+        "row_id": 7,
+        "sku": "LEFT",
+        "secret": "hidden",
+    }
+    head = client.get(f"/entities/{entity['id']}/change-log/2")
+    assert head.status_code == 200, head.text
+    assert head.json()["after"] is None
+    assert head.json()["before"]["sku"] == "HEAD"
+    assert head.json()["physical_table"] == head_physical
 
 
 def test_published_entity_exposes_recording_without_the_draft_facts(
