@@ -75,6 +75,7 @@ import {
   IconMail,
   IconMap,
   IconWebhook,
+  IconWorld,
   IconX,
   IconZoomIn,
   IconZoomOut,
@@ -180,6 +181,7 @@ const MODULE_ICONS: Record<string, ReturnType<typeof withDefaults>> = {
   palette: withDefaults(IconPalette),
   webhook: withDefaults(IconWebhook),
   mail: withDefaults(IconMail),
+  world: withDefaults(IconWorld),
   brain: withDefaults(IconBrain),
   "user-circle": withDefaults(IconUserCircle),
 };

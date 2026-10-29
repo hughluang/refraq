@@ -97,6 +97,21 @@ class EmailAccountRow(Base):
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
+class HttpAccountRow(Base):
+    __tablename__ = "http_accounts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    auth_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    username: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    headers_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    query_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    allowed_origins: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
 class ChannelVariableRow(Base):
     __tablename__ = "channel_variables"
 

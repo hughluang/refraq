@@ -47,6 +47,7 @@ EXPECTED_ICONS = {
     "branding": "palette",
     "webhooks": "webhook",
     "email-accounts": "mail",
+    "http-accounts": "world",
     "model-services": "brain",
     "account": "user-circle",
 }
@@ -419,6 +420,24 @@ EXPECTED_IDENTITIES = {
             "edit": "email_account:write",
             "delete": "email_account:write",
             "show": "email_account:read",
+            "sample": None,
+        },
+    },
+    "http-accounts": {
+        "label_key": "httpAccounts.title",
+        "routes": {
+            "list": "/console/http-accounts",
+            "create": "/console/http-accounts/new",
+            "edit": "/console/http-accounts/:id/edit",
+            "show": "/console/http-accounts/:id",
+            "aliases": [],
+        },
+        "actions": {
+            "list": "http_account:read",
+            "create": "http_account:write",
+            "edit": "http_account:write",
+            "delete": "http_account:write",
+            "show": "http_account:read",
             "sample": None,
         },
     },

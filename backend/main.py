@@ -84,6 +84,7 @@ from backend.channel.routers.runs import router as channel_runs_router
 from backend.channel.routers.variables import router as channel_variables_router
 from backend.channel.routers.webhooks import router as webhooks_router
 from backend.channel.routers.email_accounts import router as email_accounts_router
+from backend.channel.routers.http_accounts import router as http_accounts_router
 from backend.channel.subject_displays import channel_subject_displays
 from backend.channel.write_targets import incompatible_writers
 from backend.entity.publish_confirmation import bind_write_target_port
@@ -265,6 +266,7 @@ app.include_router(channel_runs_router)
 app.include_router(channel_variables_router)
 app.include_router(webhooks_router)
 app.include_router(email_accounts_router)
+app.include_router(http_accounts_router)
 app.include_router(jobs_mechanism_router)
 app.include_router(schedules_mechanism_router)
 

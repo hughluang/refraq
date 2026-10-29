@@ -444,6 +444,28 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=26,
     ),
     ConsoleModuleSeed(
+        id="http-accounts",
+        group_id="settings",
+        group_label_key="layout.navGroup.settings",
+        label_key="httpAccounts.title",
+        icon="world",
+        routes=ModuleRoutes(
+            list="/console/http-accounts",
+            create="/console/http-accounts/new",
+            show="/console/http-accounts/:id",
+            edit="/console/http-accounts/:id/edit",
+        ),
+        actions=ModuleActions(
+            list="http_account:read",
+            create="http_account:write",
+            show="http_account:read",
+            edit="http_account:write",
+            delete="http_account:write",
+        ),
+        group_order=30,
+        module_order=27,
+    ),
+    ConsoleModuleSeed(
         id="model-services",
         group_id="settings",
         group_label_key="layout.navGroup.settings",

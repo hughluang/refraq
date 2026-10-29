@@ -21,6 +21,8 @@ __all__ = [
     "ChannelVersionNotFound",
     "EmailAccountInUse",
     "EmailAccountNotFound",
+    "HttpAccountInUse",
+    "HttpAccountNotFound",
     "TemporalTargetIncompatible",
     "WebhookInUse",
     "WebhookNotFound",
@@ -170,6 +172,22 @@ class EmailAccountInUse(AppError):
 
     def _default_message(self) -> str:
         return "Email Account is still referenced by a Data Channel"
+
+
+class HttpAccountNotFound(AppError):
+    code = "HTTP_ACCOUNT_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "HTTP Account not found"
+
+
+class HttpAccountInUse(AppError):
+    code = "HTTP_ACCOUNT_IN_USE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "HTTP Account is still referenced by a Data Channel"
 
 
 class WebhookNotFound(AppError):

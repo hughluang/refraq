@@ -48,6 +48,8 @@ Permission = Literal[
     "webhook:write",
     "email_account:read",
     "email_account:write",
+    "http_account:read",
+    "http_account:write",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -91,6 +93,8 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "webhook:write",
     "email_account:read",
     "email_account:write",
+    "http_account:read",
+    "http_account:write",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -134,6 +138,8 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "webhook:write": "Create, update, test, and delete Webhooks",
     "email_account:read": "List and view Email Accounts",
     "email_account:write": "Create, update, test, and delete Email Accounts",
+    "http_account:read": "List and view HTTP Accounts",
+    "http_account:write": "Create, update, and delete HTTP Accounts",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

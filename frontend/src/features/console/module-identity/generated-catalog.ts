@@ -434,6 +434,26 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "http-accounts",
+    "label_key": "httpAccounts.title",
+    "icon": "world",
+    "routes": {
+      "list": "/console/http-accounts",
+      "create": "/console/http-accounts/new",
+      "edit": "/console/http-accounts/:id/edit",
+      "show": "/console/http-accounts/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "http_account:read",
+      "create": "http_account:write",
+      "edit": "http_account:write",
+      "delete": "http_account:write",
+      "show": "http_account:read",
+      "sample": null
+    }
+  },
+  {
     "id": "model-services",
     "label_key": "modelServices.title",
     "icon": "brain",
