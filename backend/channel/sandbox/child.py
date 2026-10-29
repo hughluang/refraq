@@ -11,6 +11,7 @@ import sys
 from typing import Any
 
 from backend.channel.sandbox.program import author_line, function_source
+from backend.channel.template import _to_text
 
 try:
     import resource
@@ -174,6 +175,30 @@ class SelfProxy:
 
 SELF = SelfProxy()
 
+# RFC 3986 unreserved bytes. Slash is outside this set, so it is encoded.
+_UNRESERVED = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+class _UrlQuote:
+    """Callable template helper. Attribute lookup is refused.
+
+    A function object would expose this module through ``__globals__``.
+    Calling uses the call slot, which is not attribute lookup.
+    """
+
+    def __call__(self, value: Any) -> str:
+        text = _to_text(value)
+        return "".join(
+            chr(byte) if byte in _UNRESERVED else f"%{byte:02X}"
+            for byte in text.encode("utf-8")
+        )
+
+    def __getattribute__(self, name: str) -> Any:
+        raise AttributeError("attribute access is not allowed")
+
+
+_url_quote = _UrlQuote()
+
 
 def _put_output(message: dict[str, Any]) -> None:
     ref = str(message["ref"])
@@ -218,7 +243,11 @@ def _run_code(source: str) -> Any:
 
 def _eval(expression: str) -> Any:
     compiled = compile(expression, "<expression>", "eval")
-    env = {"self": SELF, "__builtins__": {**SAFE_BUILTINS, "__import__": _safe_import}}
+    env = {
+        "self": SELF,
+        "url_quote": _url_quote,
+        "__builtins__": {**SAFE_BUILTINS, "__import__": _safe_import},
+    }
     value = eval(compiled, env, {})  # noqa: S307
     return _unwrap(value)
 

@@ -5,6 +5,9 @@ from __future__ import annotations
 import pytest
 
 from backend.channel.sandbox import CodeError, ExpressionError, SandboxSession
+from backend.channel.template import render
+
+_STRING = {"type": "string"}
 
 
 def test_self_path_and_comprehension() -> None:
@@ -141,6 +144,59 @@ def test_run_code_memory_is_distinct_and_restarts() -> None:
         assert memory.value.reason == "memory"
         assert str(memory.value) == "Code exceeded the memory limit"
         assert sandbox.run_code("return 1", 5) == 1
+
+
+def test_url_quote_in_a_string_template_encodes_reserved_characters() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        assert (
+            render('{{ url_quote("a/b?c#d e") }}', sandbox.evaluate, _STRING)
+            == "a%2Fb%3Fc%23d%20e"
+        )
+
+
+def test_url_quote_encodes_non_ascii_from_utf8_bytes() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        assert render('{{ url_quote("\\u00e9") }}', sandbox.evaluate, _STRING) == "%C3%A9"
+
+
+def test_url_quote_renders_a_number_as_its_text() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        assert render("{{ url_quote(1) }}", sandbox.evaluate, _STRING) == "1"
+        assert render("{{ url_quote(1e21) }}", sandbox.evaluate, _STRING) == "1e%2B21"
+
+
+def test_url_quote_leaves_unreserved_characters() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        assert render('{{ url_quote("Ab9-._~") }}', sandbox.evaluate, _STRING) == "Ab9-._~"
+
+
+def test_url_quote_globals_walk_fails() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        with pytest.raises(ExpressionError):
+            sandbox.evaluate("'_REAL_IMPORT' in url_quote.__globals__")
+        with pytest.raises(ExpressionError):
+            sandbox.evaluate("url_quote.__globals__['_REAL_IMPORT']('os').listdir('.')")
+
+
+def test_url_quote_call_attribute_walk_fails() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        with pytest.raises(ExpressionError):
+            sandbox.evaluate("url_quote.__call__.__name__")
+        with pytest.raises(ExpressionError):
+            sandbox.evaluate("'_REAL_IMPORT' in url_quote.__call__.__self__.__globals__")
+
+
+def test_url_quote_class_attribute_walk_fails() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        with pytest.raises(ExpressionError):
+            sandbox.evaluate("url_quote.__class__.__name__")
 
 
 def test_run_code_error_names_the_author_line() -> None:
