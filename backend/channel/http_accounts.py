@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy import func, select
 
@@ -351,8 +352,6 @@ def _parse_origins(origins: list[str]) -> list[str]:
 
 
 def _normalize_origin(value: object) -> str:
-    from urllib.parse import urlsplit
-
     if not isinstance(value, str) or not value or any(char.isspace() for char in value):
         raise ChannelRequestInvalid(_ORIGIN_MESSAGE)
     if any(char in value for char in ("?", "#", "@")):
