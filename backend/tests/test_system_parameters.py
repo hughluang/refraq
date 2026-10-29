@@ -10,7 +10,10 @@ import pytest
 from pydantic.fields import FieldInfo
 
 from backend.admin.parameters import ADMIN_PARAMETER_SPECS
-from backend.channel.parameters import CHANNEL_PARAMETER_SPECS
+from backend.channel.parameters import (
+    CHANNEL_PARAMETER_SPECS,
+    channel_http_response_max_bytes,
+)
 from backend.entity.parameters import ENTITY_PARAMETER_SPECS
 from backend.metadata.parameters import METADATA_PARAMETER_SPECS
 from backend.admin.system_parameters import (
@@ -124,6 +127,54 @@ def test_resolve_int_returns_nearest_bound() -> None:
     )
     assert resolve_int("admin_session_ttl_hours").value == 168
     assert resolve_int("admin_session_ttl_hours").previous_value == 8
+
+
+def test_channel_http_response_max_bytes_parameter_resolves_to_a_safe_integer() -> None:
+    assemble_system_parameters()
+    assert channel_http_response_max_bytes() == 1048576
+
+    set_parameter("channel_http_response_max_bytes", 2097152, actor_user_id=None)
+    assert channel_http_response_max_bytes() == 2097152
+
+    store = get_parameter_store()
+    store.upsert(
+        ParameterRecord(
+            key="channel_http_response_max_bytes",
+            value=16777217,
+            previous_value=2097152,
+            source="user",
+            updated_at=utc_now(),
+            updated_by_user_id=None,
+        )
+    )
+    assert read_stored_parameter("channel_http_response_max_bytes").value == 16777217
+    assert channel_http_response_max_bytes() == 16777216
+
+    store.upsert(
+        ParameterRecord(
+            key="channel_http_response_max_bytes",
+            value=65535,
+            previous_value=2097152,
+            source="user",
+            updated_at=utc_now(),
+            updated_by_user_id=None,
+        )
+    )
+    assert read_stored_parameter("channel_http_response_max_bytes").value == 65535
+    assert channel_http_response_max_bytes() == 65536
+
+    store.upsert(
+        ParameterRecord(
+            key="channel_http_response_max_bytes",
+            value="not-a-number",
+            previous_value=65535,
+            source="user",
+            updated_at=utc_now(),
+            updated_by_user_id=None,
+        )
+    )
+    assert read_stored_parameter("channel_http_response_max_bytes").value == "not-a-number"
+    assert channel_http_response_max_bytes() == 1048576
 
 
 def test_unrecognised_source_takes_read_failure_path() -> None:

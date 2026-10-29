@@ -193,6 +193,7 @@ _PARAMETER_BOUNDS = {
     "channel_dataset_retention_days": (7, 1, 3650),
     "channel_dataset_success_retention_hours": (24, 0, 720),
     "channel_dataset_max_total_gb": (100, 1, 100000),
+    "channel_http_response_max_bytes": (1048576, 65536, 16777216),
 }
 
 

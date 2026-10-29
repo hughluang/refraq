@@ -45,6 +45,7 @@ REGISTERED_KEYS = {
     "channel_dataset_max_total_gb",
     "channel_dataset_retention_days",
     "channel_dataset_success_retention_hours",
+    "channel_http_response_max_bytes",
     "channel_run_record_retention_days",
 }
 
@@ -61,6 +62,7 @@ CATALOG_KEY_ORDER = [
     "channel_dataset_max_total_gb",
     "channel_dataset_retention_days",
     "channel_dataset_success_retention_hours",
+    "channel_http_response_max_bytes",
     "channel_run_record_retention_days",
 ]
 

@@ -12,6 +12,7 @@ __all__ = [
     "channel_dataset_max_total_gb",
     "channel_dataset_retention_days",
     "channel_dataset_success_retention_hours",
+    "channel_http_response_max_bytes",
     "channel_run_record_retention_days",
 ]
 
@@ -55,6 +56,17 @@ CHANNEL_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
         help_key="settings.parameter.channel_dataset_success_retention_hours.help",
     ),
     ParameterSpec(
+        key="channel_http_response_max_bytes",
+        constraint=IntConstraint(minimum=65536, maximum=16777216),
+        seed=1048576,
+        owner="channel",
+        group="data_channel",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.channel_http_response_max_bytes.apply",
+        label_key="settings.parameter.channel_http_response_max_bytes.label",
+        help_key="settings.parameter.channel_http_response_max_bytes.help",
+    ),
+    ParameterSpec(
         key="channel_dataset_max_total_gb",
         constraint=IntConstraint(minimum=1, maximum=100000),
         seed=100,
@@ -78,6 +90,10 @@ def channel_dataset_retention_days() -> int:
 
 def channel_dataset_success_retention_hours() -> int:
     return resolve_int("channel_dataset_success_retention_hours").value
+
+
+def channel_http_response_max_bytes() -> int:
+    return resolve_int("channel_http_response_max_bytes").value
 
 
 def channel_dataset_max_total_gb() -> int:
