@@ -472,7 +472,7 @@ class _Run:
         attempt = 1
         while result.status == "failed" and attempt < tries:
             self.hooks.on_finish(seq, node, result)
-            stopped = self._pause(node_id, wait)
+            stopped = self._pause(node_id, _retry_pause(wait, result.minimum_wait_sec))
             if stopped is not None:
                 return stopped, seq, result
             stopped = self._stopped(node_id)
@@ -482,7 +482,7 @@ class _Run:
             attempt += 1
         return None, seq, result
 
-    def _pause(self, node_id: str, wait_sec: int) -> RunOutcome | None:
+    def _pause(self, node_id: str, wait_sec: float) -> RunOutcome | None:
         stopped = self._stopped(node_id)
         if stopped is not None or wait_sec <= 0:
             return stopped
@@ -734,6 +734,15 @@ def _reachable(start: str, children: dict[str, list[str]]) -> set[str]:
                 seen.add(child)
                 stack.append(child)
     return seen
+
+
+_RETRY_WAIT_CAP = 3600
+
+
+def _retry_pause(wait_sec: int, minimum_wait_sec: float | None) -> float:
+    if minimum_wait_sec is None:
+        return wait_sec
+    return min(_RETRY_WAIT_CAP, max(wait_sec, minimum_wait_sec or 0))
 
 
 def _retry_budget(node: Mapping[str, Any]) -> tuple[int, int]:

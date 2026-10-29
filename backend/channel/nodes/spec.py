@@ -47,6 +47,7 @@ class NodeResult:
     error_detail: dict[str, Any] | None = None
     ports: frozenset[str] | None = None
     iterations: list[Any] | None = None
+    minimum_wait_sec: float | None = None
 
 
 class EngineHooks(Protocol):

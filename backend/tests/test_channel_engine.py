@@ -977,6 +977,321 @@ def test_cancel_during_retry_wait_does_not_execute_again() -> None:
     assert hooks.order == ["a"]
 
 
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 10_000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += float(seconds)
+
+
+def _manual_clock(monkeypatch: pytest.MonkeyPatch) -> _ManualClock:
+    import backend.channel.engine as engine
+
+    clock = _ManualClock()
+    monkeypatch.setattr(engine.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(engine.time, "sleep", clock.sleep)
+    return clock
+
+
+def test_retry_waits_the_requested_minimum_when_it_exceeds_wait_sec(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+    seen: list[float] = []
+
+    def flaky(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        seen.append(clock.now)
+        if len(seen) == 1:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="later",
+                minimum_wait_sec=2.5,
+            )
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 2, "wait_sec": 1}
+    graph = {"nodes": [retried], "edges": [], "settings": {}}
+    outcome = execute(graph, "a", _catalog({"fake": flaky}), _RESOLVER, FakeHooks())
+    assert outcome.status == "succeeded"
+    assert seen == [10_000.0, 10_002.5]
+
+
+def test_retry_minimum_wait_above_3600_pauses_3600(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+    seen: list[float] = []
+
+    def flaky(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        seen.append(clock.now)
+        if len(seen) == 1:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="later",
+                minimum_wait_sec=4000,
+            )
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 2, "wait_sec": 1}
+    graph = {"nodes": [retried], "edges": [], "settings": {}}
+    outcome = execute(graph, "a", _catalog({"fake": flaky}), _RESOLVER, FakeHooks())
+    assert outcome.status == "succeeded"
+    assert seen == [10_000.0, 13_600.0]
+
+
+def test_retry_minimum_wait_of_zero_does_not_shorten_wait_sec(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+    seen: list[float] = []
+
+    def flaky(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        seen.append(clock.now)
+        if len(seen) == 1:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="later",
+                minimum_wait_sec=0,
+            )
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 2, "wait_sec": 4}
+    graph = {"nodes": [retried], "edges": [], "settings": {}}
+    outcome = execute(graph, "a", _catalog({"fake": flaky}), _RESOLVER, FakeHooks())
+    assert outcome.status == "succeeded"
+    assert seen == [10_000.0, 10_004.0]
+
+
+def test_retry_without_a_minimum_wait_uses_only_wait_sec(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+    seen: list[float] = []
+
+    def flaky(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        seen.append(clock.now)
+        if len(seen) == 1:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="later",
+                minimum_wait_sec=None,
+            )
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 2, "wait_sec": 4}
+    graph = {"nodes": [retried], "edges": [], "settings": {}}
+    outcome = execute(graph, "a", _catalog({"fake": flaky}), _RESOLVER, FakeHooks())
+    assert outcome.status == "succeeded"
+    assert seen == [10_000.0, 10_004.0]
+
+
+def test_an_omitted_minimum_wait_does_not_cap_wait_sec(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+    seen: list[float] = []
+
+    def flaky(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        seen.append(clock.now)
+        if len(seen) == 1:
+            return NodeResult(status="failed", error_code="CHANNEL_NODE_FAILED", error_message="later")
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 2, "wait_sec": 4000}
+    graph = {"nodes": [retried], "edges": [], "settings": {}}
+    outcome = execute(graph, "a", _catalog({"fake": flaky}), _RESOLVER, FakeHooks())
+    assert outcome.status == "succeeded"
+    assert seen == [10_000.0, 14_000.0]
+
+
+def test_retry_does_not_read_a_wait_from_error_detail(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+    seen: list[float] = []
+
+    def flaky(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        seen.append(clock.now)
+        if len(seen) == 1:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="limited",
+                error_detail={"retry_after_sec": 40, "minimum_wait_sec": 40},
+            )
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 2, "wait_sec": 2}
+    graph = {"nodes": [retried], "edges": [], "settings": {}}
+    outcome = execute(graph, "a", _catalog({"fake": flaky}), _RESOLVER, FakeHooks())
+    assert outcome.status == "succeeded"
+    assert seen == [10_000.0, 10_002.0]
+
+
+def test_minimum_wait_does_not_pause_when_no_try_remains(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+    seen: list[tuple[str, float]] = []
+
+    def run(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        seen.append((node["id"], clock.now))
+        if node["id"] == "a":
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="bad",
+                minimum_wait_sec=30,
+            )
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    failed = _node("a", 0)
+    failed["retry"] = {"max_tries": 1, "wait_sec": 0}
+    failed["on_error"] = "continue"
+    graph = {
+        "nodes": [failed, _node("b", 1)],
+        "edges": [_edge("a", "b")],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "a", _catalog({"fake": run}), _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert hooks.order == ["a", "b"]
+    assert seen == [("a", 10_000.0), ("b", 10_000.0)]
+    assert hooks.outputs["a"] is None
+
+
+def test_on_error_applies_only_after_tries_that_requested_a_minimum_wait(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+    seen: list[tuple[str, float]] = []
+
+    def run(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        seen.append((node["id"], clock.now))
+        if node["id"] == "a":
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="bad",
+                minimum_wait_sec=5,
+            )
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    failed = _node("a", 0)
+    failed["retry"] = {"max_tries": 2, "wait_sec": 1}
+    failed["on_error"] = "continue"
+    graph = {
+        "nodes": [failed, _node("b", 1)],
+        "edges": [_edge("a", "b")],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "a", _catalog({"fake": run}), _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert hooks.order == ["a", "a", "b"]
+    assert seen == [("a", 10_000.0), ("a", 10_005.0), ("b", 10_005.0)]
+    assert hooks.outputs["a"] is None
+
+
+def test_stop_after_the_tries_does_not_pause_again_for_the_minimum_wait(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+    seen: list[float] = []
+
+    def fail(node: dict, hooks: EngineHooks) -> NodeResult:
+        del node, hooks
+        seen.append(clock.now)
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="bad",
+            minimum_wait_sec=5,
+        )
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 2, "wait_sec": 0}
+    retried["on_error"] = "stop"
+    graph = {"nodes": [retried, _node("b", 1)], "edges": [_edge("a", "b")], "settings": {}}
+    hooks = FakeHooks()
+    outcome = execute(graph, "a", _catalog({"fake": fail}), _RESOLVER, hooks)
+    assert outcome.status == "failed"
+    assert outcome.failed_node_id == "a"
+    assert hooks.order == ["a", "a"]
+    assert seen == [10_000.0, 10_005.0]
+    assert clock.now == 10_005.0
+
+
+def test_cancel_during_the_minimum_wait_does_not_start_the_next_try(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+
+    class CancelDuringWait(FakeHooks):
+        def cancelled(self) -> bool:
+            return clock.now > 10_000.0
+
+    def fail(node: dict, hooks: EngineHooks) -> NodeResult:
+        del node, hooks
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="later",
+            minimum_wait_sec=10,
+        )
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 3, "wait_sec": 0}
+    graph = {
+        "nodes": [retried, _node("b", 1)],
+        "edges": [_edge("a", "b")],
+        "settings": {},
+    }
+    hooks = CancelDuringWait()
+    outcome = execute(graph, "a", _catalog({"fake": fail}), _RESOLVER, hooks)
+    assert outcome.status == "cancelled"
+    assert hooks.order == ["a"]
+    assert 10_000.0 < clock.now < 10_010.0
+
+
+def test_run_timeout_during_the_minimum_wait_does_not_start_the_next_try(monkeypatch) -> None:
+    clock = _manual_clock(monkeypatch)
+
+    def fail(node: dict, hooks: EngineHooks) -> NodeResult:
+        del node, hooks
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="later",
+            minimum_wait_sec=30,
+        )
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 3, "wait_sec": 0}
+    graph = {
+        "nodes": [retried, _node("b", 1)],
+        "edges": [_edge("a", "b")],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(
+        graph,
+        "a",
+        _catalog({"fake": fail}),
+        _RESOLVER,
+        hooks,
+        timeout_sec=3,
+    )
+    assert outcome.status == "failed"
+    assert outcome.error_code == "CHANNEL_RUN_TIMEOUT"
+    assert outcome.stopped_node_id == "a"
+    assert hooks.order == ["a"]
+    assert 10_003.0 < clock.now < 10_030.0
+
+
 def test_retries_exhausted_then_stop() -> None:
     def fail(node: dict, hooks: EngineHooks) -> NodeResult:
         del hooks
