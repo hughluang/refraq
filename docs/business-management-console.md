@@ -51,7 +51,7 @@ The side nav carries only module structural navigation and **renders exactly the
 | Entity | `entity` | Entities (`entities`) |
 | Tags | `tags` | Tags (`tags`) |
 | Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
-| Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`), Model Services (`model-services`), Webhooks (`webhooks`), Email Accounts (`email-accounts`) |
+| Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`), Model Services (`model-services`), Webhooks (`webhooks`), Email Accounts (`email-accounts`), HTTP Accounts (`http-accounts`) |
 
 - The `entity` group sits after `metadata`. The `tags` group is the module `tags` alone. Its `group_order` is 26 and its `module_order` is 25, so the group renders between the Entity group and the Channel group. A caller who cannot list Tags sees the Entity group followed by the Channel group. The `operations` group sits after `channel` and before `settings`. Module field details: `docs/business-metadata.md`, `docs/business-entity.md`, `docs/business-tags.md`, `docs/business-user-tokens.md`, `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`.
 - Module `entities` is registered under nav group `entity`. It is not mounted under `metadata`. Its record carries the access control tab and the data page (`docs/business-entity-access.md` §19); they are tabs of that module, not modules of their own.

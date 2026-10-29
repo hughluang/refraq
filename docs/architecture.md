@@ -74,6 +74,8 @@ The browser calls same-origin `/api`; Next.js rewrites to the internal API servi
 Same-origin `/mcp` is streamed by the web process to an internal MCP service (`REFRAQ_MCP_UPSTREAM`). Compose does not publish the MCP listen port. Process `readyz` stays on the MCP container network.
 Postgres and Redis are **Backing Services**; app processes stay share-nothing.
 
+An `action.http` node reaches any address the worker can reach. Egress isolation, including blocking cloud metadata endpoints, is a network-layer duty of the deployment (`docs/development.md`, Release and site install).
+
 The platform uses two databases. The metadata database holds Foundation, metadata, Job, Scheduled Task, Entity definition, and Entity access policy rows. The entity database holds generated **Entity Table**s, **Profile View**s, and the signed-context functions that enforce **Entity Access Control** (`docs/business-entity-access.md` §15). The entity database must not be the metadata database; local and site compose use a second database `refraq_entity` on the same Postgres instance, created and bootstrapped by a one-shot service. Runtime entity connections are never superusers: the worker opens an owner pool for publish, drop, and view regeneration Jobs; persistent API opens an owner pool for writes and a reader pool for reads. MCP does not open an entity pool.
 
 ```mermaid
@@ -123,7 +125,7 @@ Session expiry has two clocks frozen at creation. Lookup renews the idle deadlin
 The first version uses RBAC with **Role** as a first-class entity.
 
 - People are **User** records; each User has at most one Role (nullable).
-- Permissions are chosen from a fixed catalog (`console:access`, `dashboard:read`, `users:*`, `roles:*`, `settings:*`, `branding:*`, plus `sources:*`, `metadata:*`, `identity_providers:*`, `model_services:*`, `entity:read` / `entity:write` / `entity:drop_table` / `entity:data_read` / `entity:data_write`, `channel:read` / `channel:write` / `channel:code_write` / `channel:source_query`, `tag:read` / `tag:write`, `webhook:read` / `webhook:write`, `email_account:read` / `email_account:write`, platform-mechanism `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, `audit:read`).
+- Permissions are chosen from a fixed catalog (`console:access`, `dashboard:read`, `users:*`, `roles:*`, `settings:*`, `branding:*`, plus `sources:*`, `metadata:*`, `identity_providers:*`, `model_services:*`, `entity:read` / `entity:write` / `entity:drop_table` / `entity:data_read` / `entity:data_write`, `channel:read` / `channel:write` / `channel:code_write` / `channel:source_query`, `tag:read` / `tag:write`, `webhook:read` / `webhook:write`, `email_account:read` / `email_account:write`, `http_account:read` / `http_account:write`, platform-mechanism `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, `audit:read`).
 - Console side navigation is served from a backend-seeded module catalog (`GET /console/navigation`); Console Module Identity for SPA wiring/ACL is `GET /console/module-identities`. See `docs/adr/0002-console-navigation-catalog.md`.
 - Seeded roles: locked `super_admin` (effective permissions = full catalog by identity) and editable `operator` (`console:access` + `dashboard:read` by default; metadata write/query/sample/token permissions are not implied).
 - Machine principals are reserved as **Client** and remain out of scope; person-owned **User PAT** is in scope for metadata foundation.

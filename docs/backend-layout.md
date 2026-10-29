@@ -155,7 +155,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 |--------|----------------|
 | `backend.channel.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
 | `backend.channel.tasks` | Job kind handler dispatch (`channel_run`) and the run-record retention purge (`purge_run_records`), which also deletes due datasets, cascades datasets with a deleted run record, and drops a dataset table that has no registry row; discovered by `worker`. Not registered on `metadata.tasks` or `entity.tasks` |
-| `backend.channel.parameters` | Data Channel-owned System Parameter specs and typed accessors (`channel_run_record_retention_days`, `channel_dataset_retention_days`, `channel_dataset_success_retention_hours`, `channel_dataset_max_total_gb`), and the in-code identity of the run-record retention Scheduled Task. Collected by `worker.parameters` assembly |
+| `backend.channel.parameters` | Data Channel-owned System Parameter specs and typed accessors (`channel_run_record_retention_days`, `channel_dataset_retention_days`, `channel_dataset_success_retention_hours`, `channel_http_response_max_bytes`, `channel_dataset_max_total_gb`), and the in-code identity of the run-record retention Scheduled Task. Collected by `worker.parameters` assembly |
 | `backend.channel.schedule_projection` | `channel_run` schedule `work_kind` / `target` projection adapter, bound by composition into the platform schedule list |
 | `backend.channel.schedules` | Publish sync, activation, withdraw, and the due-tick task that mints `channel_run` Jobs |
 | `backend.channel.write_targets` | Write-node consumers of a Business Entity, bound by composition into the Entity publish confirmation |
@@ -209,7 +209,7 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 | Mechanism-resource HTTP (get/cancel Job by id) | `jobs` |
 | Mechanism-resource HTTP (list/get/patch/delete Scheduled Task) | `worker` |
 | Domain use-case HTTP (Source, Catalog, Source schedule facade, schedule run-now / related Jobs) | product domain (`metadata`) |
-| Domain use-case HTTP (Data Channel definitions, drafts, versions, activation, manual runs, run lists, Webhooks, Email Accounts) | product domain (`channel`) |
+| Domain use-case HTTP (Data Channel definitions, drafts, versions, activation, manual runs, run lists, Webhooks, Email Accounts, HTTP Accounts) | product domain (`channel`) |
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell that binds an already-interpreted `SourceEndpoint`) |
 | Domain error types | That product domain (base in `core`) |
 | Site Branding singleton, assets, validation, cache policy, and HTTP | `admin/branding` language unit |

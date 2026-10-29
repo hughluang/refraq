@@ -88,6 +88,7 @@ This document records the stable development conventions for contributors workin
 - Sites still running an older interpolated compose with `REFRAQ_VERSION` keep that pin until they replace compose with a stamped attachment. After the switch, leftover `REFRAQ_VERSION` in `.env` has no effect.
 - Browser reaches the web service on host port `3001` (`REFRAQ_WEB_PORT`); `/api` is rewritten to the internal API service named `api`; `/mcp` is streamed to the internal MCP service named `mcp` (`REFRAQ_MCP_UPSTREAM`). Keep local `next dev` on `127.0.0.1:3000` and run `python -m backend.metadata.mcp_http` so Account Center's copied `{origin}/mcp` works.
 - Published web images bake `REFRAQ_API_UPSTREAM=http://api:8000` at build time. The site compose also sets the same value at runtime for server-rendering (Site Branding) and sets `REFRAQ_MCP_UPSTREAM=http://mcp:8001`. Compose does not publish the MCP port.
+- `action.http` reaches any address the worker can reach. Egress isolation, including blocking cloud metadata endpoints, is a network-layer duty of the deployment.
 
 ## Suggested Reading Order
 

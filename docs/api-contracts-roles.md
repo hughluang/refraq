@@ -82,7 +82,7 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "entity:data_read", "description": "Entity Data API schema, get, and query" },
     { "key": "entity:data_write", "description": "Entity Data API write verbs (required together with entity:data_read)" },
     { "key": "channel:read", "description": "Read Data Channels, drafts, versions, and run lists" },
-    { "key": "channel:write", "description": "Create, edit, save drafts, validate, publish, delete Data Channels, change the activation switch, start on-demand runs, and cancel channel runs" },
+    { "key": "channel:write", "description": "Create, edit, save drafts, validate, publish, delete Data Channels, change the activation switch, start on-demand runs, and cancel channel runs; reference an existing Webhook, Email Account, or HTTP Account" },
     { "key": "channel:code_write", "description": "Add or edit a Data Channel Code node, and publish a draft that contains one" },
     { "key": "channel:source_query", "description": "Add or edit a Data Channel live Source query node, and publish a draft that contains one" },
     { "key": "tag:read", "description": "List and view Tags" },
@@ -90,7 +90,9 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "webhook:read", "description": "List and view Webhooks" },
     { "key": "webhook:write", "description": "Create, update, test, and delete Webhooks" },
     { "key": "email_account:read", "description": "List and view Email Accounts" },
-    { "key": "email_account:write", "description": "Create, update, test, and delete Email Accounts" }
+    { "key": "email_account:write", "description": "Create, update, test, and delete Email Accounts" },
+    { "key": "http_account:read", "description": "List and view HTTP Accounts" },
+    { "key": "http_account:write", "description": "Create, update, and delete HTTP Accounts" }
   ]
 }
 ```

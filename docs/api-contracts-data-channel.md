@@ -4,7 +4,7 @@
 
 This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, container rounds of a container execution, a **Node Sample** of one node against a run, **Template Preview**, dataset-row reads, and the **Channel Variable** list and manual delete. Paths address a channel by opaque `id`.
 
-**Source Mirror**s are not defined here. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
+**Source Mirror**s are not defined here. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. **HTTP Account** HTTP is `docs/api-contracts-http-accounts.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
 Related boundaries:
 

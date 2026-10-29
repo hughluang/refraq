@@ -98,6 +98,11 @@ Avoid the User contact `email`, an inbox, **Data Channel**, a per-workflow mail 
 A site-wide saved HTTPS endpoint. An `action.webhook` node POSTs one JSON body to it when that node executes. The catalog test POSTs a fixed body. The platform does not call a Webhook for any other reason. A bearer secret is optional and is not returned by the API. Deleting one that a Data Channel draft or published version still names is refused.
 Avoid **Data Channel**, a per-workflow route, chat integrations, **Email Account**, **System Parameter**, **Management Audit Event**, and a platform event bus.
 
+### HTTP Account
+
+A site-wide credential an `action.http` node may reference. It holds an optional bearer or basic auth, static headers, secret query parameters, and an optional list of allowed origins, and it has no URL of its own. The bearer token, the basic password, header values, and query values are not returned by the API. There is no catalog test. Deleting one that a Data Channel draft or published version still names is refused.
+Avoid a saved base URL, a per-workflow secret, **Webhook**, **Email Account**, **System Parameter**, **Management Audit Event**, and a platform event bus.
+
 ### Settings Override
 
 Retired as a named entity. A persisted override is a state on a **System Parameter**, not a second object.
@@ -571,7 +576,7 @@ Avoid **Management Audit Event** for data access, or treating it as a database s
 ### Data Channel
 
 The product domain of user-orchestrated, versioned data workflows, and one such workflow. A Data Channel is a graph of trigger, read, transform, volume, state, write, and action nodes joined by edges that order execution. It owns the mapping, transform, and lineage that a **Business Entity** definition does not carry, and one Data Channel may write several **Entity Table**s. Its draft is edited freely. Unattended triggers run only a published **Channel Version**. An on-demand **Channel Run** may execute a frozen draft and still writes Entity Tables. The author orchestrates increments, deletes, concurrency, checkpoint policy, and error handling with nodes; the platform does not derive them. Write nodes are safe to re-execute. An `active` switch outside versions decides whether schedules and event triggers fire. A delivery target outside the Entity Table is another write target kind on this domain, not a second write implementation. Rules: `docs/business-data-channel.md`.
-Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine. Network access belongs only to the **Webhook** node and the **Email Account** node. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task". Avoid treating an edge as a carrier of rows.
+Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine. Network access belongs only to the **Webhook** node, the **Email Account** node, and `action.http`. The Code sandbox has no network. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task". Avoid treating an edge as a carrier of rows.
 
 ### Channel Version
 
