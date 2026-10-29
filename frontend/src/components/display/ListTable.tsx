@@ -10,8 +10,19 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import type { ListPresentation } from "@/lib/list-state";
 
-const DEFAULT_MIN_WIDTH = 1080;
+const DENSE_TABLE_FLOOR = 1080;
+const COLUMN_FLOOR = 240;
 const SKELETON_ROWS = 8;
+
+/**
+ * Horizontal floor for a list. An explicit width is kept.
+ * Otherwise each column contributes 240px, capped at 1080,
+ * so a short catalog does not scroll when its columns fit the frame.
+ */
+export function listTableMinWidth(columnCount: number, minWidth?: number): number {
+  if (minWidth !== undefined) return minWidth;
+  return Math.min(DENSE_TABLE_FLOOR, columnCount * COLUMN_FLOOR);
+}
 
 /** Session fields `ListTable` binds to status, retry, and the pager. */
 export type ListTableList = {
@@ -75,7 +86,7 @@ function SkeletonRows({ columnCount }: { columnCount: number }) {
 export function ListTable({
   list,
   columnCount,
-  minWidth = DEFAULT_MIN_WIDTH,
+  minWidth,
   embedded = false,
   emptyMessage,
   emptyAction,
@@ -149,7 +160,7 @@ export function ListTable({
       style={embedded ? undefined : { minHeight: 0 }}
     >
       <Table.ScrollContainer
-        minWidth={minWidth}
+        minWidth={listTableMinWidth(columnCount, minWidth)}
         maxHeight={embedded ? undefined : "100%"}
         type="native"
         flex={embedded ? undefined : 1}

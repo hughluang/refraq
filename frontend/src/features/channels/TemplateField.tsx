@@ -23,18 +23,19 @@ import { FieldMarks } from "@/components/form/FieldChrome";
 import type { FieldNote } from "@/components/form/fieldNotes";
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import type { FieldMessage } from "@/features/channels/problemLabel";
+import { RunErrorText } from "@/features/channels/RunErrorText";
 import {
   TemplateRunPreview,
   type TemplatePreviewSource,
 } from "@/features/channels/TemplateRunPreview";
 import { scanTemplate } from "@/features/channels/templateScan";
-import { formatRunError } from "@/features/channels/problemLabel";
 import {
   resolvedText,
   templateCompletions,
   templatePreview,
   templateRule,
   typeBadge,
+  typeMark,
   type RecordedField,
   type TemplatePreview,
   type TemplateValueSchema,
@@ -260,7 +261,7 @@ export function TemplateField({
   const rule = templateRule(schema);
   const showPreview = edited && runPreview != null;
   const t = useTranslate();
-  const badge = datasetBadge(t, typeBadge(valueSchema));
+  const badge = typeMark(t, typeBadge(valueSchema));
   const tone = label
     ? invalid
       ? "error"
@@ -352,17 +353,7 @@ function RecordedValue({ recorded, raw }: { recorded: RecordedField; raw: boolea
       </Text>
     );
   } else if (recorded.state === "error") {
-    const error = formatRunError(t, recorded.code, recorded.message);
-    body = (
-      <Text size="xs" c="red">
-        {error.label}
-        {error.detail ? (
-          <Text span size="xs" c="dimmed" ml={6}>
-            {error.detail}
-          </Text>
-        ) : null}
-      </Text>
-    );
+    body = <RunErrorText code={recorded.code} message={recorded.message} />;
   } else {
     const text = raw && typeof recorded.value === "string" ? recorded.value : JSON.stringify(recorded.value, null, 2);
     body =
@@ -384,12 +375,6 @@ function RecordedValue({ recorded, raw }: { recorded: RecordedField; raw: boolea
       {body}
     </div>
   );
-}
-
-function datasetBadge(t: (key: string) => string, badge: string): string {
-  if (badge === "dataset") return t("channels.config.datasetReference");
-  if (badge === "list | dataset") return t("channels.config.datasetOrList");
-  return badge;
 }
 
 function templateNotes(

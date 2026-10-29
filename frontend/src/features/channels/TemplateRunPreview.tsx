@@ -4,7 +4,7 @@ import { Code, Group, Loader, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { formatRunError } from "@/features/channels/problemLabel";
+import { RunErrorText } from "@/features/channels/RunErrorText";
 import type {
   NodeSampleScopeInput,
   NodeSampleScopeLevel,
@@ -201,20 +201,17 @@ function PreviewResult({
   const t = useTranslate();
   const source = provenanceText(t, result.scope ?? [], nodeName, runTime);
   if (result.state === "failed") {
-    const error =
-      result.code === "CHANNEL_NODE_FAILED"
-        ? { label: t("channels.template.preview.failed"), detail: result.message }
-        : formatRunError(t, result.code, result.message);
     return (
       <>
-        <Text size="xs" c="red">
-          {error.label}
-          {error.detail ? (
-            <Text span size="xs" c="dimmed" ml={6}>
-              {error.detail}
-            </Text>
-          ) : null}
-        </Text>
+        <RunErrorText
+          code={result.code}
+          message={result.message}
+          sentence={
+            result.code === "CHANNEL_NODE_FAILED"
+              ? t("channels.template.preview.failed")
+              : undefined
+          }
+        />
         <Provenance text={source} />
       </>
     );

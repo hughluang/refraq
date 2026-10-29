@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
+import zh from "@/locales/zh-CN/common.json";
 import {
   completionSamples,
   fieldWasEdited,
@@ -12,6 +13,7 @@ import {
   templatePreview,
   templateRule,
   typeBadge,
+  typeMark,
   upstreamOutputs,
 } from "@/features/channels/templateLogic";
 import type { SelfScope } from "@/features/channels/templateScope";
@@ -27,6 +29,36 @@ describe("typeBadge", () => {
       typeBadge({ type: ["array", "object"], "x-refraq-dataset-reference": true }),
     ).toBe("list | dataset");
     expect(typeBadge({ type: "object" })).toBe("object");
+  });
+});
+
+describe("typeMark", () => {
+  const catalog = zh as Record<string, string>;
+  const t = (key: string) => catalog[key] ?? key;
+
+  it("localizes each token and keeps dataset sentences whole", () => {
+    for (const token of [
+      "string",
+      "number",
+      "integer",
+      "boolean",
+      "object",
+      "array",
+      "list",
+      "unknown",
+      "attribute",
+    ]) {
+      const sentence = catalog[`channels.template.type.${token}`];
+      expect(sentence).toBeTruthy();
+      expect(sentence).not.toBe(token);
+      expect(typeMark(t, token)).toBe(sentence);
+    }
+    expect(typeMark(t, "string | number")).toBe(
+      `${catalog["channels.template.type.string"]} | ${catalog["channels.template.type.number"]}`,
+    );
+    expect(typeMark(t, "dataset")).toBe(catalog["channels.config.datasetReference"]);
+    expect(typeMark(t, "list | dataset")).toBe(catalog["channels.config.datasetOrList"]);
+    expect(typeMark((key) => key, "string")).toBe("string");
   });
 });
 

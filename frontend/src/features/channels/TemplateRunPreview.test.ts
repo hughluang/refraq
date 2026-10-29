@@ -27,6 +27,7 @@ const LABELS: Record<string, string> = {
   "channels.template.preview.roundOf": "round {{n}} of {{name}}",
   "channels.template.preview.fromScope": "Value from {{rounds}}, run started {{time}}",
   "channels.template.preview.fromRun": "Value from the run started {{time}}",
+  "problems.CHANNEL_NODE_FAILED": "A node failed",
   "problems.CHANNEL_VALUE_TYPE_MISMATCH": "Type mismatch",
   "problems.REQUEST_INVALID": "Request invalid",
 };

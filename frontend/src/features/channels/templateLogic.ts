@@ -63,6 +63,25 @@ export function typeBadge(schema: TemplateValueSchema | null): string {
   return names.filter((name) => name !== "null").join(" | ") || "unknown";
 }
 
+const DATASET_MARKS: Record<string, string> = {
+  dataset: "channels.config.datasetReference",
+  "list | dataset": "channels.config.datasetOrList",
+};
+
+/** Operator label for a `typeBadge` token string. Dataset phrases stay their own sentences. */
+export function typeMark(t: (key: string) => string, badge: string): string {
+  const whole = DATASET_MARKS[badge];
+  if (whole) return t(whole);
+  return badge
+    .split(" | ")
+    .map((token) => {
+      const key = `channels.template.type.${token}`;
+      const translated = t(key);
+      return translated === key ? token : translated;
+    })
+    .join(" | ");
+}
+
 export function templatePreview(text: string, schema: SchemaObject | null): TemplatePreview {
   const scanned = scanTemplate(text);
   if (!scanned.ok) return { state: "invalid" };

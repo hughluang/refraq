@@ -27,10 +27,12 @@ import {
   type NodeTypeSpec,
 } from "@/features/channels/types";
 
+const notify = vi.hoisted(() => vi.fn());
+
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string, options?: { defaultValue?: string }) =>
     options?.defaultValue ?? key,
-  useNotification: () => ({ open: vi.fn() }),
+  useNotification: () => ({ open: notify }),
   useCan: () => ({ data: { can: true } }),
   usePermissions: () => ({ data: [] as string[] }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
@@ -247,6 +249,17 @@ describe("ChannelRecord draft access", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it("names a validation transport failure instead of a save", async () => {
+    vi.mocked(validateDraft).mockRejectedValue(new TypeError("Failed to fetch"));
+    await renderRecord("edit");
+    await waitFor(() => {
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", message: "channels.validate.transport" }),
+      );
+    });
+    expect(notify.mock.calls.some((call) => call[0]?.message === "channels.save.failed")).toBe(false);
   });
 
   it("does not offer a run from the show page", async () => {

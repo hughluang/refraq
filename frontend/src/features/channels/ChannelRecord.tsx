@@ -398,13 +398,13 @@ function ChannelExisting({
   const graphDirty = graph != null && JSON.stringify(graph) !== baseline;
   useLeaveGuardRegistration(writable && (form.isDirty() || graphDirty));
 
-  const notifyError = (error: unknown) => {
+  const notifyError = (error: unknown, fallback: string) => {
     open?.({
       type: "error",
       message:
         error instanceof RecordInvalid
           ? error.message
-          : problemMessage(t, error, t("channels.save.failed")),
+          : problemMessage(t, error, fallback),
     });
   };
 
@@ -441,7 +441,7 @@ function ChannelExisting({
         })
         .catch((error: unknown) => {
           if (validateSeq.current !== seq) return;
-          notifyError(error);
+          notifyError(error, t("channels.validate.transport"));
         });
     }, delay);
     return () => window.clearTimeout(timer);
@@ -484,10 +484,14 @@ function ChannelExisting({
     );
   };
 
-  const catchFailure = (error: unknown) => {
+  const catchFailure = (error: unknown, fallback: string) => {
     const revealed = revealInvalidGraph(error);
-    if (revealed) return revealed.catch(notifyError);
-    notifyError(error);
+    if (revealed) {
+      return revealed.catch((validateError: unknown) => {
+        notifyError(validateError, t("channels.validate.transport"));
+      });
+    }
+    notifyError(error, fallback);
   };
 
   if (loading) {
@@ -610,22 +614,35 @@ function ChannelExisting({
     if (!graph || runActive) return;
     const triggers = graph.nodes.filter((node) => node.type.startsWith("trigger."));
     if (triggers.length !== 1) {
-      notifyError(new Error(t("channels.run.needTrigger")));
+      notifyError(new RecordInvalid(t("channels.run.needTrigger")), t("channels.run.startFailed"));
       return;
     }
     if (!occupyPage()) return;
     void (async () => {
-      await persist();
-      const started = await startRun(channelId, {
-        target: "draft",
-        ignore_checkpoints: false,
-        stop_at_node_id: stopAt,
-      });
-      await rememberRun(started.run.job_id);
-      setRunRequest(null);
-    })()
-      .catch(catchFailure)
-      .finally(releasePage);
+      try {
+        await persist();
+      } catch (error) {
+        await catchFailure(error, t("channels.save.failed"));
+        return;
+      }
+      let started: Awaited<ReturnType<typeof startRun>>;
+      try {
+        started = await startRun(channelId, {
+          target: "draft",
+          ignore_checkpoints: false,
+          stop_at_node_id: stopAt,
+        });
+      } catch (error) {
+        await catchFailure(error, t("channels.run.startFailed"));
+        return;
+      }
+      try {
+        await rememberRun(started.run.job_id);
+        setRunRequest(null);
+      } catch (error) {
+        await catchFailure(error, t("channels.run.loadFailed"));
+      }
+    })().finally(releasePage);
   };
 
   const stopRun = () => {
@@ -660,23 +677,37 @@ function ChannelExisting({
   const showLifecycle = Boolean(canWrite?.can);
   const startPublish = () => {
     if (!occupyPage()) return;
-    void persist()
-      .then(async ({ revision: nextRevision, graph: savedGraph }) => {
-        const result = await validateDraft(channelId, savedGraph);
-        if (!result.valid) {
-          reportBlockedGraph(result, savedGraph);
-          return;
-        }
-        if (!validationResultApplies(savedGraph, graphRef.current)) return;
-        validateSeq.current += 1;
-        setProblems(result.problems);
-        setPorts(result.ports);
-        setExpressionContext(result.context);
-        setPublishRevision(nextRevision);
+    void (async () => {
+      let saved: Awaited<ReturnType<typeof persist>>;
+      try {
+        saved = await persist();
+      } catch (error) {
+        await catchFailure(error, t("channels.save.failed"));
+        return;
+      }
+      let result: Awaited<ReturnType<typeof validateDraft>>;
+      try {
+        result = await validateDraft(channelId, saved.graph);
+      } catch (error) {
+        await catchFailure(error, t("channels.validate.transport"));
+        return;
+      }
+      if (!result.valid) {
+        reportBlockedGraph(result, saved.graph);
+        return;
+      }
+      if (!validationResultApplies(saved.graph, graphRef.current)) return;
+      validateSeq.current += 1;
+      setProblems(result.problems);
+      setPorts(result.ports);
+      setExpressionContext(result.context);
+      setPublishRevision(saved.revision);
+      try {
         setPreview(await previewPublish(channelId));
-      })
-      .catch(notifyError)
-      .finally(releasePage);
+      } catch (error) {
+        await catchFailure(error, t("channels.publish.failed"));
+      }
+    })().finally(releasePage);
   };
 
   const descriptionText = form.values.description.trim();
@@ -1220,7 +1251,7 @@ function ChannelExisting({
               open?.({ type: "success", message: t("channels.publish.done") });
               setReloadToken((value) => value + 1);
             })
-            .catch(catchFailure)
+            .catch((error: unknown) => catchFailure(error, t("channels.publish.failed")))
             .finally(releasePage);
         }}
       >

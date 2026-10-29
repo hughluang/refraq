@@ -7,12 +7,12 @@ import {
   Button,
   Center,
   Paper,
-  PasswordInput,
   Skeleton,
   Stack,
   Text,
   Title,
 } from "@mantine/core";
+import { PasswordInput } from "@/components/form/PasswordInput";
 import { TextField } from "@/components/form/TextField";
 import { BrandMark } from "@/components/display/BrandMark";
 import { useLogin, useTranslate } from "@refinedev/core";

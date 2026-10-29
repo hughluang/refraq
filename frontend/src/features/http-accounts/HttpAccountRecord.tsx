@@ -252,6 +252,7 @@ function HttpAccountExisting({
             editable={editable}
             secretState={secretState}
             mode={mode}
+            baseline={baseline.current}
             headerNames={record.headers.map((item) => item.name)}
             queryNames={record.query.map((item) => item.name)}
           />
@@ -287,6 +288,7 @@ function AccountFields({
   editable,
   secretState,
   mode,
+  baseline = null,
   headerNames = [],
   queryNames = [],
 }: {
@@ -294,6 +296,7 @@ function AccountFields({
   editable: boolean;
   secretState: "token" | "password" | "empty";
   mode: "create" | "show" | "edit";
+  baseline?: Baseline | null;
   headerNames?: string[];
   queryNames?: string[];
 }) {
@@ -332,11 +335,7 @@ function AccountFields({
           type="password"
           autoComplete="new-password"
           label={t("httpAccounts.fields.secret")}
-          description={
-            mode === "edit"
-              ? t("httpAccounts.fields.secretKeep")
-              : t("httpAccounts.fields.secretHint")
-          }
+          description={secretDescription(t, mode, authType, form.values.username, baseline)}
           {...form.fieldProps("secret")}
         />
       )}
@@ -546,6 +545,33 @@ function samePairs(current: Pair[], initial: Pair[]) {
   return current.every(
     (row, index) => row.name === initial[index].name && row.value === initial[index].value,
   );
+}
+
+/** Blank secret keeps the stored secret only while the auth identity is unchanged. */
+export function blankSecretKeeps(
+  authType: HttpAuthType,
+  username: string,
+  baseline: Pick<Baseline, "authType" | "username"> | null,
+): boolean {
+  return (
+    baseline !== null &&
+    authType === baseline.authType &&
+    (authType !== "basic" || username === baseline.username)
+  );
+}
+
+function secretDescription(
+  t: (key: string) => string,
+  mode: "create" | "show" | "edit",
+  authType: HttpAuthType,
+  username: string,
+  baseline: Baseline | null,
+): string {
+  if (mode === "edit" && blankSecretKeeps(authType, username, baseline)) {
+    return t("httpAccounts.fields.secretKeep");
+  }
+  if (mode === "edit") return t("httpAccounts.fields.secretRequired");
+  return t("httpAccounts.fields.secretHint");
 }
 
 function authReplacing(values: Values, baseline: Baseline | null) {

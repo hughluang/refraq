@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ListTable, type ListTableList } from "@/components/display/ListTable";
+import { ListTable, listTableMinWidth, type ListTableList } from "@/components/display/ListTable";
 import type { ListPresentation } from "@/lib/list-state";
 import { FEEDBACK_DELAY_MS } from "@/theme";
 
@@ -66,6 +66,17 @@ function table(
     children: extra.children,
   });
 }
+
+describe("listTableMinWidth", () => {
+  it("scales a short catalog and keeps an explicit floor", () => {
+    expect(listTableMinWidth(2)).toBe(480);
+    expect(listTableMinWidth(3)).toBe(720);
+    expect(listTableMinWidth(4)).toBe(960);
+    expect(listTableMinWidth(5)).toBe(1080);
+    expect(listTableMinWidth(8)).toBe(1080);
+    expect(listTableMinWidth(3, 640)).toBe(640);
+  });
+});
 
 describe("ListTable status rows", () => {
   beforeEach(() => {

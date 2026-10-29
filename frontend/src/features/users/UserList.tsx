@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Stack, Text, Group, PasswordInput, Table } from "@mantine/core";
+import { Badge, Stack, Text, Group, Table } from "@mantine/core";
 import {
   useCan,
   useGetIdentity,
@@ -12,6 +12,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { FormDialog } from "@/components/form/FormDialog";
+import { PasswordInput } from "@/components/form/PasswordInput";
 import {
   FormErrorSummary,
   saveFailureFrom,

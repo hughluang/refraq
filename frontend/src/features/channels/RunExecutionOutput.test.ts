@@ -546,9 +546,9 @@ it("localizes an Until condition failure by problem code and leaves values as te
   expect(await screen.findByText("false")).toBeTruthy();
   expect(untilCell(0).textContent).toBe("false");
   expect(untilCell(1).textContent).toBe("true");
-  expect(untilCell(2).textContent).toBe("Type mismatchValue does not match the declared type");
+  expect(untilCell(2).textContent).toBe("Type mismatch\nValue does not match the declared type");
   expect(screen.getByText("Value does not match the declared type").closest("td")).toBe(untilCell(2));
-  expect(untilCell(3).textContent).toBe("Node failedCode failed at line 1");
+  expect(untilCell(3).textContent).toBe("Node failed\nCode failed at line 1");
   expect(untilCell(4).textContent).toBe("");
   expect(untilCell(5).textContent).toBe("Sandbox could not start");
   expect(statusCell(2).textContent).toBe("Succeeded 1");

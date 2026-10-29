@@ -1,8 +1,9 @@
 "use client";
 
-import { Button, PasswordInput, Stack } from "@mantine/core";
+import { Button, Stack } from "@mantine/core";
 import { useState } from "react";
 
+import { PasswordInput } from "@/components/form/PasswordInput";
 import { RecordPicker } from "@/components/form/RecordPicker";
 import { roleRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { TextField } from "@/components/form/TextField";

@@ -171,9 +171,7 @@ function OutputBody(props: BodyProps) {
         </Stack>
       ) : null}
       {error && (error.code || error.message) ? (
-        <Text size="xs" c="red">
-          <RunErrorText code={error.code} message={error.message} />
-        </Text>
+        <RunErrorText code={error.code} message={error.message} />
       ) : null}
       <ViewSwitch {...props} />
     </Stack>
@@ -950,12 +948,10 @@ function ConditionCell({ entry }: { entry: unknown }) {
   if (!isRecord(entry)) return null;
   if (isRecord(entry.error)) {
     return (
-      <Text size="xs" c="red">
-        <RunErrorText
-          code={typeof entry.error.code === "string" ? entry.error.code : null}
-          message={typeof entry.error.message === "string" ? entry.error.message : null}
-        />
-      </Text>
+      <RunErrorText
+        code={typeof entry.error.code === "string" ? entry.error.code : null}
+        message={typeof entry.error.message === "string" ? entry.error.message : null}
+      />
     );
   }
   return scalarText(entry.value);

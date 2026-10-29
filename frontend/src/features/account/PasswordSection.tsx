@@ -3,7 +3,6 @@
 import {
   Button,
   Group,
-  PasswordInput,
   Stack,
   Text,
   Title,
@@ -12,6 +11,7 @@ import { useNotification, useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
 import { FormDialog } from "@/components/form/FormDialog";
+import { PasswordInput } from "@/components/form/PasswordInput";
 import {
   FormErrorSummary,
   saveFailureFrom,
