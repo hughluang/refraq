@@ -56,6 +56,7 @@ _OUTPUT_VIEWS = {
         metrics=("inserted", "updated", "unchanged", "deleted", "unmatched"),
     ),
     "action.email": OutputView(kind="record"),
+    "action.http": OutputView(kind="record"),
     "action.webhook": OutputView(kind="record"),
 }
 

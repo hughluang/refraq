@@ -21,6 +21,7 @@ from backend.channel.nodes.trigger.error import NODE_TYPE as TRIGGER_ERROR
 from backend.channel.nodes.trigger.manual import NODE_TYPE as TRIGGER_MANUAL
 from backend.channel.nodes.trigger.scheduled import NODE_TYPE as TRIGGER_SCHEDULED
 from backend.channel.nodes.action.email import NODE_TYPE as ACTION_EMAIL
+from backend.channel.nodes.action.http import NODE_TYPE as ACTION_HTTP
 from backend.channel.nodes.action.webhook import NODE_TYPE as ACTION_WEBHOOK
 from backend.channel.nodes.volume.batch_read import NODE_TYPE as VOLUME_BATCH_READ
 from backend.channel.nodes.volume.dataset_query import NODE_TYPE as VOLUME_DATASET_QUERY
@@ -66,6 +67,7 @@ _CATALOG: tuple[NodeType, ...] = (
     STATE_VARIABLE,
     WRITE_ENTITY,
     ACTION_EMAIL,
+    ACTION_HTTP,
     ACTION_WEBHOOK,
 )
 

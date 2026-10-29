@@ -439,6 +439,9 @@ def test_identical_template_text_records_each_filter_condition_path() -> None:
 
 
 def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
+    from backend.worker.parameters import assemble_system_parameters
+
+    assemble_system_parameters()
     from types import SimpleNamespace
 
     from backend.channel.nodes import list_node_types
@@ -544,6 +547,15 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
             "subject": "{{ text }}",
             "body": "{{ text }}",
         },
+        "action.http": {
+            "method": "POST",
+            "url": "{{ text }}",
+            "query": [{"name": "{{ text }}", "value": "{{ text }}"}],
+            "headers": [{"name": "X-Test", "value": "{{ text }}"}],
+            "body_mode": "json",
+            "body": "{{ body }}",
+            "content_type": "{{ text }}",
+        },
         "action.webhook": {"webhook_id": "hook", "body": "{{ body }}"},
     }
     expected = {
@@ -566,6 +578,15 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "state.variable": {"name", "value", "expected"},
         "write.entity": {"source"},
         "action.email": {"to", "subject", "body"},
+        "action.http": {
+            "url",
+            "query.0.name",
+            "query.0.value",
+            "headers.0.name",
+            "headers.0.value",
+            "body",
+            "content_type",
+        },
         "action.webhook": {"body"},
     }
     values = {
