@@ -11,6 +11,7 @@ import {
   FilterIcon,
   FormsIcon,
   HandFingerIcon,
+  HttpIcon,
   JoinIcon,
   LayoutRowsIcon,
   MailIcon,
@@ -58,6 +59,7 @@ const TYPE_ICON: Record<string, NodeIcon> = {
   "write.entity": TableImportIcon,
   "action.webhook": WebhookIcon,
   "action.email": MailIcon,
+  "action.http": HttpIcon,
 };
 
 const FAMILY_ICON: Record<string, NodeIcon> = {

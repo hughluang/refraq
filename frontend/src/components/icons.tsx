@@ -76,6 +76,7 @@ import {
   IconMap,
   IconWebhook,
   IconWorld,
+  IconWorldWww,
   IconX,
   IconZoomIn,
   IconZoomOut,
@@ -148,6 +149,7 @@ export const FilterIcon = withDefaults(IconFilter);
 export const FormsIcon = withDefaults(IconForms);
 export const HandFingerIcon = withDefaults(IconHandFinger);
 export const JoinIcon = withDefaults(IconArrowsJoin2);
+export const HttpIcon = withDefaults(IconWorldWww);
 export const MailIcon = withDefaults(IconMail);
 export const PlugConnectedIcon = withDefaults(IconPlugConnected);
 export const RepeatIcon = withDefaults(IconRepeat);

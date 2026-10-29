@@ -437,6 +437,175 @@ describe("code and source query config", () => {
   });
 });
 
+describe("action.http config", () => {
+  const HTTP: SchemaObject = {
+    type: "object",
+    required: ["method", "url"],
+    properties: {
+      method: {
+        type: "string",
+        enum: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+      },
+      url: {
+        type: "string",
+        description: "Absolute http or https address.",
+        "x-refraq-template": { type: "string" },
+      },
+      query: {
+        type: "array",
+        description: "Parameters appended to the URL.",
+        items: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Template rendered to the name.",
+              "x-refraq-template": { type: "string" },
+            },
+            value: {
+              type: "string",
+              description: "Template rendered to the value.",
+              "x-refraq-template": { type: "string" },
+            },
+          },
+        },
+      },
+      headers: {
+        type: "array",
+        description: "Headers sent with the request.",
+        items: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Template rendered to the name.",
+              "x-refraq-template": { type: "string" },
+            },
+            value: {
+              type: "string",
+              description: "Template rendered to the value.",
+              "x-refraq-template": { type: "string" },
+            },
+          },
+        },
+      },
+      body_mode: { type: "string", enum: ["json", "raw"], default: "json" },
+      body: {
+        type: "string",
+        description: "Template for the request body.",
+        "x-refraq-template": { type: "string" },
+      },
+      content_type: {
+        type: "string",
+        description: "Template for the body Content-Type.",
+        "x-refraq-template": { type: "string" },
+      },
+      http_account_id: {
+        type: ["string", "null"],
+        description: "Optional account.",
+        "x-refraq-ref": "http_account",
+      },
+      timeout_sec: {
+        type: ["integer", "null"],
+        minimum: 1,
+        maximum: 120,
+        description: "Seconds for the whole exchange. Blank uses 30.",
+      },
+      max_redirects: {
+        type: ["integer", "null"],
+        minimum: 0,
+        maximum: 10,
+        description: "How many redirects to follow. Blank uses 5.",
+      },
+    },
+  };
+
+  it("maps an HTTP account reference and a list of template pairs", () => {
+    const fields = fieldsFromSchema(HTTP);
+    expect(fields.map((field) => [field.kind, field.key])).toEqual([
+      ["enum", "method"],
+      ["template", "url"],
+      ["objectList", "query"],
+      ["objectList", "headers"],
+      ["enum", "body_mode"],
+      ["template", "body"],
+      ["template", "content_type"],
+      ["http_account", "http_account_id"],
+      ["integer", "timeout_sec"],
+      ["integer", "max_redirects"],
+    ]);
+    const query = fields.find((field) => field.key === "query");
+    expect(query).toMatchObject({ kind: "objectList", description: "Parameters appended to the URL." });
+    if (query?.kind === "objectList") {
+      expect(query.fields).toEqual([
+        {
+          kind: "template",
+          key: "name",
+          required: false,
+          valueSchema: { type: "string" },
+          description: "Template rendered to the name.",
+        },
+        {
+          kind: "template",
+          key: "value",
+          required: false,
+          valueSchema: { type: "string" },
+          description: "Template rendered to the value.",
+        },
+      ]);
+    }
+    expect(fields.find((field) => field.key === "http_account_id")).toEqual({
+      kind: "http_account",
+      key: "http_account_id",
+      required: false,
+      description: "Optional account.",
+    });
+    expect(fields.find((field) => field.key === "timeout_sec")).toMatchObject({
+      kind: "integer",
+      nullable: true,
+      minimum: 1,
+      maximum: 120,
+    });
+    expect(fields.find((field) => field.key === "max_redirects")).toMatchObject({
+      kind: "integer",
+      nullable: true,
+      minimum: 0,
+      maximum: 10,
+    });
+    const headers = fields.find((field) => field.key === "headers");
+    expect(headers?.kind).toBe("objectList");
+    if (headers?.kind === "objectList") {
+      expect(headers.fields.map((field) => field.kind)).toEqual(["template", "template"]);
+    }
+    expect(defaultConfig(HTTP)).toEqual({
+      method: "GET",
+      url: "",
+      query: [],
+      headers: [],
+      body_mode: "json",
+      body: "",
+      content_type: "",
+      http_account_id: null,
+      timeout_sec: null,
+      max_redirects: null,
+    });
+  });
+
+  it("keeps a template marker ahead of an HTTP account reference", () => {
+    const fields = fieldsFromSchema({
+      type: "object",
+      properties: {
+        http_account_id: {
+          type: "string",
+          "x-refraq-ref": "http_account",
+          "x-refraq-template": { type: "string" },
+        },
+      },
+    });
+    expect(fields[0]?.kind).toBe("template");
+  });
+});
+
 describe("omitUnsetIntegers", () => {
   it("drops a stored null on a non-nullable integer and keeps null where the type allows it", () => {
     expect(

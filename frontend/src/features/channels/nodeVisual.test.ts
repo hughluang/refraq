@@ -13,6 +13,7 @@ import {
   FilterIcon,
   FormsIcon,
   HandFingerIcon,
+  HttpIcon,
   JoinIcon,
   LayoutRowsIcon,
   MailIcon,
@@ -66,6 +67,7 @@ describe("nodeTypeIcon", () => {
       ["write.entity", "write", TableImportIcon],
       ["action.webhook", "action", WebhookIcon],
       ["action.email", "action", MailIcon],
+      ["action.http", "action", HttpIcon],
     ];
     for (const [type, family, icon] of expected) {
       expect(nodeTypeIcon(type, family), type).toBe(icon);
