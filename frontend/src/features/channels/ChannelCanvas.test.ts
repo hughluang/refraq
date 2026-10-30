@@ -1827,8 +1827,8 @@ function placed(
 }
 
 const IF_SPEC = catalogSpec("transform.if", [{ port: "main", description: "" }], [
-  { port: "true", description: "", loop_back: false },
-  { port: "false", description: "", loop_back: false },
+  { port: "true", description: "" },
+  { port: "false", description: "" },
 ]);
 const FOR_SPEC = {
   ...catalogSpec(
@@ -1838,8 +1838,8 @@ const FOR_SPEC = {
       { port: "loop", description: "" },
     ],
     [
-      { port: "each", description: "", loop_back: true },
-      { port: "done", description: "", loop_back: false },
+      { port: "each", description: "" },
+      { port: "done", description: "" },
     ],
   ),
   container: { round_templates: [] },
@@ -1849,17 +1849,17 @@ const BATCH_SPEC = {
     "volume.batch_read",
     [{ port: "main", description: "" }],
     [
-      { port: "each", description: "", loop_back: true },
-      { port: "done", description: "", loop_back: false },
+      { port: "each", description: "" },
+      { port: "done", description: "" },
     ],
   ),
   container: { round_templates: [] },
 };
 const READ_SPEC = catalogSpec("read.sql", [{ port: "main", description: "" }], [
-  { port: "main", description: "", loop_back: false },
+  { port: "main", description: "" },
 ]);
 const MERGE_SPEC = catalogSpec("transform.merge", [{ port: "main", description: "" }], [
-  { port: "main", description: "", loop_back: false },
+  { port: "main", description: "" },
 ]);
 
 describe("channel ports", () => {

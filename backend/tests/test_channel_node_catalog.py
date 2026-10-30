@@ -82,7 +82,6 @@ def test_every_type_states_its_function_and_ports() -> None:
         error_ports = [port for port in node.outputs if port.port == "error"]
         assert len(error_ports) <= 1
         for port in error_ports:
-            assert port.loop_back is False
             assert "error_output" in port.description
         _assert_property_docs(node.config_schema)
 
@@ -160,7 +159,6 @@ def test_until_is_registered_as_a_container() -> None:
     node = next(item for item in list_node_types() if item.type_id == "volume.until")
     assert [port.port for port in node.inputs] == ["main"]
     assert [port.port for port in node.outputs] == ["each", "done"]
-    assert all(port.loop_back is False for port in (*node.inputs, *node.outputs))
     assert node.output_view == OutputView(
         kind="container", metrics=("count",), item="index"
     )
@@ -189,7 +187,6 @@ def test_batch_read_is_registered_as_a_container() -> None:
     )
     assert [port.port for port in node.inputs] == ["main"]
     assert [port.port for port in node.outputs] == ["each", "done"]
-    assert all(port.loop_back is False for port in node.outputs)
     schema = node.config_schema
     assert schema["required"] == ["dataset"]
     dataset = schema["properties"]["dataset"]

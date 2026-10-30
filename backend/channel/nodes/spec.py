@@ -37,7 +37,6 @@ __all__ = [
 class PortSpec:
     port: str
     description: str
-    loop_back: bool = False
     coarse_type: str = "unknown"
 
 

@@ -227,7 +227,7 @@ def test_cycle_through_a_loop_back_port_is_illegal() -> None:
         inputs=(PortSpec("main", "Items to iterate."),),
         outputs=(
             PortSpec("main", "Items after the loop finishes."),
-            PortSpec("loop", "Items sent back into the loop.", loop_back=True),
+            PortSpec("loop", "Items sent back into the loop."),
         ),
         config_schema={
             "type": "object",

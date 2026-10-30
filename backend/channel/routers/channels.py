@@ -156,7 +156,6 @@ def _node_type_out(spec: NodeType) -> NodeTypeOut:
                 port=port.port,
                 description=port.description,
                 coarse_type=port.coarse_type,
-                loop_back=port.loop_back,
             )
             for port in spec.inputs
         ],
@@ -165,7 +164,6 @@ def _node_type_out(spec: NodeType) -> NodeTypeOut:
                 port=port.port,
                 description=port.description,
                 coarse_type=port.coarse_type,
-                loop_back=port.loop_back,
             )
             for port in spec.outputs
         ],

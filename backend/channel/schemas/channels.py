@@ -408,7 +408,6 @@ class PortOut(BaseModel):
     port: str
     description: str
     coarse_type: str
-    loop_back: bool = False
 
 
 class OutputViewOut(BaseModel):
