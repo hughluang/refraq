@@ -453,7 +453,8 @@ class _RunHooks:
             step_totals=totals,
         )
 
-    def note_round_condition(self, seq: int, index: int, entry: Any) -> None:
+    def note_round_template(self, seq: int, index: int, path: str, entry: Any) -> None:
+        del path
         get_run_store().set_round_condition(
             self.run_id,
             container_seq=seq,

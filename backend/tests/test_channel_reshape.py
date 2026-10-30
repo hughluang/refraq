@@ -252,27 +252,45 @@ def test_deduplicate_keeps_the_first_row() -> None:
 
 
 def test_for_exposes_iterations_and_rejects_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    result = _run("volume.for")(_node("volume.for", {"items": '["a", "b"]'}), Hooks())
-    assert result.iterations == [
+    class _Body:
+        def __init__(self) -> None:
+            self.steps: list[dict] = []
+
+        def run_round(self, step: dict, *, record: object = None) -> dict:
+            del record
+            self.steps.append(step)
+            return {"step": {"current": step["current"]}}
+
+        def evaluate_round_template(self, path: str, schema: object) -> tuple[object, None]:
+            raise AssertionError(path)
+
+    for_type = next(item for item in list_node_types() if item.type_id == "volume.for")
+    body = _Body()
+    result = for_type.container.run(_node("volume.for", {"items": '["a", "b"]'}), Hooks(), body)
+    assert body.steps == [
         {"current": "a", "index": 0, "count": 2},
         {"current": "b", "index": 1, "count": 2},
     ]
     assert result.output["current"] == "b"
-    assert result.output["iterations"] == []
+    assert result.output["iterations"] == [
+        {"step": {"current": "a"}},
+        {"step": {"current": "b"}},
+    ]
     assert "results" not in result.output
     assert result.ports == frozenset({"done"})
-    for_type = next(item for item in list_node_types() if item.type_id == "volume.for")
     assert [port.port for port in for_type.inputs] == ["main"]
     assert [(port.port, port.loop_back) for port in for_type.outputs] == [
         ("each", False),
         ("done", False),
     ]
-    empty = _run("volume.for")(_node("volume.for", {"items": "[]"}), Hooks())
-    assert empty.iterations == []
+    empty_body = _Body()
+    empty = for_type.container.run(_node("volume.for", {"items": "[]"}), Hooks(), empty_body)
+    assert empty_body.steps == []
     assert empty.output["current"] is None
     assert empty.output["index"] is None
+    assert empty.output["iterations"] == []
     monkeypatch.setattr("backend.channel.nodes.volume.for.ITEM_LIMIT", 1)
-    limited = _run("volume.for")(_node("volume.for", {"items": "[1, 2]"}), Hooks())
+    limited = for_type.container.run(_node("volume.for", {"items": "[1, 2]"}), Hooks(), _Body())
     assert limited.error_code == "CHANNEL_ITEM_LIMIT_EXCEEDED"
     assert limited.error_message == "Use Materialize or Dataset Query, then Batch Read."
 

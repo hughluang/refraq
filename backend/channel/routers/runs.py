@@ -16,7 +16,7 @@ from backend.channel.errors import (
     ChannelRequestInvalid,
     ChannelRunNotFound,
 )
-from backend.channel.graph import CONTAINER_TYPES
+from backend.channel.nodes import list_node_types
 from backend.channel.run_store import (
     ContainerRoundRecord,
     NodeExecutionRecord,
@@ -440,9 +440,12 @@ def _is_container(run: Any, record: NodeExecutionRecord) -> bool:
     nodes = graph.get("nodes") if graph is not None else None
     if not isinstance(nodes, list):
         return False
+    containers = {
+        item.type_id for item in list_node_types() if item.container is not None
+    }
     for node in nodes:
         if isinstance(node, dict) and str(node.get("id")) == record.node_id:
-            return str(node.get("type")) in CONTAINER_TYPES
+            return str(node.get("type")) in containers
     return False
 
 

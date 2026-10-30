@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import NodeType, OutputView, PortSpec
+from backend.channel.nodes.spec import ContainerSpec, NodeResult, NodeType, OutputView, PortSpec
 
 _PORT_NAME = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")
 _SUMMARY_MAX = 160
@@ -87,27 +87,46 @@ def test_every_type_states_its_function_and_ports() -> None:
         _assert_property_docs(node.config_schema)
 
 
-def test_every_registered_type_has_execute() -> None:
+def test_every_registered_type_has_execute_or_container() -> None:
     types = list_node_types()
     assert types
     for node in types:
-        assert callable(node.execute)
+        assert (node.execute is None) != (node.container is None)
 
 
-def test_a_node_type_requires_execute() -> None:
+def test_a_node_type_has_execute_or_container() -> None:
+    def run_node(node: dict, hooks: object) -> NodeResult:
+        del node, hooks
+        return NodeResult(status="succeeded")
+
+    def run_container(node: dict, hooks: object, body: object) -> NodeResult:
+        del node, hooks, body
+        return NodeResult(status="succeeded")
+
+    bare = dict(
+        type_id="test.bare",
+        family="test",
+        label="Bare",
+        summary="Has neither execute nor container.",
+        description="Test type. Constructing it with neither execute nor container fails.",
+        trigger=False,
+        inputs=(),
+        outputs=(PortSpec("main", "Output."),),
+        config_schema={"type": "object"},
+        output_view=OutputView(kind="value"),
+    )
+    with pytest.raises(TypeError):
+        NodeType(**bare)
     with pytest.raises(TypeError):
         NodeType(
-            type_id="test.bare",
-            family="test",
-            label="Bare",
-            summary="Has no execute function.",
-            description="Test type. Constructing it without execute fails.",
-            trigger=False,
-            inputs=(),
-            outputs=(PortSpec("main", "Output."),),
-            config_schema={"type": "object"},
-            output_view=OutputView(kind="value"),
+            **bare,
+            execute=run_node,
+            container=ContainerSpec(run=run_container),
         )
+    container = NodeType(**bare, container=ContainerSpec(run=run_container))
+    assert container.execute is None
+    assert container.container is not None
+    assert container.container.round_templates == ()
 
 
 def test_every_node_module_is_registered_and_exports_only_node_type() -> None:
@@ -156,6 +175,9 @@ def test_until_is_registered_as_a_container() -> None:
     assert cap["minimum"] == 1
     assert cap["maximum"] == ITEM_LIMIT
     assert "default" not in cap
+    assert node.execute is None
+    assert node.container is not None
+    assert node.container.round_templates == ("until",)
 
 
 def test_batch_read_is_registered_as_a_container() -> None:

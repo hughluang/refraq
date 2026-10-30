@@ -6,13 +6,10 @@ whose incoming edges are all dead does not run. Among ready siblings, the
 smaller canvas y, then x, is explored first, and that branch finishes before
 the next sibling.
 
-A container runs once for each element. Its body is the nodes whose parent is
-that container. ``CONTAINER_TYPES`` names the containers. Each accumulated
-round records the outputs of the body nodes that ran. A container that does
-not accumulate leaves those rounds off its output. Until is the exception:
-it repeats its direct children until a boolean template is true, and the
-rounds are not known before the body runs. An incoming edge that does not
-target main does not gate the container.
+A container is a node type that declares one. Its body is the nodes whose
+parent is that container. The container runs its own rounds through the body
+this engine lends that execution. An incoming edge that does not target main
+does not gate the container.
 """
 
 from __future__ import annotations
@@ -21,25 +18,22 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from backend.channel.graph import CONTAINER_TYPES, ancestor_closure, refine_ports
-from backend.channel.item_limit import ITEM_LIMIT
-from backend.channel.node_support import render_field
+from backend.channel.graph import ancestor_closure, refine_ports
+from backend.channel.node_support import (
+    InputCapture,
+    bind_execution_input,
+    render_field,
+    reset_execution_input,
+)
 from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, ReferenceResolver
 from backend.channel.template import output_matches
-from backend.channel.variables import value_size
 
 __all__ = [
-    "ITERATION_VOLUME_MAX_BYTES",
     "RunOutcome",
     "execute",
 ]
 
-ITERATION_VOLUME_MAX_BYTES = 16 * 1024 * 1024
 _EACH_PORT = "each"
-_UNTIL_TYPE = "volume.until"
-_BOOL = {"type": "boolean"}
-_UNTIL_CAP_MESSAGE = "Until reached max_iterations before its condition became true."
-_UNTIL_VOLUME_MESSAGE = "Until iteration output exceeds 16 MiB."
 
 
 @dataclass
@@ -51,6 +45,14 @@ class RunOutcome:
     failed_node_id: str | None = None
     stopped_node_id: str | None = None
     skipped_node_ids: list[str] = field(default_factory=list)
+
+
+class _RoundStopped(Exception):
+    """A Loop Body walk stopped. Only the engine catches this."""
+
+    def __init__(self, outcome: RunOutcome, index: int) -> None:
+        self.outcome = outcome
+        self.index = index
 
 
 @dataclass(frozen=True)
@@ -91,7 +93,6 @@ class _Run:
         self.produced: dict[str, Any] = {}
         self.ran_stack: list[set[str]] = [set()]
         self.loops: set[str] = set()
-        self.accumulating: set[str] = set()
         self.bodies: dict[str, set[str]] = {}
         self._frames: list[tuple[int, int]] = []
         self._index_loops()
@@ -103,13 +104,11 @@ class _Run:
             if isinstance(parent, str) and parent in self.nodes and parent != node_id:
                 children.setdefault(parent, set()).add(node_id)
         for node_id, node in self.nodes.items():
-            kind = CONTAINER_TYPES.get(str(node.get("type")))
-            if kind is None:
+            spec = self.by_type.get(str(node.get("type")))
+            if spec is None or spec.container is None:
                 continue
             self.loops.add(node_id)
             self.bodies[node_id] = set(children.get(node_id, ()))
-            if kind.accumulate:
-                self.accumulating.add(node_id)
 
     def walk(self, scope: set[str], *, start: str | None) -> RunOutcome | None:
         direct = (scope & self.reachable) - self._hidden(scope)
@@ -253,174 +252,11 @@ class _Run:
             self.hooks.on_finish(seq, node, result)
             if outcome is not None:
                 return outcome
-            self._note(node_id, result)
-            self._settle(node_id, result, {_EACH_PORT})
-            self._push(node_id, direct, done, stack)
-            return None
-        if result.status != "succeeded":
-            self.hooks.on_finish(seq, node, result)
-            self._note(node_id, result)
-            self._settle(node_id, result, {_EACH_PORT})
-            self._push(node_id, direct, done, stack)
-            return None
-        if str(node.get("type")) == _UNTIL_TYPE:
-            outcome = self._until(node_id, seq, result)
         else:
-            outcome = self._iterate(node_id, seq, result)
-        if outcome is not None:
-            return outcome
+            self.hooks.on_finish(seq, node, result)
+        self._note(node_id, result)
         self._settle(node_id, result, {_EACH_PORT})
         self._push(node_id, direct, done, stack)
-        return None
-
-    def _until(self, node_id: str, seq: int, result: NodeResult) -> RunOutcome | None:
-        """Repeat direct children until the boolean template is true.
-
-        Rounds are not known before the body runs. ``previous`` is frozen from
-        the round that just finished, before the next round drops those outputs.
-        """
-        node = self.nodes[node_id]
-        body = self.bodies[node_id]
-        cap = _until_cap(node)
-        if cap is None:
-            failed = NodeResult(
-                status="failed",
-                error_code="CHANNEL_NODE_CONFIG_INVALID",
-                error_message="max_iterations must be an integer from 1 through 100000",
-            )
-            self.hooks.on_finish(seq, node, failed)
-            return self._failure(node_id, failed)
-        previous: Any = None
-        collected: list[Any] = []
-        config = node["config"]
-        for index in range(cap):
-            step = {"previous": previous, "index": index}
-            self._drop(body)
-            for body_id in body:
-                self.produced.pop(body_id, None)
-            self.hooks.on_output(node, step)
-            self.produced[node_id] = step
-            _record_round(self.hooks, seq, index, {"index": index})
-            self._arm(node_id, body)
-            self.ran_stack.append(set())
-            self._frames.append((seq, index))
-            try:
-                outcome = self.walk(body, start=None)
-            finally:
-                self._frames.pop()
-            ran = self.ran_stack.pop()
-            if outcome is not None:
-                self.hooks.on_finish(
-                    seq,
-                    node,
-                    NodeResult(
-                        status="failed",
-                        error_code=outcome.error_code,
-                        error_message=outcome.error_message or "cancelled",
-                    ),
-                )
-                return outcome
-            collected.append(self._round(ran))
-            if value_size(collected) > ITERATION_VOLUME_MAX_BYTES:
-                failed = NodeResult(
-                    status="failed",
-                    error_code="CHANNEL_ITERATION_VOLUME_EXCEEDED",
-                    error_message=_UNTIL_VOLUME_MESSAGE,
-                )
-                self.hooks.on_finish(seq, node, failed)
-                return RunOutcome(
-                    status="failed",
-                    error_code="CHANNEL_ITERATION_VOLUME_EXCEEDED",
-                    error_message=_UNTIL_VOLUME_MESSAGE,
-                    failed_node_id=node_id,
-                    skipped_node_ids=list(self.skipped),
-                )
-            value, error = render_field(self.hooks, config.get("until"), _BOOL, path="until")
-            if error is not None:
-                _note_round_condition(self.hooks, seq, index, _until_error_entry(error))
-                self.hooks.on_finish(seq, node, error)
-                return self._failure(node_id, error)
-            _note_round_condition(self.hooks, seq, index, {"value": value})
-            if value:
-                result.output = {"index": index, "count": index + 1, "iterations": collected}
-                self.hooks.on_finish(seq, node, result)
-                self._note(node_id, result)
-                return None
-            previous = collected[-1]
-        failed = NodeResult(
-            status="failed",
-            error_code="CHANNEL_UNTIL_MAX_ITERATIONS",
-            error_message=_UNTIL_CAP_MESSAGE,
-            output={"index": cap - 1, "count": cap, "iterations": collected},
-        )
-        self.hooks.on_finish(seq, node, failed)
-        return RunOutcome(
-            status="failed",
-            error_code="CHANNEL_UNTIL_MAX_ITERATIONS",
-            error_message=_UNTIL_CAP_MESSAGE,
-            failed_node_id=node_id,
-            skipped_node_ids=list(self.skipped),
-        )
-
-    def _iterate(self, node_id: str, seq: int, result: NodeResult) -> RunOutcome | None:
-        node = self.nodes[node_id]
-        body = self.bodies[node_id]
-        steps = _iteration_steps(result.iterations)
-        collected: list[Any] = []
-        accumulate = node_id in self.accumulating
-        for index, step in enumerate(steps):
-            self._drop(body)
-            for body_id in body:
-                self.produced.pop(body_id, None)
-            self.hooks.on_output(node, step)
-            self.produced[node_id] = step
-            _record_round(self.hooks, seq, index, step)
-            self._arm(node_id, body)
-            self.ran_stack.append(set())
-            self._frames.append((seq, index))
-            try:
-                outcome = self.walk(body, start=None)
-            finally:
-                self._frames.pop()
-            ran = self.ran_stack.pop()
-            if outcome is not None:
-                detail = None
-                if outcome.status == "failed" and not accumulate:
-                    detail = {"index": index}
-                self.hooks.on_finish(
-                    seq,
-                    node,
-                    NodeResult(
-                        status="failed",
-                        error_code=outcome.error_code,
-                        error_message=outcome.error_message or "cancelled",
-                        error_detail=detail,
-                    ),
-                )
-                return outcome
-            if not accumulate:
-                continue
-            collected.append(self._round(ran))
-            if value_size(collected) > ITERATION_VOLUME_MAX_BYTES:
-                message = "For iteration output exceeds 16 MiB. Read the items in batches."
-                failed = NodeResult(
-                    status="failed",
-                    error_code="CHANNEL_ITERATION_VOLUME_EXCEEDED",
-                    error_message=message,
-                )
-                self.hooks.on_finish(seq, node, failed)
-                return RunOutcome(
-                    status="failed",
-                    error_code="CHANNEL_ITERATION_VOLUME_EXCEEDED",
-                    error_message=message,
-                    failed_node_id=node_id,
-                    skipped_node_ids=list(self.skipped),
-                )
-        if accumulate:
-            base = result.output if isinstance(result.output, dict) else {}
-            result.output = {**base, "iterations": collected}
-        self.hooks.on_finish(seq, node, result)
-        self._note(node_id, result)
         return None
 
     def _round(self, ran: set[str]) -> dict[str, Any]:
@@ -440,9 +276,8 @@ class _Run:
 
     def _drop(self, body: set[str]) -> None:
         refs = sorted(str(self.nodes[node_id].get("ref") or node_id) for node_id in body)
-        drop = getattr(self.hooks, "drop_outputs", None)
-        if callable(drop) and refs:
-            drop(refs)
+        if refs:
+            self.hooks.drop_outputs(refs)
 
     def _finish_tries(self, node_id: str) -> tuple[RunOutcome | None, NodeResult]:
         stopped, seq, result = self._tries(node_id)
@@ -468,7 +303,9 @@ class _Run:
                     error_message="Node did not execute",
                 ),
             )
-        seq, result = self._start(node_id)
+        halted, seq, result = self._attempt(node_id)
+        if halted is not None:
+            return halted, seq, result
         attempt = 1
         while result.status == "failed" and attempt < tries:
             self.hooks.on_finish(seq, node, result)
@@ -478,8 +315,17 @@ class _Run:
             stopped = self._stopped(node_id)
             if stopped is not None:
                 return stopped, seq, result
-            seq, result = self._start(node_id)
+            halted, seq, result = self._attempt(node_id)
+            if halted is not None:
+                return halted, seq, result
             attempt += 1
+        return None, seq, result
+
+    def _attempt(self, node_id: str) -> tuple[RunOutcome | None, int, NodeResult]:
+        try:
+            seq, result = self._start(node_id)
+        except _RoundStopped as stopped:
+            return stopped.outcome, 0, _round_stop_result(stopped)
         return None, seq, result
 
     def _pause(self, node_id: str, wait_sec: float) -> RunOutcome | None:
@@ -520,22 +366,38 @@ class _Run:
             container_seq, round_index = self._frames[-1]
         seq = self.hooks.on_start(node, container_seq=container_seq, round=round_index)
         spec = self.by_type.get(str(node["type"]))
-        token = _open_input(self.hooks, seq)
+        token = self.hooks.open_input(seq)
         try:
-            if spec is None:
-                result = NodeResult(
-                    status="failed",
-                    error_code="CHANNEL_NODE_FAILED",
-                    error_message=f"No executor for {node['type']}",
-                )
-            else:
-                result = spec.execute(node, self.hooks)
-                result = _apply_output_check(node_id, spec, result, self.schemas)
+            try:
+                result = self._invoke(node_id, node, spec, seq)
+            except _RoundStopped as stopped:
+                self.hooks.on_finish(seq, node, _round_stop_result(stopped))
+                raise
             if result.status == "skipped" and result.output is None:
                 result.output = {"skipped": True, "reason": result.error_message}
             return seq, result
         finally:
-            _close_input(self.hooks, token)
+            self.hooks.close_input(token)
+
+    def _invoke(
+        self,
+        node_id: str,
+        node: Mapping[str, Any],
+        spec: NodeType | None,
+        seq: int,
+    ) -> NodeResult:
+        if spec is None:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message=f"No executor for {node['type']}",
+            )
+        if spec.container is not None:
+            body = _ContainerBody(self, node_id, seq, spec.container.round_templates)
+            result = spec.container.run(node, self.hooks, body)
+        else:
+            result = spec.execute(node, self.hooks)
+        return _apply_output_check(node_id, spec, result, self.schemas)
 
     def _failure(self, node_id: str, result: NodeResult) -> RunOutcome | None:
         if result.status != "failed":
@@ -559,58 +421,80 @@ class _Run:
         return _position(self.nodes[node_id])
 
 
-def _open_input(hooks: EngineHooks, seq: int) -> Any:
-    opener = getattr(hooks, "open_input", None)
-    if not callable(opener):
-        return None
-    return opener(seq)
+def _round_stop_result(stopped: _RoundStopped) -> NodeResult:
+    outcome = stopped.outcome
+    return NodeResult(
+        status="failed",
+        error_code=outcome.error_code,
+        error_message=outcome.error_message or "cancelled",
+        error_detail={"index": stopped.index},
+    )
 
 
-def _close_input(hooks: EngineHooks, token: Any) -> None:
-    closer = getattr(hooks, "close_input", None)
-    if callable(closer):
-        closer(token)
+class _ContainerBody:
+    """The one Container Body. One instance serves one Container execution."""
 
+    def __init__(
+        self,
+        run: _Run,
+        node_id: str,
+        seq: int,
+        round_templates: tuple[str, ...],
+    ) -> None:
+        self._run = run
+        self._node_id = node_id
+        self._seq = seq
+        self._templates = round_templates
+        self._count = 0
+        self._index: int | None = None
 
-def _record_round(hooks: EngineHooks, seq: int, index: int, step: Any) -> None:
-    recorder = getattr(hooks, "on_round", None)
-    if callable(recorder):
-        recorder(seq, index, step)
+    def run_round(self, step: Any, *, record: Any = None) -> dict[str, Any]:
+        index = self._count
+        self._count += 1
+        self._index = index
+        run = self._run
+        node_id = self._node_id
+        body = run.bodies[node_id]
+        run._drop(body)
+        for body_id in body:
+            run.produced.pop(body_id, None)
+        node = run.nodes[node_id]
+        run.hooks.on_output(node, step)
+        run.produced[node_id] = step
+        run.hooks.on_round(self._seq, index, step if record is None else record)
+        run._arm(node_id, body)
+        run.ran_stack.append(set())
+        run._frames.append((self._seq, index))
+        try:
+            outcome = run.walk(body, start=None)
+        finally:
+            run._frames.pop()
+            ran = run.ran_stack.pop()
+        if outcome is not None:
+            raise _RoundStopped(outcome, index)
+        return run._round(ran)
 
-
-def _note_round_condition(hooks: EngineHooks, seq: int, index: int, entry: Any) -> None:
-    """Record the condition on the round that just finished evaluating it."""
-    note = getattr(hooks, "note_round_condition", None)
-    if callable(note):
-        note(seq, index, entry)
-
-
-def _until_error_entry(error: NodeResult) -> dict[str, Any]:
-    return {"error": {"code": error.error_code, "message": error.error_message}}
-
-
-def _until_cap(node: Mapping[str, Any]) -> int | None:
-    config = node.get("config")
-    if not isinstance(config, dict):
-        return None
-    value = config.get("max_iterations")
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    if value < 1 or value > ITEM_LIMIT:
-        return None
-    return value
-
-
-def _iteration_steps(iterations: Any) -> Any:
-    """Rounds to walk. A list stays a list. Any other iterable stays lazy."""
-    if isinstance(iterations, list):
-        return iterations
-    if iterations is None or isinstance(iterations, (str, bytes, bytearray)):
-        return []
-    try:
-        return iter(iterations)
-    except TypeError:
-        return []
+    def evaluate_round_template(
+        self, path: str, schema: Mapping[str, Any]
+    ) -> tuple[Any, NodeResult | None]:
+        if path not in self._templates:
+            raise RuntimeError(f"{path} is not a round template of this container")
+        if self._index is None:
+            raise RuntimeError("no round to evaluate")
+        node = self._run.nodes[self._node_id]
+        config = node.get("config")
+        raw = config.get(path) if isinstance(config, dict) else None
+        suspended = bind_execution_input(InputCapture())
+        try:
+            value, error = render_field(self._run.hooks, raw, schema, path=path)
+        finally:
+            reset_execution_input(suspended)
+        if error is None:
+            entry: Any = {"value": value}
+        else:
+            entry = {"error": {"code": error.error_code, "message": error.error_message}}
+        self._run.hooks.note_round_template(self._seq, self._index, path, entry)
+        return value, error
 
 
 def execute(

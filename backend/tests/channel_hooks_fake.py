@@ -77,6 +77,19 @@ class FakeHooks:
     def on_output(self, node: Mapping[str, Any], output: Any) -> None:
         self.outputs[str(node["id"])] = output
 
+    def open_input(self, seq: int) -> Any:
+        del seq
+        return None
+
+    def close_input(self, token: Any) -> None:
+        del token
+
+    def on_round(self, seq: int, index: int, step: Any) -> None:
+        del seq, index, step
+
+    def note_round_template(self, seq: int, index: int, path: str, entry: Any) -> None:
+        del seq, index, path, entry
+
     def drop_outputs(self, refs: list[str]) -> None:
         self.dropped.append(list(refs))
 

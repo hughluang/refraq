@@ -5,9 +5,12 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from backend.channel.item_limit import ITEM_LIMIT, LIST_ITEM_LIMIT_MESSAGE
+from backend.channel.iteration_volume import append_round
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
     MAIN_INPUT,
+    ContainerBody,
+    ContainerSpec,
     EngineHooks,
     NodeResult,
     NodeType,
@@ -78,7 +81,10 @@ def _nullable(schema: Mapping[str, Any]) -> dict[str, Any]:
     return dict(schema)
 
 
-def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+_VOLUME_MESSAGE = "For iteration output exceeds 16 MiB. Read the items in batches."
+
+
+def _run(node: Mapping[str, Any], hooks: EngineHooks, body: ContainerBody) -> NodeResult:
     items, error = render_field(hooks, node["config"].get("items"), _ARRAY, path="items")
     if error is not None:
         return error
@@ -89,19 +95,23 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_message=LIST_ITEM_LIMIT_MESSAGE,
         )
     count = len(items)
-    iterations = [
-        {"current": item, "index": index, "count": count} for index, item in enumerate(items)
-    ]
-    if count == 0:
-        current: Any = None
-        index: int | None = None
-    else:
-        current = items[-1]
-        index = count - 1
+    collected: list[Any] = []
+    current: Any = None
+    index: int | None = None
+    for index, item in enumerate(items):
+        outputs = body.run_round({"current": item, "index": index, "count": count})
+        failed = append_round(collected, outputs, message=_VOLUME_MESSAGE)
+        if failed is not None:
+            return failed
+        current = item
     return NodeResult(
         status="succeeded",
-        output={"current": current, "index": index, "count": count, "iterations": []},
-        iterations=iterations,
+        output={
+            "current": current,
+            "index": index,
+            "count": count,
+            "iterations": collected,
+        },
         ports=frozenset({"done"}),
     )
 
@@ -143,6 +153,6 @@ NODE_TYPE = NodeType(
         ["items"],
     ),
     output_view=OutputView(kind="container", metrics=("count",), item="current"),
-    execute=_execute,
+    container=ContainerSpec(run=_run),
     refine=_refine,
 )

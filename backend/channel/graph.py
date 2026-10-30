@@ -2,9 +2,9 @@
 
 `validate` reports every problem it finds. It does not read stores; callers
 pass a reference resolver. Every cycle is illegal. A container frame is the
-set of nodes whose parent is a container. ``CONTAINER_TYPES`` is that set.
-An edge may enter a frame only from that container's each port. Ancestors
-walk incoming edges and skip edges that cross a frame.
+set of nodes whose parent is a container node type. An edge may enter a frame
+only from that container's each port. Ancestors walk incoming edges and skip
+edges that cross a frame.
 """
 
 from __future__ import annotations
@@ -26,8 +26,6 @@ from backend.channel.template import (
 from backend.channel.values import attribute_value_schema
 
 __all__ = [
-    "CONTAINER_TYPES",
-    "ContainerType",
     "RefinedPort",
     "TemplateSite",
     "refine_ports",
@@ -79,7 +77,7 @@ def validate(
     problems.extend(_trigger_problems(nodes, edges, by_id, by_type))
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
     problems.extend(_cycle_problems(nodes, edges, by_id))
-    problems.extend(_for_frame_problems(nodes, edges, by_id))
+    problems.extend(_container_frame_problems(nodes, edges, by_id, by_type))
     problems.extend(_reference_problems(nodes, by_type, resolver))
     problems.extend(_settings_problems(graph["settings"], resolver))
     return problems
@@ -797,27 +795,9 @@ def _is_trigger(node: Mapping[str, Any], by_type: dict[str, NodeType]) -> bool:
     return spec is not None and spec.trigger
 
 
-@dataclass(frozen=True, slots=True)
-class ContainerType:
-    """How a container type runs the frame named by its ``CONTAINER_TYPES`` key.
-
-    ``accumulate`` keeps each round on the container output. For does. A
-    container that opts out does not.
-    """
-
-    accumulate: bool = True
-
-
-# The engine and graph validation both read this set.
-CONTAINER_TYPES: dict[str, ContainerType] = {
-    "volume.for": ContainerType(),
-    "volume.batch_read": ContainerType(accumulate=False),
-    "volume.until": ContainerType(),
-}
-
-
-def _is_container(type_id: object) -> bool:
-    return str(type_id) in CONTAINER_TYPES
+def _is_container(type_id: object, by_type: Mapping[str, NodeType]) -> bool:
+    spec = by_type.get(str(type_id))
+    return spec is not None and spec.container is not None
 
 
 def _parent_ref(node: Mapping[str, Any]) -> str | None:
@@ -840,7 +820,11 @@ def _crosses_frame(
     return parent_target != source_id
 
 
-def _parent_cycle(start: str, by_id: Mapping[str, Mapping[str, Any]]) -> bool:
+def _parent_cycle(
+    start: str,
+    by_id: Mapping[str, Mapping[str, Any]],
+    by_type: Mapping[str, NodeType],
+) -> bool:
     seen = {start}
     current = start
     while True:
@@ -849,16 +833,17 @@ def _parent_cycle(start: str, by_id: Mapping[str, Mapping[str, Any]]) -> bool:
             return False
         if parent in seen:
             return True
-        if not _is_container(by_id[parent].get("type")):
+        if not _is_container(by_id[parent].get("type"), by_type):
             return False
         seen.add(parent)
         current = parent
 
 
-def _for_frame_problems(
+def _container_frame_problems(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     by_id: dict[str, dict[str, Any]],
+    by_type: Mapping[str, NodeType],
 ) -> list[Problem]:
     problems: list[Problem] = []
     for node in nodes:
@@ -870,7 +855,7 @@ def _for_frame_problems(
             not isinstance(parent, str)
             or not parent
             or parent not in by_id
-            or not _is_container(by_id[parent].get("type"))
+            or not _is_container(by_id[parent].get("type"), by_type)
         ):
             problems.append(
                 Problem(
@@ -880,7 +865,7 @@ def _for_frame_problems(
                 )
             )
             continue
-        if _parent_cycle(node_id, by_id):
+        if _parent_cycle(node_id, by_id, by_type):
             problems.append(
                 Problem(
                     "CHANNEL_LOOP_BODY_INVALID",
@@ -904,7 +889,7 @@ def _for_frame_problems(
             )
             continue
         source = by_id[source_id]
-        if not _is_container(source.get("type")):
+        if not _is_container(source.get("type"), by_type):
             continue
         source_port = str(edge["source"]["port"])
         target_parent = _parent_ref(by_id[target_id])
@@ -943,7 +928,11 @@ class _Upstream(dict[str, Any]):
         self.inside = frozenset(inside)
 
 
-def _containing_refs(node_id: str, by_id: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
+def _containing_refs(
+    node_id: str,
+    by_id: Mapping[str, Mapping[str, Any]],
+    by_type: Mapping[str, NodeType],
+) -> frozenset[str]:
     """Refs of container ancestors whose frame holds ``node_id``."""
     refs: set[str] = set()
     seen: set[str] = set()
@@ -954,7 +943,7 @@ def _containing_refs(node_id: str, by_id: Mapping[str, Mapping[str, Any]]) -> fr
         if parent is None or parent not in by_id:
             break
         parent_node = by_id[parent]
-        if _is_container(parent_node.get("type")):
+        if _is_container(parent_node.get("type"), by_type):
             ref = parent_node.get("ref")
             if isinstance(ref, str):
                 refs.add(ref)
@@ -1015,7 +1004,11 @@ def refine_ports(
                     upstream[ref] = outputs.get(anc, {})
             produced = spec.refine(
                 node["config"],
-                _Upstream(upstream, _name_to_ref(found, by_id), _containing_refs(node_id, by_id)),
+                _Upstream(
+                    upstream,
+                    _name_to_ref(found, by_id),
+                    _containing_refs(node_id, by_id, by_type),
+                ),
                 resolver,
             )
         outputs[node_id] = produced if isinstance(produced, dict) else {}

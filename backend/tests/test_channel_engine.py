@@ -7,7 +7,20 @@ from collections.abc import Callable
 import pytest
 
 from backend.channel.engine import execute
-from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, OutputView, PortSpec
+from backend.channel.node_support import (
+    InputCapture,
+    bind_execution_input,
+    reset_execution_input,
+)
+from backend.channel.nodes.spec import (
+    ContainerBody,
+    ContainerSpec,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    OutputView,
+    PortSpec,
+)
 from backend.tests.channel_hooks_fake import FakeHooks
 
 
@@ -53,6 +66,12 @@ def _type(
 
 def _catalog(bound: dict[str, Callable[..., NodeResult]]) -> list[NodeType]:
     return [_type(type_id, run) for type_id, run in bound.items()]
+
+
+def _for_type() -> NodeType:
+    import importlib
+
+    return importlib.import_module("backend.channel.nodes.volume.for").NODE_TYPE
 
 
 def _node(
@@ -304,17 +323,11 @@ def _branch(node: dict, hooks: EngineHooks) -> NodeResult:
 
 
 def _walk(node: dict, hooks: EngineHooks) -> NodeResult:
-    if node["type"] != "volume.for":
-        current = hooks.outputs.get("outer") or hooks.outputs.get("walk") or {}
-        return NodeResult(status="succeeded", output={"saw": current.get("current"), "id": node["id"]})
-    items = list(node["config"].get("items") or [])
-    count = len(items)
-    iterations = [{"current": item, "index": index, "count": count} for index, item in enumerate(items)]
-    if count == 0:
-        output = {"current": None, "index": None, "count": 0}
-    else:
-        output = {"current": items[-1], "index": count - 1, "count": count}
-    return NodeResult(status="succeeded", output=output, iterations=iterations, ports=frozenset({"done"}))
+    current = hooks.outputs.get("outer") or hooks.outputs.get("walk") or {}
+    return NodeResult(
+        status="succeeded",
+        output={"saw": current.get("current"), "id": node["id"]},
+    )
 
 
 def test_if_dead_branch_does_not_run_and_the_join_does() -> None:
@@ -361,7 +374,7 @@ def test_join_waits_for_both_inputs() -> None:
 
 def test_for_runs_the_body_once_per_element_and_records_iterations() -> None:
     walk = _node("walk", 0, type_id="volume.for")
-    walk["config"] = {"items": ["a", "b"]}
+    walk["config"] = {"items": '["a", "b"]'}
     graph = {
         "nodes": [walk, _node("step", 1, parent="walk"), _node("after", 2)],
         "edges": [
@@ -371,7 +384,7 @@ def test_for_runs_the_body_once_per_element_and_records_iterations() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}), _RESOLVER, hooks)
+    outcome = execute(graph, "walk", [_for_type(), _type("fake", _walk)], _RESOLVER, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order == ["walk", "step", "step", "after"]
     assert hooks.outputs["walk"]["iterations"] == [
@@ -385,14 +398,27 @@ def test_for_runs_the_body_once_per_element_and_records_iterations() -> None:
 
 
 def test_for_runs_each_element_of_a_non_list_iterable() -> None:
-    def walk(node: dict, hooks: EngineHooks) -> NodeResult:
-        result = _walk(node, hooks)
-        if result.iterations is not None:
-            result.iterations = tuple(result.iterations)
-        return result
+    def run(node: dict, hooks: EngineHooks, body: ContainerBody) -> NodeResult:
+        del node, hooks
+        items = ("a", "b")
+        count = len(items)
+        collected = []
+        for index, item in enumerate(items):
+            collected.append(
+                body.run_round({"current": item, "index": index, "count": count})
+            )
+        return NodeResult(
+            status="succeeded",
+            output={
+                "current": items[-1],
+                "index": count - 1,
+                "count": count,
+                "iterations": collected,
+            },
+            ports=frozenset({"done"}),
+        )
 
     walk_node = _node("walk", 0, type_id="volume.for")
-    walk_node["config"] = {"items": ["a", "b"]}
     graph = {
         "nodes": [walk_node, _node("step", 1, parent="walk"), _node("after", 2)],
         "edges": [
@@ -402,7 +428,13 @@ def test_for_runs_each_element_of_a_non_list_iterable() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "walk", _catalog({"volume.for": walk, "fake": walk}), _RESOLVER, hooks)
+    outcome = execute(
+        graph,
+        "walk",
+        [_container("volume.for", run), _type("fake", _walk)],
+        _RESOLVER,
+        hooks,
+    )
     assert outcome.status == "succeeded"
     assert hooks.order == ["walk", "step", "step", "after"]
     assert hooks.outputs["walk"]["iterations"] == [
@@ -413,7 +445,7 @@ def test_for_runs_each_element_of_a_non_list_iterable() -> None:
 
 def test_for_empty_list_skips_the_body_and_still_runs_done() -> None:
     walk = _node("walk", 0, type_id="volume.for")
-    walk["config"] = {"items": []}
+    walk["config"] = {"items": "[]"}
     graph = {
         "nodes": [walk, _node("step", 1, parent="walk"), _node("after", 2)],
         "edges": [
@@ -423,7 +455,7 @@ def test_for_empty_list_skips_the_body_and_still_runs_done() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}), _RESOLVER, hooks)
+    outcome = execute(graph, "walk", [_for_type(), _type("fake", _walk)], _RESOLVER, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order == ["walk", "after"]
     assert hooks.outputs["walk"]["iterations"] == []
@@ -435,9 +467,9 @@ def test_for_empty_list_skips_the_body_and_still_runs_done() -> None:
 
 def test_nested_for_records_the_inner_output_as_one_key() -> None:
     outer = _node("outer", 0, type_id="volume.for")
-    outer["config"] = {"items": [1, 2]}
+    outer["config"] = {"items": "[1, 2]"}
     inner = _node("inner", 1, type_id="volume.for", parent="outer")
-    inner["config"] = {"items": ["x"]}
+    inner["config"] = {"items": '["x"]'}
     graph = {
         "nodes": [outer, inner, _node("leaf", 2, parent="inner")],
         "edges": [
@@ -450,7 +482,7 @@ def test_nested_for_records_the_inner_output_as_one_key() -> None:
     outcome = execute(
         graph,
         "outer",
-        _catalog({"volume.for": _walk, "fake": _walk}),
+        [_for_type(), _type("fake", _walk)],
         _RESOLVER,
         hooks,
     )
@@ -466,7 +498,7 @@ def test_nested_for_records_the_inner_output_as_one_key() -> None:
 
 def test_for_iteration_omits_the_branch_that_did_not_run() -> None:
     walk = _node("walk", 0, type_id="volume.for")
-    walk["config"] = {"items": [1]}
+    walk["config"] = {"items": "[1]"}
     gate = _node("gate", 1, type_id="transform.if", parent="walk")
     gate["config"] = {"live": "true"}
     graph = {
@@ -489,7 +521,7 @@ def test_for_iteration_omits_the_branch_that_did_not_run() -> None:
     outcome = execute(
         graph,
         "walk",
-        _catalog({"volume.for": _walk, "transform.if": _branch, "fake": _branch}),
+        [_for_type(), _type("transform.if", _branch), _type("fake", _branch)],
         _RESOLVER,
         hooks,
     )
@@ -500,29 +532,28 @@ def test_for_iteration_omits_the_branch_that_did_not_run() -> None:
     ]
 
 
-def test_a_container_in_the_set_runs_its_body_once_per_element(monkeypatch) -> None:
-    from backend.channel.graph import CONTAINER_TYPES, ContainerType
-
-    monkeypatch.setitem(
-        CONTAINER_TYPES,
-        "volume.batch_read",
-        ContainerType(),
-    )
-
-    def batch(node: dict, hooks: EngineHooks) -> NodeResult:
-        if node["type"] != "volume.batch_read":
-            current = hooks.outputs.get("batch") or {}
-            return NodeResult(status="succeeded", output={"saw": current.get("current"), "id": node["id"]})
+def test_a_container_in_the_set_runs_its_body_once_per_element() -> None:
+    def run(node: dict, hooks: EngineHooks, body: ContainerBody) -> NodeResult:
+        del hooks
         items = list(node["config"].get("items") or [])
-        iterations = [{"current": item, "index": index, "count": len(items)} for index, item in enumerate(items)]
+        collected = []
+        for index, item in enumerate(items):
+            collected.append(
+                body.run_round({"current": item, "index": index, "count": len(items)})
+            )
         return NodeResult(
             status="succeeded",
-            output={"count": len(items)},
-            iterations=iterations,
+            output={"count": len(items), "iterations": collected},
             ports=frozenset({"done"}),
         )
 
-    node = _node("batch", 0, type_id="volume.batch_read")
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        current = hooks.outputs.get("batch") or {}
+        return NodeResult(
+            status="succeeded", output={"saw": current.get("current"), "id": node["id"]}
+        )
+
+    node = _node("batch", 0, type_id="test.box")
     node["config"] = {"items": ["a", "b"]}
     graph = {
         "nodes": [node, _node("step", 1, parent="batch")],
@@ -533,7 +564,7 @@ def test_a_container_in_the_set_runs_its_body_once_per_element(monkeypatch) -> N
     outcome = execute(
         graph,
         "batch",
-        _catalog({"volume.batch_read": batch, "fake": batch}),
+        [_container("test.box", run), _type("fake", step)],
         _RESOLVER,
         hooks,
     )
@@ -546,35 +577,31 @@ def test_a_container_in_the_set_runs_its_body_once_per_element(monkeypatch) -> N
 
 
 def test_a_container_that_does_not_accumulate_skips_the_16_mib_cap(monkeypatch) -> None:
-    from backend.channel.graph import CONTAINER_TYPES, ContainerType
     from backend.channel.variables import value_size
 
-    monkeypatch.setitem(
-        CONTAINER_TYPES,
-        "volume.batch_read",
-        ContainerType(accumulate=False),
-    )
     blob = "x" * 30
     one_round = [{"step": {"blob": blob}}]
     monkeypatch.setattr(
-        "backend.channel.engine.ITERATION_VOLUME_MAX_BYTES",
+        "backend.channel.iteration_volume.ITERATION_VOLUME_MAX_BYTES",
         value_size(one_round),
     )
 
-    def batch(node: dict, hooks: EngineHooks) -> NodeResult:
+    def run(node: dict, hooks: EngineHooks, body: ContainerBody) -> NodeResult:
         del hooks
-        if node["type"] == "volume.batch_read":
-            items = list(node["config"].get("items") or [])
-            iterations = [{"current": item} for item in items]
-            return NodeResult(
-                status="succeeded",
-                output={"count": len(items)},
-                iterations=iterations,
-                ports=frozenset({"done"}),
-            )
+        items = list(node["config"].get("items") or [])
+        for item in items:
+            body.run_round({"current": item})
+        return NodeResult(
+            status="succeeded",
+            output={"count": len(items)},
+            ports=frozenset({"done"}),
+        )
+
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        del node, hooks
         return NodeResult(status="succeeded", output={"blob": blob})
 
-    node = _node("batch", 0, type_id="volume.batch_read")
+    node = _node("batch", 0, type_id="test.box")
     node["config"] = {"items": ["a", "b"]}
     graph = {
         "nodes": [node, _node("step", 1, parent="batch"), _node("after", 2)],
@@ -588,7 +615,7 @@ def test_a_container_that_does_not_accumulate_skips_the_16_mib_cap(monkeypatch) 
     outcome = execute(
         graph,
         "batch",
-        _catalog({"volume.batch_read": batch, "fake": batch}),
+        [_container("test.box", run), _type("fake", step)],
         _RESOLVER,
         hooks,
     )
@@ -600,24 +627,23 @@ def test_a_container_that_does_not_accumulate_skips_the_16_mib_cap(monkeypatch) 
 
 
 def test_for_fails_when_iteration_output_exceeds_16_mib(monkeypatch) -> None:
-    from backend.channel.engine import ITERATION_VOLUME_MAX_BYTES
+    from backend.channel.iteration_volume import ITERATION_VOLUME_MAX_BYTES
     from backend.channel.variables import value_size
 
     assert ITERATION_VOLUME_MAX_BYTES == 16 * 1024 * 1024
     blob = "x" * 30
     one_round = [{"step": {"blob": blob}}]
     monkeypatch.setattr(
-        "backend.channel.engine.ITERATION_VOLUME_MAX_BYTES",
+        "backend.channel.iteration_volume.ITERATION_VOLUME_MAX_BYTES",
         value_size(one_round),
     )
 
     def bulky(node: dict, hooks: EngineHooks) -> NodeResult:
-        if node["type"] == "volume.for":
-            return _walk(node, hooks)
+        del node, hooks
         return NodeResult(status="succeeded", output={"blob": blob})
 
     walk = _node("walk", 0, type_id="volume.for")
-    walk["config"] = {"items": ["a", "b"]}
+    walk["config"] = {"items": '["a", "b"]'}
     graph = {
         "nodes": [walk, _node("step", 1, parent="walk"), _node("after", 2)],
         "edges": [
@@ -627,7 +653,7 @@ def test_for_fails_when_iteration_output_exceeds_16_mib(monkeypatch) -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "walk", _catalog({"volume.for": bulky, "fake": bulky}), _RESOLVER, hooks)
+    outcome = execute(graph, "walk", [_for_type(), _type("fake", bulky)], _RESOLVER, hooks)
     assert outcome.status == "failed"
     assert outcome.error_code == "CHANNEL_ITERATION_VOLUME_EXCEEDED"
     assert outcome.failed_node_id == "walk"
@@ -635,6 +661,63 @@ def test_for_fails_when_iteration_output_exceeds_16_mib(monkeypatch) -> None:
     assert "batch" in outcome.error_message.lower()
     assert hooks.order == ["walk", "step", "step"]
     assert "after" not in hooks.order
+
+
+def test_for_volume_failure_follows_retry_and_continue(monkeypatch) -> None:
+    from backend.channel.variables import value_size
+
+    blob = "x" * 40
+    monkeypatch.setattr(
+        "backend.channel.iteration_volume.ITERATION_VOLUME_MAX_BYTES",
+        value_size([{"step": {"blob": blob}}]) - 1,
+    )
+
+    def bulky(node: dict, hooks: EngineHooks) -> NodeResult:
+        del node, hooks
+        return NodeResult(status="succeeded", output={"blob": blob})
+
+    retried = _node("walk", 0, type_id="volume.for")
+    retried["config"] = {"items": '["a"]'}
+    retried["retry"] = {"max_tries": 2, "wait_sec": 0}
+    retried_graph = {
+        "nodes": [retried, _node("step", 1, parent="walk")],
+        "edges": [_edge("walk", "step", "each")],
+        "settings": {},
+    }
+    retried_hooks = FakeHooks()
+    retried_outcome = execute(
+        retried_graph,
+        "walk",
+        [_for_type(), _type("fake", bulky)],
+        _RESOLVER,
+        retried_hooks,
+    )
+    assert retried_outcome.status == "failed"
+    assert retried_outcome.failed_node_id == "walk"
+    assert retried_hooks.order == ["walk", "step", "walk", "step"]
+
+    continued = _node("walk", 0, type_id="volume.for")
+    continued["config"] = {"items": '["a"]'}
+    continued["on_error"] = "continue"
+    continued_graph = {
+        "nodes": [continued, _node("step", 1, parent="walk"), _node("after", 2)],
+        "edges": [
+            _edge("walk", "step", "each"),
+            _edge("walk", "after", "done"),
+        ],
+        "settings": {},
+    }
+    continued_hooks = FakeHooks()
+    continued_outcome = execute(
+        continued_graph,
+        "walk",
+        [_for_type(), _type("fake", bulky)],
+        _RESOLVER,
+        continued_hooks,
+    )
+    assert continued_outcome.status == "succeeded"
+    assert continued_hooks.order == ["walk", "step", "after"]
+    assert continued_hooks.outputs["walk"] is None
 
 
 def test_engine_runs_volume_for_without_rejecting_the_each_schema() -> None:
@@ -673,7 +756,7 @@ def test_engine_runs_volume_for_without_rejecting_the_each_schema() -> None:
 
 def test_body_execution_names_the_direct_container_and_round() -> None:
     walk = _node("walk", 0, type_id="volume.for")
-    walk["config"] = {"items": ["a", "b"]}
+    walk["config"] = {"items": '["a", "b"]'}
     graph = {
         "nodes": [walk, _node("step", 1, parent="walk"), _node("after", 2)],
         "edges": [
@@ -683,7 +766,7 @@ def test_body_execution_names_the_direct_container_and_round() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}), _RESOLVER, hooks)
+    outcome = execute(graph, "walk", [_for_type(), _type("fake", _walk)], _RESOLVER, hooks)
     assert outcome.status == "succeeded"
     assert hooks.starts == [
         ("walk", None, None),
@@ -695,9 +778,9 @@ def test_body_execution_names_the_direct_container_and_round() -> None:
 
 def test_nested_for_body_names_the_inner_container() -> None:
     outer = _node("outer", 0, type_id="volume.for")
-    outer["config"] = {"items": [1, 2]}
+    outer["config"] = {"items": "[1, 2]"}
     inner = _node("inner", 1, type_id="volume.for", parent="outer")
-    inner["config"] = {"items": ["x"]}
+    inner["config"] = {"items": '["x"]'}
     graph = {
         "nodes": [outer, inner, _node("leaf", 2, parent="inner")],
         "edges": [
@@ -710,7 +793,7 @@ def test_nested_for_body_names_the_inner_container() -> None:
     outcome = execute(
         graph,
         "outer",
-        _catalog({"volume.for": _walk, "fake": _walk}),
+        [_for_type(), _type("fake", _walk)],
         _RESOLVER,
         hooks,
     )
@@ -726,7 +809,7 @@ def test_nested_for_body_names_the_inner_container() -> None:
 
 def test_cancel_inside_a_for_body() -> None:
     walk = _node("walk", 0, type_id="volume.for")
-    walk["config"] = {"items": ["a", "b"]}
+    walk["config"] = {"items": '["a", "b"]'}
     graph = {
         "nodes": [walk, _node("step", 1, parent="walk"), _node("tail", 2, parent="walk")],
         "edges": [
@@ -735,18 +818,19 @@ def test_cancel_inside_a_for_body() -> None:
         ],
         "settings": {},
     }
-    hooks = FakeHooks()
+    hooks = _Finished()
     hooks.cancel_after = "step"
-    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _ok}), _RESOLVER, hooks)
+    outcome = execute(graph, "walk", [_for_type(), _type("fake", _ok)], _RESOLVER, hooks)
     assert outcome.status == "cancelled"
     assert outcome.stopped_node_id == "tail"
     assert hooks.order == ["walk", "step"]
+    assert ("walk", "failed", {"index": 0}) in hooks.finished
 
 
 def test_stop_at_inside_a_for_body_excludes_the_back_edge_downstream() -> None:
     start = _node("start", 0)
     walk = _node("walk", 1, type_id="volume.for")
-    walk["config"] = {"items": ["a"]}
+    walk["config"] = {"items": '["a"]'}
     graph = {
         "nodes": [
             start,
@@ -770,7 +854,7 @@ def test_stop_at_inside_a_for_body_excludes_the_back_edge_downstream() -> None:
     outcome = execute(
         graph,
         "start",
-        _catalog({"fake": _ok, "volume.for": _walk}),
+        [_for_type(), _type("fake", _ok)],
         _RESOLVER,
         hooks,
         stop_at_node_id="step",
@@ -786,7 +870,7 @@ def test_timeout_inside_a_for_body() -> None:
     import time
 
     walk = _node("walk", 0, type_id="volume.for")
-    walk["config"] = {"items": ["a"]}
+    walk["config"] = {"items": '["a"]'}
 
     def slow(node: dict, hooks: EngineHooks) -> NodeResult:
         if node["id"] == "step":
@@ -801,11 +885,11 @@ def test_timeout_inside_a_for_body() -> None:
         ],
         "settings": {},
     }
-    hooks = FakeHooks()
+    hooks = _Finished()
     outcome = execute(
         graph,
         "walk",
-        _catalog({"volume.for": _walk, "fake": slow}),
+        [_for_type(), _type("fake", slow)],
         _RESOLVER,
         hooks,
         timeout_sec=0.01,
@@ -814,6 +898,7 @@ def test_timeout_inside_a_for_body() -> None:
     assert outcome.error_code == "CHANNEL_RUN_TIMEOUT"
     assert outcome.stopped_node_id == "tail"
     assert hooks.order == ["walk", "step"]
+    assert ("walk", "failed", {"index": 0}) in hooks.finished
 
 
 _STRICT = {
@@ -2064,3 +2149,240 @@ class _PreviewSandbox:
 
     def run_code(self, source: str, timeout_sec: float) -> object:
         raise AssertionError(source)
+
+
+def _container(type_id: str, run: Callable[..., NodeResult]) -> NodeType:
+    return NodeType(
+        type_id=type_id,
+        family="test",
+        label=type_id,
+        summary="Test container.",
+        description="Test container. Used only by the engine suite.",
+        trigger=False,
+        inputs=(PortSpec("main", "Input."),),
+        outputs=(
+            PortSpec("each", "One round."),
+            PortSpec("done", "After the rounds."),
+        ),
+        config_schema={"type": "object"},
+        output_view=OutputView(kind="record"),
+        container=ContainerSpec(run=run, round_templates=("flag",)),
+    )
+
+
+class _RoundLog(FakeHooks):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rounds: list[tuple[int, int, object]] = []
+        self.finished: list[tuple[str, NodeResult]] = []
+
+    def on_round(self, seq: int, index: int, step: object) -> None:
+        self.rounds.append((seq, index, step))
+
+    def on_finish(self, seq: int, node: dict, result: NodeResult) -> None:
+        super().on_finish(seq, node, result)
+        self.finished.append((str(node["id"]), result))
+
+
+def _box_graph(box: dict) -> dict:
+    return {
+        "nodes": [box, _node("step", 1, parent="box"), _node("after", 2)],
+        "edges": [
+            _edge("box", "step", "each"),
+            _edge("box", "after", "done"),
+        ],
+        "settings": {},
+    }
+
+
+def test_a_container_runs_rounds_in_order_and_records_them() -> None:
+    def run(node: dict, hooks: EngineHooks, body: ContainerBody) -> NodeResult:
+        del node, hooks
+        for index, item in enumerate(("a", "b")):
+            body.run_round({"current": item, "index": index})
+        return NodeResult(
+            status="succeeded",
+            output={"count": 2},
+            ports=frozenset({"done"}),
+        )
+
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["id"] != "step":
+            return NodeResult(status="succeeded", output={"id": node["id"]})
+        return NodeResult(
+            status="succeeded",
+            output={"saw": hooks.outputs["box"]["current"]},
+        )
+
+    box = _node("box", 0, type_id="test.box")
+    hooks = _RoundLog()
+    outcome = execute(
+        _box_graph(box),
+        "box",
+        [_container("test.box", run), _type("fake", step)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded", outcome.error_message
+    assert hooks.order == ["box", "step", "step", "after"]
+    assert hooks.rounds == [
+        (1, 0, {"current": "a", "index": 0}),
+        (1, 1, {"current": "b", "index": 1}),
+    ]
+    assert hooks.outputs["box"] == {"count": 2}
+
+
+def test_a_body_stop_records_the_round_index_and_skips_container_policy() -> None:
+    def run(node: dict, hooks: EngineHooks, body: ContainerBody) -> NodeResult:
+        del node, hooks
+        body.run_round({"index": 0})
+        body.run_round({"index": 1})
+        return NodeResult(status="succeeded", output={"count": 2}, ports=frozenset({"done"}))
+
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["id"] != "step":
+            return NodeResult(status="succeeded", output={"id": node["id"]})
+        if hooks.outputs["box"]["index"] == 0:
+            return NodeResult(status="succeeded", output={"kept": True})
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="nope",
+        )
+
+    box = _node("box", 0, type_id="test.box")
+    box["retry"] = {"max_tries": 2, "wait_sec": 0}
+    box["on_error"] = "continue"
+    hooks = _RoundLog()
+    outcome = execute(
+        _box_graph(box),
+        "box",
+        [_container("test.box", run), _type("fake", step)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "failed"
+    assert outcome.failed_node_id == "step"
+    assert outcome.error_code == "CHANNEL_NODE_FAILED"
+    assert outcome.error_message == "nope"
+    assert hooks.order == ["box", "step", "step"]
+    assert "after" not in hooks.order
+    stopped = [result for node_id, result in hooks.finished if node_id == "box"]
+    assert len(stopped) == 1
+    assert stopped[0].status == "failed"
+    assert stopped[0].error_detail == {"index": 1}
+    assert stopped[0].error_code == "CHANNEL_NODE_FAILED"
+    assert stopped[0].error_message == "nope"
+
+
+def test_a_container_failure_is_retried() -> None:
+    def run(node: dict, hooks: EngineHooks, body: ContainerBody) -> NodeResult:
+        del node, hooks
+        body.run_round({"index": 0})
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="nope",
+        )
+
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    box = _node("box", 0, type_id="test.box")
+    box["retry"] = {"max_tries": 2, "wait_sec": 0}
+    hooks = _RoundLog()
+    outcome = execute(
+        _box_graph(box),
+        "box",
+        [_container("test.box", run), _type("fake", step)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "failed"
+    assert outcome.failed_node_id == "box"
+    assert outcome.error_code == "CHANNEL_NODE_FAILED"
+    assert hooks.order == ["box", "step", "box", "step"]
+    assert "after" not in hooks.order
+    assert [node_id for node_id, _result in hooks.finished if node_id == "box"] == [
+        "box",
+        "box",
+    ]
+
+
+def test_a_container_failure_with_continue_runs_done() -> None:
+    def run(node: dict, hooks: EngineHooks, body: ContainerBody) -> NodeResult:
+        del node, hooks
+        body.run_round({"index": 0})
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="nope",
+        )
+
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    box = _node("box", 0, type_id="test.box")
+    box["on_error"] = "continue"
+    hooks = _RoundLog()
+    outcome = execute(
+        _box_graph(box),
+        "box",
+        [_container("test.box", run), _type("fake", step)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded", outcome.error_message
+    assert hooks.order == ["box", "step", "after"]
+    assert hooks.outputs["box"] is None
+    finished = [result for node_id, result in hooks.finished if node_id == "box"]
+    assert finished[-1].status == "failed"
+    assert finished[-1].output is None
+
+
+class _InputLog(_RoundLog):
+    def __init__(self) -> None:
+        super().__init__()
+        self.captures: dict[int, InputCapture] = {}
+        self.templates: list[tuple[int, int, str, object]] = []
+
+    def open_input(self, seq: int) -> object:
+        capture = InputCapture()
+        self.captures[seq] = capture
+        return bind_execution_input(capture)
+
+    def close_input(self, token: object) -> None:
+        reset_execution_input(token)
+
+    def note_round_template(self, seq: int, index: int, path: str, entry: object) -> None:
+        self.templates.append((seq, index, path, entry))
+
+
+def test_a_round_template_stays_on_the_round() -> None:
+    def run(node: dict, hooks: EngineHooks, body: ContainerBody) -> NodeResult:
+        del node, hooks
+        body.run_round({"index": 0}, record={"index": 0})
+        value, error = body.evaluate_round_template("flag", {"type": "boolean"})
+        assert error is None
+        assert value is True
+        return NodeResult(status="succeeded", output={"ok": True}, ports=frozenset({"done"}))
+
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    box = _node("box", 0, type_id="test.box")
+    box["config"] = {"flag": "true"}
+    hooks = _InputLog()
+    outcome = execute(
+        _box_graph(box),
+        "box",
+        [_container("test.box", run), _type("fake", step)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded", outcome.error_message
+    assert hooks.templates == [(1, 0, "flag", {"value": True})]
+    assert hooks.captures[1].fields == {}

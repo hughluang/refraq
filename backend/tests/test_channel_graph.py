@@ -6,6 +6,7 @@ from backend.channel.graph import ancestor_closure, refine_ports, validate
 from backend.channel.schemas.channels import NodeIn
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import (
+    ContainerSpec,
     NodeType,
     OutputView,
     PortSpec,
@@ -975,14 +976,7 @@ def test_dataset_producers_may_sit_inside_a_container() -> None:
     assert cross[0].detail == "Edge crosses a container frame"
 
 
-def test_dataset_producers_inside_batch_read_are_valid(monkeypatch) -> None:
-    from backend.channel.graph import CONTAINER_TYPES, ContainerType
-
-    monkeypatch.setitem(
-        CONTAINER_TYPES,
-        "volume.batch_read",
-        ContainerType(accumulate=False),
-    )
+def test_dataset_producers_inside_batch_read_are_valid() -> None:
     catalog = [*list_node_types(), _container_type("volume.batch_read")]
     graph = _graph(
         [
@@ -1313,24 +1307,7 @@ def test_until_is_a_legal_parent() -> None:
     assert [item for item in validate(graph, FakeResolver()) if item.severity == "error"] == []
 
 
-def test_for_batch_read_and_until_are_the_container_types() -> None:
-    from backend.channel.graph import CONTAINER_TYPES
-
-    assert set(CONTAINER_TYPES) == {"volume.for", "volume.batch_read", "volume.until"}
-    assert CONTAINER_TYPES["volume.for"].accumulate is True
-    assert CONTAINER_TYPES["volume.batch_read"].accumulate is False
-    assert CONTAINER_TYPES["volume.until"].accumulate is True
-
-
-def test_a_non_for_container_in_the_set_is_a_legal_parent(monkeypatch) -> None:
-    from backend.channel.graph import CONTAINER_TYPES, ContainerType
-    from backend.channel.nodes import list_node_types
-
-    monkeypatch.setitem(
-        CONTAINER_TYPES,
-        "volume.batch_read",
-        ContainerType(accumulate=False),
-    )
+def test_a_non_for_container_in_the_set_is_a_legal_parent() -> None:
     catalog = [*list_node_types(), _container_type("volume.batch_read")]
     graph = _graph(
         [
@@ -1378,6 +1355,11 @@ def test_a_non_for_container_in_the_set_is_a_legal_parent(monkeypatch) -> None:
     assert each[0].detail == "each connects only to a direct child of this container"
 
 
+def _container_run(node: object, hooks: object, body: object) -> object:
+    del node, hooks, body
+    raise AssertionError("not executed")
+
+
 def _container_type(type_id: str) -> NodeType:
     return NodeType(
         type_id=type_id,
@@ -1392,7 +1374,7 @@ def _container_type(type_id: str) -> NodeType:
             PortSpec("done", "After the rounds.", coarse_type="object"),
         ),
         config_schema={"type": "object", "additionalProperties": True},
-        execute=_idle,
+        container=ContainerSpec(run=_container_run),
         output_view=OutputView(kind="record"),
     )
 

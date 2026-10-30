@@ -13,7 +13,6 @@ from typing import Any, Mapping, Sequence
 
 from backend.channel.errors import ChannelRequestInvalid, ChannelRunNotFound
 from backend.channel.graph import (
-    CONTAINER_TYPES,
     _crosses_frame,
     _template_fields,
     ancestor_closure,
@@ -237,6 +236,9 @@ def _frames(graph: Mapping[str, Any], node_id: str) -> list[str] | None:
     by_id = _nodes(graph)
     if node_id not in by_id:
         return None
+    containers = {
+        item.type_id for item in list_node_types() if item.container is not None
+    }
     chain: list[str] = []
     seen = {node_id}
     current = node_id
@@ -245,7 +247,7 @@ def _frames(graph: Mapping[str, Any], node_id: str) -> list[str] | None:
         if not isinstance(parent, str) or not parent or parent in seen or parent not in by_id:
             break
         seen.add(parent)
-        if str(by_id[parent].get("type")) in CONTAINER_TYPES:
+        if str(by_id[parent].get("type")) in containers:
             chain.append(parent)
         current = parent
     chain.reverse()

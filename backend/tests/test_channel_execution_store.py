@@ -43,12 +43,17 @@ def test_start_execution_assigns_one_past_the_highest_seq() -> None:
     assert other.seq == 1
 
 
-def test_success_under_batch_read_stores_the_full_output(monkeypatch) -> None:
+def test_success_under_batch_read_stores_the_full_output() -> None:
     from backend.admin.user_store import UserRecord
     from backend.channel.channel_run import _RunHooks
     from backend.channel.engine import execute
-    from backend.channel.graph import CONTAINER_TYPES, ContainerType
-    from backend.channel.nodes.spec import NodeResult, NodeType, OutputView, PortSpec
+    from backend.channel.nodes.spec import (
+        ContainerSpec,
+        NodeResult,
+        NodeType,
+        OutputView,
+        PortSpec,
+    )
     from backend.channel.run_store import (
         ChannelRunRecord,
         get_run_store,
@@ -59,13 +64,12 @@ def test_success_under_batch_read_stores_the_full_output(monkeypatch) -> None:
     from backend.channel.sandbox import SandboxSession
     from backend.core.time import utc_now
 
-    monkeypatch.setitem(
-        CONTAINER_TYPES,
-        "volume.batch_read",
-        ContainerType(accumulate=False),
-    )
     rows = list(range(120))
     tags = ["a", "b"]
+    rounds = {
+        "batch": [{"current": 0}],
+        "inner": [{"current": 1, "index": 0, "count": 1}],
+    }
 
     def run(node: dict, hooks: object) -> NodeResult:
         del hooks
@@ -73,20 +77,18 @@ def test_success_under_batch_read_stores_the_full_output(monkeypatch) -> None:
             return NodeResult(
                 status="succeeded",
                 output={"count": 1, "total": 1, "batch_size": 1000},
-                iterations=[{"current": 0}],
                 ports=frozenset({"done"}),
             )
         if node["id"] == "inner":
             return NodeResult(
                 status="succeeded",
                 output={"current": 1, "index": 0, "count": 1},
-                iterations=[{"current": 1, "index": 0, "count": 1}],
                 ports=frozenset({"done"}),
             )
         return NodeResult(status="succeeded", output={"rows": rows, "tags": tags})
 
     def kind(type_id: str) -> NodeType:
-        return NodeType(
+        shared = dict(
             type_id=type_id,
             family="test",
             label=type_id,
@@ -100,9 +102,20 @@ def test_success_under_batch_read_stores_the_full_output(monkeypatch) -> None:
                 PortSpec("done", "After the rounds.", coarse_type="object"),
             ),
             config_schema={"type": "object"},
-            execute=run,
             output_view=OutputView(kind="record"),
         )
+        if type_id == "fake":
+            return NodeType(**shared, execute=run)
+        accumulate = type_id == "volume.for"
+
+        def container_run(node, hooks, body, _accumulate=accumulate):
+            result = run(node, hooks)
+            collected = [body.run_round(step) for step in rounds[node["id"]]]
+            if _accumulate and isinstance(result.output, dict):
+                result.output = {**result.output, "iterations": collected}
+            return result
+
+        return NodeType(**shared, container=ContainerSpec(run=container_run))
 
     batch = _graph_node("batch", "volume.batch_read", 0)
     inner = _graph_node("inner", "volume.for", 1, parent="batch")
@@ -208,16 +221,10 @@ def test_success_under_batch_read_stores_the_full_output(monkeypatch) -> None:
     assert len(inner_row.output["iterations"][0]["step"]["rows"]) == 120
 
 
-def test_failed_execution_under_batch_read_stores_the_full_output(monkeypatch) -> None:
-    from backend.channel.graph import CONTAINER_TYPES, ContainerType
+def test_failed_execution_under_batch_read_stores_the_full_output() -> None:
     from backend.channel.nodes.spec import NodeResult
     from backend.channel.run_store import get_run_store
 
-    monkeypatch.setitem(
-        CONTAINER_TYPES,
-        "volume.batch_read",
-        ContainerType(accumulate=False),
-    )
     rows = list(range(120))
 
     def run(node: dict, hooks: object) -> NodeResult:
@@ -226,7 +233,6 @@ def test_failed_execution_under_batch_read_stores_the_full_output(monkeypatch) -
             return NodeResult(
                 status="succeeded",
                 output={"count": 1},
-                iterations=[{"current": 0}],
                 ports=frozenset({"done"}),
             )
         return NodeResult(
@@ -245,18 +251,10 @@ def test_failed_execution_under_batch_read_stores_the_full_output(monkeypatch) -
     assert len(rows) == 120
 
 
-def test_a_failed_retry_and_the_following_success_store_the_full_output(
-    monkeypatch,
-) -> None:
-    from backend.channel.graph import CONTAINER_TYPES, ContainerType
+def test_a_failed_retry_and_the_following_success_store_the_full_output() -> None:
     from backend.channel.nodes.spec import NodeResult
     from backend.channel.run_store import get_run_store
 
-    monkeypatch.setitem(
-        CONTAINER_TYPES,
-        "volume.batch_read",
-        ContainerType(accumulate=False),
-    )
     calls = {"n": 0}
     held: list[list[int]] = []
 
@@ -266,7 +264,6 @@ def test_a_failed_retry_and_the_following_success_store_the_full_output(
             return NodeResult(
                 status="succeeded",
                 output={"count": 1},
-                iterations=[{"current": 0}],
                 ports=frozenset({"done"}),
             )
         calls["n"] += 1
@@ -300,21 +297,13 @@ def test_a_failed_retry_and_the_following_success_store_the_full_output(
     assert len(held[1]) == 120
 
 
-def test_success_under_batch_read_stores_a_clipped_input_and_the_full_output(
-    monkeypatch,
-) -> None:
+def test_success_under_batch_read_stores_a_clipped_input_and_the_full_output() -> None:
     import json
 
-    from backend.channel.graph import CONTAINER_TYPES, ContainerType
     from backend.channel.node_support import render_field
     from backend.channel.nodes.spec import NodeResult
     from backend.channel.run_store import get_run_store
 
-    monkeypatch.setitem(
-        CONTAINER_TYPES,
-        "volume.batch_read",
-        ContainerType(accumulate=False),
-    )
     numbers = list(range(120))
 
     def run(node: dict, hooks: object) -> NodeResult:
@@ -322,7 +311,6 @@ def test_success_under_batch_read_stores_a_clipped_input_and_the_full_output(
             return NodeResult(
                 status="succeeded",
                 output={"count": 1},
-                iterations=[{"current": 0}],
                 ports=frozenset({"done"}),
             )
         rendered, error = render_field(
@@ -638,12 +626,31 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         capture = InputCapture()
         token = bind_execution_input(capture)
         try:
-            spec.execute({"id": spec.type_id, "config": config}, hooks)
+            if spec.execute is not None:
+                spec.execute({"id": spec.type_id, "config": config}, hooks)
+            elif spec.container is not None:
+                spec.container.run(
+                    {"id": spec.type_id, "config": config},
+                    hooks,
+                    _NoRound(),
+                )
         finally:
             reset_execution_input(token)
         assert set(capture.fields) == expected[spec.type_id]
         for path in capture.fields:
             assert _config_at(config, path) is not None
+
+
+class _NoRound:
+    """Body that does not render. Round templates stay out of this capture."""
+
+    def run_round(self, step: Any, *, record: Any = None) -> dict[str, Any]:
+        del step, record
+        return {}
+
+    def evaluate_round_template(self, path: str, schema: Any) -> tuple[Any, None]:
+        del path, schema
+        return True, None
 
 
 def _config_at(config: Any, path: str) -> Any:
@@ -807,7 +814,7 @@ def _run_preview_graph(run, *, step_retry: dict | None) -> str:
     from backend.admin.user_store import UserRecord
     from backend.channel.channel_run import _RunHooks
     from backend.channel.engine import execute
-    from backend.channel.nodes.spec import NodeType, OutputView, PortSpec
+    from backend.channel.nodes.spec import ContainerSpec, NodeType, OutputView, PortSpec
     from backend.channel.run_store import ChannelRunRecord, get_run_store
     from backend.core.time import utc_now
 
@@ -839,7 +846,7 @@ def _run_preview_graph(run, *, step_retry: dict | None) -> str:
     )
 
     def kind(type_id: str) -> NodeType:
-        return NodeType(
+        shared = dict(
             type_id=type_id,
             family="test",
             label=type_id,
@@ -853,9 +860,17 @@ def _run_preview_graph(run, *, step_retry: dict | None) -> str:
                 PortSpec("done", "After the rounds.", coarse_type="object"),
             ),
             config_schema={"type": "object"},
-            execute=run,
             output_view=OutputView(kind="record"),
         )
+        if type_id == "fake":
+            return NodeType(**shared, execute=run)
+
+        def container_run(node, hooks, body):
+            result = run(node, hooks)
+            body.run_round({"current": 0})
+            return result
+
+        return NodeType(**shared, container=ContainerSpec(run=container_run))
 
     user = UserRecord(
         id="usr_system",

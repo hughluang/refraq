@@ -16,6 +16,8 @@ from backend.admin.user_store import UserRecord
 __all__ = [
     "ERROR_OUTPUT",
     "CheckpointView",
+    "ContainerBody",
+    "ContainerSpec",
     "EngineHooks",
     "MAIN_INPUT",
     "MAIN_OUTPUT",
@@ -47,7 +49,6 @@ class NodeResult:
     error_message: str | None = None
     error_detail: dict[str, Any] | None = None
     ports: frozenset[str] | None = None
-    iterations: list[Any] | None = None
     minimum_wait_sec: float | None = None
 
 
@@ -69,6 +70,16 @@ class EngineHooks(Protocol):
     ) -> None: ...
 
     def on_output(self, node: Mapping[str, Any], output: Any) -> None: ...
+
+    def open_input(self, seq: int) -> Any: ...
+
+    def close_input(self, token: Any) -> None: ...
+
+    def on_round(self, seq: int, index: int, step: Any) -> None: ...
+
+    def note_round_template(
+        self, seq: int, index: int, path: str, entry: Any
+    ) -> None: ...
 
     def drop_outputs(self, refs: list[str]) -> None: ...
 
@@ -118,7 +129,18 @@ class CheckpointView(Protocol):
     def propose(self, node_id: str, stream: str, position: Any) -> None: ...
 
 
+class ContainerBody(Protocol):
+    """One Container execution's rounds. The engine supplies the only implementation."""
+
+    def run_round(self, step: Any, *, record: Any = None) -> dict[str, Any]: ...
+
+    def evaluate_round_template(
+        self, path: str, schema: Mapping[str, Any]
+    ) -> tuple[Any, NodeResult | None]: ...
+
+
 Execute = Callable[[Mapping[str, Any], EngineHooks], NodeResult]
+ContainerRun = Callable[[Mapping[str, Any], EngineHooks, ContainerBody], NodeResult]
 Refine = Callable[
     [Mapping[str, Any], Mapping[str, Any], Any],
     dict[str, Any],
@@ -159,6 +181,13 @@ class ReferenceResolver(Protocol):
 
 
 Check = Callable[[Mapping[str, Any], ReferenceResolver], list[Problem]]
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerSpec:
+    run: ContainerRun
+    round_templates: tuple[str, ...] = ()
+
 
 _OUTPUT_VIEW_KINDS = frozenset(
     {"record", "rows", "dataset", "counts", "container", "value"}
@@ -215,8 +244,9 @@ class NodeType:
     inputs: tuple[PortSpec, ...]
     outputs: tuple[PortSpec, ...]
     config_schema: dict[str, Any]
-    execute: Execute
     output_view: OutputView
+    execute: Execute | None = None
+    container: ContainerSpec | None = None
     permission: str | None = None
     type_version: int = 1
     refine: Refine | None = None
@@ -225,6 +255,8 @@ class NodeType:
     def __post_init__(self) -> None:
         if not isinstance(self.output_view, OutputView):
             raise TypeError("output_view is required")
+        if (self.execute is None) == (self.container is None):
+            raise TypeError("a node type has execute or container")
 
 
 MAIN_INPUT = PortSpec(

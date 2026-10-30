@@ -14,6 +14,8 @@ from backend.channel.item_limit import ITEM_LIMIT
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
     MAIN_INPUT,
+    ContainerBody,
+    ContainerSpec,
     EngineHooks,
     NodeResult,
     NodeType,
@@ -82,7 +84,7 @@ def _row_schema(text: Any, upstream: Mapping[str, Any]) -> dict[str, Any] | None
     return dataset_row_schema(schema_at_path(text, upstream))
 
 
-def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+def _run(node: Mapping[str, Any], hooks: EngineHooks, body: ContainerBody) -> NodeResult:
     config = node["config"]
     dataset, error = render_field(
         hooks, config.get("dataset"), DATASET_REFERENCE_SCHEMA, path="dataset"
@@ -101,19 +103,18 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         return unavailable
     total = record.row_count
     count = _batch_count(total, batch_size)
-    rounds: Any = []
     if count:
-        rounds = _rounds(
+        for step in _rounds(
             record.relation,
             total=total,
             batch_size=batch_size,
             count=count,
             columns=dataset.get("columns"),
-        )
+        ):
+            body.run_round(step)
     return NodeResult(
         status="succeeded",
         output={"count": count, "total": total, "batch_size": batch_size},
-        iterations=rounds,
         ports=frozenset({"done"}),
     )
 
@@ -248,6 +249,6 @@ NODE_TYPE = NodeType(
     output_view=OutputView(
         kind="container", metrics=("count", "total", "batch_size"), item="rows"
     ),
-    execute=_execute,
+    container=ContainerSpec(run=_run),
     refine=_refine,
 )

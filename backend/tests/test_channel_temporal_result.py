@@ -94,7 +94,8 @@ def test_batch_read_keeps_fractional_offset_on_a_declared_timestamp(
             }
         ],
     )
-    result = NODE_TYPE.execute(
+    body = _Scripted()
+    result = NODE_TYPE.container.run(
         {
             "id": "batch",
             "type": "volume.batch_read",
@@ -119,9 +120,10 @@ def test_batch_read_keeps_fractional_offset_on_a_declared_timestamp(
             },
         },
         FakeHooks(),
+        body,
     )
     assert result.status == "succeeded"
-    row = next(result.iterations)["rows"][0]
+    row = body.steps[0]["rows"][0]
     assert row["seen"] == _DECLARED_TEXT
     assert row["seen"] != _SECOND_Z
     assert isinstance(row["seen"], str)
@@ -385,6 +387,22 @@ def test_dataset_rows_encode_a_declared_timestamp_like_batch_read(
     assert item["note"] == "2024-06-01"
     assert item["legacy"] is legacy
     assert item["_ord"] == 1
+
+
+class _Scripted:
+    """Captures the page Batch Read passes to one round."""
+
+    def __init__(self) -> None:
+        self.steps: list[dict] = []
+
+    def run_round(self, step: dict, *, record: object = None) -> dict:
+        del record
+        self.steps.append(step)
+        return {}
+
+    def evaluate_round_template(self, path: str, schema: object) -> tuple[None, None]:
+        del schema
+        raise AssertionError(path)
 
 
 def _hooks(values: dict):

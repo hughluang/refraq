@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from backend.channel.engine import execute
@@ -78,8 +78,8 @@ class RecordingHooks(FakeHooks):
     def on_round(self, seq: int, index: int, step: Any) -> None:
         self.rounds.append((seq, index, step))
 
-    def note_round_condition(self, seq: int, index: int, entry: Any) -> None:
-        del seq
+    def note_round_template(self, seq: int, index: int, path: str, entry: Any) -> None:
+        del seq, path
         hold = [status for node_id, status in self.statuses if node_id == "hold"]
         self.conditions.append((index, entry, list(self.order), hold[-1] if hold else None))
 
@@ -355,7 +355,7 @@ def test_until_fails_when_iteration_output_exceeds_16_mib_and_keeps_the_body(
     blob = "x" * 30
     one_round = [{"step": {"blob": blob}}]
     monkeypatch.setattr(
-        "backend.channel.engine.ITERATION_VOLUME_MAX_BYTES",
+        "backend.channel.iteration_volume.ITERATION_VOLUME_MAX_BYTES",
         value_size(one_round),
     )
 
@@ -422,6 +422,11 @@ def test_a_body_stop_skips_done_and_keeps_the_earlier_round() -> None:
     assert step_results[0].output == {"kept": True}
     assert step_results[1].status == "failed"
     assert [index for index, _entry, _order, _status in hooks.conditions] == [0]
+    hold_stop = [result for node_id, result in hooks.finished if node_id == "hold"][-1]
+    assert hold_stop.status == "failed"
+    assert hold_stop.error_code == "CHANNEL_NODE_FAILED"
+    assert hold_stop.error_message == "nope"
+    assert hold_stop.error_detail == {"index": 1}
 
 
 def test_continue_and_error_output_keep_their_meanings() -> None:
@@ -715,6 +720,184 @@ def test_a_stored_until_round_keeps_index_and_records_the_condition() -> None:
     assert "until" not in (store.get_execution(job_id, stored["hold"].seq).input or {})
     steps = [item for item in store.list_executions(job_id) if item.node_id == "step"]
     assert [(item.round, item.output) for item in steps] == [(0, {"n": 0}), (1, {"n": 1})]
+
+
+class _Rounds:
+    """Container Body stand-in. It returns scripted round outputs and conditions."""
+
+    def __init__(self, outputs: list[dict[str, Any]], conditions: list[Any]) -> None:
+        self.outputs = outputs
+        self.conditions = conditions
+        self.steps: list[Any] = []
+        self.records: list[Any] = []
+        self.templates: list[tuple[str, dict[str, Any]]] = []
+
+    def run_round(self, step: Any, *, record: Any = None) -> dict[str, Any]:
+        self.steps.append(step)
+        self.records.append(record)
+        return self.outputs[len(self.steps) - 1]
+
+    def evaluate_round_template(
+        self, path: str, schema: Mapping[str, Any]
+    ) -> tuple[Any, NodeResult | None]:
+        self.templates.append((path, dict(schema)))
+        item = self.conditions[len(self.templates) - 1]
+        if isinstance(item, NodeResult):
+            return None, item
+        return item, None
+
+
+def _until_node(cap: object) -> dict[str, Any]:
+    return {"id": "hold", "config": {"until": "true", "max_iterations": cap}}
+
+
+def test_until_run_stops_when_the_condition_is_true() -> None:
+    body = _Rounds([{"step": {"n": 1}}], [True])
+    result = UNTIL.container.run(_until_node(3), FakeHooks(), body)
+    assert result.status == "succeeded"
+    assert result.ports == frozenset({"done"})
+    assert result.output == {
+        "index": 0,
+        "count": 1,
+        "iterations": [{"step": {"n": 1}}],
+    }
+    assert body.steps == [{"previous": None, "index": 0}]
+    assert body.records == [{"index": 0}]
+    assert body.templates == [("until", {"type": "boolean"})]
+
+
+def test_until_run_fails_when_the_cap_is_reached_while_false() -> None:
+    body = _Rounds([{"step": {"n": 0}}, {"step": {"n": 1}}], [False, False])
+    result = UNTIL.container.run(_until_node(2), FakeHooks(), body)
+    assert result.status == "failed"
+    assert result.error_code == "CHANNEL_UNTIL_MAX_ITERATIONS"
+    assert result.error_message == (
+        "Until reached max_iterations before its condition became true."
+    )
+    assert result.output == {
+        "index": 1,
+        "count": 2,
+        "iterations": [{"step": {"n": 0}}, {"step": {"n": 1}}],
+    }
+    assert [step["index"] for step in body.steps] == [0, 1]
+
+
+def test_until_run_passes_the_previous_round_output() -> None:
+    body = _Rounds([{"step": {"n": 0}}, {"step": {"n": 1}}], [False, True])
+    result = UNTIL.container.run(_until_node(5), FakeHooks(), body)
+    assert result.status == "succeeded"
+    assert body.steps[0]["previous"] is None
+    assert body.steps[1]["previous"] == {"step": {"n": 0}}
+    assert body.records == [{"index": 0}, {"index": 1}]
+    assert result.output == {
+        "index": 1,
+        "count": 2,
+        "iterations": [{"step": {"n": 0}}, {"step": {"n": 1}}],
+    }
+
+
+def test_until_run_returns_a_condition_error() -> None:
+    error = NodeResult(
+        status="failed",
+        error_code="CHANNEL_NODE_FAILED",
+        error_message="bad condition",
+        error_detail={"expression": "{{ flag }}"},
+    )
+    body = _Rounds([{"step": {"n": 1}}], [error])
+    result = UNTIL.container.run(_until_node(3), FakeHooks(), body)
+    assert result.status == "failed"
+    assert result.error_code == "CHANNEL_NODE_FAILED"
+    assert result.error_message == "bad condition"
+    assert result.error_detail == {"expression": "{{ flag }}"}
+    assert len(body.steps) == 1
+    assert len(body.templates) == 1
+
+
+def test_until_run_reports_the_until_volume_message(monkeypatch: Any) -> None:
+    from backend.channel.variables import value_size
+
+    record = {"step": {"blob": "x" * 30}}
+    monkeypatch.setattr(
+        "backend.channel.iteration_volume.ITERATION_VOLUME_MAX_BYTES",
+        value_size([record]) - 1,
+    )
+    body = _Rounds([record], [False])
+    result = UNTIL.container.run(_until_node(3), FakeHooks(), body)
+    assert result.status == "failed"
+    assert result.error_code == "CHANNEL_ITERATION_VOLUME_EXCEEDED"
+    assert result.error_message == "Until iteration output exceeds 16 MiB."
+    assert "batch" not in (result.error_message or "").lower()
+    assert result.output is None
+    assert body.templates == []
+
+
+def test_until_run_rejects_a_max_iterations_outside_the_limit() -> None:
+    body = _Rounds([], [])
+    for cap in (True, False, 0, 100_001, "2", None):
+        result = UNTIL.container.run(_until_node(cap), FakeHooks(), body)
+        assert result.status == "failed"
+        assert result.error_code == "CHANNEL_NODE_CONFIG_INVALID"
+        assert result.error_message == (
+            "max_iterations must be an integer from 1 through 100000"
+        )
+    assert body.steps == []
+
+
+def test_until_cap_with_retry_runs_the_rounds_as_two_executions() -> None:
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["id"] != "step":
+            return NodeResult(status="succeeded", output={"id": node["id"]})
+        return NodeResult(status="succeeded", output={"n": hooks.outputs["hold"]["index"]})
+
+    hold = _hold("false", 2)
+    hold["retry"] = {"max_tries": 2, "wait_sec": 0}
+    graph = {
+        "nodes": [hold, _node("step", 1, parent="hold"), _node("after", 2)],
+        "edges": [_edge("hold", "step", "each"), _edge("hold", "after", "done")],
+        "settings": {},
+    }
+    hooks = RecordingHooks()
+    outcome = execute(graph, "hold", [UNTIL, _type("fake", step)], _RESOLVER, hooks)
+    assert outcome.status == "failed"
+    assert outcome.error_code == "CHANNEL_UNTIL_MAX_ITERATIONS"
+    assert outcome.failed_node_id == "hold"
+    assert hooks.order == ["hold", "step", "step", "hold", "step", "step"]
+    assert "after" not in hooks.order
+    assert [node_id for node_id, _result in hooks.finished if node_id == "hold"] == [
+        "hold",
+        "hold",
+    ]
+    assert hooks.rounds == [
+        (1, 0, {"index": 0}),
+        (1, 1, {"index": 1}),
+        (4, 0, {"index": 0}),
+        (4, 1, {"index": 1}),
+    ]
+
+
+def test_until_cap_with_continue_runs_done_with_an_empty_output() -> None:
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        if node["id"] != "step":
+            return NodeResult(status="succeeded", output={"id": node["id"]})
+        return NodeResult(status="succeeded", output={"n": 0})
+
+    hold = _hold("false", 1)
+    hold["on_error"] = "continue"
+    graph = {
+        "nodes": [hold, _node("step", 1, parent="hold"), _node("after", 2)],
+        "edges": [_edge("hold", "step", "each"), _edge("hold", "after", "done")],
+        "settings": {},
+    }
+    hooks = RecordingHooks()
+    outcome = execute(graph, "hold", [UNTIL, _type("fake", step)], _RESOLVER, hooks)
+    assert outcome.status == "succeeded", outcome.error_message
+    assert hooks.order == ["hold", "step", "after"]
+    assert hooks.stored("hold") is None
+    finished = [result for node_id, result in hooks.finished if node_id == "hold"]
+    assert finished[-1].status == "failed"
+    assert finished[-1].output is None
+    assert finished[-1].error_code == "CHANNEL_UNTIL_MAX_ITERATIONS"
 
 
 def _idle(node: dict, hooks: EngineHooks) -> NodeResult:
