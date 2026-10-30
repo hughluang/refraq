@@ -281,6 +281,7 @@ function ChannelExisting({
   const [reloadToken, setReloadToken] = useState(0);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [runRequest, setRunRequest] = useState<{ stopAt: string | null } | null>(null);
+  const [ignoreCheckpoints, setIgnoreCheckpoints] = useState(false);
   const [sessionRun, setSessionRun] = useState<ChannelRunDetail | null>(null);
   const [adoptToken, setAdoptToken] = useState(0);
   const nameEditorRef = useRef<ChannelNameHeadingHandle>(null);
@@ -577,6 +578,7 @@ function ChannelExisting({
   };
 
   const openRun = (stopAt: string | null) => {
+    setIgnoreCheckpoints(false);
     setRunRequest({ stopAt });
   };
 
@@ -629,7 +631,7 @@ function ChannelExisting({
       try {
         started = await startRun(channelId, {
           target: "draft",
-          ignore_checkpoints: false,
+          ignore_checkpoints: ignoreCheckpoints,
           stop_at_node_id: stopAt,
         });
       } catch (error) {
@@ -1109,6 +1111,21 @@ function ChannelExisting({
               ? t("channels.run.writesUpTo", { node: runNodeName })
               : t("channels.run.writes")}
           </Text>
+          {graph?.nodes.some((node) => node.type === "read.changes") ? (
+            <>
+              <Text size="sm">
+                {runNodeName != null
+                  ? t("channels.run.cursorStays")
+                  : t("channels.run.cursorAdvances")}
+              </Text>
+              <Switch
+                label={t("channels.run.ignoreCheckpoints")}
+                description={t("channels.run.ignoreCheckpointsHint")}
+                checked={ignoreCheckpoints}
+                onChange={(event) => setIgnoreCheckpoints(event.currentTarget.checked)}
+              />
+            </>
+          ) : null}
           <Group justify="flex-end">
             <Button variant="default" disabled={busy} onClick={() => setRunRequest(null)}>
               {t("common.cancel")}

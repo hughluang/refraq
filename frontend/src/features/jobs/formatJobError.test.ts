@@ -21,6 +21,16 @@ describe("formatJobError", () => {
     expect(line.occurrence).toBe(LOCK);
   });
 
+  it("drops an occurrence that repeats the English catalog sentence", () => {
+    const t = (key: string) => zh[key as keyof typeof zh] ?? key;
+    const sentence = en["problems.JOB_ALREADY_ACTIVE" as keyof typeof en];
+    const line = formatJobError(t, "JOB_ALREADY_ACTIVE", sentence);
+    expect(line.catalogued).toBe(true);
+    expect(line.text).toBe(t("problems.JOB_ALREADY_ACTIVE"));
+    expect(line.text).not.toBe(sentence);
+    expect(line.occurrence).toBeNull();
+  });
+
   it("keeps the code and English text when the catalog has no entry", () => {
     const t = (key: string) => key;
     const line = formatJobError(t, "JOB_COLLECT_FAILED", "connector aborted");

@@ -21,6 +21,8 @@ from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
+from backend.entity.access.records import BindingRecord  # noqa: E402
+from backend.entity.access.store import get_access_store  # noqa: E402
 from backend.entity.jobs import find_inflight_entity_table_job  # noqa: E402
 from backend.entity.table_name import compose_physical_table_name  # noqa: E402
 from backend.entity.kinds import KIND_RECONCILE  # noqa: E402
@@ -82,6 +84,22 @@ def _publish(client: TestClient, entity: dict) -> dict:
     )
     assert published.status_code == 201, published.text
     return published.json()
+
+
+def _binding(entity_id: str, version_id: str) -> BindingRecord:
+    return BindingRecord(
+        entity_id=entity_id,
+        head_version_id=version_id,
+        policy_revision=1,
+        combo_key="all",
+        shape_key="all",
+        action="read",
+        view_name="pav_head",
+        columns=[],
+        ddl_sha256="abc",
+        status="ready",
+        sql="SELECT 1",
+    )
 
 
 def test_publish_creates_table_and_locks(
@@ -179,11 +197,14 @@ def test_publish_successor_repoints_stem_view(
         for stmt in port.statements
     )
 
+    access = get_access_store()
+    access.replace_bindings(entity["id"], [_binding(entity["id"], v1)])
     dropped = client.post(f"/entities/{entity['id']}/versions/{v1}/drop-table")
     assert dropped.status_code == 201, dropped.text
     job = get_job_store().get(dropped.json()["job"]["id"])
     assert job is not None
     assert job.status == "succeeded"
+    assert access.bindings(entity["id"]) == [_binding(entity["id"], v1)]
 
 
 def test_publish_name_conflict_rolls_back(
@@ -838,11 +859,14 @@ def test_drop_current_after_deprecate(
     v1 = entity["current_version"]["id"]
     _publish(client, entity)
     assert client.post(f"/entities/{entity['id']}/deprecate").status_code == 200
+    access = get_access_store()
+    access.replace_bindings(entity["id"], [_binding(entity["id"], v1)])
     dropped = client.post(f"/entities/{entity['id']}/versions/{v1}/drop-table")
     assert dropped.status_code == 201, dropped.text
     job = get_job_store().get(dropped.json()["job"]["id"])
     assert job is not None
     assert job.status == "succeeded"
+    assert access.bindings(entity["id"]) == []
 
 
 def test_drop_non_empty_table_fails_job(

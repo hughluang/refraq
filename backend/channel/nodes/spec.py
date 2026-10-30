@@ -15,6 +15,7 @@ from backend.admin.user_store import UserRecord
 
 __all__ = [
     "ERROR_OUTPUT",
+    "CheckpointView",
     "EngineHooks",
     "MAIN_INPUT",
     "MAIN_OUTPUT",
@@ -63,7 +64,9 @@ class EngineHooks(Protocol):
         round: int | None = None,
     ) -> int: ...
 
-    def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None: ...
+    def on_finish(
+        self, seq: int, node: Mapping[str, Any], result: NodeResult
+    ) -> None: ...
 
     def on_output(self, node: Mapping[str, Any], output: Any) -> None: ...
 
@@ -93,6 +96,26 @@ class EngineHooks(Protocol):
 
     @property
     def run_variables(self) -> dict[str, Any]: ...
+
+    @property
+    def ignore_checkpoints(self) -> bool: ...
+
+    @property
+    def checkpoints(self) -> CheckpointView: ...
+
+
+class CheckpointView(Protocol):
+    """Positions one run reads and proposes. The node decides when a run may advance."""
+
+    def durable(self, node_id: str, stream: str) -> Any: ...
+
+    def proposed(self, node_id: str, stream: str) -> Any: ...
+
+    def stored(self, node_id: str, stream: str) -> Any: ...
+
+    def bound(self, node_id: str, stream: str) -> int: ...
+
+    def propose(self, node_id: str, stream: str, position: Any) -> None: ...
 
 
 Execute = Callable[[Mapping[str, Any], EngineHooks], NodeResult]
@@ -176,7 +199,9 @@ class OutputView:
                 raise ValueError("container output view rejects rows and dataset keys")
             return
         if self.rows is not None or self.dataset is not None or self.item is not None:
-            raise ValueError("output view rows, dataset, and item belong to their own kinds")
+            raise ValueError(
+                "output view rows, dataset, and item belong to their own kinds"
+            )
 
 
 @dataclass(frozen=True, slots=True)

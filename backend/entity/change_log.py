@@ -50,6 +50,8 @@ __all__ = [
     "read_change_log",
     "read_change_log_entry",
     "read_effective",
+    "read_entries_after",
+    "read_purge_mark",
     "remove_triggers",
     "write_effective",
 ]
@@ -57,6 +59,7 @@ __all__ = [
 CHANGE_LOG_SCHEMA = ENTITY_CHANGE_LOG_SCHEMA
 EFFECTIVE_TABLE = "effective"
 ENTRY_TABLE = "entry"
+PURGE_MARK_TABLE = "purge_mark"
 SOURCE_GUC = "refraq.change_log_source"
 SUBJECT_GUC = "refraq.change_log_subject"
 SOURCE_USER = "user"
@@ -153,8 +156,10 @@ class _ImageTarget:
 def ensure_shared_relations(conn: Connection) -> None:
     """Create the shared change-log schema, tables, and trigger function.
 
-    Idempotent. Does not commit. Sequences and per-table triggers are created
-    by ``install_triggers``.
+    Idempotent. Does not commit. Entity bootstrap calls this. A read does not:
+    these statements lock the log table an open write already holds, and the
+    snapshot bound is what hides that write. Sequences and per-table triggers
+    are created by ``install_triggers``.
     """
     role = str(conn.execute(text("SELECT current_user")).scalar_one())
     if role == ENTITY_OWNER_ROLE:
@@ -162,9 +167,7 @@ def ensure_shared_relations(conn: Connection) -> None:
         return
     schema = ident(CHANGE_LOG_SCHEMA)
     owner = ident(ENTITY_OWNER_ROLE)
-    conn.exec_driver_sql(
-        f"CREATE SCHEMA IF NOT EXISTS {schema} AUTHORIZATION {owner}"
-    )
+    conn.exec_driver_sql(f"CREATE SCHEMA IF NOT EXISTS {schema} AUTHORIZATION {owner}")
     conn.exec_driver_sql(f"ALTER SCHEMA {schema} OWNER TO {owner}")
     conn.exec_driver_sql(f"SET ROLE {owner}")
     try:
@@ -208,13 +211,17 @@ def list_effectives(conn: Connection) -> list[ChangeLogEffective]:
 def read_effective(conn: Connection, entity_id: str) -> ChangeLogEffective | None:
     """Return the effective row, or none when recording has no row."""
     entity_id = _entity_id(entity_id)
-    row = conn.execute(
-        text(
-            f"SELECT entity_id, recording, retention_days, applied_version_id "
-            f"FROM {_effective_table()} WHERE entity_id = :entity_id"
-        ),
-        {"entity_id": entity_id},
-    ).mappings().one_or_none()
+    row = (
+        conn.execute(
+            text(
+                f"SELECT entity_id, recording, retention_days, applied_version_id "
+                f"FROM {_effective_table()} WHERE entity_id = :entity_id"
+            ),
+            {"entity_id": entity_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
     if row is None:
         return None
     return ChangeLogEffective(
@@ -271,9 +278,7 @@ def install_triggers(
     """
     entity_id = _entity_id(entity_id)
     schema = _schema_name(schema)
-    conn.exec_driver_sql(
-        f"CREATE SEQUENCE IF NOT EXISTS {_sequence_name(entity_id)}"
-    )
+    conn.exec_driver_sql(f"CREATE SEQUENCE IF NOT EXISTS {_sequence_name(entity_id)}")
     function = qualified_table(CHANGE_LOG_SCHEMA, _APPEND_FUNCTION)
     for table in tables:
         relation = qualified_table(schema, table)
@@ -301,32 +306,38 @@ def remove_triggers(
         relation = qualified_table(schema, table)
         for suffix, _event, _referencing in _TRIGGER_EVENTS:
             conn.exec_driver_sql(
-                f"DROP TRIGGER IF EXISTS {ident(f'change_log_{suffix}')} "
-                f"ON {relation}"
+                f"DROP TRIGGER IF EXISTS {ident(f'change_log_{suffix}')} ON {relation}"
             )
 
 
 def delete_entries(conn: Connection, entity_id: str) -> None:
-    """Delete every entry of this entity. Does not restart its sequence."""
+    """Delete every entry of this entity. Does not restart its sequence.
+
+    The same statement records the greatest deleted ``(xact, seq)`` on
+    ``purge_mark`` so a checkpoint behind that position can be reported.
+    """
     entity_id = _entity_id(entity_id)
-    conn.execute(
-        text(f"DELETE FROM {_entry_table()} WHERE entity_id = :entity_id"),
+    _delete_noting_purge(
+        conn,
+        entity_id,
+        "entity_id = :entity_id",
         {"entity_id": entity_id},
     )
 
 
-def delete_entries_before(
-    conn: Connection, entity_id: str, cutoff: datetime
-) -> None:
-    """Delete entries whose transaction timestamp is strictly earlier than cutoff."""
+def delete_entries_before(conn: Connection, entity_id: str, cutoff: datetime) -> None:
+    """Delete entries whose transaction timestamp is strictly earlier than cutoff.
+
+    The same statement records the greatest deleted ``(xact, seq)`` on
+    ``purge_mark``. An empty delete leaves the mark unchanged.
+    """
     entity_id = _entity_id(entity_id)
     if not isinstance(cutoff, datetime) or cutoff.tzinfo is None:
         raise ValueError("cutoff must be an aware timestamp")
-    conn.execute(
-        text(
-            f"DELETE FROM {_entry_table()} "
-            "WHERE entity_id = :entity_id AND occurred_at < :cutoff"
-        ),
+    _delete_noting_purge(
+        conn,
+        entity_id,
+        "entity_id = :entity_id AND occurred_at < :cutoff",
         {"entity_id": entity_id, "cutoff": cutoff},
     )
 
@@ -351,7 +362,9 @@ def list_entries(
     target = _ImageTarget(attributes)
     entries: list[ChangeLogEntry] = []
     for row in rows:
-        before_raw, after_raw = _rebuild(str(row["operation"]), _image_dict(row["image"]))
+        before_raw, after_raw = _rebuild(
+            str(row["operation"]), _image_dict(row["image"])
+        )
         entries.append(
             ChangeLogEntry(
                 entity_id=str(row["entity_id"]),
@@ -431,9 +444,7 @@ def read_change_log(
         params,
     ).mappings()
     items = [_entry_from_row(conn, row, tables) for row in rows]
-    next_before = (
-        items[-1].sequence if len(items) == CHANGE_LOG_PAGE_LIMIT else None
-    )
+    next_before = items[-1].sequence if len(items) == CHANGE_LOG_PAGE_LIMIT else None
     return ChangeLogPage(
         items=items,
         limit=CHANGE_LOG_PAGE_LIMIT,
@@ -449,18 +460,98 @@ def read_change_log_entry(
 ) -> ChangeLogEntry | None:
     """One entry by sequence, with the rebuilt physical images."""
     entity_id = _entity_id(entity_id)
-    row = conn.execute(
-        text(
-            "SELECT entity_id, physical_table, operation, seq, occurred_at, "
-            "source, subject, image "
-            f"FROM {_entry_table()} "
-            "WHERE entity_id = :entity_id AND seq = :seq"
-        ),
-        {"entity_id": entity_id, "seq": sequence},
-    ).mappings().one_or_none()
+    row = (
+        conn.execute(
+            text(
+                "SELECT entity_id, physical_table, operation, seq, occurred_at, "
+                "source, subject, image "
+                f"FROM {_entry_table()} "
+                "WHERE entity_id = :entity_id AND seq = :seq"
+            ),
+            {"entity_id": entity_id, "seq": sequence},
+        )
+        .mappings()
+        .one_or_none()
+    )
     if row is None:
         return None
     return _entry_from_row(conn, row, tables)
+
+
+def read_purge_mark(conn: Connection, entity_id: str) -> tuple[int, int] | None:
+    """Greatest ``(xact, seq)`` deleted for this entity, or none."""
+    entity_id = _entity_id(entity_id)
+    row = (
+        conn.execute(
+            text(
+                "SELECT xact::text::bigint AS xact, seq "
+                f"FROM {_purge_mark_table()} WHERE entity_id = :entity_id"
+            ),
+            {"entity_id": entity_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    return int(row["xact"]), int(row["seq"])
+
+
+def read_entries_after(
+    conn: Connection,
+    entity_id: str,
+    tables: Sequence[ChangeLogTable],
+    *,
+    after_xact: int | None,
+    after_seq: int | None,
+    bound_xact: int,
+    limit: int,
+) -> tuple[list[tuple[ChangeLogEntry, int]], bool]:
+    """Entries with ``xact`` strictly below ``bound_xact``, oldest position first.
+
+    ``after_xact`` and ``after_seq`` together are an exclusive lower bound.
+    Both are absent, or both are present. ``limit`` is the page size. The
+    boolean is true when another matching entry exists after this page.
+    Positions are ``(xact, seq)``. A transaction still in progress holds the
+    snapshot xmin, so its row and every later ``xact`` stay out of the page.
+    """
+    entity_id = _entity_id(entity_id)
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if (after_xact is None) != (after_seq is None):
+        raise ValueError("after_xact and after_seq are set together")
+    clauses = [
+        "entity_id = :entity_id",
+        "xact::text::bigint < :bound_xact",
+    ]
+    params: dict[str, Any] = {
+        "entity_id": entity_id,
+        "bound_xact": int(bound_xact),
+        "lim": limit + 1,
+    }
+    if after_xact is not None:
+        clauses.append("(xact::text::bigint, seq) > (:after_xact, :after_seq)")
+        params["after_xact"] = int(after_xact)
+        params["after_seq"] = int(after_seq)
+    rows = list(
+        conn.execute(
+            text(
+                "SELECT entity_id, physical_table, operation, seq, occurred_at, "
+                "source, subject, image, xact::text::bigint AS xact_n "
+                f"FROM {_entry_table()} "
+                f"WHERE {' AND '.join(clauses)} "
+                "ORDER BY xact, seq "
+                "LIMIT :lim"
+            ),
+            params,
+        ).mappings()
+    )
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    return (
+        [(_entry_from_row(conn, row, tables), int(row["xact_n"])) for row in page],
+        has_more,
+    )
 
 
 def _entry_from_row(
@@ -539,6 +630,7 @@ def _create_shared_objects(conn: Connection) -> None:
         "source text, "
         "subject text, "
         "image jsonb NOT NULL, "
+        "xact xid8 NOT NULL DEFAULT pg_current_xact_id(), "
         "PRIMARY KEY (entity_id, seq), "
         "CONSTRAINT change_log_operation "
         "CHECK (operation IN ('insert', 'update', 'delete')), "
@@ -548,13 +640,15 @@ def _create_shared_objects(conn: Connection) -> None:
         "CHECK (source IS NOT NULL OR subject IS NULL)"
         ")"
     )
+    _ensure_entry_position(conn)
     changed = qualified_table(CHANGE_LOG_SCHEMA, _CHANGED_FUNCTION)
     append = qualified_table(CHANGE_LOG_SCHEMA, _APPEND_FUNCTION)
     conn.exec_driver_sql(_changed_columns_sql(changed))
     conn.exec_driver_sql(_append_change_sql(append, changed))
     conn.exec_driver_sql(f"REVOKE ALL ON SCHEMA {schema} FROM PUBLIC")
     conn.exec_driver_sql(
-        f"REVOKE ALL ON TABLE {_effective_table()}, {_entry_table()} FROM PUBLIC"
+        f"REVOKE ALL ON TABLE {_effective_table()}, {_entry_table()}, "
+        f"{_purge_mark_table()} FROM PUBLIC"
     )
     conn.exec_driver_sql(
         f"REVOKE ALL ON FUNCTION {changed}(jsonb, jsonb), {append}() FROM PUBLIC"
@@ -619,25 +713,27 @@ BEGIN
 
   IF TG_OP = 'INSERT' THEN
     INSERT INTO {entry} (
-      entity_id, physical_table, operation, seq, occurred_at, source, subject, image
+      entity_id, physical_table, operation, seq, occurred_at, source, subject, image, xact
     )
     SELECT ent, qualified, 'insert',
            nextval(format('{CHANGE_LOG_SCHEMA}.%%I', 'seq_' || ent)::regclass),
            transaction_timestamp(), src, subj,
-           jsonb_build_object('after', to_jsonb(n))
+           jsonb_build_object('after', to_jsonb(n)),
+           pg_current_xact_id()
     FROM new_rows AS n;
   ELSIF TG_OP = 'DELETE' THEN
     INSERT INTO {entry} (
-      entity_id, physical_table, operation, seq, occurred_at, source, subject, image
+      entity_id, physical_table, operation, seq, occurred_at, source, subject, image, xact
     )
     SELECT ent, qualified, 'delete',
            nextval(format('{CHANGE_LOG_SCHEMA}.%%I', 'seq_' || ent)::regclass),
            transaction_timestamp(), src, subj,
-           jsonb_build_object('before', to_jsonb(o))
+           jsonb_build_object('before', to_jsonb(o)),
+           pg_current_xact_id()
     FROM old_rows AS o;
   ELSIF TG_OP = 'UPDATE' THEN
     INSERT INTO {entry} (
-      entity_id, physical_table, operation, seq, occurred_at, source, subject, image
+      entity_id, physical_table, operation, seq, occurred_at, source, subject, image, xact
     )
     SELECT ent, qualified, 'update',
            nextval(format('{CHANGE_LOG_SCHEMA}.%%I', 'seq_' || ent)::regclass),
@@ -645,7 +741,8 @@ BEGIN
            jsonb_build_object(
              'after', to_jsonb(n),
              'changed', {changed}(to_jsonb(o), to_jsonb(n))
-           )
+           ),
+           pg_current_xact_id()
     FROM new_rows AS n
     JOIN old_rows AS o ON o.row_id = n.row_id
     WHERE to_jsonb(o) IS DISTINCT FROM to_jsonb(n);
@@ -656,12 +753,72 @@ $body$
 """
 
 
+def _delete_noting_purge(
+    conn: Connection,
+    entity_id: str,
+    where_sql: str,
+    params: dict[str, Any],
+) -> None:
+    """Delete matching entries and raise the purge mark to the greatest position."""
+    mark = _purge_mark_table()
+    conn.execute(
+        text(
+            f"WITH deleted AS ("
+            f"DELETE FROM {_entry_table()} WHERE {where_sql} "
+            f"RETURNING xact, seq"
+            f"), top AS ("
+            f"SELECT xact, seq FROM deleted "
+            f"ORDER BY xact DESC, seq DESC LIMIT 1"
+            f") "
+            f"INSERT INTO {mark} AS mark (entity_id, xact, seq) "
+            f"SELECT :entity_id, xact, seq FROM top "
+            f"ON CONFLICT (entity_id) DO UPDATE SET "
+            f"xact = CASE WHEN (EXCLUDED.xact, EXCLUDED.seq) > (mark.xact, mark.seq) "
+            f"THEN EXCLUDED.xact ELSE mark.xact END, "
+            f"seq = CASE WHEN (EXCLUDED.xact, EXCLUDED.seq) > (mark.xact, mark.seq) "
+            f"THEN EXCLUDED.seq ELSE mark.seq END"
+        ),
+        params,
+    )
+
+
+def _ensure_entry_position(conn: Connection) -> None:
+    """Add the transaction id, its index, and the purge-mark table.
+
+    Existing rows receive ``xact`` 0, which sorts before every real transaction.
+    Later inserts take ``pg_current_xact_id`` unless the trigger sets it.
+    """
+    entry = _entry_table()
+    conn.exec_driver_sql(
+        f"ALTER TABLE {entry} ADD COLUMN IF NOT EXISTS "
+        "xact xid8 NOT NULL DEFAULT '0'::xid8"
+    )
+    conn.exec_driver_sql(
+        f"ALTER TABLE {entry} ALTER COLUMN xact SET DEFAULT pg_current_xact_id()"
+    )
+    conn.exec_driver_sql(
+        f"CREATE INDEX IF NOT EXISTS change_log_entry_position "
+        f"ON {entry} (entity_id, xact, seq)"
+    )
+    conn.exec_driver_sql(
+        f"CREATE TABLE IF NOT EXISTS {_purge_mark_table()} ("
+        "entity_id text PRIMARY KEY, "
+        "xact xid8 NOT NULL, "
+        "seq bigint NOT NULL"
+        ")"
+    )
+
+
 def _effective_table() -> str:
     return qualified_table(CHANGE_LOG_SCHEMA, EFFECTIVE_TABLE)
 
 
 def _entry_table() -> str:
     return qualified_table(CHANGE_LOG_SCHEMA, ENTRY_TABLE)
+
+
+def _purge_mark_table() -> str:
+    return qualified_table(CHANGE_LOG_SCHEMA, PURGE_MARK_TABLE)
 
 
 def _sequence_name(entity_id: str) -> str:
@@ -704,9 +861,7 @@ def _decode_image(
         return None
     columns = ["row_id", *[attr.name for attr in attributes]]
     params: dict[str, Any] = {"img": json.dumps(image)}
-    selects = [
-        "CAST((CAST(:img AS jsonb) ->> 'row_id') AS bigint) AS row_id"
-    ]
+    selects = ["CAST((CAST(:img AS jsonb) ->> 'row_id') AS bigint) AS row_id"]
     for index, attr in enumerate(attributes):
         key = f"k{index}"
         params[key] = attr.name
@@ -746,9 +901,7 @@ def _retention_days(value: int | None) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError(
-            "retention_days must be null or a whole number of days >= 1"
-        )
+        raise ValueError("retention_days must be null or a whole number of days >= 1")
     return value
 
 

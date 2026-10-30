@@ -149,7 +149,11 @@ def test_success_under_batch_read_stores_the_full_output(monkeypatch) -> None:
             actor={"id": "usr_system", "name": "System"},
             started_at="2026-10-22T00:00:00Z",
             user=user,
-            schedule={"schedule_id": None, "name": "", "scheduled_for": "2026-10-22T00:00:00Z"},
+            schedule={
+                "schedule_id": None,
+                "name": "",
+                "scheduled_for": "2026-10-22T00:00:00Z",
+            },
             target="draft",
             channel_id="chn_preview",
             run_version=None,
@@ -241,7 +245,9 @@ def test_failed_execution_under_batch_read_stores_the_full_output(monkeypatch) -
     assert len(rows) == 120
 
 
-def test_a_failed_retry_and_the_following_success_store_the_full_output(monkeypatch) -> None:
+def test_a_failed_retry_and_the_following_success_store_the_full_output(
+    monkeypatch,
+) -> None:
     from backend.channel.graph import CONTAINER_TYPES, ContainerType
     from backend.channel.nodes.spec import NodeResult
     from backend.channel.run_store import get_run_store
@@ -276,7 +282,11 @@ def test_a_failed_retry_and_the_following_success_store_the_full_output(monkeypa
         return NodeResult(status="succeeded", output={"rows": rows})
 
     job_id = _run_preview_graph(run, step_retry={"max_tries": 2, "wait_sec": 0})
-    steps = [item for item in get_run_store().list_executions(job_id) if item.node_id == "step"]
+    steps = [
+        item
+        for item in get_run_store().list_executions(job_id)
+        if item.node_id == "step"
+    ]
     assert len(steps) == 2
     assert steps[0].status == "failed"
     assert steps[0].preview_only is False
@@ -333,7 +343,11 @@ def test_success_under_batch_read_stores_a_clipped_input_and_the_full_output(
 
 
 def test_note_killed_run_keeps_the_full_output() -> None:
-    from backend.channel.run_store import ChannelRunRecord, get_run_store, note_killed_run
+    from backend.channel.run_store import (
+        ChannelRunRecord,
+        get_run_store,
+        note_killed_run,
+    )
     from backend.core.time import utc_now
 
     rows = list(range(120))
@@ -430,7 +444,9 @@ def test_identical_template_text_records_each_filter_condition_path() -> None:
     capture = InputCapture()
     token = bind_execution_input(capture)
     try:
-        NODE_TYPE.execute({"id": "nd_filter", "config": config}, FakeHooks(evaluate=evaluate))
+        NODE_TYPE.execute(
+            {"id": "nd_filter", "config": config}, FakeHooks(evaluate=evaluate)
+        )
     finally:
         reset_execution_input(token)
     assert capture.fields["conditions.0.value"] == {"value": 1}
@@ -506,6 +522,7 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "trigger.error": {},
         "trigger.manual": {},
         "trigger.scheduled": {},
+        "read.changes": {"entity_id": "ent_1"},
         "read.sql": {"source": {"kind": "entity"}, "sql": "{{ sql }}"},
         "read.source_query": {"source_id": "src_1", "sql": "{{ sql }}"},
         "transform.set_fields": {
@@ -562,6 +579,7 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "trigger.error": set(),
         "trigger.manual": set(),
         "trigger.scheduled": set(),
+        "read.changes": set(),
         "read.sql": {"sql"},
         "read.source_query": {"sql"},
         "transform.set_fields": {"fields.0.value", "fields.1.value"},
@@ -638,7 +656,9 @@ def _config_at(config: Any, path: str) -> Any:
     return current
 
 
-def test_batch_round_stores_clipped_rows_and_the_body_reads_every_row(monkeypatch) -> None:
+def test_batch_round_stores_clipped_rows_and_the_body_reads_every_row(
+    monkeypatch,
+) -> None:
     from datetime import datetime, timezone
 
     import backend.channel.nodes.volume.batch_read as batch_read
@@ -744,12 +764,18 @@ def test_batch_round_stores_clipped_rows_and_the_body_reads_every_row(monkeypatc
             actor={"id": "usr_system", "name": "System"},
             started_at="2026-10-22T00:00:00Z",
             user=user,
-            schedule={"schedule_id": None, "name": "", "scheduled_for": "2026-10-22T00:00:00Z"},
+            schedule={
+                "schedule_id": None,
+                "name": "",
+                "scheduled_for": "2026-10-22T00:00:00Z",
+            },
             target="draft",
             channel_id="chn_rounds",
             run_version=None,
         )
-        outcome = execute(graph, "batch", [batch_read.NODE_TYPE, kind], _resolver(), hooks)
+        outcome = execute(
+            graph, "batch", [batch_read.NODE_TYPE, kind], _resolver(), hooks
+        )
     assert outcome.status == "succeeded"
     assert seen == [120]
     executions = {
@@ -846,7 +872,11 @@ def _run_preview_graph(run, *, step_retry: dict | None) -> str:
         actor={"id": "usr_system", "name": "System"},
         started_at="2026-10-22T00:00:00Z",
         user=user,
-        schedule={"schedule_id": None, "name": "", "scheduled_for": "2026-10-22T00:00:00Z"},
+        schedule={
+            "schedule_id": None,
+            "name": "",
+            "scheduled_for": "2026-10-22T00:00:00Z",
+        },
         target="draft",
         channel_id="chn_preview",
         run_version=None,
@@ -869,7 +899,9 @@ class _QuietSandbox:
         del refs
 
 
-def _graph_node(node_id: str, type_id: str, y: int, *, parent: str | None = None) -> dict:
+def _graph_node(
+    node_id: str, type_id: str, y: int, *, parent: str | None = None
+) -> dict:
     node = {
         "id": node_id,
         "type": type_id,
@@ -920,8 +952,15 @@ def test_sql_store_writes_the_columns_and_one_past_the_highest_seq(monkeypatch) 
         pytest.skip("Postgres is not available")
     monkeypatch.setenv("REFRAQ_STORE_BACKEND", "persistent")
     monkeypatch.setenv("DATABASE_URL", _DATABASE_URL)
-    monkeypatch.setenv("REDIS_URL", os.getenv("REFRAQ_INTEGRATION_REDIS_URL", "redis://127.0.0.1:6379/1"))
-    from backend.channel.models import ChannelNodeExecutionRow, ChannelRow, ChannelRunRow
+    monkeypatch.setenv(
+        "REDIS_URL",
+        os.getenv("REFRAQ_INTEGRATION_REDIS_URL", "redis://127.0.0.1:6379/1"),
+    )
+    from backend.channel.models import (
+        ChannelNodeExecutionRow,
+        ChannelRow,
+        ChannelRunRow,
+    )
     from backend.channel.run_store import SqlRunStore
     from backend.core.config import reset_settings_cache
     from backend.core.db import reset_db_singletons, session_scope
@@ -1037,7 +1076,9 @@ def test_sql_store_writes_the_columns_and_one_past_the_highest_seq(monkeypatch) 
         assert paged[0].round == 1
         assert paged[0].step == {"rows": [1], "index": 1, "count": 2, "total": 150}
         assert paged[0].step_totals == {"rows": 150}
-        failed_child = store.start_execution(job_id, "nd_child", container_seq=1, round=1)
+        failed_child = store.start_execution(
+            job_id, "nd_child", container_seq=1, round=1
+        )
         failed_child.status = "failed"
         failed_child.finished_at = now
         store.finish_execution(failed_child)

@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.admin.user_store import get_user_store
 from backend.channel.channel_run import dispatch, mint_followup_run, trigger_node_id
+from backend.channel.checkpoints import advance_from_run
 from backend.channel.store import get_channel_store
 from backend.core.time import format_instant, utc_now
 from backend.jobs.store import JobRecord, append_job_log, get_job_store
@@ -21,7 +22,13 @@ _SYSTEM = {"id": "usr_system", "name": "System"}
 
 
 def settle_success(run: Any) -> None:
-    """A published success ends the failure episode."""
+    """A completed run advances checkpoints. A published success ends the failure episode.
+
+    Advance runs for a draft too: the run's writes and deliveries already happened.
+    A run that stopped at one node does not advance. The checkpoint module applies
+    that rule.
+    """
+    advance_from_run(run)
     if run.target != "published":
         return
     _write_streak(run.channel_id, 0)
@@ -44,7 +51,11 @@ def settle_failure(
         if run.target == "published":
             _bump_streak(run.channel_id)
         return
-    if run.target == "published" and run.version is not None and _ancestors(job) < _limit(run):
+    if (
+        run.target == "published"
+        and run.version is not None
+        and _ancestors(job) < _limit(run)
+    ):
         _queue_retry(job, run)
         return
     if run.target == "published":
@@ -139,7 +150,9 @@ def _start_error_workflow(
                 "ignore_checkpoints": False,
                 "error_source": {
                     "channel_id": run.channel_id,
-                    "channel_name": source.name if source is not None else run.channel_id,
+                    "channel_name": source.name
+                    if source is not None
+                    else run.channel_id,
                     "job_id": job.id,
                     "version": run.version,
                     "attempt": _ancestors(job) + 1,

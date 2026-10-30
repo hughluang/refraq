@@ -478,6 +478,10 @@ A dropped physical table leaves its entries in place. The list still returns the
 
 `source` is `user`, `channel_run`, or null. The entry stores the subject id. `subject_label` is resolved on read. A user subject uses the user's name when the user exists, and the stored id when it does not. A missing user does not drop the entry. A channel-run subject uses the stored run id. The response has no channel link. An unattributed entry has `source`, `subject`, and `subject_label` null.
 
+This list orders by sequence descending. It is not the checkpoint read. A Data Channel `read.changes` node reads forward by `(xact, seq)` below a snapshot bound (`docs/business-data-channel.md` §6.1). `xact` is the writing transaction id. Entries written before that column existed have `xact` 0. The list response does not include `xact`.
+
+Retention cleanup and a delete of an entity's entries record the greatest deleted `(xact, seq)` as that entity's purge mark, in the same statement as the delete. A later delete that removes nothing does not lower the mark. The list does not return the mark. A stored checkpoint strictly behind it fails `read.changes` with `CHANNEL_CHECKPOINT_INVALID`.
+
 ### 4.10 `GET /entities/{id}/change-log/{sequence}`
 
 Permission: `entity:data_read`. An unknown or invisible entity, or a sequence this entity does not have, is `404 ENTITY_NOT_FOUND`. `sequence` below 1 is `422 REQUEST_INVALID`.
@@ -657,13 +661,13 @@ The worker opens the entity owner pool for publish, drop, and view regeneration 
 
 ### 6.1 `POST /entities/{id}/versions/{version_id}/drop-table`
 
-Permitted on a published version that is not the metadata head, or on the head after the Entity is deprecated. Dropping the head also drops the stem view. Dropping the table still in service — the metadata head while the Entity is not deprecated — is `422 ENTITY_TABLE_IN_SERVICE`. Opening a newer unpublished version does not take that table out of service.
+Permitted on a published version that is not the metadata head, or on the head after the Entity is deprecated. Dropping the head, in one entity-database transaction, drops every Profile View in `entity_access` that selects that physical table, then the stem view, then the table. Each view is dropped by name, without `CASCADE`. After that transaction commits, the Entity's profile-view bindings are cleared. Dropping the table still in service — the metadata head while the Entity is not deprecated — is `422 ENTITY_TABLE_IN_SERVICE`. Opening a newer unpublished version does not take that table out of service.
 
 Enqueue is idempotent with the same in-flight rule as publish (`200` returns the in-flight Job). A version whose snapshot is already empty is `200` `{ "job": null, "version": { … } }`.
 
 Emptiness is checked in the same transaction as the drop. A non-empty table fails the Job with `ENTITY_TABLE_NOT_EMPTY`. The HTTP enqueue does not treat a pre-check as a guarantee.
 
-The drop removes the relation and the triggers on it. Change-log entries that name the table remain until retention removes them or a publish turns recording off. The list and the entry read still return those entries (§4.9, §4.10).
+The drop removes the relation and the triggers on it. On the head it also removes the Profile Views that select that table, by name and without `CASCADE`, in that same transaction, then clears that Entity's profile-view bindings. Change-log entries that name the table remain until retention removes them or a publish turns recording off. The list and the entry read still return those entries (§4.9, §4.10).
 
 Success envelope:
 

@@ -83,6 +83,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "entity.dictionaries.active_codes",
             "entity.heads",
             "entity.rows",
+            "entity.changes",
             "entity.publish_confirmation",
             "entity.subject_displays",
             "entity.statements",
@@ -188,9 +189,15 @@ def test_layout_imports(path: Path) -> None:
 
     for imported in _imported_backend_modules(tree):
         if imported == "worker.app" or imported.startswith("worker.app."):
-            if importer_pkg in {"admin", "jobs", "metadata", "entity", "channel", "tags", "core"} or importer.startswith(
-                "routers."
-            ):
+            if importer_pkg in {
+                "admin",
+                "jobs",
+                "metadata",
+                "entity",
+                "channel",
+                "tags",
+                "core",
+            } or importer.startswith("routers."):
                 if not _allowlisted(importer, imported):
                     raise AssertionError(
                         f"{importer} must not import worker.app "
@@ -239,7 +246,8 @@ def test_layout_imports(path: Path) -> None:
         # The supervised Job child is a process entry and assembles there.
         if importer_pkg == "jobs" and target_pkg not in {"core", "admin"}:
             if importer == "jobs.job_child" and (
-                imported == "worker.parameters" or imported.startswith("worker.parameters.")
+                imported == "worker.parameters"
+                or imported.startswith("worker.parameters.")
             ):
                 continue
             if not _allowlisted(importer, imported):
@@ -250,10 +258,24 @@ def test_layout_imports(path: Path) -> None:
 
         # core must not import business packages (upgrade → published admin/worker/metadata seeds).
         if importer_pkg == "core":
-            if target_pkg in {"admin", "jobs", "metadata", "entity", "worker", "channel", "tags"}:
-                if importer == "core.upgrade" and target_pkg in {"admin", "worker", "metadata"}:
+            if target_pkg in {
+                "admin",
+                "jobs",
+                "metadata",
+                "entity",
+                "worker",
+                "channel",
+                "tags",
+            }:
+                if importer == "core.upgrade" and target_pkg in {
+                    "admin",
+                    "worker",
+                    "metadata",
+                }:
                     if target_pkg == "worker":
-                        if imported == "worker.api" or imported.startswith("worker.api."):
+                        if imported == "worker.api" or imported.startswith(
+                            "worker.api."
+                        ):
                             continue
                         if imported == "worker.parameters" or imported.startswith(
                             "worker.parameters."

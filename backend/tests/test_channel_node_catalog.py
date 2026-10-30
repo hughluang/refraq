@@ -25,6 +25,9 @@ _OUTPUT_VIEWS = {
     "trigger.error": OutputView(kind="record"),
     "trigger.manual": OutputView(kind="record"),
     "trigger.scheduled": OutputView(kind="record"),
+    "read.changes": OutputView(
+        kind="rows", rows="entries", metrics=("count", "has_more")
+    ),
     "read.source_query": OutputView(
         kind="rows", rows="rows", metrics=("count", "truncated")
     ),
@@ -139,7 +142,9 @@ def test_until_is_registered_as_a_container() -> None:
     assert [port.port for port in node.inputs] == ["main"]
     assert [port.port for port in node.outputs] == ["each", "done"]
     assert all(port.loop_back is False for port in (*node.inputs, *node.outputs))
-    assert node.output_view == OutputView(kind="container", metrics=("count",), item="index")
+    assert node.output_view == OutputView(
+        kind="container", metrics=("count",), item="index"
+    )
     schema = node.config_schema
     assert schema["required"] == ["until", "max_iterations"]
     until = schema["properties"]["until"]
@@ -157,7 +162,9 @@ def test_batch_read_is_registered_as_a_container() -> None:
     from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA
     from backend.channel.item_limit import ITEM_LIMIT
 
-    node = next(item for item in list_node_types() if item.type_id == "volume.batch_read")
+    node = next(
+        item for item in list_node_types() if item.type_id == "volume.batch_read"
+    )
     assert [port.port for port in node.inputs] == ["main"]
     assert [port.port for port in node.outputs] == ["each", "done"]
     assert all(port.loop_back is False for port in node.outputs)
@@ -185,13 +192,19 @@ def test_dataset_query_and_materialize_are_registered() -> None:
     assert timeout["maximum"] == 3600
     assert timeout["default"] == 300
     assert "statement_timeout_sec" not in query.config_schema["required"]
-    assert query.config_schema["properties"]["source"]["properties"]["kind"]["enum"] == (
-        sql.config_schema["properties"]["source"]["properties"]["kind"]["enum"]
+    assert (
+        query.config_schema["properties"]["source"]["properties"]["kind"]["enum"]
+        == (sql.config_schema["properties"]["source"]["properties"]["kind"]["enum"])
     )
-    assert query.config_schema["properties"]["sql"]["x-refraq-template"] == {"type": "string"}
+    assert query.config_schema["properties"]["sql"]["x-refraq-template"] == {
+        "type": "string"
+    }
     assert set(query.config_schema["required"]) == {"source", "sql"}
     assert materialize.config_schema["required"] == ["items"]
-    assert materialize.config_schema["properties"]["items"]["x-refraq-template"]["type"] == "array"
+    assert (
+        materialize.config_schema["properties"]["items"]["x-refraq-template"]["type"]
+        == "array"
+    )
     assert [port.port for port in query.outputs] == ["main", "error"]
     assert [port.port for port in materialize.outputs] == ["main", "error"]
 

@@ -19,22 +19,18 @@ from backend.entity.change_log import (
     SOURCE_USER,
     ChangeLogEntry,
     ChangeLogTable,
-    ensure_shared_relations,
     read_change_log,
     read_change_log_entry,
 )
-from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
 from backend.entity.entity_db import get_entity_engine
 from backend.entity.errors import EntityNotFound, EntityRequestInvalid
 from backend.entity.jobs import enqueue_drop
-from backend.entity.lifecycle import PUBLISHED
 from backend.entity.publish import accept
 from backend.entity.publish_confirmation import (
     change_log_publish_effect,
     incompatible_write_nodes,
 )
 from backend.entity.records import AttributeRecord
-from backend.entity.reference_binding import business_key_attr
 from backend.entity.schemas.entities import (
     AttributeIn,
     BusinessEntityListResponse,
@@ -59,6 +55,7 @@ from backend.entity.schemas.entities import (
 from backend.entity.service import (
     add_entity_tags,
     change_log_on_entity_database,
+    change_log_tables,
     classify_entity,
     create_entity,
     delete_entity,
@@ -74,8 +71,6 @@ from backend.entity.service import (
     remove_entity_tags,
     replace_entity_tags,
 )
-from backend.entity.store import get_entity_store
-from backend.entity.table_name import compose_physical_table_name, published_attributes
 from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.store import JobRecord
 
@@ -190,9 +185,10 @@ def http_list_change_log(
 ) -> ChangeLogPageOut:
     tables = _change_log_tables(entity_id, user)
     if not change_log_on_entity_database():
-        return ChangeLogPageOut(items=[], limit=CHANGE_LOG_PAGE_LIMIT, next_before_sequence=None)
+        return ChangeLogPageOut(
+            items=[], limit=CHANGE_LOG_PAGE_LIMIT, next_before_sequence=None
+        )
     with get_entity_engine().begin() as conn:
-        ensure_shared_relations(conn)
         page = read_change_log(
             conn,
             entity_id,
@@ -227,7 +223,6 @@ def http_get_change_log_entry(
     if not change_log_on_entity_database():
         raise EntityNotFound("Change log entry not found")
     with get_entity_engine().begin() as conn:
-        ensure_shared_relations(conn)
         entry = read_change_log_entry(conn, entity_id, tables, sequence)
     if entry is None:
         raise EntityNotFound("Change log entry not found")
@@ -240,40 +235,22 @@ def http_get_change_log_entry(
 
 
 def _change_log_tables(entity_id: str, user: UserRecord) -> list[ChangeLogTable]:
-    """Decode targets for published versions, including a dropped table.
-
-    The physical name is composed from the version. An empty snapshot still
-    yields the version's attributes, so an entry stored before the drop
-    decodes. Missing or invisible entity is not found.
-    """
+    """Decode targets for published versions the caller is allowed to open."""
     get_entity(entity_id, user=user)
-    entity = get_entity_store().get_entity(entity_id)
-    assert entity is not None
-    tables: list[ChangeLogTable] = []
-    for version in get_entity_store().list_all_versions(entity_id):
-        if version.publish_status != PUBLISHED:
-            continue
-        name, _comment = compose_physical_table_name(
-            entity.table_name, version.version, version.id
-        )
-        attributes = tuple(published_attributes(version))
-        key = business_key_attr(attributes)
-        tables.append(
-            ChangeLogTable(
-                physical_table=qualified_table(ENTITY_DATA_SCHEMA, name),
-                attributes=attributes,
-                reference_snapshots=dict(version.reference_snapshots),
-                business_key=None if key is None else key.name,
-            )
-        )
-    return tables
+    return change_log_tables(entity_id)
 
 
-def _change_log_item(entry: ChangeLogEntry, tables: list[ChangeLogTable]) -> ChangeLogEntryOut:
+def _change_log_item(
+    entry: ChangeLogEntry, tables: list[ChangeLogTable]
+) -> ChangeLogEntryOut:
     image = entry.after if entry.after is not None else entry.before
     row: dict[str, Any] = {} if image is None else image
     key_name = next(
-        (table.business_key for table in tables if table.physical_table == entry.physical_table),
+        (
+            table.business_key
+            for table in tables
+            if table.physical_table == entry.physical_table
+        ),
         None,
     )
     row_id = row.get("row_id")

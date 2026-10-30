@@ -1,4 +1,5 @@
 import type { GraphProblem } from "@/features/channels/types";
+import { repeatsContractSentence } from "@/lib/problem";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
@@ -109,18 +110,21 @@ export function formatRunError(
   code: string | null,
   message: string | null,
 ): { label: string; detail: string | null } {
-  const detail = message ? message : null;
+  const raw = message ? message : null;
   if (
     code === "CHANNEL_ITERATION_VOLUME_EXCEEDED" &&
     message &&
     message !== FOR_ITERATION_VOLUME
   ) {
-    return { label: message, detail };
+    return { label: message, detail: raw };
   }
   if (code) {
     const key = `problems.${code}`;
     const translated = t(key);
-    if (translated !== key) return { label: translated, detail };
+    if (translated !== key) {
+      const detail = raw && !repeatsContractSentence(code, raw) ? raw : null;
+      return { label: translated, detail };
+    }
   }
-  return { label: detail ?? "", detail: null };
+  return { label: raw ?? "", detail: null };
 }

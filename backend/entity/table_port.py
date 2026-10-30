@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from backend.core.config import get_settings, require_entity_database_url
 from backend.entity.ddl import (
+    ENTITY_ACCESS_SCHEMA,
     comment_table_sql,
     create_table_statements,
     create_view_sql,
@@ -185,6 +186,8 @@ class PostgresEntityTablePort:
             is_table = _relation_kind(conn, schema, table) == "r"
             if is_table:
                 _lock_and_assert_empty(conn, qualified)
+                for name in _profile_views_on_table(conn, schema, table):
+                    conn.execute(text(drop_view_sql(ENTITY_ACCESS_SCHEMA, name)))
             if _relation_kind(conn, schema, view) == "v":
                 conn.execute(text(drop_view_sql(schema, view)))
             if is_table:
@@ -289,6 +292,34 @@ def _lock_and_assert_empty(conn: object, qualified: str) -> None:
     )
     if nonempty:
         raise EntityTableHasRows(qualified)
+
+
+def _profile_views_on_table(conn: object, schema: str, table: str) -> list[str]:
+    """Profile views in ``entity_access`` whose query names this physical table.
+
+    Names only. The caller drops each view without ``CASCADE``.
+    """
+    rows = conn.execute(  # type: ignore[union-attr]
+        text(
+            "SELECT DISTINCT view_rel.relname "
+            "FROM pg_depend dep "
+            "JOIN pg_rewrite rule ON rule.oid = dep.objid "
+            "JOIN pg_class view_rel ON view_rel.oid = rule.ev_class "
+            "JOIN pg_namespace view_ns ON view_ns.oid = view_rel.relnamespace "
+            "JOIN pg_class table_rel ON table_rel.oid = dep.refobjid "
+            "JOIN pg_namespace table_ns ON table_ns.oid = table_rel.relnamespace "
+            "WHERE dep.classid = 'pg_rewrite'::regclass "
+            "AND dep.refclassid = 'pg_class'::regclass "
+            "AND table_ns.nspname = :schema "
+            "AND table_rel.relname = :table "
+            "AND view_rel.relkind = 'v' "
+            "AND view_ns.nspname = :access_schema "
+            "AND view_rel.oid <> table_rel.oid "
+            "ORDER BY view_rel.relname"
+        ),
+        {"schema": schema, "table": table, "access_schema": ENTITY_ACCESS_SCHEMA},
+    )
+    return [str(name) for name in rows.scalars()]
 
 
 def _drop_empty_table(conn: object, qualified: str) -> None:

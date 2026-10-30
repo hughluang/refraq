@@ -7,7 +7,7 @@ from dataclasses import replace
 from celery import current_task
 
 from backend.core.time import utc_now
-from backend.entity.access.views import rebuild_entity_views
+from backend.entity.access.views import clear_profile_bindings, rebuild_entity_views
 from backend.entity.ddl import ENTITY_DATA_SCHEMA
 from backend.entity.errors import EntityTableInService
 from backend.entity.kinds import KIND_ACCESS_VIEWS, KIND_DROP, KIND_RECONCILE
@@ -125,6 +125,7 @@ def _drop(job_id: str, version_id: str) -> dict[str, str]:
         port = get_entity_table_port()
         if is_head:
             port.drop_head(schema, table, entity.table_name)
+            clear_profile_bindings(entity.id)
         elif port.table_exists(schema, table):
             port.drop_table(schema, table)
     except EntityTableHasRows as exc:

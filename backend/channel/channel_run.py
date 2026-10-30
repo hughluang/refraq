@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
+from backend.channel.checkpoints import LocalCheckpoints, RunCheckpoints
 from backend.channel.context import channel_context, platform_context, run_context
 from backend.channel.engine import RunOutcome, execute
 from backend.channel.node_support import (
@@ -179,7 +180,9 @@ def mint_scheduled_run(
             summary=f"channel_run {channel_id}",
             trigger_kind="schedule",
             trigger_ref=schedule_id,
-            log_body=format_job_log_line(level="info", message="queued channel run", at=now),
+            log_body=format_job_log_line(
+                level="info", message="queued channel run", at=now
+            ),
             scheduled_for=scheduled_for,
             running_timeout_sec=None,
             session=session,
@@ -189,7 +192,9 @@ def mint_scheduled_run(
         already = True
         found = get_job_store().get(exc.existing_job_id or "", session=session)
         if found is None:
-            return ScheduledMint("already_minted", exc.existing_job_id or "", None, None)
+            return ScheduledMint(
+                "already_minted", exc.existing_job_id or "", None, None
+            )
         job = found
     if not already and get_channel_store().get(channel_id) is not None:
         get_run_store().insert_run(
@@ -339,6 +344,7 @@ def execute_channel_run(
             channel_id=run.channel_id,
             run_version=run.version,
             pinned=pinned,
+            run=run,
         )
         return _execute_graph(
             graph,
@@ -365,6 +371,7 @@ class _RunHooks:
         channel_id: str,
         run_version: int | None,
         pinned: bool = False,
+        run: Any | None = None,
     ) -> None:
         self._sandbox = sandbox
         self.run_id = run_id
@@ -378,6 +385,10 @@ class _RunHooks:
         self._pinned = pinned
         self._inputs: dict[int, InputCapture] = {}
         self.run_variables: dict[str, Any] = {}
+        self.ignore_checkpoints = bool(getattr(run, "ignore_checkpoints", False))
+        self.checkpoints = (
+            RunCheckpoints(channel_id, run) if run is not None else LocalCheckpoints()
+        )
 
     def evaluate(self, expression: str) -> Any:
         return self._sandbox.evaluate(expression)
@@ -496,7 +507,9 @@ def _clip_captured(fields: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str,
     return stored, totals
 
 
-def _preview_copy(output: Any, *, cap: int = PREVIEW_LIST_CAP) -> tuple[Any, dict[str, int]]:
+def _preview_copy(
+    output: Any, *, cap: int = PREVIEW_LIST_CAP
+) -> tuple[Any, dict[str, int]]:
     """Deep-copy ``output`` and keep the first ``cap`` elements of each list."""
     copied = copy.deepcopy(output)
     totals: dict[str, int] = {}

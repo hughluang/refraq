@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 from backend.admin.user_store import UserRecord
+from backend.channel.checkpoints import LocalCheckpoints
 from backend.channel.nodes.spec import NodeResult
 
 _ACTOR = {"id": "usr_system", "name": "System"}
@@ -46,6 +47,8 @@ class FakeHooks:
         self.starts: list[tuple[str, int | None, int | None]] = []
         self.cancel_after: str | None = None
         self.run_variables: dict[str, Any] = {}
+        self.ignore_checkpoints = False
+        self.checkpoints = LocalCheckpoints()
 
     def cancelled(self) -> bool:
         return bool(self.cancel_after and self.cancel_after in self.order)

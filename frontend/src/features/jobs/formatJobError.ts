@@ -1,3 +1,5 @@
+import { repeatsContractSentence } from "@/lib/problem";
+
 type Translate = (key: string) => string;
 
 export type JobErrorLine = {
@@ -6,8 +8,9 @@ export type JobErrorLine = {
   /** True when `problems.${code}` is in the catalog. */
   catalogued: boolean;
   /**
-   * English occurrence text. Present only for a catalogued code, so the main
-   * line stays localized and this text can sit in a disclosure.
+   * Server text that is not the English catalog sentence for this code.
+   * Present only for a catalogued code, so the main line stays localized
+   * and this text can sit in a disclosure.
    */
   occurrence: string | null;
 };
@@ -20,7 +23,9 @@ export function formatJobError(
 ): JobErrorLine {
   const key = `problems.${code}`;
   const translated = t(key);
-  const occurrence = message?.trim() ? message.trim() : null;
+  const trimmed = message?.trim() ? message.trim() : null;
+  const occurrence =
+    trimmed && !repeatsContractSentence(code, trimmed) ? trimmed : null;
   if (translated !== key) {
     return { text: translated, catalogued: true, occurrence };
   }

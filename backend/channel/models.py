@@ -61,7 +61,25 @@ class ChannelRunRow(Base):
     stop_at_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     skipped_node_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
     context: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    checkpoint_proposals: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class ChannelCheckpointRow(Base):
+    """Durable cursor for one checkpoint-owning node and one stream."""
+
+    __tablename__ = "channel_checkpoints"
+
+    channel_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("channels.id", ondelete="CASCADE"), primary_key=True
+    )
+    node_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    stream: Mapped[str] = mapped_column(String(64), primary_key=True)
+    position_xact: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    position_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
 class WebhookRow(Base):
@@ -71,7 +89,9 @@ class WebhookRow(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_delivery_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(
+        UtcDateTime, nullable=True
+    )
     last_delivery_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
@@ -90,7 +110,9 @@ class EmailAccountRow(Base):
     password_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     from_address: Mapped[str] = mapped_column(String(254), nullable=False)
     tls_skip_verify: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    last_delivery_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(
+        UtcDateTime, nullable=True
+    )
     last_delivery_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
@@ -140,7 +162,9 @@ class ChannelNodeExecutionRow(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     job_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("channel_runs.job_id", ondelete="CASCADE"), nullable=False
+        String(64),
+        ForeignKey("channel_runs.job_id", ondelete="CASCADE"),
+        nullable=False,
     )
     node_id: Mapped[str] = mapped_column(String(64), nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -164,7 +188,9 @@ class ChannelContainerRoundRow(Base):
     __tablename__ = "channel_container_rounds"
 
     job_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("channel_runs.job_id", ondelete="CASCADE"), primary_key=True
+        String(64),
+        ForeignKey("channel_runs.job_id", ondelete="CASCADE"),
+        primary_key=True,
     )
     container_seq: Mapped[int] = mapped_column(Integer, primary_key=True)
     round: Mapped[int] = mapped_column(Integer, primary_key=True)

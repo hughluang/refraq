@@ -8,7 +8,10 @@ from typing import Any, TypeVar
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
-from backend.entity.change_log import ensure_shared_relations, read_effective
+from backend.entity.change_log import (
+    ChangeLogTable,
+    read_effective,
+)
 from backend.entity.classify import Classification, classify_shapes
 from backend.entity.dictionary_binding import require_attribute_dictionaries
 from backend.entity.entity_db import get_entity_engine
@@ -37,7 +40,11 @@ from backend.entity.access.facts import Person
 from backend.entity.access.plan import load_head, load_policy
 from backend.entity.access.store import get_access_store
 from backend.entity.inbound import inbound_references_for
-from backend.entity.reference_binding import require_business_key_stable
+from backend.entity.reference_binding import (
+    business_key_attr,
+    require_business_key_stable,
+)
+from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
 from backend.entity.lifecycle import (
     PUBLISHED,
     UNPUBLISHED,
@@ -66,7 +73,12 @@ from backend.tags.api import (
     list_subject_ids,
     replace_assignment,
 )
-from backend.entity.table_name import physical_table_name, table_present
+from backend.entity.table_name import (
+    compose_physical_table_name,
+    physical_table_name,
+    published_attributes,
+    table_present,
+)
 from backend.entity.validate import (
     bind_reference_self,
     require_reference_targets,
@@ -185,7 +197,11 @@ def _definition(
     user: UserRecord | None, entity_id: str
 ) -> tuple[bool, bool, set[str] | None]:
     if user is None or _sees_every_definition(user):
-        return True, "entity:write" in _catalog_permissions(user) if user else True, None
+        return (
+            True,
+            "entity:write" in _catalog_permissions(user) if user else True,
+            None,
+        )
     head = load_head(entity_id)
     revision = get_access_store().revision(entity_id)
     policy = load_policy(head, revision)
@@ -209,17 +225,11 @@ def _require_visible(user: UserRecord | None, entity_id: str) -> None:
         raise EntityNotFound()
 
 
-def _visible_inbound(
-    entity_id: str, user: UserRecord | None
-) -> list[dict[str, str]]:
+def _visible_inbound(entity_id: str, user: UserRecord | None) -> list[dict[str, str]]:
     rows = inbound_references_for(get_entity_store(), entity_id)
     if user is None or _sees_every_definition(user):
         return rows
-    return [
-        row
-        for row in rows
-        if _definition(user, row["entity_id"])[0]
-    ]
+    return [row for row in rows if _definition(user, row["entity_id"])[0]]
 
 
 def _project_version(
@@ -257,6 +267,36 @@ def get_entity(entity_id: str, *, user: UserRecord | None = None) -> dict[str, A
     return payload
 
 
+def change_log_tables(entity_id: str) -> list[ChangeLogTable]:
+    """Decode targets for every published version, including a dropped table.
+
+    The physical name is composed from the version. An empty snapshot still
+    yields the version's attributes, so an entry stored before the drop
+    decodes. A missing entity is not found. Visibility is the caller's job.
+    """
+    entity = get_entity_store().get_entity(entity_id)
+    if entity is None:
+        raise EntityNotFound()
+    tables: list[ChangeLogTable] = []
+    for version in get_entity_store().list_all_versions(entity_id):
+        if version.publish_status != PUBLISHED:
+            continue
+        name, _comment = compose_physical_table_name(
+            entity.table_name, version.version, version.id
+        )
+        attributes = tuple(published_attributes(version))
+        key = business_key_attr(attributes)
+        tables.append(
+            ChangeLogTable(
+                physical_table=qualified_table(ENTITY_DATA_SCHEMA, name),
+                attributes=attributes,
+                reference_snapshots=dict(version.reference_snapshots),
+                business_key=None if key is None else key.name,
+            )
+        )
+    return tables
+
+
 def change_log_on_entity_database() -> bool:
     """True when the bound table port can run change-log policy.
 
@@ -275,7 +315,6 @@ def live_change_log(entity_id: str) -> tuple[bool, int | None]:
     if not change_log_on_entity_database():
         return False, None
     with get_entity_engine().begin() as conn:
-        ensure_shared_relations(conn)
         row = read_effective(conn, entity_id)
     if row is None:
         return False, None
@@ -375,9 +414,7 @@ def create_entity(
     cleaned_name = _require_text(name, "name")
     cleaned_description = _require_text(description, "description")
     entity_id = new_entity_id()
-    attrs = _require_writable_shape(
-        attributes, entity_id=entity_id, previous=[]
-    )
+    attrs = _require_writable_shape(attributes, entity_id=entity_id, previous=[])
     now = utc_now()
     entity = BusinessEntityRecord(
         id=entity_id,
@@ -564,9 +601,7 @@ def classify_entity(
         validate_write=False,
         entity_id=entity.id,
     )
-    result = classify_shapes(
-        current.attributes, proposed.attributes, versions=versions
-    )
+    result = classify_shapes(current.attributes, proposed.attributes, versions=versions)
     return _classification_out(result)
 
 
@@ -591,9 +626,7 @@ def patch_version(
         validate_write=True,
         entity_id=entity.id,
     )
-    result = classify_shapes(
-        version.attributes, proposed.attributes, versions=versions
-    )
+    result = classify_shapes(version.attributes, proposed.attributes, versions=versions)
     now = utc_now()
     updated = replace(
         version,
@@ -635,9 +668,7 @@ def open_version(
     proposed_attributes = (
         list(current.attributes) if attributes is None else list(attributes)
     )
-    result = classify_shapes(
-        current.attributes, proposed_attributes, versions=versions
-    )
+    result = classify_shapes(current.attributes, proposed_attributes, versions=versions)
     if result.change_class == "unchanged":
         stored_attributes = list(current.attributes)
     else:
@@ -705,7 +736,9 @@ def deprecate_entity(
     if inbound_references_for(get_entity_store(), entity.id):
         raise EntityReferenced()
     now = utc_now()
-    saved = get_entity_store().save_entity(replace(entity, deprecated_at=now, updated_at=now))
+    saved = get_entity_store().save_entity(
+        replace(entity, deprecated_at=now, updated_at=now)
+    )
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -802,7 +835,9 @@ def remove_entity_tags(
     )
 
 
-def _bulk_ids(subject_ids: list[str], tag_ids: list[str]) -> tuple[list[str], list[str]]:
+def _bulk_ids(
+    subject_ids: list[str], tag_ids: list[str]
+) -> tuple[list[str], list[str]]:
     subjects = _collapse_ids(subject_ids)
     tags = _collapse_ids(tag_ids)
     if (

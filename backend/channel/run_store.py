@@ -49,6 +49,8 @@ class ChannelRunRecord:
     stop_at_node_id: str | None = None
     # `self.channel`, `self.run`, and `self.platform`; None until the run starts.
     context: dict[str, Any] | None = None
+    # node id -> stream -> {"xact", "seq"}. None until a node proposes a position.
+    checkpoint_proposals: dict[str, Any] | None = None
 
 
 @dataclass
@@ -198,6 +200,13 @@ class MemoryRunStore:
     def update_run(self, record: ChannelRunRecord) -> None:
         with self._lock:
             self._runs[record.job_id] = record
+
+    def set_checkpoint_proposals(self, job_id: str, proposals: dict[str, Any]) -> None:
+        with self._lock:
+            record = self._runs.get(job_id)
+            if record is None:
+                raise RuntimeError(f"channel run {job_id} is missing")
+            record.checkpoint_proposals = proposals
 
     def get_run(self, job_id: str) -> ChannelRunRecord | None:
         with self._lock:
@@ -385,7 +394,9 @@ class MemoryRunStore:
         """
         jobs = get_job_store()
         with self._lock:
-            snapshot = [(record.created_at, record.job_id) for record in self._runs.values()]
+            snapshot = [
+                (record.created_at, record.job_id) for record in self._runs.values()
+            ]
         return [
             job_id
             for created_at, job_id in snapshot
@@ -408,7 +419,9 @@ class MemoryRunStore:
             for job_id in doomed:
                 del self._runs[job_id]
             doomed_ids = set(doomed)
-            drop = [key for key, item in self._execs.items() if item.job_id in doomed_ids]
+            drop = [
+                key for key, item in self._execs.items() if item.job_id in doomed_ids
+            ]
             for key in drop:
                 del self._execs[key]
             drop_rounds = [
@@ -438,6 +451,14 @@ class SqlRunStore:
             row.trigger_node_id = record.trigger_node_id
             row.skipped_node_ids = list(record.skipped_node_ids)
             row.context = record.context
+            row.checkpoint_proposals = record.checkpoint_proposals
+
+    def set_checkpoint_proposals(self, job_id: str, proposals: dict[str, Any]) -> None:
+        with session_scope() as session:
+            row = session.get(ChannelRunRow, job_id)
+            if row is None:
+                raise RuntimeError(f"channel run {job_id} is missing")
+            row.checkpoint_proposals = proposals
 
     def get_run(self, job_id: str) -> ChannelRunRecord | None:
         with session_scope() as session:
@@ -458,9 +479,13 @@ class SqlRunStore:
             stmt = select(ChannelRunRow).where(ChannelRunRow.channel_id == channel_id)
             if target is not None:
                 stmt = stmt.where(ChannelRunRow.target == target)
-            total = int(session.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+            total = int(
+                session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+            )
             rows = session.scalars(
-                stmt.order_by(ChannelRunRow.created_at.desc(), ChannelRunRow.job_id.desc())
+                stmt.order_by(
+                    ChannelRunRow.created_at.desc(), ChannelRunRow.job_id.desc()
+                )
                 .limit(limit)
                 .offset(offset)
             ).all()
@@ -475,14 +500,17 @@ class SqlRunStore:
         round: int | None = None,
     ) -> NodeExecutionRecord:
         with session_scope() as session:
-            seq = int(
-                session.scalar(
-                    select(func.max(ChannelNodeExecutionRow.seq)).where(
-                        ChannelNodeExecutionRow.job_id == job_id
+            seq = (
+                int(
+                    session.scalar(
+                        select(func.max(ChannelNodeExecutionRow.seq)).where(
+                            ChannelNodeExecutionRow.job_id == job_id
+                        )
                     )
+                    or 0
                 )
-                or 0
-            ) + 1
+                + 1
+            )
             record = NodeExecutionRecord(
                 id=f"cne_{uuid.uuid4().hex[:12]}",
                 job_id=job_id,
@@ -564,7 +592,9 @@ class SqlRunStore:
         with session_scope() as session:
             total = int(
                 session.scalar(
-                    select(func.count()).select_from(ChannelNodeExecutionRow).where(*clauses)
+                    select(func.count())
+                    .select_from(ChannelNodeExecutionRow)
+                    .where(*clauses)
                 )
                 or 0
             )
@@ -603,7 +633,9 @@ class SqlRunStore:
                     container_seq=container_seq,
                     round=round,
                     step=step,
-                    step_totals={str(key): int(value) for key, value in step_totals.items()},
+                    step_totals={
+                        str(key): int(value) for key, value in step_totals.items()
+                    },
                 )
             )
 
@@ -638,7 +670,9 @@ class SqlRunStore:
         with session_scope() as session:
             total = int(
                 session.scalar(
-                    select(func.count()).select_from(ChannelContainerRoundRow).where(*clauses)
+                    select(func.count())
+                    .select_from(ChannelContainerRoundRow)
+                    .where(*clauses)
                 )
                 or 0
             )
@@ -754,6 +788,7 @@ def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
         stop_at_node_id=record.stop_at_node_id,
         skipped_node_ids=list(record.skipped_node_ids),
         context=record.context,
+        checkpoint_proposals=record.checkpoint_proposals,
         created_at=record.created_at,
     )
 
@@ -775,6 +810,7 @@ def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
         stopped_node_id=row.stopped_node_id,
         stop_at_node_id=row.stop_at_node_id,
         context=row.context,
+        checkpoint_proposals=row.checkpoint_proposals,
     )
 
 
@@ -868,11 +904,17 @@ def _unpack_output(raw: Any) -> tuple[Any, bool, dict[str, int]]:
         and raw[_PREVIEW_MARK].get("preview_only") is True
     ):
         totals = raw[_PREVIEW_MARK].get("preview_totals") or {}
-        return raw[_PREVIEW_VALUE], True, {str(key): int(value) for key, value in totals.items()}
+        return (
+            raw[_PREVIEW_VALUE],
+            True,
+            {str(key): int(value) for key, value in totals.items()},
+        )
     return raw, False, {}
 
 
-def output_page(output: Any, path: str | None, *, limit: int, offset: int) -> dict[str, Any]:
+def output_page(
+    output: Any, path: str | None, *, limit: int, offset: int
+) -> dict[str, Any]:
     value = output
     if path:
         for part in path.split("."):
@@ -937,7 +979,9 @@ def note_killed_run(job_id: str) -> None:
     run = store.get_run(job_id)
     if run is None:
         return
-    running = [item for item in store.list_executions(job_id) if item.status == "running"]
+    running = [
+        item for item in store.list_executions(job_id) if item.status == "running"
+    ]
     if not running:
         return
     current = running[-1]

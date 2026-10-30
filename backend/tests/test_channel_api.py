@@ -326,6 +326,7 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "trigger.error",
         "trigger.manual",
         "trigger.scheduled",
+        "read.changes",
         "read.source_query",
         "read.sql",
         "transform.code",
@@ -362,11 +363,15 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
     assert by_type["transform.code"]["permission"] == "channel:code_write"
     assert by_type["read.source_query"]["permission"] == "channel:source_query"
     assert (
-        by_type["transform.code"]["config_schema"]["properties"]["code"]["contentMediaType"]
+        by_type["transform.code"]["config_schema"]["properties"]["code"][
+            "contentMediaType"
+        ]
         == "text/x-python"
     )
     assert (
-        by_type["read.source_query"]["config_schema"]["properties"]["source_id"]["x-refraq-ref"]
+        by_type["read.source_query"]["config_schema"]["properties"]["source_id"][
+            "x-refraq-ref"
+        ]
         == "source"
     )
     assert all(
@@ -465,7 +470,9 @@ def test_publish_syncs_and_activation_toggles_the_schedule(client: TestClient) -
     assert row.owner_ref == f"channel:{channel_id}"
 
     changed = dict(SCHEDULED_GRAPH)
-    changed["nodes"] = [{**SCHEDULED_GRAPH["nodes"][0], "config": {"cron": "15 * * * *"}}]
+    changed["nodes"] = [
+        {**SCHEDULED_GRAPH["nodes"][0], "config": {"cron": "15 * * * *"}}
+    ]
     _save_draft(client, channel_id, changed)
     assert store.get_by_key(f"channel_run:{channel_id}").cron == "0 * * * *"
 
@@ -493,7 +500,9 @@ def test_publish_syncs_and_activation_toggles_the_schedule(client: TestClient) -
 def test_global_variable_list_and_delete(client: TestClient) -> None:
     from backend.channel.variables import get_variable_store
 
-    saved = get_variable_store().apply(operation="set", name="lease", value={"held": True})
+    saved = get_variable_store().apply(
+        operation="set", name="lease", value={"held": True}
+    )
     assert saved.applied is True
     bad_name = client.delete("/channel-variables/not a name")
     assert_problem(
@@ -588,7 +597,9 @@ def test_channel_variable_http(client: TestClient) -> None:
     assert store.list_live(limit=50, offset=0, channel_id=channel_id)[1] == 0
 
 
-def _guarded_graph(type_id: str, config: dict, *, trigger_name: str = "Run manually") -> dict:
+def _guarded_graph(
+    type_id: str, config: dict, *, trigger_name: str = "Run manually"
+) -> dict:
     return {
         "nodes": [
             {
@@ -736,14 +747,18 @@ def test_guarded_node_save_and_publish_permissions(
 
         current = writer.get(f"/channels/{channel_id}/draft").json()
         removed = current["graph"]
-        removed["nodes"] = [node for node in removed["nodes"] if node["id"] != "nd_guard"]
+        removed["nodes"] = [
+            node for node in removed["nodes"] if node["id"] != "nd_guard"
+        ]
         removed["edges"] = []
         deleted = writer.put(
             f"/channels/{channel_id}/draft",
             json={"base_revision": current["draft_revision"], "graph": removed},
         )
         assert deleted.status_code == 200, deleted.text
-        assert all(node["id"] != "nd_guard" for node in deleted.json()["graph"]["nodes"])
+        assert all(
+            node["id"] != "nd_guard" for node in deleted.json()["graph"]["nodes"]
+        )
     finally:
         writer.__exit__(None, None, None)
 
@@ -974,16 +989,24 @@ def test_execution_list_filters_pages_and_requires_read(client: TestClient) -> N
     with TestClient(app) as plain:
         _login(plain, "plain", "secret")
         assert plain.get(f"/channels/{channel_id}/runs/{job_id}").status_code == 403
-        assert plain.get(f"/channels/{channel_id}/runs/{job_id}/executions").status_code == 403
+        assert (
+            plain.get(f"/channels/{channel_id}/runs/{job_id}/executions").status_code
+            == 403
+        )
         assert plain.get(rows).status_code == 403
         assert (
-            plain.get(f"/channels/{channel_id}/runs/{job_id}/executions/1/rounds").status_code
+            plain.get(
+                f"/channels/{channel_id}/runs/{job_id}/executions/1/rounds"
+            ).status_code
             == 403
         )
     with TestClient(app) as allowed:
         _login(allowed, "reader", "secret")
         assert allowed.get(f"/channels/{channel_id}/runs/{job_id}").status_code == 200
-        assert allowed.get(f"/channels/{channel_id}/runs/{job_id}/executions").status_code == 200
+        assert (
+            allowed.get(f"/channels/{channel_id}/runs/{job_id}/executions").status_code
+            == 200
+        )
         assert_problem(
             allowed.get(f"/channels/{channel_id}/runs/{job_id}/executions/1/rounds"),
             status=422,
@@ -1017,7 +1040,9 @@ def _api_node(
     return node
 
 
-def _api_edge(edge_id: str, source: str, target: str, *, source_port: str = "main") -> dict:
+def _api_edge(
+    edge_id: str, source: str, target: str, *, source_port: str = "main"
+) -> dict:
     return {
         "id": edge_id,
         "source": {"node_id": source, "port": source_port},
@@ -1043,14 +1068,18 @@ def _run_draft(client: TestClient, channel_id: str, graph: dict) -> str:
     return started.json()["run"]["job_id"]
 
 
-def test_execution_list_includes_rendered_input(client: TestClient, monkeypatch) -> None:
+def test_execution_list_includes_rendered_input(
+    client: TestClient, monkeypatch
+) -> None:
     import json
 
     monkeypatch.setattr(
         "backend.channel.nodes.read.sql.run_channel_sql",
         lambda statement, **kwargs: {"rows": [{"n": 1}], "count": 1, "rowcount": 1},
     )
-    created = client.post("/channels", json={"name": "Rendered input", "description": None})
+    created = client.post(
+        "/channels", json={"name": "Rendered input", "description": None}
+    )
     assert created.status_code == 201, created.text
     channel_id = created.json()["channel"]["id"]
     numbers = list(range(101))
@@ -1099,7 +1128,9 @@ def test_execution_list_includes_rendered_input(client: TestClient, monkeypatch)
     assert fields["input_preview"]["fields.0.value"] == {"value": 5}
     assert fields["input_preview"]["fields.1.value"] == {"value": "ok"}
     assert fields["input_preview"]["fields.2.value"]["value"] == list(range(100))
-    assert fields["input_preview"]["fields.3.value"]["value"]["nums"] == list(range(100))
+    assert fields["input_preview"]["fields.3.value"]["value"]["nums"] == list(
+        range(100)
+    )
     assert fields["input_truncated"] is True
     assert fields["input_totals"] == {"fields.2.value": 101, "fields.3.value.nums": 101}
     assert fields["preview_only"] is False
@@ -1111,7 +1142,9 @@ def test_execution_list_includes_rendered_input(client: TestClient, monkeypatch)
 
 
 def test_execution_records_a_render_error(client: TestClient) -> None:
-    created = client.post("/channels", json={"name": "Render error", "description": None})
+    created = client.post(
+        "/channels", json={"name": "Render error", "description": None}
+    )
     assert created.status_code == 201, created.text
     channel_id = created.json()["channel"]["id"]
     graph = {
@@ -1185,7 +1218,9 @@ def test_container_rounds_page_and_reject_a_non_container(client: TestClient) ->
     assert listed.status_code == 200, listed.text
     by_node = {item["node_id"]: item for item in listed.json()["items"]}
     walk_seq = by_node["nd_walk"]["seq"]
-    rounds = client.get(f"/channels/{channel_id}/runs/{job_id}/executions/{walk_seq}/rounds")
+    rounds = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions/{walk_seq}/rounds"
+    )
     assert rounds.status_code == 200, rounds.text
     body = rounds.json()
     assert body["total"] == 3
@@ -1316,10 +1351,14 @@ def test_rerun_pins_a_failed_published_version(client: TestClient) -> None:
             json={"draft_revision": saved.json()["draft_revision"]},
         )
         assert published.status_code == 201, published.text
-        started = client.post(f"/channels/{channel_id}/runs", json={"target": "published"})
+        started = client.post(
+            f"/channels/{channel_id}/runs", json={"target": "published"}
+        )
         assert started.status_code == 202, started.text
         job_id = started.json()["run"]["job_id"]
-        assert mark_failed(job_id, error_code="CHANNEL_NODE_FAILED", error_summary="failed")
+        assert mark_failed(
+            job_id, error_code="CHANNEL_NODE_FAILED", error_summary="failed"
+        )
         rerun = client.post(f"/channels/{channel_id}/runs/{job_id}/rerun")
         assert rerun.status_code == 202, rerun.text
         body = rerun.json()["run"]
@@ -1337,7 +1376,9 @@ def test_rerun_pins_a_failed_published_version(client: TestClient) -> None:
         draft = client.post(f"/channels/{channel_id}/runs", json={"target": "draft"})
         assert draft.status_code == 202, draft.text
         draft_id = draft.json()["run"]["job_id"]
-        assert mark_failed(draft_id, error_code="CHANNEL_NODE_FAILED", error_summary="failed")
+        assert mark_failed(
+            draft_id, error_code="CHANNEL_NODE_FAILED", error_summary="failed"
+        )
         refused = client.post(f"/channels/{channel_id}/runs/{draft_id}/rerun")
         assert_problem(refused, status=422, code="CHANNEL_RUN_NOT_RERUNNABLE")
     finally:

@@ -418,11 +418,90 @@ describe("ChannelRecord draft access", () => {
     fireEvent.click(await screen.findByRole("button", { name: "channels.run.open" }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).not.toContain("channels.run.writesUpTo");
+    expect(within(dialog).queryByRole("switch")).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "channels.run.confirm" }));
     await waitFor(() => {
       expect(startRun).toHaveBeenCalledWith("chn_1", {
         target: "draft",
         ignore_checkpoints: false,
+        stop_at_node_id: null,
+      });
+    });
+  });
+
+  it("offers to ignore checkpoints when the graph reads changes", async () => {
+    const graph = {
+      nodes: [
+        {
+          id: "nd_1",
+          ref: "run_manually",
+          type: "trigger.manual",
+          name: "Start",
+          position: { x: 40, y: 40 },
+          config: {},
+          on_error: "stop" as const,
+          retry: null,
+        },
+        {
+          id: "nd_2",
+          ref: "read_changes",
+          type: "read.changes",
+          name: "Changes",
+          position: { x: 240, y: 40 },
+          config: { entity_id: "ent_1" },
+          on_error: "stop" as const,
+          retry: null,
+        },
+      ],
+      edges: [],
+      settings: EMPTY_GRAPH.settings,
+    };
+    vi.mocked(getDraft).mockResolvedValue({ draft_revision: 1, draft_updated_at: now, graph });
+    vi.mocked(listNodeTypes).mockResolvedValue({
+      items: [
+        { ...spec, type: "trigger.manual" },
+        { ...spec, type: "read.changes" },
+      ],
+    });
+    vi.mocked(startRun).mockResolvedValue({ run: runningDetail().run });
+
+    await renderRecord("edit");
+    fireEvent.click(await screen.findByRole("button", { name: "channels.run.open" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("channels.run.ignoreCheckpointsHint");
+    expect(dialog.textContent).toContain("channels.run.cursorAdvances");
+    expect(dialog.textContent).not.toContain("channels.run.cursorStays");
+    fireEvent.click(within(dialog).getByRole("button", { name: "common.cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    const nodeRun = document.querySelector(".channel-flow-node__run");
+    if (!(nodeRun instanceof HTMLButtonElement)) throw new Error("missing node run button");
+    fireEvent.click(nodeRun);
+    const nodeDialog = await screen.findByRole("dialog");
+    expect(nodeDialog.textContent).toContain("channels.run.cursorStays");
+    expect(nodeDialog.textContent).not.toContain("channels.run.cursorAdvances");
+    expect(nodeDialog.textContent).toContain("channels.run.ignoreCheckpointsHint");
+    fireEvent.click(within(nodeDialog).getByRole("button", { name: "common.cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "channels.run.open" }));
+    const again = await screen.findByRole("dialog");
+    const toggle = within(again).getByRole("switch", {
+      name: /channels\.run\.ignoreCheckpoints/,
+    });
+    fireEvent.click(toggle);
+    fireEvent.click(within(again).getByRole("button", { name: "channels.run.confirm" }));
+    await waitFor(() => {
+      expect(startRun).toHaveBeenCalledWith("chn_1", {
+        target: "draft",
+        ignore_checkpoints: true,
         stop_at_node_id: null,
       });
     });
@@ -562,6 +641,24 @@ describe("run confirmation copy", () => {
     );
     expect(en["channels.run.writesUpTo"]).toBe(
       "This runs {{node}} and the nodes upstream of it. Downstream nodes do not run. Unsaved changes are saved first.",
+    );
+    expect(zh["channels.run.ignoreCheckpointsHint"]).toBe(
+      "\u4ece\u6700\u65e9\u4fdd\u7559\u7684\u6761\u76ee\u5f00\u59cb\u8bfb\u3002",
+    );
+    expect(en["channels.run.ignoreCheckpointsHint"]).toBe(
+      "Read from the earliest retained entry.",
+    );
+    expect(zh["channels.run.cursorAdvances"]).toBe(
+      "\u5b8c\u6574\u6210\u529f\u4f1a\u63a8\u8fdb\u6e38\u6807\u3002\u5ffd\u7565\u68c0\u67e5\u70b9\u4e5f\u4e00\u6837\u3002",
+    );
+    expect(en["channels.run.cursorAdvances"]).toBe(
+      "A completed run advances the cursor. Ignoring checkpoints does not change that.",
+    );
+    expect(zh["channels.run.cursorStays"]).toBe(
+      "\u8fd9\u6b21\u8fd0\u884c\u505c\u5728\u8be5\u8282\u70b9\uff0c\u4e0d\u63a8\u8fdb\u6e38\u6807\u3002",
+    );
+    expect(en["channels.run.cursorStays"]).toBe(
+      "This run stops at this node and does not advance the cursor.",
     );
   });
 });

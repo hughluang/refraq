@@ -552,6 +552,7 @@ function ConfigField({
     return (
       <TargetEntityField
         label={caption}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
         value={typeof value === "string" ? value : ""}
         selfEntityId={null}
         selfName=""
@@ -877,7 +878,7 @@ function StringListEditor({
     <Stack gap="xs">
       <ListHeading
         label={label}
-        description={field.description}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
         notes={notes}
         openSignal={openSignal}
         editable={editable}
@@ -930,7 +931,7 @@ function TemplateListEditor({
     <Stack gap="xs">
       <ListHeading
         label={label}
-        description={field.description}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
         notes={notes}
         openSignal={openSignal}
         editable={editable}

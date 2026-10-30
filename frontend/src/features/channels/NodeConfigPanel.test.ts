@@ -6,6 +6,7 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
+import zh from "@/locales/zh-CN/common.json";
 import type { FlowNodeData } from "@/features/channels/graphValidation";
 import { problemIdentity } from "@/features/channels/problemLabel";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
@@ -14,6 +15,8 @@ import { listEntities, listVersions } from "@/features/entities/api";
 import { listSources } from "@/features/sources/api/sources";
 import type { Source } from "@/features/sources/types";
 import type { EntityAttribute, EntityVersion } from "@/features/entities/types";
+
+const zhMessages = zh as Record<string, string>;
 
 const LABELS: Record<string, string> = {
   "channels.node.name": "Name",
@@ -93,6 +96,15 @@ const LABELS: Record<string, string> = {
   "channels.config.fields.transform.code.code.description": "Python body of main.",
   "channels.config.fields.read.source_query.source_id": "Source",
   "channels.config.fields.read.source_query.source_id.description": "Registered Source.",
+  "channels.config.fields.read.changes.entity_id":
+    zhMessages["channels.config.fields.read.changes.entity_id"],
+  "channels.config.fields.read.changes.entity_id.description":
+    zhMessages["channels.config.fields.read.changes.entity_id.description"],
+  "channels.config.fields.read.changes.sources":
+    zhMessages["channels.config.fields.read.changes.sources"],
+  "channels.config.fields.read.changes.sources.description":
+    zhMessages["channels.config.fields.read.changes.sources.description"],
+  "channels.config.fields.transform.merge.inputs.description": "Locale lists.",
   "channels.config.source.placeholder": "Select a source",
   "channels.config.source.loadFailed": "Could not load sources",
   "form.field.description": "Description",
@@ -1196,5 +1208,58 @@ describe("code and source query fields", () => {
     fireEvent.click(within(list).getByRole("option", { name: "Archive", hidden: true }));
     const changed = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
     expect(changed.config.source_id).toBe("src_arc");
+  });
+});
+
+const SCHEMA_ENTITY = "Business Entity whose Change Log is read.";
+const SCHEMA_SOURCES =
+  "Optional subset of user, channel_run, and unattributed. Absent or empty returns every source. Hidden entries still advance the cursor.";
+
+describe("read.changes field descriptions", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("shows the locale sentences for entity and sources, not the schema English", async () => {
+    await renderPanel(
+      {
+        type: "object",
+        required: ["entity_id"],
+        properties: {
+          entity_id: {
+            type: "string",
+            description: SCHEMA_ENTITY,
+            "x-refraq-ref": "entity",
+          },
+          sources: {
+            type: "array",
+            description: SCHEMA_SOURCES,
+            items: { type: "string", enum: ["user", "channel_run", "unattributed"] },
+          },
+        },
+      },
+      node({ entity_id: "", sources: [] }, "read.changes"),
+    );
+
+    const entityLabel = zhMessages["channels.config.fields.read.changes.entity_id"];
+    const entityDescription =
+      zhMessages["channels.config.fields.read.changes.entity_id.description"];
+    const sourcesLabel = zhMessages["channels.config.fields.read.changes.sources"];
+    const sourcesDescription =
+      zhMessages["channels.config.fields.read.changes.sources.description"];
+
+    fireEvent.click(screen.getByRole("button", { name: `${entityLabel} Description` }));
+    expect(screen.getByText(entityDescription)).toBeTruthy();
+    expect(screen.queryByText(SCHEMA_ENTITY)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: `${sourcesLabel} Description` }));
+    expect(screen.getByText(sourcesDescription)).toBeTruthy();
+    expect(screen.queryByText(SCHEMA_SOURCES)).toBeNull();
+  });
+
+  it("uses the locale sentence for a template list when the key exists", async () => {
+    await renderPanel(MERGE_SCHEMA, node({ mode: "append", inputs: [] }, "transform.merge"));
+    fireEvent.click(screen.getByRole("button", { name: "Inputs Description" }));
+    expect(screen.getByText("Locale lists.")).toBeTruthy();
+    expect(screen.queryByText("Lists to fold.")).toBeNull();
   });
 });

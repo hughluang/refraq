@@ -239,7 +239,7 @@ describe("frame-rule sentences", () => {
     expect(enMessages["problems.CHANNEL_ITERATION_VOLUME_EXCEEDED"]).toBe(forSentence);
     expect(formatRunError(catalogTranslate(zhMessages), "CHANNEL_ITERATION_VOLUME_EXCEEDED", forSentence)).toEqual({
       label: zhMessages["problems.CHANNEL_ITERATION_VOLUME_EXCEEDED"],
-      detail: forSentence,
+      detail: null,
     });
     expect(formatRunError(catalogTranslate(zhMessages), "CHANNEL_ITERATION_VOLUME_EXCEEDED", untilSentence)).toEqual({
       label: untilSentence,
@@ -256,6 +256,34 @@ describe("frame-rule sentences", () => {
         "Until reached max_iterations before its condition became true.",
       ).label,
     ).toBe("Until reached max_iterations before its condition became true.");
+  });
+
+  it("uses the locale sentence for a change-log contract message", () => {
+    const enMessages = en as Record<string, string>;
+    const zhMessages = zh as Record<string, string>;
+    const cases = [
+      ["CHANNEL_CHANGE_LOG_OFF", "Change recording is off for this entity."],
+      ["CHANNEL_CHECKPOINT_INVALID", "Checkpoint is behind deleted change-log entries."],
+    ] as const;
+    for (const [code, message] of cases) {
+      const key = `problems.${code}`;
+      expect(enMessages[key]).toBe(message);
+      expect(zhMessages[key]).toBeTruthy();
+      expect(zhMessages[key]).not.toBe(message);
+      expect(zhMessages[key]).not.toContain(code);
+      expect(formatRunError(catalogTranslate(zhMessages), code, message)).toEqual({
+        label: zhMessages[key],
+        detail: null,
+      });
+      expect(formatRunError(catalogTranslate(enMessages), code, message)).toEqual({
+        label: message,
+        detail: null,
+      });
+      expect(formatRunError((key) => key, code, message)).toEqual({
+        label: message,
+        detail: null,
+      });
+    }
   });
 
   it("keeps an edge place on a frame reason and does not append the English detail", () => {

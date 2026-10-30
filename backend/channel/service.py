@@ -17,6 +17,7 @@ from backend.channel.errors import (
     ChannelVersionNotFound,
 )
 from backend.channel.graph import validate
+from backend.channel.checkpoints import get_checkpoint_store
 from backend.channel.ids import new_channel_id
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import Problem
@@ -231,7 +232,9 @@ def remove_channel_tags(
     )
 
 
-def _bulk_ids(subject_ids: list[str], tag_ids: list[str]) -> tuple[list[str], list[str]]:
+def _bulk_ids(
+    subject_ids: list[str], tag_ids: list[str]
+) -> tuple[list[str], list[str]]:
     subjects = _collapse_ids(subject_ids)
     tags = _collapse_ids(tag_ids)
     if (
@@ -352,6 +355,7 @@ def delete_channel(
     if not get_channel_store().delete(channel_id, after=_clear):
         raise ChannelNotFound()
     get_variable_store().delete_for_channel(channel_id)
+    get_checkpoint_store().delete_for_channel(channel_id)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -501,7 +505,9 @@ def _guarded_changed(stored: Mapping[str, Any] | None, node: Mapping[str, Any]) 
     return dict(_node_config(stored)) != dict(_node_config(node))
 
 
-def _require_permission_for(node: Mapping[str, Any], permission: str, held: set[str]) -> None:
+def _require_permission_for(
+    node: Mapping[str, Any], permission: str, held: set[str]
+) -> None:
     if permission in held:
         return
     raise AuthForbidden(f"Node '{_node_label(node)}' requires {permission}")
@@ -524,7 +530,9 @@ def require_draft_permissions(
         _require_permission_for(node, spec.permission, held)
 
 
-def _require_publish_permissions(graph: Mapping[str, Any], permissions: Sequence[str]) -> None:
+def _require_publish_permissions(
+    graph: Mapping[str, Any], permissions: Sequence[str]
+) -> None:
     catalog = {item.type_id: item for item in list_node_types()}
     held = set(permissions)
     for node in _graph_nodes(graph):
@@ -565,7 +573,9 @@ def _runs_to_cancel(channel_id: str) -> list[dict[str, Any]]:
             {
                 "job_id": job.id,
                 "version": run.version,
-                "started_at": format_instant(job.started_at) if job.started_at else None,
+                "started_at": format_instant(job.started_at)
+                if job.started_at
+                else None,
             }
         )
     return items

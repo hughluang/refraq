@@ -83,6 +83,30 @@ def _relation_present(schema: str, name: str) -> bool:
     return found is not None
 
 
+def _create_select_view(
+    schema: str, name: str, source_schema: str, source: str
+) -> None:
+    from backend.entity.entity_db import get_entity_engine
+
+    engine = get_entity_engine()
+    with engine.begin() as conn:
+        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
+        conn.execute(
+            text(
+                f"CREATE VIEW {qualified_table(schema, name)} AS "
+                f"SELECT * FROM {qualified_table(source_schema, source)}"
+            )
+        )
+
+
+def _drop_view(schema: str, name: str) -> None:
+    from backend.entity.entity_db import get_entity_engine
+
+    engine = get_entity_engine()
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP VIEW IF EXISTS {qualified_table(schema, name)}"))
+
+
 def _force_drop(schema: str, view: str, table: str) -> None:
     from backend.entity.entity_db import get_entity_engine
 
@@ -131,7 +155,9 @@ def test_generated_ddl_accepted_by_postgres(monkeypatch: pytest.MonkeyPatch) -> 
     reset_settings_cache()
 
 
-def test_drop_head_removes_view_then_table(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_drop_head_removes_profile_view_then_stem_then_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     if not _postgres_available():
         pytest.skip("Postgres not available (start: docker compose up -d)")
 
@@ -144,13 +170,53 @@ def test_drop_head_removes_view_then_table(monkeypatch: pytest.MonkeyPatch) -> N
     suffix = uuid.uuid4().hex[:10]
     table = f"entity_head_{suffix}"
     view = f"entity_stem_{suffix}"
+    profile = f"pav_{suffix}"
     try:
         port.create_physical_table(schema, table, [])
         port.swap_stem_view(schema, view, physical=table, expected_target=None)
+        _create_select_view("entity_access", profile, schema, table)
         port.drop_head(schema, table, view)
         assert port.table_exists(schema, table) is False
         assert _relation_present(schema, view) is False
+        assert _relation_present("entity_access", profile) is False
     finally:
+        _drop_view("entity_access", profile)
+        _force_drop(schema, view, table)
+        reset_entity_engine()
+        reset_settings_cache()
+
+
+def test_drop_head_does_not_cascade_to_other_schemas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not _postgres_available():
+        pytest.skip("Postgres not available (start: docker compose up -d)")
+
+    from backend.core.config import reset_settings_cache
+    from backend.entity.entity_db import reset_entity_engine
+
+    _bind_entity_database(monkeypatch)
+    port = PostgresEntityTablePort()
+    schema = "entity_data"
+    suffix = uuid.uuid4().hex[:10]
+    table = f"entity_head_{suffix}"
+    view = f"entity_stem_{suffix}"
+    profile = f"pav_{suffix}"
+    stray = f"stray_{suffix}"
+    try:
+        port.create_physical_table(schema, table, [])
+        port.swap_stem_view(schema, view, physical=table, expected_target=None)
+        _create_select_view("entity_access", profile, schema, table)
+        _create_select_view("public", stray, schema, table)
+        with pytest.raises(Exception, match="depend"):
+            port.drop_head(schema, table, view)
+        assert port.table_exists(schema, table) is True
+        assert _relation_present(schema, view) is True
+        assert _relation_present("entity_access", profile) is True
+        assert _relation_present("public", stray) is True
+    finally:
+        _drop_view("public", stray)
+        _drop_view("entity_access", profile)
         _force_drop(schema, view, table)
         reset_entity_engine()
         reset_settings_cache()

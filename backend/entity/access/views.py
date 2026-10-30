@@ -21,6 +21,7 @@ from backend.entity.table_port import get_entity_table_port
 
 __all__ = [
     "READY",
+    "clear_profile_bindings",
     "persist_ready",
     "profile_view_statements",
     "rebuild_entity_views",
@@ -45,6 +46,17 @@ def profile_view_statements(
         for name in drop_names
     ]
     return [*drops, *creates]
+
+
+def clear_profile_bindings(entity_id: str) -> None:
+    """Record that this Entity's profile views are gone.
+
+    The entity-database drop already removed the views. This updates the
+    binding catalog so it matches that database.
+    """
+    store = get_access_store()
+    store.replace_bindings(entity_id, [])
+    store.set_views_revision(entity_id, store.revision(entity_id))
 
 
 def rebuild_entity_views(entity_id: str) -> dict[str, Any]:

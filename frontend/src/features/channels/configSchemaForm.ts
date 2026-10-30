@@ -30,7 +30,7 @@ export type FieldWhen =
 export type FieldSpec = (
   | { kind: "string"; key: string; required: boolean; nullable: boolean }
   | { kind: "enum"; key: string; required: boolean; options: string[]; fallback: string }
-  | { kind: "entity"; key: string; required: boolean }
+  | { kind: "entity"; key: string; required: boolean; description: string }
   | { kind: "attribute"; key: string; required: boolean; allowEmpty: boolean }
   | { kind: "objectList"; key: string; required: boolean; description: string; fields: FieldSpec[] }
   | { kind: "stringList"; key: string; required: boolean; description: string }
@@ -147,7 +147,9 @@ function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSp
   }
   const ref = schema["x-refraq-ref"];
   if (ref === "json") return { kind: "json", key, required };
-  if (ref === "entity") return { kind: "entity", key, required };
+  if (ref === "entity") {
+    return { kind: "entity", key, required, description: schema.description ?? "" };
+  }
   if (ref === "source") {
     return { kind: "source", key, required, description: schema.description ?? "" };
   }

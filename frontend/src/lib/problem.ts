@@ -1,4 +1,17 @@
+import en from "@/locales/en-US/common.json";
+
 import { ApiError } from "@/lib/api";
+
+const enMessages = en as Record<string, string>;
+
+/**
+ * True when `message` is the English catalog sentence for `problems.${code}`.
+ * That sentence is already the localized main line, so it is not an extra occurrence.
+ */
+export function repeatsContractSentence(code: string, message: string): boolean {
+  const sentence = enMessages[`problems.${code}`];
+  return typeof sentence === "string" && message.trim() === sentence;
+}
 
 type Translate = (key: string, options?: Record<string, string>) => string;
 

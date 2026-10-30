@@ -192,6 +192,17 @@ SQL configuration (`read.sql`):
 
 A successful SQL execution returns `{rows, count, rowcount}`. `rows` is an array of objects and `count` is its length. Both are empty and 0 when the statement returns no result set. `rowcount` is an integer when the driver reports an affected-row count, otherwise `null`. More than 100000 rows fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` and the message `Use Dataset Query, then Batch Read.` SQL does not return a **Dataset Reference**. Text that is not exactly one statement fails the node with `CHANNEL_SQL_NOT_ONE_STATEMENT` before the driver runs. A database error fails the node with `CHANNEL_NODE_FAILED` and the database message.
 
+Read Changes configuration (`read.changes`):
+
+| Field | Rule |
+| --- | --- |
+| `entity_id` | Required Business Entity id. `x-refraq-ref` is `entity`. An id that does not resolve fails the execution with `CHANNEL_NODE_FAILED` and the message `Entity does not resolve` |
+| `limit` | Integer from 1 to 100000. Absent means 1000. It counts change-log entries scanned, not rows returned |
+| `shape` | `entries` or `net`. Absent means `entries` |
+| `sources` | Optional array of `user`, `channel_run`, and `unattributed`, unique. Absent or empty returns every source. A filtered-out entry still advances the cursor |
+
+A successful execution returns `{entries, count, has_more, last_sequence}`. `count` is the length of `entries`. `has_more` is true when more entries remain below the run's snapshot bound. `last_sequence` is the sequence of the last scanned entry, or null when none were scanned. The cursor, the bound, and when the stored position moves are `docs/business-data-channel.md` §6.1. Recording off, or no effective change-log record, fails the node with `CHANNEL_CHANGE_LOG_OFF` and the message `Change recording is off for this entity.` A stored cursor strictly behind deleted entries fails the node with `CHANNEL_CHECKPOINT_INVALID` and the message `Checkpoint is behind deleted change-log entries.` `ignore_checkpoints` true skips that check and reads from the earliest retained entry.
+
 Scheduled trigger configuration (`trigger.scheduled`):
 
 | Field | Rule |
@@ -707,7 +718,7 @@ Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active cha
 - `stop_at_node_id` is optional. Omit it, or send `null`, to execute every node reachable from the trigger. When set, the selected draft snapshot or published graph must be valid for that node's ancestor closure, including the node. Errors on nodes outside the closure do not refuse the start. A refusal carries `problems` as in the publish rule of §5.8, limited to errors inside the closure and errors that belong to no node; `detail` is the first of them. A missing stop node refuses with an empty `problems`. A stop node that is missing or not reachable from the trigger is `422 CHANNEL_GRAPH_INVALID`.
 - A body that contains `pinned` is `422 REQUEST_INVALID`.
 - The run enters the graph's only trigger node.
-- `ignore_checkpoints` defaults to `false`. Checkpoint-aware node types define how this override affects their configured read and advance policy.
+- `ignore_checkpoints` defaults to `false`. For `read.changes`, `true` reads from the earliest retained entry and skips the invalid-cursor check. A completed run with no stop node still advances (`docs/business-data-channel.md` §6.1).
 - The framework does not provide a dry-run mode or an execution row limit. Every node the run reaches performs its normal effects.
 - Allowed while the channel is inactive.
 - `202` `{ "run": { … } }` (§3.6). `trigger_kind` is `user` and `trigger_ref` is the acting User. The body is the Channel Run as stored when the handler returns, the same read as a following GET. `status` is `queued` and `outcome` is null when the worker has not finished. When the worker has already finished inside the request, `status`, `outcome`, and `failed_node_id` match that GET and §3.6.
@@ -1032,6 +1043,8 @@ Check order: a name that does not match the name rule is `422 CHANNEL_VARIABLE_N
 | `CHANNEL_UNTIL_MAX_ITERATIONS` | An Until finished `max_iterations` rounds and `until` was still false. The error message is `Until reached max_iterations before its condition became true.` The failed execution stores the finished rounds as `{index, count, iterations}`. `done` does not run |
 | `CHANNEL_SQL_NOT_ONE_STATEMENT` | The rendered SQL text is empty, unreadable, or more than one statement |
 | `CHANNEL_NODE_FAILED` | A node failed with `on_error` `stop`; the run record names the node and its error. A Code node sets `error_detail.reason` to `network`, `import`, `timeout`, `memory`, or `error` (and, for `error`, `type`, `message`, and `line`). A live Source query keeps the Controlled Query code in `error_detail.code` |
+| `CHANNEL_CHANGE_LOG_OFF` | A `read.changes` node read an entity whose effective change-log recording is off or missing. The message is `Change recording is off for this entity.` |
+| `CHANNEL_CHECKPOINT_INVALID` | A `read.changes` node's stored cursor is strictly behind the greatest deleted change-log position. The message is `Checkpoint is behind deleted change-log entries.` `ignore_checkpoints` true does not raise this code |
 | `CHANNEL_VALUE_TYPE_MISMATCH` | A template result does not match its declared value type |
 | `CHANNEL_OUTPUT_SCHEMA_MISMATCH` | A successful node output does not match its refined schema |
 | `CHANNEL_SANDBOX_FAILED` | The expression sandbox crashed or could not be restarted |
