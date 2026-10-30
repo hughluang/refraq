@@ -454,12 +454,12 @@ class _RunHooks:
         )
 
     def note_round_template(self, seq: int, index: int, path: str, entry: Any) -> None:
-        del path
-        get_run_store().set_round_condition(
+        get_run_store().set_round_template(
             self.run_id,
             container_seq=seq,
             round=index,
-            condition=entry,
+            path=path,
+            entry=entry,
         )
 
     def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None:

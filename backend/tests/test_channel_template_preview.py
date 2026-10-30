@@ -158,10 +158,14 @@ def _sample(
     graph: dict,
     node_id: str,
     scope: list[dict[str, Any]] | None = None,
+    *,
+    container_round: int | None = None,
 ) -> Any:
     body: dict[str, Any] = {"graph": graph, "node_id": node_id}
     if scope is not None:
         body["scope"] = scope
+    if container_round is not None:
+        body["container_round"] = container_round
     return client.post(
         f"/channels/{channel_id}/runs/{job_id}/node-sample",
         json=body,
@@ -849,3 +853,74 @@ def test_node_sample_folds_preview_totals_with_the_response_clip(client: TestCli
     assert wide_body["input_totals"] == {"source": 1000000, "note": 2}
     assert len(wide_body["input"]["source"]["value"]) == 100
     assert wide_body["input"]["note"]["value"] == ["a", "b"]
+
+
+def test_node_sample_overlays_a_declared_round_template(client: TestClient) -> None:
+    from backend.channel.nodes import list_node_types
+    from backend.channel.nodes.spec import ContainerSpec, NodeType, OutputView, PortSpec
+    from backend.channel.routers.runs import get_node_catalog
+
+    def run(node: object, hooks: object, body: object) -> object:
+        raise AssertionError("not executed")
+
+    box_type = NodeType(
+        type_id="test.round_box",
+        family="test",
+        label="Round box",
+        summary="Test container with one round template.",
+        description="Test container. Used only by the node sample.",
+        trigger=False,
+        inputs=(PortSpec("main", "Input."),),
+        outputs=(
+            PortSpec("each", "One round."),
+            PortSpec("done", "After the rounds."),
+        ),
+        config_schema={"type": "object"},
+        output_view=OutputView(kind="record"),
+        container=ContainerSpec(run=run, round_templates=("flag",)),
+    )
+    app.dependency_overrides[get_node_catalog] = lambda: [*list_node_types(), box_type]
+    try:
+        graph = {
+            "nodes": [
+                _node("nd_box", "box", "test.round_box", 0, {"flag": "true"}),
+                _node("nd_plain", "plain", "transform.set_fields", 100, {"fields": []}),
+            ],
+            "edges": [],
+            "settings": _settings(),
+        }
+        channel_id, job_id = _seed(client, graph, name="Round template")
+        store = get_run_store()
+        box = store.start_execution(job_id, "nd_box")
+        _finish(box, output={"ok": True}, input={"kept": {"n": 1}})
+        store.insert_round(
+            job_id,
+            container_seq=box.seq,
+            round=0,
+            step={"index": 0, "flag": {"value": True}, "spare": {"value": False}},
+            step_totals={},
+        )
+        shown = _sample(client, channel_id, job_id, graph, "nd_box", container_round=0)
+        assert shown.status_code == 200, shown.text
+        assert shown.json()["node"]["input"] == {"kept": {"n": 1}, "flag": {"value": True}}
+
+        missing = _sample(client, channel_id, job_id, graph, "nd_box", container_round=1)
+        assert missing.status_code == 200, missing.text
+        assert missing.json()["node"]["input"] == {"kept": {"n": 1}}
+
+        plain = store.start_execution(job_id, "nd_plain")
+        _finish(plain, output={"n": 1}, input={"kept": {"n": 2}})
+        store.insert_round(
+            job_id,
+            container_seq=plain.seq,
+            round=0,
+            step={"flag": {"value": True}},
+            step_totals={},
+        )
+        ignored = _sample(
+            client, channel_id, job_id, graph, "nd_plain", container_round=0
+        )
+        assert ignored.status_code == 200, ignored.text
+        assert ignored.json()["node"]["input"] == {"kept": {"n": 2}}
+    finally:
+        app.dependency_overrides.pop(get_node_catalog, None)

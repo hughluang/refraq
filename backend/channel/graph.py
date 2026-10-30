@@ -179,7 +179,7 @@ def _expression_problems(
         ):
             problems.extend(
                 _template_problems(
-                    text, value_schema, node_id, node, upstream, by_id, path
+                    text, value_schema, node_id, upstream, by_id, path, spec
                 )
             )
     return problems
@@ -190,6 +190,7 @@ def template_site(
     node_id: str,
     path: Sequence[str | int],
     resolver: ReferenceResolver,
+    catalog: Sequence[NodeType] | None = None,
 ) -> TemplateSite | None:
     """The template at `path` in one node's configuration, as validation sees it.
 
@@ -199,7 +200,8 @@ def template_site(
     node = by_id.get(node_id)
     if node is None or not isinstance(node.get("config"), dict):
         return None
-    spec = next((item for item in list_node_types() if item.type_id == node["type"]), None)
+    types = list(catalog) if catalog is not None else list_node_types()
+    spec = next((item for item in types if item.type_id == node["type"]), None)
     if spec is None:
         return None
     upstream = _ancestors(by_id, list(graph["edges"])).get(node_id, set())
@@ -209,26 +211,27 @@ def template_site(
     ):
         if found == wanted:
             problems = _template_problems(
-                text, value_schema, node_id, node, upstream, by_id, found
+                text, value_schema, node_id, upstream, by_id, found, spec
             )
             return TemplateSite(text, value_schema, tuple(problems))
     return None
 
 
 def _template_upstream(
-    node: Mapping[str, Any],
     node_id: str,
     upstream: set[str],
     by_id: Mapping[str, Mapping[str, Any]],
     path: tuple[str | int, ...],
+    spec: NodeType,
 ) -> set[str]:
     """Nodes a template may name.
 
-    Ancestors only, except an Until condition, which may also name that
-    Until's direct children.
+    Ancestors only, except a Round Template path, which may also name that
+    Container's direct children.
     """
     allowed = set(upstream)
-    if str(node.get("type")) == "volume.until" and path == ("until",):
+    templates = () if spec.container is None else spec.container.round_templates
+    if len(path) == 1 and path[0] in templates:
         for other_id, other in by_id.items():
             if other.get("parent") == node_id:
                 allowed.add(str(other_id))
@@ -239,10 +242,10 @@ def _template_problems(
     text: str,
     value_schema: dict[str, Any] | None,
     node_id: str,
-    node: Mapping[str, Any],
     upstream: set[str],
     by_id: dict[str, dict[str, Any]],
     path: tuple[str | int, ...],
+    spec: NodeType,
 ) -> list[Problem]:
     try:
         template = parse(text)
@@ -256,7 +259,7 @@ def _template_problems(
             )
         ]
     problems: list[Problem] = []
-    allowed = _template_upstream(node, node_id, upstream, by_id, path)
+    allowed = _template_upstream(node_id, upstream, by_id, path, spec)
     by_ref = {str(item.get("ref")): str(item["id"]) for item in by_id.values()}
     by_name = {str(item.get("name")): str(item["id"]) for item in by_id.values()}
     for ref in template.refs:

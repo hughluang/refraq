@@ -1110,6 +1110,103 @@ def test_until_template_may_name_ancestors_and_direct_children() -> None:
     ] == []
 
 
+def _round_box() -> NodeType:
+    def run(node: object, hooks: object, body: object) -> object:
+        raise AssertionError("not executed")
+
+    return NodeType(
+        type_id="test.round_box",
+        family="test",
+        label="Round box",
+        summary="Test container with one round template.",
+        description="Test container. Used only by graph validation.",
+        trigger=False,
+        inputs=(PortSpec("main", "Input.", coarse_type="object"),),
+        outputs=(
+            PortSpec("each", "One round.", coarse_type="object"),
+            PortSpec("done", "After the rounds.", coarse_type="object"),
+        ),
+        config_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "flag": {
+                    "type": "string",
+                    "minLength": 1,
+                    "x-refraq-template": {"type": "boolean"},
+                },
+                "note": {
+                    "type": "string",
+                    "minLength": 1,
+                    "x-refraq-template": {"type": "boolean"},
+                },
+            },
+            "required": ["flag", "note"],
+        },
+        output_view=OutputView(kind="record"),
+        container=ContainerSpec(run=run, round_templates=("flag",)),
+    )
+
+
+def test_round_template_path_may_name_direct_children_and_another_path_may_not() -> None:
+    catalog = [*list_node_types(), _round_box()]
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_box",
+                "test.round_box",
+                "Box",
+                {
+                    "flag": "{{ self.step.output.n == self.trigger.output }}",
+                    "note": "{{ self.trigger.output == true }}",
+                },
+            ),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_box"),
+            _node("nd_inner", "volume.for", "Inner", {"items": "[1]"}, parent="nd_box"),
+            _node("nd_leaf", "transform.set_fields", "Leaf", _fields("1"), parent="nd_inner"),
+            _node("nd_after", "transform.set_fields", "After", _fields("1")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_box"),
+            _edge("ed_each", "nd_box", "nd_step", source_port="each"),
+            _edge("ed_inner", "nd_box", "nd_inner", source_port="each"),
+            _edge("ed_leaf", "nd_inner", "nd_leaf", source_port="each"),
+            _edge("ed_done", "nd_box", "nd_after", source_port="done"),
+        ],
+    )
+    assert [
+        item for item in validate(graph, FakeResolver(), catalog) if item.severity == "error"
+    ] == []
+
+    def configured(flag: str, note: str) -> dict:
+        nodes = [{**node} for node in graph["nodes"]]
+        nodes[1] = {**nodes[1], "config": {"flag": flag, "note": note}}
+        return _graph(nodes, graph["edges"])
+
+    other_path = [
+        item
+        for item in validate(
+            configured("true", "{{ self.step.output.n == true }}"),
+            FakeResolver(),
+            catalog,
+        )
+        if item.code == "CHANNEL_TEMPLATE_REF_INVALID"
+    ]
+    assert [(item.node_id, item.path) for item in other_path] == [("nd_box", ("note",))]
+
+    grandchild = [
+        item
+        for item in validate(
+            configured("{{ self.leaf.output.n == true }}", "true"),
+            FakeResolver(),
+            catalog,
+        )
+        if item.code == "CHANNEL_TEMPLATE_REF_INVALID"
+    ]
+    assert [(item.node_id, item.path) for item in grandchild] == [("nd_box", ("flag",))]
+
+
 def test_until_max_iterations_rejects_missing_zero_and_above_the_ceiling() -> None:
     def invalid(config: dict) -> list[tuple[str, ...]]:
         graph = _graph(

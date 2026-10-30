@@ -30,6 +30,35 @@ def test_start_execution_stores_container_seq_and_round() -> None:
     assert (again.container_seq, again.round) == (1, 0)
 
 
+def test_set_round_template_writes_the_entry_under_its_path() -> None:
+    store = MemoryRunStore()
+    store.insert_round(
+        "job_1",
+        container_seq=1,
+        round=0,
+        step={"index": 0},
+        step_totals={},
+    )
+    store.set_round_template(
+        "job_1",
+        container_seq=1,
+        round=0,
+        path="flag",
+        entry={"value": True},
+    )
+    found = store.get_round("job_1", 1, 0)
+    assert found is not None
+    assert found.step == {"index": 0, "flag": {"value": True}}
+    with pytest.raises(RuntimeError):
+        store.set_round_template(
+            "job_1",
+            container_seq=1,
+            round=1,
+            path="flag",
+            entry={"value": False},
+        )
+
+
 def test_start_execution_assigns_one_past_the_highest_seq() -> None:
     store = MemoryRunStore()
     first = store.start_execution("job_1", "nd_a")
@@ -1085,6 +1114,30 @@ def test_sql_store_writes_the_columns_and_one_past_the_highest_seq(monkeypatch) 
             step={"rows": [1], "index": 1, "count": 2, "total": 150},
             step_totals={"rows": 150},
         )
+        store.set_round_template(
+            job_id,
+            container_seq=1,
+            round=0,
+            path="flag",
+            entry={"value": True},
+        )
+        recorded = store.get_round(job_id, 1, 0)
+        assert recorded is not None
+        assert recorded.step == {
+            "rows": [0],
+            "index": 0,
+            "count": 2,
+            "total": 150,
+            "flag": {"value": True},
+        }
+        with pytest.raises(RuntimeError):
+            store.set_round_template(
+                job_id,
+                container_seq=1,
+                round=9,
+                path="flag",
+                entry={"value": False},
+            )
         paged, round_total = store.query_rounds(job_id, 1, limit=1, offset=1)
         assert round_total == 2
         assert len(paged) == 1

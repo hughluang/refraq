@@ -329,21 +329,22 @@ class MemoryRunStore:
         with self._lock:
             self._rounds[(job_id, container_seq, round)] = record
 
-    def set_round_condition(
+    def set_round_template(
         self,
         job_id: str,
         *,
         container_seq: int,
         round: int,
-        condition: Any,
+        path: str,
+        entry: Any,
     ) -> None:
-        """Add the evaluated Until condition to a round that was already inserted."""
+        """Add one Round Template entry to a round that was already inserted."""
         key = (job_id, container_seq, round)
         with self._lock:
             record = self._rounds.get(key)
             if record is None:
                 raise RuntimeError(f"channel container round {key} is missing")
-            record.step = {**record.step, "until": condition}
+            record.step = {**record.step, path: entry}
 
     def query_rounds(
         self,
@@ -639,21 +640,22 @@ class SqlRunStore:
                 )
             )
 
-    def set_round_condition(
+    def set_round_template(
         self,
         job_id: str,
         *,
         container_seq: int,
         round: int,
-        condition: Any,
+        path: str,
+        entry: Any,
     ) -> None:
-        """Add the evaluated Until condition to a round that was already inserted."""
+        """Add one Round Template entry to a round that was already inserted."""
         key = (job_id, container_seq, round)
         with session_scope() as session:
             row = session.get(ChannelContainerRoundRow, key)
             if row is None:
                 raise RuntimeError(f"channel container round {key} is missing")
-            row.step = {**row.step, "until": condition}
+            row.step = {**row.step, path: entry}
 
     def query_rounds(
         self,

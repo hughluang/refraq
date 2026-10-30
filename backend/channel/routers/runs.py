@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -17,6 +17,7 @@ from backend.channel.errors import (
     ChannelRunNotFound,
 )
 from backend.channel.nodes import list_node_types
+from backend.channel.nodes.spec import NodeType
 from backend.channel.run_store import (
     ContainerRoundRecord,
     NodeExecutionRecord,
@@ -377,12 +378,17 @@ def http_preview_template(
     )
 
 
+def get_node_catalog() -> list[NodeType]:
+    return list_node_types()
+
+
 @router.post("/channels/{channel_id}/runs/{job_id}/node-sample")
 def http_node_sample(
     channel_id: str,
     job_id: str,
     body: NodeSampleRequest,
     _actor: UserRecord = Depends(require_permission("channel:write")),
+    catalog: Sequence[NodeType] = Depends(get_node_catalog),
 ) -> dict[str, Any]:
     """Read a Node Sample. The request executes no node and writes nothing."""
     return node_sample(
@@ -392,6 +398,7 @@ def http_node_sample(
         node_id=body.node_id,
         scope=_scope_arg(body.scope),
         container_round=body.container_round,
+        catalog=catalog,
     )
 
 

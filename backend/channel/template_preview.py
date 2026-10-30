@@ -19,6 +19,7 @@ from backend.channel.graph import (
     template_site,
 )
 from backend.channel.nodes import list_node_types
+from backend.channel.nodes.spec import NodeType
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import (
     PREVIEW_LIST_CAP,
@@ -148,8 +149,11 @@ def node_sample(
     node_id: str,
     scope: Sequence[Mapping[str, Any]] | None = None,
     container_round: int | None = None,
+    catalog: Sequence[NodeType] | None = None,
 ) -> dict[str, Any]:
-    _run, sample = _load(channel_id, job_id, graph, node_id, scope, container_round)
+    _run, sample = _load(
+        channel_id, job_id, graph, node_id, scope, container_round, catalog
+    )
     return {
         "scope": sample.scope,
         "config_changed": sample.config_changed,
@@ -165,12 +169,14 @@ def _load(
     node_id: str,
     scope: Sequence[Mapping[str, Any]] | None,
     container_round: int | None = None,
+    catalog: Sequence[NodeType] | None = None,
 ) -> tuple[Any, _Sample]:
     store = get_run_store()
     run = store.get_run(job_id)
     if run is None or run.channel_id != channel_id:
         raise ChannelRunNotFound()
-    return run, _bind(store, run, graph, node_id, scope, container_round)
+    types = list(catalog) if catalog is not None else list_node_types()
+    return run, _bind(store, run, graph, node_id, scope, container_round, types)
 
 
 def _bind(
@@ -179,9 +185,10 @@ def _bind(
     graph: Mapping[str, Any],
     node_id: str,
     scope: Sequence[Mapping[str, Any]] | None,
-    container_round: int | None = None,
+    container_round: int | None,
+    catalog: Sequence[NodeType],
 ) -> _Sample:
-    frames = _frames(graph, node_id)
+    frames = _frames(graph, node_id, catalog)
     if frames is None:
         raise ChannelRequestInvalid("node_id is not a node of the graph")
     requested = _requested_scope(scope, frames)
@@ -196,7 +203,7 @@ def _bind(
         resolved = _scope_for_request(store, run.job_id, requested)
     by_id = _nodes(graph)
     node = by_id[node_id]
-    referenced = _referenced_ids(graph, node, run.channel_id)
+    referenced = _referenced_ids(graph, node, run.channel_id, catalog)
     ancestors = ancestor_closure(graph, node_id) or set()
     ancestors.discard(node_id)
     ordered = _ordered_ancestors(graph, ancestors)
@@ -216,13 +223,15 @@ def _bind(
     ]
     selected = _select_node(store, run.job_id, node_id, resolved)
     presented = _present_node(selected)
-    if (
-        str(node.get("type")) == "volume.until"
-        and container_round is not None
-        and selected is not None
-    ):
-        presented = _overlay_until_condition(
-            store, run.job_id, selected.seq, container_round, presented
+    if container_round is not None and selected is not None:
+        presented = _overlay_round_templates(
+            store,
+            run.job_id,
+            node,
+            selected.seq,
+            container_round,
+            presented,
+            catalog,
         )
     return _Sample(
         scope=resolved,
@@ -232,13 +241,13 @@ def _bind(
     )
 
 
-def _frames(graph: Mapping[str, Any], node_id: str) -> list[str] | None:
+def _frames(
+    graph: Mapping[str, Any], node_id: str, catalog: Sequence[NodeType]
+) -> list[str] | None:
     by_id = _nodes(graph)
     if node_id not in by_id:
         return None
-    containers = {
-        item.type_id for item in list_node_types() if item.container is not None
-    }
+    containers = {item.type_id for item in catalog if item.container is not None}
     chain: list[str] = []
     seen = {node_id}
     current = node_id
@@ -637,21 +646,39 @@ def _present_upstream(slot: _Slot) -> dict[str, Any]:
     }
 
 
-def _overlay_until_condition(
+def _overlay_round_templates(
     store: Any,
     job_id: str,
+    node: Mapping[str, Any],
     seq: int,
     round_index: int,
     presented: dict[str, Any],
+    catalog: Sequence[NodeType],
 ) -> dict[str, Any]:
-    """Show one round's condition on the sample the config panel already reads.
+    """Merge one round's Round Template entries into the sample input.
 
-    The execution's stored input stays empty. This copy exists only on the response.
+    The execution's stored input stays as recorded. This copy exists only on
+    the response. A node with no Round Templates keeps that input.
     """
-    found = store.get_round(job_id, seq, round_index)
-    if found is None or "until" not in found.step:
+    spec = next(
+        (item for item in catalog if item.type_id == str(node.get("type"))),
+        None,
+    )
+    if spec is None or spec.container is None or not spec.container.round_templates:
         return presented
-    return {**presented, "input": {"until": found.step["until"]}}
+    found = store.get_round(job_id, seq, round_index)
+    if found is None:
+        return presented
+    entries = {
+        path: found.step[path]
+        for path in spec.container.round_templates
+        if path in found.step
+    }
+    if not entries:
+        return presented
+    current = presented.get("input")
+    base = dict(current) if isinstance(current, Mapping) else {}
+    return {**presented, "input": {**base, **entries}}
 
 
 def _present_node(record: NodeExecutionRecord | None) -> dict[str, Any]:
@@ -738,9 +765,14 @@ def _config_changed(snapshot: Any, node_id: str, submitted: Any) -> bool:
     return True
 
 
-def _referenced_ids(graph: Mapping[str, Any], node: Mapping[str, Any], channel_id: str) -> set[str]:
+def _referenced_ids(
+    graph: Mapping[str, Any],
+    node: Mapping[str, Any],
+    channel_id: str,
+    catalog: Sequence[NodeType],
+) -> set[str]:
     spec = next(
-        (item for item in list_node_types() if item.type_id == str(node.get("type"))),
+        (item for item in catalog if item.type_id == str(node.get("type"))),
         None,
     )
     config = node.get("config")
