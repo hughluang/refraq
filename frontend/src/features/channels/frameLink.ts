@@ -5,8 +5,8 @@ import {
   CARD_WIDTH,
   FRAME_PAD,
   frameBox,
-  isContainerNode,
 } from "@/features/channels/portLayout";
+import type { ContainerDeclaration } from "@/features/channels/types";
 
 /** Gap kept between a For frame and a node created from `done` when the drop overlaps the frame. */
 const DONE_OUTSIDE_GAP = 72;
@@ -15,7 +15,8 @@ export type LinkMember = {
   id: string;
   parentId?: string;
   position: { x: number; y: number };
-  nodeType: string;
+  /** Copied from flow node data. `null` is not a Container. */
+  container: ContainerDeclaration | null;
 };
 
 export type LinkEdge = {
@@ -44,7 +45,11 @@ export function crossesFrame(
 }
 
 export function frameLinkAllowed(
-  nodes: readonly { id: string; parentId?: string | null; nodeType: string }[],
+  nodes: readonly {
+    id: string;
+    parentId?: string | null;
+    container: ContainerDeclaration | null;
+  }[],
   connection: { source?: string | null; target?: string | null; sourceHandle?: string | null },
 ): boolean {
   if (!connection.source || !connection.target) return false;
@@ -53,7 +58,7 @@ export function frameLinkAllowed(
   const target = byId.get(connection.target);
   if (!source || !target) return false;
   if (crossesFrame(source.parentId, target.parentId, source.id)) return false;
-  if (!isContainerNode(source.nodeType)) return true;
+  if (source.container == null) return true;
   const targetParent = none(target.parentId);
   if (connection.sourceHandle === "each") return targetParent === source.id;
   return targetParent !== source.id;
@@ -72,7 +77,7 @@ export type FrozenFrame = {
 export function freezeFrames(members: readonly LinkMember[]): FrozenFrame[] {
   const byId = index(members);
   return members.flatMap((node) => {
-    if (!isContainerNode(node.nodeType)) return [];
+    if (node.container == null) return [];
     const origin = absoluteOf(node, byId);
     const box = frameBox(node.id, members);
     return [{ id: node.id, x: origin.x, y: origin.y, width: box.width, height: box.height }];
@@ -98,11 +103,13 @@ export function reparentDrag(
     if (none(node.parentId) === target) return node;
     const absolute = absoluteOf(node, byId);
     const frame = target ? byId.get(target) : undefined;
-    if (!frame) return { id: node.id, nodeType: node.nodeType, position: absolute };
+    if (!frame) {
+      return { id: node.id, container: node.container, position: absolute };
+    }
     const origin = absoluteOf(frame, byId);
     return {
       id: node.id,
-      nodeType: node.nodeType,
+      container: node.container,
       parentId: frame.id,
       position: { x: absolute.x - origin.x, y: absolute.y - origin.y },
     };
@@ -111,7 +118,11 @@ export function reparentDrag(
 
 export function edgesAfterReparent<E extends LinkEdge>(
   edges: readonly E[],
-  nodes: readonly { id: string; parentId?: string | null; nodeType: string }[],
+  nodes: readonly {
+    id: string;
+    parentId?: string | null;
+    container: ContainerDeclaration | null;
+  }[],
 ): E[] {
   return edges.filter((edge) =>
     frameLinkAllowed(nodes, {
@@ -168,7 +179,7 @@ export function placementFromPort(
   const byId = index(members);
   const source = byId.get(sourceId);
   if (!source) return { position: { x: absolute.x, y: absolute.y } };
-  if (isContainerNode(source.nodeType) && sourceHandle === "each") {
+  if (source.container != null && sourceHandle === "each") {
     const origin = absoluteOf(source, byId);
     const box = frameBox(source.id, members);
     const relative = { x: absolute.x - origin.x, y: absolute.y - origin.y };
@@ -183,7 +194,7 @@ export function placementFromPort(
     };
   }
   let flow = { x: absolute.x, y: absolute.y };
-  if (isContainerNode(source.nodeType) && sourceHandle === "done") {
+  if (source.container != null && sourceHandle === "done") {
     const origin = absoluteOf(source, byId);
     const box = frameBox(source.id, members);
     const card = { x: absolute.x, y: absolute.y, width: CARD_WIDTH, height: CARD_HEIGHT };
@@ -261,7 +272,7 @@ function centerOf(
 ): Point {
   const origin = absoluteOf(node, byId);
   const box =
-    isContainerNode(node.nodeType)
+    node.container != null
       ? frameBox(node.id, members)
       : { width: CARD_WIDTH, height: CARD_HEIGHT };
   return { x: origin.x + box.width / 2, y: origin.y + box.height / 2 };

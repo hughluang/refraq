@@ -113,14 +113,12 @@ import {
   scopeRequest,
   type NodeRunPhase,
 } from "@/features/channels/runSession";
-import type { NodeSampleScopeLevel } from "@/features/channels/types";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import { nodeTypeLabel } from "@/features/channels/nodeTypeCopy";
 import {
   EACH_INSET,
   frameBox,
-  isContainerNode,
   layoutNodePorts,
   parentsFirst,
   type HandleSide,
@@ -166,13 +164,30 @@ import type { TemplateCaret } from "@/features/channels/TemplateField";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import type {
   ChannelRunDetail,
+  ContainerDeclaration,
   ExpressionContext,
   Graph,
   GraphProblem,
   NodeExecution,
+  NodeSampleScopeLevel,
   NodeTypeSpec,
   RefinedPort,
 } from "@/features/channels/types";
+
+function copyContainer(
+  container: ContainerDeclaration | null | undefined,
+): ContainerDeclaration | null {
+  if (container == null) return null;
+  return { round_templates: [...container.round_templates] };
+}
+
+function sameContainer(left: ContainerDeclaration | null, right: ContainerDeclaration | null): boolean {
+  if (left == null || right == null) return left == null && right == null;
+  return (
+    left.round_templates.length === right.round_templates.length &&
+    left.round_templates.every((name, index) => name === right.round_templates[index])
+  );
+}
 
 type ChannelNode = Node<FlowNodeData, "channel">;
 type NoteData = { text: string };
@@ -208,7 +223,7 @@ function linkMembers(nodes: readonly CanvasNode[]) {
             id: node.id,
             parentId: node.parentId,
             position: node.position,
-            nodeType: node.data.nodeType,
+            container: node.data.container,
           },
         ]
       : [],
@@ -256,7 +271,7 @@ function flowNoteOf(node: NoteCanvasNode): FlowNoteShape {
 
 function presentNodes(nodes: CanvasNode[], members: readonly LinkMember[]): CanvasNode[] {
   return parentsFirst(nodes).map((node) => {
-    if (!isChannelNode(node) || !isContainerNode(node.data.nodeType)) return node;
+    if (!isChannelNode(node) || node.data.container == null) return node;
     const box = frameBox(node.id, members);
     return {
       ...node,
@@ -474,8 +489,15 @@ function ChannelCanvasBody({
     () => new Set(catalog.filter((item) => item.trigger).map((item) => item.type)),
     [catalog],
   );
+  const containers = useMemo(() => {
+    const map = new Map<string, ContainerDeclaration | null>();
+    for (const item of catalog) map.set(item.type, item.container);
+    return map;
+  }, [catalog]);
+  const declaredContainer = (typeId: string): ContainerDeclaration | null =>
+    copyContainer(containers.get(typeId));
   const initial = useMemo(
-    () => flowFromGraph(graph, triggerTypes),
+    () => flowFromGraph(graph, triggerTypes, containers),
     // The canvas owns edits after mount. The parent remounts only when a draft is loaded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -528,6 +550,26 @@ function ChannelCanvasBody({
   nodesRef.current = nodes;
   edgesRef.current = edges;
   highlightRef.current = highlight;
+  useEffect(() => {
+    if (catalog.length === 0) return;
+    const byType = new Map(catalog.map((item) => [item.type, item]));
+    const current = nodesRef.current;
+    let changed = false;
+    const next = current.map((node) => {
+      if (!isChannelNode(node)) return node;
+      const spec = byType.get(node.data.nodeType);
+      if (!spec) return node;
+      const container = copyContainer(spec.container);
+      if (node.data.trigger === spec.trigger && sameContainer(node.data.container, container)) {
+        return node;
+      }
+      changed = true;
+      return { ...node, data: { ...node.data, trigger: spec.trigger, container } };
+    });
+    if (!changed) return;
+    nodesRef.current = next;
+    setNodes(next);
+  }, [catalog]);
   const frameMembers = useMemo(() => {
     const members = linkMembers(nodes);
     return drag ? reparentDrag(members, drag.ids, drag.frozen) : members;
@@ -704,7 +746,7 @@ function ChannelCanvasBody({
     const selectedEdgeIds = new Set(
       edgesRef.current.filter((edge) => edge.selected).map((edge) => edge.id),
     );
-    const flow = flowFromGraph(nextGraph, triggerTypes);
+    const flow = flowFromGraph(nextGraph, triggerTypes, containers);
     const adoptedNodes: CanvasNode[] = [
       ...flow.notes.map((note) => noteCanvasNode(note, selectedNodeIds.has(note.id))),
       ...flow.nodes.map((node) => ({
@@ -732,7 +774,7 @@ function ChannelCanvasBody({
     // The stored graph is one undo step ahead of the pre-save canvas, so undo
     // returns to that unsaved graph.
     pushSnap();
-  }, [adoptToken, triggerTypes, graph]);
+  }, [adoptToken, triggerTypes, containers, graph]);
 
   useEffect(() => {
     if (mutable) return;
@@ -887,6 +929,7 @@ function ChannelCanvasBody({
         name,
         defaultConfig(spec.config_schema as SchemaObject),
         spec.trigger,
+        spec.container,
       ),
     };
     const nextNodes = [...nodesRef.current.map((node) => ({ ...node, selected: false })), created];
@@ -1493,9 +1536,18 @@ function ChannelCanvasBody({
   const sampleScope = useMemo(
     () =>
       selected
-        ? scopeRequest(graph.nodes, selected.id, pinnedRounds, resolvedScope.current)
+        ? scopeRequest(
+            graph.nodes.map((node) => ({
+              id: node.id,
+              parent: node.parent,
+              container: declaredContainer(node.type),
+            })),
+            selected.id,
+            pinnedRounds,
+            resolvedScope.current,
+          )
         : undefined,
-    [graph.nodes, pinnedRounds, selected],
+    [catalog, graph.nodes, pinnedRounds, selected],
   );
   const sampleState = useNodeSample({
     channelId: channelId ?? "",
@@ -1505,7 +1557,7 @@ function ChannelCanvasBody({
     scope: sampleScope,
     recordedKey: summaryKey,
     containerRound:
-      selected?.data.nodeType === "volume.until"
+      selected != null && (declaredContainer(selected.data.nodeType)?.round_templates.length ?? 0) > 0
         ? (pinnedRounds[selected.id] ?? adoptedRounds[selected.id] ?? 0)
         : undefined,
     enabled: Boolean(channelId && sessionRun && selected),
@@ -1589,6 +1641,7 @@ function ChannelCanvasBody({
             ref: node.data.ref,
             type: node.data.nodeType,
             parent: node.parentId,
+            container: declaredContainer(node.data.nodeType),
           },
         ]
       : [],
@@ -1783,6 +1836,7 @@ function ChannelCanvasBody({
         notes: result.notes,
       },
       triggerTypes,
+      containers,
     );
     const nextNodes: CanvasNode[] = [
       ...nodesRef.current.map((node) => ({ ...node, selected: false })),
@@ -2359,7 +2413,7 @@ function ChannelCanvasBody({
                             ref: node.data.ref,
                             name: node.data.name,
                             parent: node.parentId,
-                            nodeType: node.data.nodeType,
+                            container: node.data.container,
                           }]
                         : [],
                     ),
@@ -3166,7 +3220,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   };
   const inputs = spec ? spec.inputs : data.trigger ? [] : [{ port: "main", description: "" }];
   const outputs = spec ? spec.outputs : [{ port: "main", description: "" }];
-  const frame = isContainerNode(data.nodeType);
+  const frame = data.container != null;
   const laid = layoutNodePorts(inputs, outputs, { frame });
   const errorAnchor = outputs.some((port) => port.port === "error");
   const run = useContext(CanvasRunContext);

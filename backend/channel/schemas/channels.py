@@ -430,6 +430,10 @@ class OutputViewOut(BaseModel):
         return document
 
 
+class ContainerOut(BaseModel):
+    round_templates: list[str]
+
+
 class NodeTypeOut(BaseModel):
     type: str
     family: str
@@ -437,6 +441,7 @@ class NodeTypeOut(BaseModel):
     summary: str
     description: str
     trigger: bool
+    container: ContainerOut | None
     inputs: list[PortOut]
     outputs: list[PortOut]
     output_view: OutputViewOut

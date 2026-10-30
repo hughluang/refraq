@@ -13,9 +13,26 @@ import {
 import {
   EMPTY_GRAPH,
   type ChannelRunDetail,
+  type ContainerDeclaration,
   type Graph,
   type NodeSummary,
 } from "@/features/channels/types";
+
+const CATALOG = new Map<string, ContainerDeclaration | null>([
+  ["lab.frame", { round_templates: [] }],
+  ["volume.batch_read", { round_templates: [] }],
+  ["volume.for", null],
+  ["write.entity", null],
+  ["transform.set_fields", null],
+]);
+
+function declared(nodeType: string): ContainerDeclaration | null {
+  return CATALOG.get(nodeType) ?? null;
+}
+
+function chainNode(id: string, nodeType: string, parent?: string) {
+  return { id, parent, container: declared(nodeType) };
+}
 
 function graph(): Graph {
   return {
@@ -115,10 +132,10 @@ describe("phaseByNode", () => {
 
 describe("sample scope", () => {
   const nodes = [
-    { id: "outer", type: "volume.for" },
-    { id: "inner", type: "volume.batch_read", parent: "outer" },
-    { id: "body", type: "write.entity", parent: "inner" },
-    { id: "after", type: "transform.set_fields" },
+    chainNode("outer", "lab.frame"),
+    chainNode("inner", "volume.batch_read", "outer"),
+    chainNode("body", "write.entity", "inner"),
+    chainNode("after", "transform.set_fields"),
   ];
 
   it("walks containing frames from the outside in and omits the node itself", () => {
@@ -128,6 +145,9 @@ describe("sample scope", () => {
     expect(roundControlIds(nodes, "body")).toEqual(["outer", "inner"]);
     expect(roundControlIds(nodes, "inner")).toEqual(["outer", "inner"]);
     expect(roundControlIds(nodes, "after")).toEqual([]);
+    const misdeclared = [chainNode("walk", "volume.for"), chainNode("step", "write.entity", "walk")];
+    expect(containerChain(misdeclared, "step")).toEqual([]);
+    expect(roundControlIds(misdeclared, "walk")).toEqual([]);
   });
 
   it("omits scope until a round is pinned, then sends the whole chain", () => {

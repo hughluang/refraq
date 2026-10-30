@@ -291,6 +291,11 @@ export type ContainerRound = {
   status_counts: Record<string, number>;
 };
 
+/** Catalog declaration of a Container. `null` means the node type is not a Container. */
+export type ContainerDeclaration = {
+  round_templates: string[];
+};
+
 export type NodeTypeSpec = {
   type: string;
   family: string;
@@ -298,6 +303,7 @@ export type NodeTypeSpec = {
   summary: string;
   description: string;
   trigger: boolean;
+  container: ContainerDeclaration | null;
   inputs: NodeTypePort[];
   outputs: NodeTypePort[];
   config_schema: Record<string, unknown>;

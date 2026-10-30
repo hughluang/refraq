@@ -13,6 +13,20 @@ import {
   type LinkEdge,
   type LinkMember,
 } from "@/features/channels/frameLink";
+import type { ContainerDeclaration } from "@/features/channels/types";
+
+const CATALOG = new Map<string, ContainerDeclaration | null>([
+  ["lab.frame", { round_templates: [] }],
+  ["volume.batch_read", { round_templates: [] }],
+  ["volume.until", { round_templates: ["until"] }],
+  ["volume.for", null],
+  ["read.sql", null],
+  ["transform.set_fields", null],
+]);
+
+function declared(nodeType: string): ContainerDeclaration | null {
+  return CATALOG.get(nodeType) ?? null;
+}
 
 function member(
   id: string,
@@ -20,7 +34,9 @@ function member(
   position: { x: number; y: number },
   parentId?: string,
 ): LinkMember {
-  return parentId ? { id, nodeType, position, parentId } : { id, nodeType, position };
+  const node: LinkMember = { id, position, container: declared(nodeType) };
+  if (parentId) node.parentId = parentId;
+  return node;
 }
 
 function edge(id: string, source: string, target: string, sourceHandle: string): LinkEdge {
@@ -28,7 +44,7 @@ function edge(id: string, source: string, target: string, sourceHandle: string):
 }
 
 const frame = (id: string, position: { x: number; y: number }, parentId?: string) =>
-  member(id, "volume.for", position, parentId);
+  member(id, "lab.frame", position, parentId);
 
 describe("crossesFrame", () => {
   it("treats an empty parent as none and allows a For to reach its own child", () => {
@@ -49,6 +65,16 @@ describe("frameLinkAllowed", () => {
     member("after", "read.sql", { x: 400, y: 40 }),
   ];
 
+  it("does not treat volume.for as a frame when the catalog declaration is null", () => {
+    const walk = member("walk", "volume.for", { x: 0, y: 0 });
+    const step = member("step", "read.sql", { x: 40, y: 48 }, "walk");
+    expect(walk.container).toBeNull();
+    expect(freezeFrames([walk, step])).toEqual([]);
+    expect(frameLinkAllowed([walk, step], { source: "walk", target: "step", sourceHandle: "done" })).toBe(
+      true,
+    );
+  });
+
   it("treats Until as a frame with the same each and done rules", () => {
     const hold = member("hold", "volume.until", { x: 0, y: 0 });
     const step = member("step", "transform.set_fields", { x: 40, y: 48 }, "hold");
@@ -64,7 +90,7 @@ describe("frameLinkAllowed", () => {
 
   it("treats Batch Read as a container, not a For-only type compare", () => {
     const batch = member("batch", "volume.batch_read", { x: 0, y: 0 });
-    const nested = member("inner", "volume.for", { x: 40, y: 48 }, "batch");
+    const nested = member("inner", "lab.frame", { x: 40, y: 48 }, "batch");
     const step = member("step", "read.sql", { x: 16, y: 16 }, "batch");
     const after = member("after", "read.sql", { x: 400, y: 40 });
     const members = [batch, nested, step, after];
@@ -104,7 +130,12 @@ describe("reparentDrag", () => {
     ]);
     expect(nextOuter).toEqual(outer);
     expect(nextInner).toEqual(inner);
-    expect(nextStep).toEqual({ id: "step", nodeType: "read.sql", parentId: "inner", position: { x: 60, y: 52 } });
+    expect(nextStep).toEqual({
+      id: "step",
+      container: null,
+      parentId: "inner",
+      position: { x: 60, y: 52 },
+    });
   });
 
   it("keeps a child that grew the frame when its center stays inside the frozen rect", () => {
@@ -125,7 +156,11 @@ describe("reparentDrag", () => {
     const moved = member("step", "read.sql", { x: 700, y: 400 }, "walk");
     const [nextWalk, nextStep] = reparentDrag([walk, moved], ["step"], frozen);
     expect(nextWalk).toEqual(walk);
-    expect(nextStep).toEqual({ id: "step", nodeType: "read.sql", position: { x: 700, y: 400 } });
+    expect(nextStep).toEqual({
+      id: "step",
+      container: null,
+      position: { x: 700, y: 400 },
+    });
     expect(nextStep).not.toHaveProperty("parentId");
   });
 
@@ -147,7 +182,7 @@ describe("reparentDrag", () => {
     const next = reparentDrag([outer, inner, moved], ["step"], frozen);
     expect(next.find((node) => node.id === "step")).toEqual({
       id: "step",
-      nodeType: "read.sql",
+      container: null,
       parentId: "outer",
       position: { x: 276, y: 72 },
     });

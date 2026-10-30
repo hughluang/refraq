@@ -92,6 +92,7 @@ const catalog: NodeTypeSpec[] = [
     summary: "Reads",
     description: "",
     trigger: false,
+    container: null,
     inputs: [],
     outputs: [],
     config_schema: {},
@@ -105,6 +106,7 @@ const catalog: NodeTypeSpec[] = [
     summary: "Sets",
     description: "",
     trigger: false,
+    container: null,
     inputs: [],
     outputs: [],
     config_schema: {},
@@ -118,6 +120,7 @@ const catalog: NodeTypeSpec[] = [
     summary: "Loops",
     description: "",
     trigger: false,
+    container: { round_templates: [] },
     inputs: [],
     outputs: [],
     config_schema: {},
@@ -131,6 +134,7 @@ const catalog: NodeTypeSpec[] = [
     summary: "Repeats",
     description: "",
     trigger: false,
+    container: { round_templates: ["until"] },
     inputs: [],
     outputs: [],
     config_schema: {},
@@ -144,6 +148,7 @@ const catalog: NodeTypeSpec[] = [
     summary: "Batches",
     description: "",
     trigger: false,
+    container: { round_templates: [] },
     inputs: [],
     outputs: [],
     config_schema: {},
@@ -785,8 +790,8 @@ describe("sample bar", () => {
     stop_at_node_id: "b",
   };
   const nodes = [
-    { id: "loop", name: "Walk", ref: "walk", type: "volume.for" },
-    { id: "b", name: "Write", ref: "write", type: "write.entity", parent: "loop" },
+    { id: "loop", name: "Walk", ref: "walk", type: "volume.for", container: { round_templates: [] } },
+    { id: "b", name: "Write", ref: "write", type: "write.entity", parent: "loop", container: null },
   ];
 
   it("names the run and hides the round control outside a container", () => {
@@ -794,7 +799,7 @@ describe("sample bar", () => {
       createElement(SampleBar, {
         run,
         nodeId: "plain",
-        nodes: [{ id: "plain", name: "Plain", ref: "plain", type: "transform.set_fields" }],
+        nodes: [{ id: "plain", name: "Plain", ref: "plain", type: "transform.set_fields", container: null }],
         sample: sample({ config_changed: true }),
         loading: true,
         channelId: "chn_1",

@@ -360,6 +360,14 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
     assert error_trigger["trigger"] is True
     assert error_trigger["config_schema"]["properties"] == {}
     by_type = {item["type"]: item for item in items}
+    assert by_type["volume.for"]["container"] == {"round_templates": []}
+    assert by_type["volume.batch_read"]["container"] == {"round_templates": []}
+    assert by_type["volume.until"]["container"] == {"round_templates": ["until"]}
+    assert all(
+        item["container"] is None
+        for item in items
+        if item["type"] not in {"volume.for", "volume.batch_read", "volume.until"}
+    )
     assert by_type["transform.code"]["permission"] == "channel:code_write"
     assert by_type["read.source_query"]["permission"] == "channel:source_query"
     assert (

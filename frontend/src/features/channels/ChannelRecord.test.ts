@@ -87,6 +87,7 @@ const spec: NodeTypeSpec = {
   summary: "Start here",
   description: "",
   trigger: true,
+  container: null,
   inputs: [],
   outputs: [{ port: "out", description: "" }],
   config_schema: {},

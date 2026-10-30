@@ -30,6 +30,7 @@ from backend.channel.schemas.channels import (
     DraftPutRequest,
     DraftResponse,
     LatestVersionOut,
+    ContainerOut,
     NodeTypeListResponse,
     NodeTypeOut,
     OutputViewOut,
@@ -145,6 +146,11 @@ def _node_type_out(spec: NodeType) -> NodeTypeOut:
         summary=spec.summary,
         description=spec.description,
         trigger=spec.trigger,
+        container=(
+            None
+            if spec.container is None
+            else ContainerOut(round_templates=list(spec.container.round_templates))
+        ),
         inputs=[
             PortOut(
                 port=port.port,

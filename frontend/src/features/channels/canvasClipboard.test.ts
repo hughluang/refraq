@@ -62,6 +62,7 @@ function spec(type: string, extra: Partial<NodeTypeSpec> = {}): NodeTypeSpec {
     summary: "",
     description: "",
     trigger: false,
+    container: null,
     inputs: [{ port: "main", description: "" }],
     outputs: [{ port: "main", description: "" }],
     config_schema: {},

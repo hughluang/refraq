@@ -209,6 +209,7 @@ function node(config: Record<string, unknown>, nodeType = "write.entity"): FlowN
     onError: "stop",
     retry: null,
     trigger: false,
+    container: null,
     problem: false,
     typeVersion: 1,
   };

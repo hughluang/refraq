@@ -12,6 +12,7 @@ import { roundControlIds } from "@/features/channels/runSession";
 import type {
   ChannelRun,
   ChannelRunDetail,
+  ContainerDeclaration,
   Graph,
   NodeSample,
   NodeSampleScopeInput,
@@ -31,6 +32,7 @@ export type RunNodeInfo = {
   ref: string;
   type: string;
   parent?: string;
+  container: ContainerDeclaration | null;
 };
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
@@ -52,7 +54,7 @@ export function useNodeSample({
   scope: readonly NodeSampleScopeInput[] | undefined;
   /** `recordedKey` of the live run. A change refetches without waiting for a graph edit. */
   recordedKey?: string;
-  /** Selected round of an Until node. Projects that round's condition into `node.input`. */
+  /** Selected round of a Container that declares Round Templates. Projects that round into `node.input`. */
   containerRound?: number;
   enabled: boolean;
 }): { sample: NodeSample | null; loading: boolean; failure: unknown } {

@@ -1,5 +1,6 @@
 import { omitUnsetIntegers, type SchemaObject } from "@/features/channels/configSchemaForm";
 import type {
+  ContainerDeclaration,
   Graph,
   GraphNode,
   GraphNote,
@@ -17,6 +18,8 @@ export type FlowNodeData = {
   onError: GraphNode["on_error"];
   retry: GraphNode["retry"];
   trigger: boolean;
+  /** `null` is not a Container. Empty `round_templates` is still a Container. */
+  container: ContainerDeclaration | null;
   problem: boolean;
   typeVersion: number;
 };
@@ -71,6 +74,7 @@ export function emptyNodeData(
   name: string,
   config: Record<string, unknown>,
   trigger: boolean,
+  container: ContainerDeclaration | null,
 ): FlowNodeData {
   return {
     nodeType,
@@ -80,14 +84,23 @@ export function emptyNodeData(
     onError: "stop",
     retry: null,
     trigger,
+    container: copyContainer(container),
     problem: false,
     typeVersion: 1,
   };
 }
 
+function copyContainer(
+  container: ContainerDeclaration | null | undefined,
+): ContainerDeclaration | null {
+  if (container == null) return null;
+  return { round_templates: [...container.round_templates] };
+}
+
 export function flowFromGraph(
   graph: Graph,
   triggerTypes: ReadonlySet<string>,
+  containers: ReadonlyMap<string, ContainerDeclaration | null> = new Map(),
 ): { nodes: FlowNodeShape[]; edges: FlowEdgeShape[]; notes: FlowNoteShape[] } {
   return {
     notes: (graph.notes ?? []).map((note) => ({
@@ -109,6 +122,7 @@ export function flowFromGraph(
           onError: node.on_error,
           retry: node.retry,
           trigger: triggerTypes.has(node.type),
+          container: copyContainer(containers.get(node.type)),
           problem: false,
           typeVersion: node.type_version ?? 1,
         },

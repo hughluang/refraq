@@ -279,6 +279,7 @@ const spec: NodeTypeSpec = {
   summary: "Start here",
   description: "",
   trigger: true,
+  container: null,
   inputs: [],
   outputs: [{ port: "out", description: "" }],
   config_schema: {},
@@ -1799,6 +1800,7 @@ function catalogSpec(
     summary: type,
     description: "",
     trigger,
+    container: null,
     inputs,
     outputs,
     config_schema: {},
@@ -1828,25 +1830,31 @@ const IF_SPEC = catalogSpec("transform.if", [{ port: "main", description: "" }],
   { port: "true", description: "", loop_back: false },
   { port: "false", description: "", loop_back: false },
 ]);
-const FOR_SPEC = catalogSpec(
-  "volume.for",
-  [
-    { port: "main", description: "" },
-    { port: "loop", description: "" },
-  ],
-  [
-    { port: "each", description: "", loop_back: true },
-    { port: "done", description: "", loop_back: false },
-  ],
-);
-const BATCH_SPEC = catalogSpec(
-  "volume.batch_read",
-  [{ port: "main", description: "" }],
-  [
-    { port: "each", description: "", loop_back: true },
-    { port: "done", description: "", loop_back: false },
-  ],
-);
+const FOR_SPEC = {
+  ...catalogSpec(
+    "volume.for",
+    [
+      { port: "main", description: "" },
+      { port: "loop", description: "" },
+    ],
+    [
+      { port: "each", description: "", loop_back: true },
+      { port: "done", description: "", loop_back: false },
+    ],
+  ),
+  container: { round_templates: [] },
+};
+const BATCH_SPEC = {
+  ...catalogSpec(
+    "volume.batch_read",
+    [{ port: "main", description: "" }],
+    [
+      { port: "each", description: "", loop_back: true },
+      { port: "done", description: "", loop_back: false },
+    ],
+  ),
+  container: { round_templates: [] },
+};
 const READ_SPEC = catalogSpec("read.sql", [{ port: "main", description: "" }], [
   { port: "main", description: "", loop_back: false },
 ]);
@@ -2085,6 +2093,42 @@ describe("channel ports", () => {
     fireEvent.mouseMove(document, { clientX: client.x + 24, clientY: client.y });
     fireEvent.mouseUp(document, { clientX: client.x, clientY: client.y });
   }
+
+  it("stamps a late catalog onto a moved For and keeps that position", async () => {
+    const { ChannelCanvas } = await import("@/features/channels/ChannelCanvas");
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [{ ...placed("walk", "volume.for", "Walk", 0), position: { x: 80, y: 80 } }],
+    };
+    const element = (catalog: NodeTypeSpec[]) =>
+      createElement(
+        MantineProvider,
+        { env: "test" },
+        createElement(ChannelCanvas, {
+          graph,
+          catalog,
+          appearance: "edit",
+          mutable: true,
+          problems: [],
+          onChange: vi.fn(),
+        }),
+      );
+    const view = render(element([{ ...FOR_SPEC, container: null }]));
+    await measured("walk");
+    expect(flowNode("walk").querySelector(".channel-flow-node--frame")).toBeNull();
+    dragNode("walk", [
+      { x: 80, y: 80 },
+      { x: 120, y: 80 },
+      { x: 240, y: 160 },
+    ]);
+    const moved = translationOf("walk");
+    expect(moved).not.toEqual({ x: 80, y: 80 });
+    view.rerender(element([FOR_SPEC]));
+    await waitFor(() => {
+      expect(flowNode("walk").querySelector(".channel-flow-node--frame")).not.toBeNull();
+    });
+    expect(translationOf("walk")).toEqual(moved);
+  });
 
   it("keeps a body's parent and relative position when the body is nudged", async () => {
     const onChange = vi.fn();

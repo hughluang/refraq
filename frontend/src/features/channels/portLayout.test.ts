@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { frameBox, isContainerNode, layoutNodePorts, parentsFirst } from "@/features/channels/portLayout";
+import { frameBox, layoutNodePorts, parentsFirst } from "@/features/channels/portLayout";
+import type { ContainerDeclaration } from "@/features/channels/types";
 
 describe("layoutNodePorts", () => {
   it("keeps a single main handle unlabelled on its side", () => {
@@ -52,28 +53,29 @@ describe("layoutNodePorts", () => {
   });
 });
 
-describe("container node types", () => {
-  it("includes For, Batch Read, and Until and leaves other volume nodes out", () => {
-    expect(isContainerNode("volume.for")).toBe(true);
-    expect(isContainerNode("volume.batch_read")).toBe(true);
-    expect(isContainerNode("volume.until")).toBe(true);
-    expect(isContainerNode("volume.dataset_query")).toBe(false);
-    expect(isContainerNode("volume.materialize")).toBe(false);
-  });
-});
+const CATALOG = new Map<string, ContainerDeclaration | null>([
+  ["lab.frame", { round_templates: [] }],
+  ["volume.batch_read", { round_templates: [] }],
+  ["volume.for", null],
+  ["read.sql", null],
+]);
+
+function declared(nodeType: string): ContainerDeclaration | null {
+  return CATALOG.get(nodeType) ?? null;
+}
 
 describe("frameBox", () => {
   const frame = (id: string, parentId?: string, position = { x: 0, y: 0 }) => ({
     id,
     parentId,
     position,
-    nodeType: "volume.for",
+    container: declared("lab.frame"),
   });
   const card = (id: string, parentId: string, position: { x: number; y: number }) => ({
     id,
     parentId,
     position,
-    nodeType: "read.sql",
+    container: declared("read.sql"),
   });
 
   it("uses a minimum size when a For has no children", () => {
@@ -87,10 +89,27 @@ describe("frameBox", () => {
     ).toEqual({ width: 336, height: 204 });
   });
 
+  it("sizes a volume.for child as a card when the catalog declaration is null", () => {
+    const nodes = [
+      frame("outer"),
+      {
+        id: "walk",
+        parentId: "outer",
+        position: { x: 40, y: 48 },
+        container: declared("volume.for"),
+      },
+    ];
+    // 40 + 208 + 48 = 296 -> minimum 320; 48 + 56 + 48 = 152 -> minimum 180
+    expect(frameBox("outer", nodes)).toEqual({ width: 320, height: 180 });
+  });
+
   it("sizes a nested Batch Read as a frame inside an outer frame", () => {
     const nodes = [
       frame("outer"),
-      { ...frame("batch", "outer", { x: 40, y: 48 }), nodeType: "volume.batch_read" },
+      {
+        ...frame("batch", "outer", { x: 40, y: 48 }),
+        container: declared("volume.batch_read"),
+      },
       card("step", "batch", { x: 80, y: 40 }),
     ];
     // 80 + 208 + 48 = 336, 40 + 56 + 48 = 144 -> min height 180

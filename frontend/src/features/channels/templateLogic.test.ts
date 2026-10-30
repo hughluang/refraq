@@ -353,14 +353,25 @@ describe("upstreamOutputs", () => {
     expect(doneOptions).not.toContain("self.walk.output.results");
   });
 
-  it("offers an Until node's direct children and not a grandchild or a done successor", () => {
+  it("offers direct children when the declaration has round templates, and not for an empty or null declaration", () => {
+    const declarations = new Map<string, { round_templates: string[] } | null>([
+      ["lab.hold", { round_templates: ["until"] }],
+      ["volume.for", { round_templates: [] }],
+      ["volume.until", null],
+      ["trigger.manual", null],
+      ["transform.set_fields", null],
+    ]);
+    const stamp = <T extends { nodeType: string }>(node: T) => ({
+      ...node,
+      container: declarations.get(node.nodeType) ?? null,
+    });
     const nodes = [
-      { id: "trigger", ref: "run_manually", name: "Run", nodeType: "trigger.manual" },
-      { id: "loop", ref: "hold", name: "Hold", nodeType: "volume.until" },
-      { id: "body", ref: "step", name: "Step", parent: "loop", nodeType: "transform.set_fields" },
-      { id: "later", ref: "later", name: "Later", parent: "loop", nodeType: "transform.set_fields" },
-      { id: "leaf", ref: "leaf", name: "Leaf", parent: "body", nodeType: "transform.set_fields" },
-      { id: "after", ref: "after", name: "After", nodeType: "transform.set_fields" },
+      stamp({ id: "trigger", ref: "run_manually", name: "Run", nodeType: "trigger.manual" }),
+      stamp({ id: "loop", ref: "hold", name: "Hold", nodeType: "lab.hold" }),
+      stamp({ id: "body", ref: "step", name: "Step", parent: "loop", nodeType: "transform.set_fields" }),
+      stamp({ id: "later", ref: "later", name: "Later", parent: "loop", nodeType: "transform.set_fields" }),
+      stamp({ id: "leaf", ref: "leaf", name: "Leaf", parent: "body", nodeType: "transform.set_fields" }),
+      stamp({ id: "after", ref: "after", name: "After", nodeType: "transform.set_fields" }),
     ];
     const edges = [
       { source: "trigger", target: "loop", sourcePort: "main" },
@@ -383,10 +394,16 @@ describe("upstreamOutputs", () => {
     expect(options).not.toContain("self.hold");
 
     const forNodes = nodes.map((node) =>
-      node.id === "loop" ? { ...node, nodeType: "volume.for" } : node,
+      node.id === "loop" ? stamp({ ...node, nodeType: "volume.for" }) : node,
     );
     const insideFor = upstreamOutputs("loop", forNodes, edges, schemas);
     expect(insideFor.map((item) => item.ref)).toEqual(["run_manually"]);
+
+    const untilNodes = nodes.map((node) =>
+      node.id === "loop" ? stamp({ ...node, nodeType: "volume.until" }) : node,
+    );
+    const insideUntil = upstreamOutputs("loop", untilNodes, edges, schemas);
+    expect(insideUntil.map((item) => item.ref)).toEqual(["run_manually"]);
   });
 });
 

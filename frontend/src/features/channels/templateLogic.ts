@@ -1,5 +1,6 @@
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import { crossesFrame } from "@/features/channels/frameLink";
+import type { ContainerDeclaration } from "@/features/channels/types";
 import { scanTemplate, templatePosition } from "@/features/channels/templateScan";
 import {
   memberOptions,
@@ -222,7 +223,7 @@ export function upstreamOutputs(
     ref: string;
     name: string;
     parent?: string | null;
-    nodeType?: string;
+    container?: ContainerDeclaration | null;
   }[],
   edges: readonly ScopeEdge[],
   schemas: ReadonlyMap<string, SchemaObject | null>,
@@ -247,7 +248,7 @@ export function upstreamOutputs(
     stack.push(...(incoming.get(edge.source) ?? []));
   }
   const self = nodes.find((node) => node.id === nodeId);
-  if (self?.nodeType === "volume.until") {
+  if ((self?.container?.round_templates.length ?? 0) > 0) {
     for (const child of nodes) {
       if (child.parent === nodeId) {
         seen.add(child.id);

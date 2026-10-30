@@ -1,10 +1,19 @@
 import { soleStatus } from "@/features/channels/datasetView";
 import { ancestorIds as frameAncestorIds } from "@/features/channels/frameLink";
-import { isContainerNode } from "@/features/channels/portLayout";
-import type { Graph, GraphEdge, NodeSampleScopeInput } from "@/features/channels/types";
-import type { ChannelRunDetail, NodeSummary } from "@/features/channels/types";
+import type {
+  ChannelRunDetail,
+  ContainerDeclaration,
+  Graph,
+  GraphEdge,
+  NodeSampleScopeInput,
+  NodeSummary,
+} from "@/features/channels/types";
 
-type ChainNode = { id: string; type: string; parent?: string | null };
+type ChainNode = {
+  id: string;
+  parent?: string | null;
+  container: ContainerDeclaration | null;
+};
 
 export type NodeRunPhase = "waiting" | "running" | "succeeded" | "failed" | "dead";
 
@@ -100,7 +109,7 @@ function countKey(counts: NodeSummary["status_counts"]): string {
     .join(",");
 }
 
-/** Outer-to-inner For and Batch Read frames that contain `nodeId`. The node itself is not included. */
+/** Outer-to-inner Container frames that contain `nodeId`. The node itself is not included. */
 export function containerChain(nodes: readonly ChainNode[], nodeId: string): string[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const chain: string[] = [];
@@ -108,7 +117,7 @@ export function containerChain(nodes: readonly ChainNode[], nodeId: string): str
   while (parentId) {
     const parent = byId.get(parentId);
     if (!parent) break;
-    if (isContainerNode(parent.type)) chain.push(parent.id);
+    if (parent.container != null) chain.push(parent.id);
     parentId = parent.parent;
   }
   return chain.reverse();
@@ -118,7 +127,7 @@ export function containerChain(nodes: readonly ChainNode[], nodeId: string): str
 export function roundControlIds(nodes: readonly ChainNode[], nodeId: string): string[] {
   const chain = containerChain(nodes, nodeId);
   const self = nodes.find((node) => node.id === nodeId);
-  if (self && isContainerNode(self.type)) return [...chain, self.id];
+  if (self && self.container != null) return [...chain, self.id];
   return chain;
 }
 
