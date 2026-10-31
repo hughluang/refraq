@@ -2,14 +2,11 @@
 
 import { Button, Group, Stack } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -26,13 +23,12 @@ import {
   tagFormErrors,
 } from "@/features/tags/tagForm";
 import type { Tag, TagFormValues } from "@/features/tags/types";
-import { problemMessage } from "@/lib/problem";
 
 const TAG_FORM_ID = "tag-record-form";
 
 type TagLoad =
   | { status: "loading" }
-  | { status: "error"; message: string }
+  | { status: "error" }
   | { status: "ready"; tag: Tag };
 
 type Props = { mode: "create" } | { mode: "show" | "edit"; tagId: string };
@@ -45,10 +41,8 @@ export function TagRecord(props: Props) {
 function TagCreateForm() {
   const t = useTranslate();
   const { open } = useNotification();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<TagFormValues>({
     initialValues: EMPTY_TAG_FORM,
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => tagFormErrors(values, t),
   });
 
@@ -63,9 +57,7 @@ function TagCreateForm() {
       open?.({ type: "success", message: t("tags.create.success") });
       window.location.replace(`/console/tags/${created.tag.id}/edit`);
     } catch (error) {
-      setSaveFailure(
-        saveFailureFrom(t, error, form.applyApiError(error), String(error)),
-      );
+      presentSaveFailure(t, error, form.applyApiError);
     }
   };
 
@@ -105,7 +97,6 @@ function TagCreateForm() {
         onSubmit={form.onSubmit((values) => submit(values))}
       >
         <Stack gap="sm">
-          <FormErrorSummary failure={saveFailure} />
           <TagFormFields form={form} editable />
         </Stack>
       </form>
@@ -129,10 +120,9 @@ function ExistingTagRecord({
   });
   const [loaded, setLoaded] = useState<TagLoad>({ status: "loading" });
   const recordAction = useConsoleMutation();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const loadRef = useRef<() => Promise<void>>(async () => {});
   const form = useConsoleForm<TagFormValues>({
     initialValues: EMPTY_TAG_FORM,
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => tagFormErrors(values, t),
   });
 
@@ -144,12 +134,12 @@ function ExistingTagRecord({
       form.setValues(formFromTag(response.tag));
       form.markSaved();
     } catch (err) {
-      setLoaded({
-        status: "error",
-        message: problemMessage(t, err, String(err)),
-      });
+      setLoaded({ status: "error" });
+      presentProblemNotification(t, err, { onRetry: () => void loadRef.current() });
     }
   }, [tagId]);
+
+  loadRef.current = load;
 
   useEffect(() => {
     void load();
@@ -169,18 +159,10 @@ function ExistingTagRecord({
         description: values.description,
       });
       form.markSaved();
-      setSaveFailure(null);
       open?.({ type: "success", message: t("tags.update.success") });
       await load();
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(
-          t,
-          err,
-          form.applyApiError(err),
-          t("tags.update.failed"),
-        ),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   };
 
@@ -192,8 +174,7 @@ function ExistingTagRecord({
     return (
       <PageChrome
         title={t("tags.title")}
-        status="error"
-        errorMessage={loaded.message}
+        status="unloaded"
         onRetry={() => void load()}
       />
     );
@@ -309,7 +290,6 @@ function ExistingTagRecord({
           noValidate
           onSubmit={form.onSubmit((values) => submit(values))}
         >
-          <FormErrorSummary failure={saveFailure} />
           {body}
         </form>
       )}

@@ -3,12 +3,12 @@
 import { Button, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
 import { RecordReference } from "@/components/display/RecordReference";
 import { RowActions } from "@/components/display/RowActions";
-import { PageError } from "@/components/feedback/PageError";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { TextField } from "@/components/form/TextField";
@@ -56,9 +56,11 @@ export function UserGroupShow({ groupId }: Props) {
   const [definitions, setDefinitions] = useState<SubjectAttribute[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string[]>>({});
   const [member, setMember] = useState<RecordOption | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const generation = useRef(0);
+  const loadRef = useRef<() => Promise<void>>(async () => {});
 
   const fetchMembers = useCallback(
     (query: PageQuery) => listGroupMembers(groupId, query),
@@ -79,39 +81,44 @@ export function UserGroupShow({ groupId }: Props) {
     });
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      setLoading(true);
-      try {
-        const [loaded, values, defs] = await Promise.all([
-          getUserGroup(groupId),
-          getGroupSubjectValues(groupId),
-          listAllSubjectAttributes(),
-        ]);
-        if (cancelled) return;
-        setGroup(loaded.group);
-        setName(loaded.group.name);
-        setDescription(loaded.group.description ?? "");
-        setDefinitions(defs);
-        const next: Record<string, string[]> = {};
-        for (const item of defs) {
-          next[item.key] = (values.values[item.key] ?? []).map(String);
-        }
-        setDrafts(next);
-        setError(null);
-      } catch (err) {
-        if (!cancelled) {
-          setError(problemMessage(t, err, t("common.error.loadFailed")));
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
+  const load = useCallback(async () => {
+    const current = ++generation.current;
+    setLoading(true);
+    setFailure(false);
+    try {
+      const [loaded, values, defs] = await Promise.all([
+        getUserGroup(groupId),
+        getGroupSubjectValues(groupId),
+        listAllSubjectAttributes(),
+      ]);
+      if (current !== generation.current) return;
+      setGroup(loaded.group);
+      setName(loaded.group.name);
+      setDescription(loaded.group.description ?? "");
+      setDefinitions(defs);
+      const next: Record<string, string[]> = {};
+      for (const item of defs) {
+        next[item.key] = (values.values[item.key] ?? []).map(String);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      setDrafts(next);
+    } catch (err) {
+      if (current !== generation.current) return;
+      setGroup(null);
+      setFailure(true);
+      presentProblemNotification(t, err, { onRetry: () => void loadRef.current() });
+    } finally {
+      if (current === generation.current) setLoading(false);
+    }
   }, [groupId, t]);
+
+  loadRef.current = load;
+
+  useEffect(() => {
+    void load();
+    return () => {
+      generation.current += 1;
+    };
+  }, [load]);
 
   async function saveGroup() {
     if (!group || subjectNameError(name)) return;
@@ -202,11 +209,13 @@ export function UserGroupShow({ groupId }: Props) {
       </PageChrome>
     );
   }
-  if (error || !group) {
+  if (failure || !group) {
     return (
-      <PageChrome title={t("userGroups.title")}>
-        <PageError message={error ?? t("common.error.loadFailed")} onRetry={() => location.reload()} />
-      </PageChrome>
+      <PageChrome
+        title={t("userGroups.title")}
+        status="unloaded"
+        onRetry={() => void loadRef.current()}
+      />
     );
   }
 

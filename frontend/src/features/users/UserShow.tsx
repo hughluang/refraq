@@ -2,8 +2,9 @@
 
 import { Button, Group, Stack, Text, Title } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { FieldDisplay } from "@/components/form/FieldDisplay";
 import { RecordMultiPicker } from "@/components/form/RecordPicker";
 import { userGroupRecordAdapter } from "@/components/form/recordPickerAdapters";
@@ -42,9 +43,11 @@ export function UserShow({ userId }: Props) {
   const [definitions, setDefinitions] = useState<SubjectAttribute[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string[]>>({});
   const [effective, setEffective] = useState<SubjectValues>({});
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const generation = useRef(0);
+  const loadRef = useRef<() => Promise<void>>(async () => {});
 
   function notifyError(err: unknown) {
     open?.({
@@ -54,40 +57,45 @@ export function UserShow({ userId }: Props) {
     });
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      setLoading(true);
-      try {
-        const [loaded, membership, values, defs] = await Promise.all([
-          getUser(userId),
-          getUserGroups(userId),
-          getUserSubjectValues(userId),
-          listAllSubjectAttributes(),
-        ]);
-        if (cancelled) return;
-        setUser(loaded.user);
-        setGroupIds(membership.groups.map((group) => group.id));
-        setDefinitions(defs);
-        setEffective(values.effective);
-        const next: Record<string, string[]> = {};
-        for (const item of defs) {
-          next[item.key] = (values.values[item.key] ?? []).map(String);
-        }
-        setDrafts(next);
-        setError(null);
-      } catch (err) {
-        if (!cancelled) {
-          setError(problemMessage(t, err, t("common.error.loadFailed")));
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
+  const load = useCallback(async () => {
+    const current = ++generation.current;
+    setLoading(true);
+    setFailure(false);
+    try {
+      const [loaded, membership, values, defs] = await Promise.all([
+        getUser(userId),
+        getUserGroups(userId),
+        getUserSubjectValues(userId),
+        listAllSubjectAttributes(),
+      ]);
+      if (current !== generation.current) return;
+      setUser(loaded.user);
+      setGroupIds(membership.groups.map((group) => group.id));
+      setDefinitions(defs);
+      setEffective(values.effective);
+      const next: Record<string, string[]> = {};
+      for (const item of defs) {
+        next[item.key] = (values.values[item.key] ?? []).map(String);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      setDrafts(next);
+    } catch (err) {
+      if (current !== generation.current) return;
+      setUser(null);
+      setFailure(true);
+      presentProblemNotification(t, err, { onRetry: () => void loadRef.current() });
+    } finally {
+      if (current === generation.current) setLoading(false);
+    }
   }, [t, userId]);
+
+  loadRef.current = load;
+
+  useEffect(() => {
+    void load();
+    return () => {
+      generation.current += 1;
+    };
+  }, [load]);
 
   async function saveGroups() {
     setBusy(true);
@@ -141,15 +149,17 @@ export function UserShow({ userId }: Props) {
   if (loading) {
     return <PageChrome title={t("users.title")} status="loading" />;
   }
-  if (error || !user) {
+  if (failure) {
     return (
       <PageChrome
         title={t("users.title")}
-        status={error ? "error" : "notFound"}
-        errorMessage={error ?? undefined}
-        onRetry={error ? () => location.reload() : undefined}
+        status="unloaded"
+        onRetry={() => void loadRef.current()}
       />
     );
+  }
+  if (!user) {
+    return <PageChrome title={t("users.title")} status="notFound" />;
   }
 
   return (

@@ -1,14 +1,11 @@
 "use client";
 
 import { Button, Stack } from "@mantine/core";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { TextField } from "@/components/form/TextField";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import {
   useCreate,
@@ -16,7 +13,6 @@ import {
   useTranslate,
   useUpdate,
 } from "@refinedev/core";
-import { useEffect } from "react";
 
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { suppressLeaveGuard } from "@/components/navigation/leaveGuard";
@@ -32,7 +28,6 @@ import type {
   RoleRow,
 } from "@/features/roles/types";
 import { apiClient } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 
 const ROLE_FORM_ID = "role-record-form";
 
@@ -43,16 +38,21 @@ type RoleFormProps = {
 
 export function RoleForm({ mode, roleId }: RoleFormProps) {
   const t = useTranslate();
+  const tRef = useRef(t);
+  tRef.current = t;
   const { push } = useConsoleNavigation();
   const [catalog, setCatalog] = useState<PermissionCatalogEntry[] | null>(null);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const [catalogFailed, setCatalogFailed] = useState(false);
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
 
   const roleQuery = useOne<RoleRow>({
     resource: ModuleId.roles,
     id: roleId ?? "",
     queryOptions: { enabled: mode === "edit" && Boolean(roleId) },
+    errorNotification: false,
   });
+  const refetchRoleRef = useRef(roleQuery.query.refetch);
+  refetchRoleRef.current = roleQuery.query.refetch;
 
   const { mutate: createRole } = useCreate<RoleRow>();
   const { mutate: updateRole } = useUpdate<RoleRow>();
@@ -63,7 +63,6 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
       name: "",
       permissions: [],
     },
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       key: (value) =>
         mode === "create"
@@ -76,28 +75,39 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
     },
   });
 
+  const reloadCatalog = useCallback(() => {
+    setCatalogAttempt((value) => value + 1);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
+    setCatalog(null);
+    setCatalogFailed(false);
     void (async () => {
       try {
         const data = await apiClient<{ items: PermissionCatalogEntry[] }>(
           "/permissions",
         );
-        if (!cancelled) {
-          setCatalog(data.items);
-        }
+        if (!cancelled) setCatalog(data.items);
       } catch (error) {
-        if (!cancelled) {
-          setCatalogError(
-            problemMessage(t, error, t("common.error.loadFailed")),
-          );
-        }
+        if (cancelled) return;
+        setCatalogFailed(true);
+        presentProblemNotification(tRef.current, error, { onRetry: reloadCatalog });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [t]);
+  }, [catalogAttempt, reloadCatalog]);
+
+  useEffect(() => {
+    if (mode !== "edit" || !roleQuery.query.isError) return;
+    presentProblemNotification(tRef.current, roleQuery.query.error, {
+      onRetry: () => {
+        void refetchRoleRef.current();
+      },
+    });
+  }, [mode, roleQuery.query.error, roleQuery.query.isError]);
 
   useEffect(() => {
     const role = roleQuery.result;
@@ -113,11 +123,6 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
   }, [mode, roleQuery.result]);
 
   function submit(values: RoleFormValues) {
-    const fail = (error: unknown) => {
-      setSaveFailure(
-        saveFailureFrom(t, error, form.applyApiError(error), t("common.error.loadFailed")),
-      );
-    };
     return new Promise<void>((resolve) => {
       if (mode === "create") {
         createRole(
@@ -138,7 +143,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
               resolve();
             },
             onError: (error) => {
-              fail(error);
+              presentSaveFailure(t, error, form.applyApiError);
               resolve();
             },
           },
@@ -168,7 +173,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
             resolve();
           },
           onError: (error) => {
-            fail(error);
+            presentSaveFailure(t, error, form.applyApiError);
             resolve();
           },
         },
@@ -176,7 +181,20 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
     });
   }
 
+  const roleFailed = mode === "edit" && Boolean(roleQuery.query.isError);
   const locked = mode === "edit" && Boolean(roleQuery.result?.locked);
+  const visibleCatalog =
+    catalog != null && !catalogFailed && !roleFailed ? catalog : null;
+  const pageStatus = roleFailed || catalogFailed
+    ? "unloaded"
+    : catalog == null
+      ? "loading"
+      : "ready";
+
+  function retryLoad() {
+    if (catalogFailed) reloadCatalog();
+    if (roleFailed) void refetchRoleRef.current();
+  }
 
   if (mode === "edit" && roleQuery.query.isLoading) {
     return <PageChrome title={t("roles.edit.title")} status="loading" />;
@@ -191,10 +209,10 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
           ? { moduleId: "roles", title: roleQuery.result.name }
           : undefined
       }
-      status={catalogError ? "error" : catalog === null ? "loading" : "ready"}
-      errorMessage={catalogError ?? undefined}
+      status={pageStatus}
+      onRetry={pageStatus === "unloaded" ? retryLoad : undefined}
       actions={
-        catalog && !catalogError ? (
+        visibleCatalog ? (
           <HeaderActions
             standard={
               <>
@@ -221,13 +239,12 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
         ) : undefined
       }
     >
-      {catalog && !catalogError ? (
+      {visibleCatalog ? (
         <form
           id={ROLE_FORM_ID}
           onSubmit={locked ? (event) => event.preventDefault() : form.onSubmit(submit)}
         >
           <Stack gap="sm">
-            <FormErrorSummary failure={saveFailure} />
             <TextField
               label={t("roles.fields.key")}
               required={mode === "create"}
@@ -243,7 +260,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
               {...form.fieldProps("name")}
             />
             <PermissionEditor
-              catalog={catalog}
+              catalog={visibleCatalog}
               selected={form.values.permissions}
               locked={locked}
               onChange={(permissions) => form.setFieldValue("permissions", permissions)}

@@ -2,16 +2,13 @@
 
 import { Badge, Button, Group, Stack, Table, Text } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { suppressLeaveGuard } from "@/components/navigation/leaveGuard";
 import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
 import { RecordReference } from "@/components/display/RecordReference";
@@ -63,10 +60,8 @@ export function DictionaryRecord(props: Props) {
 function DictionaryCreateForm() {
   const t = useTranslate();
   const { open } = useNotification();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<DictionaryFormValues>({
     initialValues: EMPTY_DICTIONARY_FORM,
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => dictionaryFormErrors(values, t),
   });
 
@@ -86,9 +81,7 @@ function DictionaryCreateForm() {
         `/console/dictionaries/${created.dictionary.id}/edit`,
       );
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(t, err, form.applyApiError(err), String(err)),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   };
 
@@ -128,7 +121,6 @@ function DictionaryCreateForm() {
         onSubmit={form.onSubmit((values) => submit(values))}
       >
         <Stack gap="sm">
-          <FormErrorSummary failure={saveFailure} />
           <DictionaryFormFields form={form} editable nameEditable />
         </Stack>
       </form>
@@ -146,19 +138,18 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
   });
   const [record, setRecord] = useState<Dictionary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const recordAction = useConsoleMutation();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const loadRef = useRef<() => Promise<void>>(async () => {});
   const form = useConsoleForm<DictionaryFormValues>({
     initialValues: EMPTY_DICTIONARY_FORM,
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => dictionaryFormErrors(values, t),
   });
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setLoadFailed(false);
     try {
       const response = await getDictionary(dictionaryId);
       setRecord(response.dictionary);
@@ -166,11 +157,14 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
       form.markSaved();
     } catch (err) {
       setRecord(null);
-      setError(problemMessage(t, err, String(err)));
+      setLoadFailed(true);
+      presentProblemNotification(t, err, { onRetry: () => void loadRef.current() });
     } finally {
       setLoading(false);
     }
   }, [dictionaryId]);
+
+  loadRef.current = load;
 
   useEffect(() => {
     void load();
@@ -204,18 +198,10 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
         entries: entriesFromForm(values.entries),
       });
       form.markSaved();
-      setSaveFailure(null);
       open?.({ type: "success", message: t("dictionaries.update.success") });
       await load();
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(
-          t,
-          err,
-          form.applyApiError(err),
-          t("dictionaries.update.failed"),
-        ),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   };
 
@@ -271,12 +257,11 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
     return <PageChrome title={t("dictionaries.title")} status="loading" />;
   }
 
-  if (error) {
+  if (loadFailed) {
     return (
       <PageChrome
         title={t("dictionaries.title")}
-        status="error"
-        errorMessage={error}
+        status="unloaded"
         onRetry={() => void load()}
       />
     );
@@ -451,7 +436,6 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
           noValidate
           onSubmit={form.onSubmit((values) => submit(values))}
         >
-          <FormErrorSummary failure={saveFailure} />
           {body}
         </form>
       )}
