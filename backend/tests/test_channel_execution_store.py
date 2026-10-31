@@ -540,6 +540,7 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "trigger.manual": {},
         "trigger.scheduled": {},
         "read.changes": {"entity_id": "ent_1"},
+        "volume.changes_dataset": {"entity_id": "ent_1"},
         "read.sql": {"source": {"kind": "entity"}, "sql": "{{ sql }}"},
         "read.source_query": {"source_id": "src_1", "sql": "{{ sql }}"},
         "transform.set_fields": {
@@ -597,6 +598,7 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "trigger.manual": set(),
         "trigger.scheduled": set(),
         "read.changes": set(),
+        "volume.changes_dataset": set(),
         "read.sql": {"sql"},
         "read.source_query": {"sql"},
         "transform.set_fields": {"fields.0.value", "fields.1.value"},

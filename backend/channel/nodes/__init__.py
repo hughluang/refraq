@@ -25,6 +25,7 @@ from backend.channel.nodes.action.email import NODE_TYPE as ACTION_EMAIL
 from backend.channel.nodes.action.http import NODE_TYPE as ACTION_HTTP
 from backend.channel.nodes.action.webhook import NODE_TYPE as ACTION_WEBHOOK
 from backend.channel.nodes.volume.batch_read import NODE_TYPE as VOLUME_BATCH_READ
+from backend.channel.nodes.volume.changes_dataset import NODE_TYPE as VOLUME_CHANGES_DATASET
 from backend.channel.nodes.volume.dataset_query import NODE_TYPE as VOLUME_DATASET_QUERY
 from backend.channel.nodes.volume.materialize import NODE_TYPE as VOLUME_MATERIALIZE
 from backend.channel.nodes.volume.until import NODE_TYPE as VOLUME_UNTIL
@@ -63,6 +64,7 @@ _CATALOG: tuple[NodeType, ...] = (
     DEDUPLICATE,
     _FOR,
     VOLUME_BATCH_READ,
+    VOLUME_CHANGES_DATASET,
     VOLUME_DATASET_QUERY,
     VOLUME_MATERIALIZE,
     VOLUME_UNTIL,

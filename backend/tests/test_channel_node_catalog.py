@@ -45,6 +45,9 @@ _OUTPUT_VIEWS = {
     "volume.batch_read": OutputView(
         kind="container", metrics=("count", "total", "batch_size"), item="rows"
     ),
+    "volume.changes_dataset": OutputView(
+        kind="dataset", dataset="dataset", metrics=("count",)
+    ),
     "volume.dataset_query": OutputView(
         kind="dataset", dataset="dataset", metrics=("count",)
     ),
