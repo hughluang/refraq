@@ -2,7 +2,7 @@
 
 import { Anchor, Button, Group, Table, Text, Tooltip } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
 import { ListToolbar } from "@/components/display/ListToolbar";
@@ -14,7 +14,7 @@ import {
 } from "@/components/display/statusTone";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
-import { PageError } from "@/components/feedback/PageError";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { RecordPicker } from "@/components/form/RecordPicker";
 import { sourceRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -28,7 +28,6 @@ import {
 import type { CatalogObject } from "@/features/sources/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
-import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
@@ -84,11 +83,11 @@ export function CatalogBrowse() {
 
   const urlSource = query.select("source");
   const [fallbackId, setFallbackId] = useState<string | null>(null);
-  const [phase, setPhase] = useState<"loading" | "empty" | "ready" | "error">(
+  const [phase, setPhase] = useState<"loading" | "empty" | "ready" | "unloaded">(
     urlSource ? "ready" : "loading",
   );
-  const [error, setError] = useState<string | null>(null);
   const sourceId = urlSource || fallbackId;
+  const probeGeneration = useRef(0);
 
   const fetchPage = useCallback(
     (page: PageQuery) =>
@@ -119,37 +118,37 @@ export function CatalogBrowse() {
   });
   const { items, reload } = list;
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    const generation = ++probeGeneration.current;
     if (urlSource || fallbackId) {
       setPhase("ready");
       return;
     }
-    let cancelled = false;
     setPhase("loading");
-    listSources({ limit: 1, offset: 0 })
+    void listSources({ limit: 1, offset: 0 })
       .then((data) => {
-        if (cancelled) return;
+        if (generation !== probeGeneration.current) return;
         const first = data.items[0];
         if (!first) {
           setPhase("empty");
           return;
         }
         setFallbackId(first.id);
-        setError(null);
         setPhase("ready");
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
-          setPhase("error");
-          setError(problemMessage(t, err, String(err)));
-        }
+        if (generation !== probeGeneration.current) return;
+        setPhase("unloaded");
+        presentProblemNotification(t, err, { onRetry: () => void load() });
       });
-    return () => {
-      cancelled = true;
-    };
   }, [fallbackId, t, urlSource]);
 
-  if (phase === "error" && error) return <PageError message={error} />;
+  useEffect(() => {
+    load();
+    return () => {
+      probeGeneration.current += 1;
+    };
+  }, [load]);
 
   const refreshAction = (
     <Button size="sm" variant="light" onClick={() => void reload()}>
@@ -162,6 +161,8 @@ export function CatalogBrowse() {
       title={t("catalog.title")}
       description={t("catalog.description")}
       actions={refreshAction}
+      status={phase === "unloaded" ? "unloaded" : undefined}
+      onRetry={phase === "unloaded" ? () => void load() : undefined}
       toolbar={
         phase === "ready" && sourceId ? (
           <Group align="flex-end" wrap="wrap">

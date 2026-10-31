@@ -19,6 +19,7 @@ import {
   presentCatalogPresence,
   presentCatalogSemantics,
 } from "@/components/display/statusTone";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { objectTypeLabel, semanticSourceLabel } from "@/features/sources/catalogLabel";
@@ -36,7 +37,6 @@ import { OverviewTab } from "@/features/sources/catalog-detail/OverviewTab";
 import { isSampleEligible } from "@/features/sources/catalog-detail/catalogObjectKind";
 import { SampleTab } from "@/features/sources/catalog-detail/SampleTab";
 import type { CatalogObject } from "@/features/sources/types";
-import { problemMessage } from "@/lib/problem";
 import { copyText } from "@/lib/copy-text";
 
 type CatalogObjectDetailProps = {
@@ -62,7 +62,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
 
   const [object, setObject] = useState<CatalogObject | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   const [reloadEpoch, setReloadEpoch] = useState(0);
   const [joinsVisited, setJoinsVisited] = useState(false);
   const [historyVisited, setHistoryVisited] = useState(false);
@@ -85,7 +85,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
       if (!refresh) {
         setLoading(true);
       }
-      setError(null);
+      setFailed(false);
       try {
         const objRes = await getCatalogObject(objectId);
         setObject(objRes.object);
@@ -93,15 +93,16 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           setReloadEpoch((n) => n + 1);
         }
       } catch (err) {
-        setError(problemMessage(t, err, String(err)));
+        setFailed(true);
         if (!refresh) {
           setObject(null);
         }
+        presentProblemNotification(t, err, { onRetry: () => void load() });
       } finally {
         setLoading(false);
       }
     },
-    [objectId],
+    [objectId, t],
   );
 
   useEffect(() => {
@@ -144,13 +145,12 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     }
   };
 
-  if (loading || error || !object) {
+  if (loading || failed || !object) {
     return (
       <PageChrome
         title={t("catalog.detail")}
-        status={loading ? "loading" : error ? "error" : "notFound"}
-        errorMessage={error ?? undefined}
-        onRetry={error ? () => void load() : undefined}
+        status={loading ? "loading" : failed ? "unloaded" : "notFound"}
+        onRetry={failed ? () => void load() : undefined}
       />
     );
   }
