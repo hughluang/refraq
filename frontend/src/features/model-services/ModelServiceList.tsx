@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Alert,
   Button,
   Group,
   Modal,
@@ -22,6 +21,7 @@ import {
   presentModelServiceOpen,
   presentModelServiceUse,
 } from "@/components/display/statusTone";
+import { Callout } from "@/components/feedback/Callout";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { PageTabs } from "@/components/layout/consoleTabs";
@@ -445,9 +445,9 @@ export function ModelServiceList() {
               ) : null}
             </Group>
             {purpose?.closed ? (
-              <Alert color="yellow" title={t("modelServices.closed.noteTitle")}>
+              <Callout tone="notice" title={t("modelServices.closed.noteTitle")}>
                 {t("modelServices.closed.note")}
-              </Alert>
+              </Callout>
             ) : null}
           </Stack>
           ),
