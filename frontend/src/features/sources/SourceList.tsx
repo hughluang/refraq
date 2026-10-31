@@ -1,12 +1,8 @@
 "use client";
 
 import { Button, Modal, Stack, Table } from "@mantine/core";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
@@ -108,7 +104,6 @@ export function SourceList() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Source | null>(null);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [testing, setTesting] = useState(false);
   const [schema, setSchema] = useState<ConnectorSpec | null>(null);
   const [access, setAccess] = useState<SourceAccess>({});
@@ -144,7 +139,6 @@ export function SourceList() {
 
   const form = useConsoleForm<IdentityForm>({
     initialValues: emptyIdentity(),
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       key: (v) =>
         editing ? null : v.trim() ? null : t("sources.validation.required"),
@@ -164,7 +158,6 @@ export function SourceList() {
     form.setValues(emptyIdentity("postgresql"));
     form.markSaved();
     form.clearErrors();
-    setSaveFailure(null);
     try {
       const defaults = await loadSchemaAndDefaults("postgresql");
       setAccess(defaults);
@@ -194,7 +187,6 @@ export function SourceList() {
     });
     form.markSaved();
     form.clearErrors();
-    setSaveFailure(null);
     try {
       const defaults = await loadSchemaAndDefaults(engine);
       try {
@@ -281,7 +273,6 @@ export function SourceList() {
 
   const closeModal = () => {
     setModalOpen(false);
-    setSaveFailure(null);
     form.reset();
   };
 
@@ -321,13 +312,10 @@ export function SourceList() {
         });
       }
       form.markSaved();
-      setSaveFailure(null);
       setModalOpen(false);
       await reload();
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(t, err, form.applyApiError(err), String(err)),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   };
 
@@ -476,7 +464,6 @@ export function SourceList() {
         dirty={form.dirty}
         submitting={form.submitting}
         submitLabel={t("common.save")}
-        summary={<FormErrorSummary failure={saveFailure} />}
         onSubmit={() => void form.submit(saveSource)}
         leading={
           <Button

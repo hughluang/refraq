@@ -5,12 +5,8 @@ import { useList, useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { SelectField } from "@/components/form/SelectField";
 import { SwitchField } from "@/components/form/SwitchField";
 import { TextField } from "@/components/form/TextField";
@@ -136,14 +132,12 @@ export function SpecDrivenForm({
   const t = useTranslate();
   const [spec, setSpec] = useState<IdentityProviderSpec | null>(null);
   const [callbackUrl, setCallbackUrl] = useState("");
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const roles = useList<RoleRow>({
     resource: ModuleId.roles,
     pagination: { mode: "off" },
   });
   const form = useConsoleForm<IdentityProviderFormValues>({
     initialValues: valuesFromProvider(provider),
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       display_name: (value) =>
         value.trim() ? null : t("identityProviders.validation.required"),
@@ -282,7 +276,6 @@ export function SpecDrivenForm({
   };
 
   const close = () => {
-    setSaveFailure(null);
     form.reset();
     onClose();
   };
@@ -298,22 +291,13 @@ export function SpecDrivenForm({
       dirty={form.dirty}
       submitting={form.submitting}
       submitLabel={t("common.save")}
-      summary={<FormErrorSummary failure={saveFailure} />}
       onSubmit={() =>
         void form.submit(async (values) => {
           try {
             await onSubmit(values);
             form.markSaved();
-            setSaveFailure(null);
           } catch (error) {
-            setSaveFailure(
-              saveFailureFrom(
-                t,
-                error,
-                form.applyApiError(error),
-                t("common.error.loadFailed"),
-              ),
-            );
+            presentSaveFailure(t, error, form.applyApiError);
           }
         })
       }

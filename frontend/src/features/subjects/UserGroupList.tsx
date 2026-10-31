@@ -9,12 +9,8 @@ import { ListTable } from "@/components/display/ListTable";
 import { ListToolbar } from "@/components/display/ListToolbar";
 import { RecordReference } from "@/components/display/RecordReference";
 import { RowActions } from "@/components/display/RowActions";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { TextField } from "@/components/form/TextField";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -38,10 +34,8 @@ export function UserGroupList() {
   });
   const query = useListQuery();
   const [opened, setOpened] = useState(false);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<{ key: string; name: string; description: string }>({
     initialValues: { key: "", name: "", description: "" },
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       key: (value) => {
         const issue = subjectKeyError(value);
@@ -77,7 +71,6 @@ export function UserGroupList() {
 
   function close() {
     setOpened(false);
-    setSaveFailure(null);
     form.reset();
   }
 
@@ -89,14 +82,11 @@ export function UserGroupList() {
         description: values.description.trim() || null,
       });
       form.markSaved();
-      setSaveFailure(null);
       setOpened(false);
       form.reset();
       await list.reload();
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(t, err, form.applyApiError(err), t("common.error.loadFailed")),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   }
 
@@ -179,7 +169,6 @@ export function UserGroupList() {
         dirty={form.dirty}
         submitting={form.submitting}
         submitLabel={t("userGroups.create")}
-        summary={<FormErrorSummary failure={saveFailure} />}
         onSubmit={() => void form.submit(submitCreate)}
       >
         <Stack gap="sm">

@@ -2,14 +2,9 @@
 
 import { Stack } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useState } from "react";
 
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { DictionaryFormFields } from "@/features/dictionaries/DictionaryFormFields";
 import { createDictionary } from "@/features/dictionaries/api";
@@ -34,15 +29,12 @@ type Props = {
 
 export function CreateDictionaryModal({ opened, onClose, onCreated }: Props) {
   const t = useTranslate();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<DictionaryFormValues>({
     initialValues: EMPTY_DICTIONARY_FORM,
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => dictionaryFormErrors(values, t),
   });
 
   const close = () => {
-    setSaveFailure(null);
     form.reset();
     onClose();
   };
@@ -62,13 +54,10 @@ export function CreateDictionaryModal({ opened, onClose, onCreated }: Props) {
         display_name: created.dictionary.display_name,
       });
       form.markSaved();
-      setSaveFailure(null);
       form.reset();
       onClose();
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(t, err, form.applyApiError(err), String(err)),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   };
 
@@ -81,7 +70,6 @@ export function CreateDictionaryModal({ opened, onClose, onCreated }: Props) {
       dirty={form.dirty}
       submitting={form.submitting}
       submitLabel={t("dictionaries.create.submit")}
-      summary={<FormErrorSummary failure={saveFailure} />}
       onSubmit={() => void form.submit(submit)}
     >
       <Stack>

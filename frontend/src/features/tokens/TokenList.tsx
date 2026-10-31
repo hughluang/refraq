@@ -1,12 +1,8 @@
 "use client";
 
 import { Stack, Table } from "@mantine/core";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
@@ -64,7 +60,6 @@ export function TokenList() {
   const { items: rows, reload } = list;
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
 
   const form = useConsoleForm<CreateFormValues>({
@@ -72,7 +67,6 @@ export function TokenList() {
       name: "",
       expires_at: defaultExpiresWall(zone),
     },
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       name: (value) =>
         value.trim().length > 0 ? null : t("tokens.validation.required"),
@@ -96,13 +90,11 @@ export function TokenList() {
     });
     form.markSaved();
     form.clearErrors();
-    setSaveFailure(null);
     setCreateOpen(true);
   }
 
   function closeCreate() {
     setCreateOpen(false);
-    setSaveFailure(null);
     form.reset();
   }
 
@@ -115,7 +107,6 @@ export function TokenList() {
         expires_at: expiresAt,
       });
       form.markSaved();
-      setSaveFailure(null);
       setCreateOpen(false);
       setSecret(result.secret);
       open?.({
@@ -125,9 +116,7 @@ export function TokenList() {
       });
       await reload();
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(t, err, form.applyApiError(err), t("tokens.create.error")),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   }
 
@@ -303,7 +292,6 @@ export function TokenList() {
         dirty={form.dirty}
         submitting={form.submitting}
         submitLabel={t("tokens.create.submit")}
-        summary={<FormErrorSummary failure={saveFailure} />}
         onSubmit={() => void form.submit(onCreate)}
       >
         <Stack gap="md">

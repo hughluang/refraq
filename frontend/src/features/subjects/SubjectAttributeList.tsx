@@ -8,12 +8,8 @@ import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
 import { RecordReference } from "@/components/display/RecordReference";
 import { RowActions } from "@/components/display/RowActions";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { RecordPicker } from "@/components/form/RecordPicker";
 import { dictionaryRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { SelectField } from "@/components/form/SelectField";
@@ -79,10 +75,8 @@ export function SubjectAttributeList() {
   });
   const query = useListQuery({ search: false });
   const [opened, setOpened] = useState(false);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<Draft>({
     initialValues: EMPTY_DRAFT,
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       key: (value, values) => {
         if (values.id) return null;
@@ -122,7 +116,6 @@ export function SubjectAttributeList() {
   function openCreate() {
     form.setValues(EMPTY_DRAFT);
     form.markSaved();
-    setSaveFailure(null);
     setOpened(true);
   }
 
@@ -138,13 +131,11 @@ export function SubjectAttributeList() {
       multiLocked: row.multi_value,
     });
     form.markSaved();
-    setSaveFailure(null);
     setOpened(true);
   }
 
   function close() {
     setOpened(false);
-    setSaveFailure(null);
     form.reset();
   }
 
@@ -169,19 +160,11 @@ export function SubjectAttributeList() {
         });
       }
       form.markSaved();
-      setSaveFailure(null);
       setOpened(false);
       form.reset();
       await list.reload();
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(
-          t,
-          err,
-          form.applyApiError(err),
-          t("common.error.loadFailed"),
-        ),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   }
 
@@ -265,7 +248,6 @@ export function SubjectAttributeList() {
         dirty={form.dirty}
         submitting={form.submitting}
         submitLabel={t("subjectAttributes.save")}
-        summary={<FormErrorSummary failure={saveFailure} />}
         onSubmit={() => void form.submit(submit)}
       >
         <Stack gap="sm">

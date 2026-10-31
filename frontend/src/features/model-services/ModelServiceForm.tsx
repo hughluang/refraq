@@ -1,15 +1,10 @@
 "use client";
 
 import { Checkbox, Stack, Text, TextInput } from "@mantine/core";
-import { useState } from "react";
 
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
 import { NumberField } from "@/components/form/NumberField";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { TextField } from "@/components/form/TextField";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { useTranslate } from "@refinedev/core";
@@ -76,10 +71,8 @@ export function ModelServiceForm({
   onClose,
 }: Props) {
   const t = useTranslate();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<ModelServiceFormValues>({
     initialValues: valuesFromService(service),
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       display_name: (value) =>
         value.trim() ? null : t("modelServices.validation.required"),
@@ -100,7 +93,6 @@ export function ModelServiceForm({
   const wireLocked = Boolean(service?.in_use);
 
   const close = () => {
-    setSaveFailure(null);
     form.reset();
     onClose();
   };
@@ -114,22 +106,13 @@ export function ModelServiceForm({
       dirty={form.dirty}
       submitting={form.submitting}
       submitLabel={t("actions.save")}
-      summary={<FormErrorSummary failure={saveFailure} />}
       onSubmit={() =>
         void form.submit(async (values) => {
           try {
             await onSubmit(values);
             form.markSaved();
-            setSaveFailure(null);
           } catch (error) {
-            setSaveFailure(
-              saveFailureFrom(
-                t,
-                error,
-                form.applyApiError(error),
-                t("common.error.loadFailed"),
-              ),
-            );
+            presentSaveFailure(t, error, form.applyApiError);
           }
         })
       }

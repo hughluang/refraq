@@ -14,12 +14,8 @@ import { useGetLocale, useNotification, useTranslate } from "@refinedev/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { CronField } from "@/components/form/CronField";
 import { DEFAULT_DAILY_CRON } from "@/components/form/cronBuilder";
@@ -153,10 +149,8 @@ function ScheduleForm({
   const { open } = useNotification();
   const showInstant = useShowInstant();
   const displayZone = useDisplayZoneId();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<FormValues>({
     initialValues: valuesFromTask(schedule, cronTimezone),
-    onValuesChange: () => setSaveFailure(null),
   });
   const cron = form.values.cron.trim();
   const startAt = wallToInstant(form.values.startWall, cronTimezone);
@@ -262,14 +256,11 @@ function ScheduleForm({
         return;
       }
       form.markSaved();
-      setSaveFailure(null);
       open?.({ type: "success", message: t("schedules.save.success") });
       onSaved();
       onClose();
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(t, err, form.applyApiError(err), String(err)),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   }
 
@@ -283,7 +274,6 @@ function ScheduleForm({
       submitting={form.submitting || showSkeleton}
       submitDisabled={!canSave}
       submitLabel={t("common.save")}
-      summary={<FormErrorSummary failure={saveFailure} />}
       onSubmit={() => void form.submit(handleSave)}
     >
     <Stack gap="sm">
@@ -456,7 +446,9 @@ function ScheduleForm({
       <TextField
         editable
         label={t("schedules.fields.name")}
-        {...form.fieldProps("name")}
+        value={form.values.name}
+        error={form.errors.name}
+        onChange={(event) => form.setFieldValue("name", event.currentTarget.value)}
       />
       <SwitchField
         editable
