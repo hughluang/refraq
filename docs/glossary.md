@@ -660,12 +660,12 @@ Avoid a permission bypass, a human account, and `super_admin` as a stand-in for 
 
 ### Checkpoint
 
-A durable cursor owned by a concrete **Data Channel** business node that reads an incremental stream. The key is the channel, the node id, and a stream. `read.changes` uses the Business Entity id as the stream and a position of `(xact, seq)`. The stored cursor moves only after a completed run with no stop node, and only forward. `draft` and `published` do not otherwise differ.
+A durable cursor owned by a concrete **Data Channel** business node that reads an incremental stream. The key is the channel, the node id, and a stream. `read.changes` and `volume.changes_dataset` each use the Business Entity id as the stream and a position of `(xact, seq)`. The stored cursor moves only after a completed run with no stop node, and only forward. `draft` and `published` do not otherwise differ.
 Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a per-schedule cursor, a framework-wide advancement rule, and a platform-derived dirty-key set.
 
 ### Dataset Reference
 
-A claim check. The value `{dataset_id, columns, count}` names a run-scoped table in the entity database and has no `relation`. The registry row is the only fact source. **Data Channel** owns the registry and the lifecycle. `backend.entity.datasets` creates, reads, and drops the table and does not own the registry. Only Dataset Query and Materialize produce one. Either producer may be a direct child of a container. One execution creates one dataset. Batch Read and Write Entity consume one.
+A claim check. The value `{dataset_id, columns, count}` names a run-scoped table in the entity database and has no `relation`. The registry row is the only fact source. **Data Channel** owns the registry and the lifecycle. `backend.entity.datasets` creates, reads, and drops the table and does not own the registry. Dataset Query, Materialize, and Changes Dataset produce one. Each producer may be a direct child of a container. One execution creates one dataset. Batch Read and Write Entity consume one.
 Avoid a `relation` on the value, rows traveling on an edge, a Read or SQL node producing one, temp table as a user concept, **Entity Table**, **Source Mirror**, an item list, and expiry with run-record retention as the only clock.
 
 ### Channel Variable

@@ -194,7 +194,7 @@ Responsibilities:
 - Expression evaluator and Code node sandbox (one reused subprocess per run; no network; allow-listed modules; time and memory limits)
 - **Dataset Reference**s as claim checks. Channel owns the dataset registry and the lifecycle: retention, the capacity ceiling, purge, and cascade with the run record. The physical tables are `backend.entity.datasets`
 - Entity writer: modes, match key, mapped attributes only, and head compatibility; writes through Entity's published row-write port. That port does not append the entity Change Log
-- **Checkpoint** store: per (channel, node, stream) cursors. `read.changes` owns entity streams. A proposal on the run becomes the stored cursor after the run completes with no stop node, and only forward
+- **Checkpoint** store: per (channel, node, stream) cursors. `read.changes` and `volume.changes_dataset` own entity streams. A proposal on the run becomes the stored cursor after the run completes with no stop node, and only forward
 - Run records: node executions (including `container_seq` and `round`), preview storage for a successful execution under a Batch Read, and `failed_node_id` when `on_error` `stop` fails the run
 - **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, a pinned version for rerun and `retry`, run-timeout checks between node executions, version supersede of unpinned runs, error workflow, `failure_streak`. User cancel kills the run's child process
 - **Webhook** catalog and the `action.webhook` node that POSTs to one saved endpoint
