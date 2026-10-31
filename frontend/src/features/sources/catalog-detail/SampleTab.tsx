@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Alert,
   Badge,
   Button,
   Group,
@@ -13,6 +12,7 @@ import {
 import { useTranslate } from "@refinedev/core";
 import { useMemo } from "react";
 
+import { StatusBadge } from "@/components/display/StatusBadge";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
@@ -180,18 +180,6 @@ export function SampleTab({ object }: SampleTabProps) {
         </Button>
       </Group>
 
-      {unstableOrder ? (
-        <Alert color="yellow" variant="light">
-          {t("catalog.sample.unstableOrder")}
-        </Alert>
-      ) : null}
-
-      {stale ? (
-        <Alert color="yellow" variant="light">
-          {t("catalog.sample.stale")}
-        </Alert>
-      ) : null}
-
       {!result ? (
         <EmptyState message={t("catalog.sample.empty")} />
       ) : (
@@ -210,6 +198,20 @@ export function SampleTab({ object }: SampleTabProps) {
               <Text size="sm" c="dimmed">
                 {t("catalog.sample.duration", { ms: result.duration_ms })}
               </Text>
+              {unstableOrder ? (
+                <StatusBadge
+                  tone="warning"
+                  labelKey="catalog.sample.unstableOrder.badge"
+                  explanation={t("catalog.sample.unstableOrder")}
+                />
+              ) : null}
+              {stale ? (
+                <StatusBadge
+                  tone="warning"
+                  labelKey="catalog.sample.outdated"
+                  explanation={t("catalog.sample.stale")}
+                />
+              ) : null}
               {result.truncated ? (
                 <Badge color="yellow">{t("catalog.sample.truncated")}</Badge>
               ) : null}

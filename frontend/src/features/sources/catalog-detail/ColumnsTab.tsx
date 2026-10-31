@@ -14,6 +14,7 @@ import { useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 import { FillColumn } from "@/components/layout/FillColumn";
@@ -112,13 +113,25 @@ export function ColumnsTab({
     (query: PageQuery) => offsetPageFromItems(filteredRef.current, query),
     [],
   );
+  const translateRef = useRef(t);
+  translateRef.current = t;
+  const reloadRef = useRef<() => Promise<void>>(async () => {});
+  const onError = useCallback((error: unknown) => {
+    presentProblemNotification(translateRef.current, error, {
+      onRetry: () => {
+        void reloadRef.current();
+      },
+    });
+  }, []);
   const list = usePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
     resetDeps: [q, filter, object.id, reloadEpoch, filteredIds],
     filtered: isFiltered,
     initialLoading: false,
+    onError,
   });
+  reloadRef.current = list.reload;
 
   const updateDraft = (columnId: string, patch: Partial<ColumnDraft>) => {
     setDrafts((prev) => ({
