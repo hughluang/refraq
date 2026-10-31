@@ -671,6 +671,7 @@
   "feedback.success.title": "{{outcome}}：{{record}}",
   "feedback.undo": "撤销",
   "feedback.undo.done": "已撤销",
+  "feedback.repeated": "已重复 {{count}} 次",
   "common.loading": "加载中",
   "common.empty": "暂无数据",
   "common.noMatch": "无匹配结果",

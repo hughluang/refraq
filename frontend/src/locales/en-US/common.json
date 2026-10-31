@@ -671,6 +671,7 @@
   "feedback.success.title": "{{outcome}} — {{record}}",
   "feedback.undo": "Undo",
   "feedback.undo.done": "Undone",
+  "feedback.repeated": "Repeated {{count}} times",
   "common.loading": "Loading",
   "common.empty": "No data",
   "common.noMatch": "No Matching Results",
