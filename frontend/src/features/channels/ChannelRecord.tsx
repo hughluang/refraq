@@ -31,19 +31,15 @@ import {
   useState,
 } from "react";
 
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { FormDialog } from "@/components/form/FormDialog";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { JobReference } from "@/components/display/JobReference";
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
-import { StaleNotice } from "@/components/display/StaleNotice";
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentChannelActive, presentJobStatus } from "@/components/display/statusTone";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { AdjustmentsIcon, ListIcon, VariableIcon, VersionsIcon } from "@/components/icons";
 import { NumberField } from "@/components/form/NumberField";
@@ -95,8 +91,9 @@ import {
 import { formatGraphProblem } from "@/features/channels/problemLabel";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
-import { useLiveStatus } from "@/hooks/useLiveStatus";
-import { ApiError } from "@/lib/api";
+import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
+import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
+import { ApiError, isSessionExpiredError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
 import type {
@@ -163,10 +160,8 @@ function ChannelCreate() {
     resource: ModuleId.channels,
     action: ModuleAction.edit,
   });
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm({
     initialValues: { name: "", description: "" },
-    onValuesChange: () => setSaveFailure(null),
   });
   const [tagDraft, setTagDraft] = useState<{ tag_ids: string[]; names: string[] }>({
     tag_ids: [],
@@ -214,19 +209,11 @@ function ChannelCreate() {
             open?.({ type: "success", message: t("channels.create.success") });
             window.location.replace(`/console/channels/${created.channel.id}/edit`);
           } catch (error) {
-            setSaveFailure(
-              saveFailureFrom(
-                t,
-                error,
-                form.applyApiError(error),
-                t("channels.save.failed"),
-              ),
-            );
+            presentSaveFailure(t, error, form.applyApiError);
           }
         })}
       >
         <Stack gap="sm">
-          <FormErrorSummary failure={saveFailure} />
           <IdentityFields form={form} editable />
           <ChannelTagsControl
             ref={tagsControl}
@@ -271,9 +258,8 @@ function ChannelExisting({
   const [ports, setPorts] = useState<RefinedPort[]>([]);
   const [expressionContext, setExpressionContext] = useState<ExpressionContext | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<ApiError | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [panel, setPanel] = useState<"versions" | "runs" | "variables" | null>(null);
   const [preview, setPreview] = useState<Confirmation | null>(null);
   const [publishJobId, setPublishJobId] = useState<string | null>(null);
@@ -287,7 +273,6 @@ function ChannelExisting({
   const nameEditorRef = useRef<ChannelNameHeadingHandle>(null);
   const form = useConsoleForm<IdentityValues>({
     initialValues: { name: "", description: "", active: false },
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       name: (value) => {
         const trimmed = value.trim();
@@ -319,7 +304,7 @@ function ChannelExisting({
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setLoadError(null);
+    setLoadFailed(false);
     loadedChannelRef.current = null;
     validateSeq.current += 1;
     setProblems([]);
@@ -347,6 +332,11 @@ function ChannelExisting({
     void Promise.all([getChannel(channelId), getDraft(channelId), listNodeTypes()])
       .then(([channelBody, draft, types]) => {
         if (cancelled) return;
+        if (!channelBody.channel || !draft.graph) {
+          setChannel(null);
+          setGraph(null);
+          return;
+        }
         loadedChannelRef.current = channelId;
         arrivalRef.current = true;
         setChannel(channelBody.channel);
@@ -363,9 +353,11 @@ function ChannelExisting({
         formRef.current.markSaved();
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
-          setLoadError(error instanceof ApiError ? error : null);
-        }
+        if (cancelled) return;
+        setLoadFailed(true);
+        presentProblemNotification(t, error, {
+          onRetry: () => setReloadToken((value) => value + 1),
+        });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -387,12 +379,31 @@ function ChannelExisting({
   const draftEditable = draftAccess === "edit";
   const canStop = Boolean(canWrite?.can || canJobs?.can);
   const runJobId = sessionRun?.run.job_id ?? null;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const retryRunRef = useRef<() => Promise<void>>(async () => {});
+  const reportRefreshFailure = (result: LiveRefreshResult) => {
+    if (result.ok) return;
+    if (isSessionExpiredError(result.error)) return;
+    presentProblemNotification(tRef.current, result.error, {
+      onRetry: () => {
+        void retryRunRef.current();
+      },
+    });
+  };
   const runLive = useLiveStatus({
     enabled: Boolean(runJobId),
     key: runJobId,
+    onRefreshResult: reportRefreshFailure,
     fetch: (signal) => getRun(channelId, runJobId ?? "", { signal }),
     isTerminal: (detail) => isTerminalRun(detail.run.status),
   });
+  retryRunRef.current = () => runLive.refresh();
+  const runSessionExpired = isSessionExpiredError(runLive.error);
+  const runFreshness =
+    runLive.data && runLive.stale && !runSessionExpired
+      ? { updatedAt: runLive.lastSuccessAt, onRefresh: () => void retryRunRef.current() }
+      : null;
   useEffect(() => {
     if (runLive.data) setSessionRun(runLive.data);
   }, [runLive.data]);
@@ -504,18 +515,17 @@ function ChannelExisting({
   if (loading) {
     return <PageChrome title={t("channels.title")} status="loading" />;
   }
-  if (loadError || !channel || !graph) {
+  if (loadFailed) {
     return (
       <PageChrome
         title={t("channels.title")}
-        status={loadError ? "error" : "notFound"}
-        errorMessage={
-          loadError ? problemMessage(t, loadError, t("channels.load.failed")) : undefined
-        }
-        requestId={loadError?.requestId}
-        onRetry={loadError ? () => setReloadToken((value) => value + 1) : undefined}
+        status="unloaded"
+        onRetry={() => setReloadToken((value) => value + 1)}
       />
     );
+  }
+  if (!channel || !graph) {
+    return <PageChrome title={t("channels.title")} status="notFound" />;
   }
   if (mode === "edit" && canWrite?.can === false) {
     return <PageChrome title={t("channels.title")} status="loading" />;
@@ -1050,18 +1060,10 @@ function ChannelExisting({
             try {
               await persist();
               form.markSaved();
-              setSaveFailure(null);
               open?.({ type: "success", message: t("channels.edit.success") });
             } catch (error) {
               if (error instanceof RecordInvalid || error instanceof PageMutationOccupied) throw error;
-              setSaveFailure(
-                saveFailureFrom(
-                  t,
-                  error,
-                  form.applyApiError(error),
-                  t("channels.save.failed"),
-                ),
-              );
+              presentSaveFailure(t, error, form.applyApiError);
             } finally {
               releasePage();
             }
@@ -1075,20 +1077,18 @@ function ChannelExisting({
         )}
       />
       <FillColumn>
-        <FormErrorSummary failure={saveFailure} />
-        <LiveStatusAnnouncer
-          text={
-            runLive.data
-              ? t(presentJobStatus(runLive.data.run.status).labelKey)
-              : ""
-          }
-        />
-        {runLive.stale ? (
-          <StaleNotice
-            hasData={sessionRun != null || runLive.data != null}
-            onRetry={() => void runLive.refresh()}
+        <Group gap="xs" wrap="nowrap" align="center">
+          <LiveStatusAnnouncer
+            text={
+              runLive.data
+                ? t(presentJobStatus(runLive.data.run.status).labelKey)
+                : ""
+            }
           />
-        ) : null}
+          {runLive.data ? (
+            <JobStatusBadge status={runLive.data.run.status} freshness={runFreshness} />
+          ) : null}
+        </Group>
         <ChannelCanvas
           key={draftEpoch}
           channelId={channelId}
