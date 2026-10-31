@@ -38,6 +38,7 @@ import {
   IconFilter,
   IconForms,
   IconHandFinger,
+  IconHistory,
   IconInbox,
   IconIdBadge,
   IconInfoCircle,
@@ -148,6 +149,7 @@ export const LayoutRowsIcon = withDefaults(IconLayoutRows);
 export const FilterIcon = withDefaults(IconFilter);
 export const FormsIcon = withDefaults(IconForms);
 export const HandFingerIcon = withDefaults(IconHandFinger);
+export const HistoryIcon = withDefaults(IconHistory);
 export const JoinIcon = withDefaults(IconArrowsJoin2);
 export const HttpIcon = withDefaults(IconWorldWww);
 export const MailIcon = withDefaults(IconMail);

@@ -1117,7 +1117,9 @@ function ChannelExisting({
               ? t("channels.run.writesUpTo", { node: runNodeName })
               : t("channels.run.writes")}
           </Text>
-          {graph?.nodes.some((node) => node.type === "read.changes") ? (
+          {graph?.nodes.some(
+            (node) => node.type === "read.changes" || node.type === "volume.changes_dataset",
+          ) ? (
             <>
               <Text size="sm">
                 {runNodeName != null

@@ -508,6 +508,50 @@ describe("ChannelRecord draft access", () => {
     });
   });
 
+  it("offers to ignore checkpoints when the graph only has a changes dataset", async () => {
+    const graph = {
+      nodes: [
+        {
+          id: "nd_1",
+          ref: "run_manually",
+          type: "trigger.manual",
+          name: "Start",
+          position: { x: 40, y: 40 },
+          config: {},
+          on_error: "stop" as const,
+          retry: null,
+        },
+        {
+          id: "nd_2",
+          ref: "changes_dataset",
+          type: "volume.changes_dataset",
+          name: "Changes Dataset",
+          position: { x: 240, y: 40 },
+          config: { entity_id: "ent_1" },
+          on_error: "stop" as const,
+          retry: null,
+        },
+      ],
+      edges: [],
+      settings: EMPTY_GRAPH.settings,
+    };
+    vi.mocked(getDraft).mockResolvedValue({ draft_revision: 1, draft_updated_at: now, graph });
+    vi.mocked(listNodeTypes).mockResolvedValue({
+      items: [
+        { ...spec, type: "trigger.manual" },
+        { ...spec, type: "volume.changes_dataset", family: "volume", trigger: false },
+      ],
+    });
+
+    await renderRecord("edit");
+    fireEvent.click(await screen.findByRole("button", { name: "channels.run.open" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("switch", { name: /channels\.run\.ignoreCheckpoints/ }),
+    ).toBeTruthy();
+    expect(dialog.textContent).toContain("channels.run.ignoreCheckpointsHint");
+  });
+
   it("enqueues one run when confirm is clicked twice in one turn", async () => {
     vi.mocked(getDraft).mockResolvedValue({
       draft_revision: 1,

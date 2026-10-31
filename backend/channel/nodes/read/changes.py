@@ -185,7 +185,8 @@ NODE_TYPE = NodeType(
     description=(
         "Reads the entity Change Log after this node's checkpoint and below a "
         "snapshot bound fixed for the run. The checkpoint advances only when "
-        "the whole run completes. Entries the source filter hides still count."
+        "the whole run completes. Entries the source filter hides still count. "
+        "Use Changes Dataset to read more than one page in a run."
     ),
     trigger=False,
     inputs=(MAIN_INPUT,),

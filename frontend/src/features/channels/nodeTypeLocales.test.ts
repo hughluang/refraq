@@ -163,6 +163,37 @@ describe("channel node type locales", () => {
     expect(enMessages["channels.config.fields.volume.batch_read.dataset"]).not.toBe("dataset");
   });
 
+  it("names Changes Dataset and states its limit in both languages", () => {
+    const enMessages = en as Record<string, string>;
+    const zhMessages = zh as Record<string, string>;
+    const keys = [
+      "channelNodeTypes.volume.changes_dataset.label",
+      "channelNodeTypes.volume.changes_dataset.summary",
+      "channels.config.fields.volume.changes_dataset.entity_id",
+      "channels.config.fields.volume.changes_dataset.entity_id.description",
+      "channels.config.fields.volume.changes_dataset.sources",
+      "channels.config.fields.volume.changes_dataset.sources.description",
+      "channels.config.fields.volume.changes_dataset.limit",
+      "channels.config.fields.volume.changes_dataset.limit.description",
+      "channels.config.fields.volume.changes_dataset.statement_timeout_sec",
+      "channels.config.fields.volume.changes_dataset.statement_timeout_sec.description",
+    ];
+    for (const key of keys) {
+      expect(enMessages[key], key).toBeTruthy();
+      expect(zhMessages[key], key).toBeTruthy();
+      expect(zhMessages[key]).not.toBe(enMessages[key]);
+    }
+    expect(enMessages["channelNodeTypes.volume.changes_dataset.label"]).toBe("Changes Dataset");
+    expect(enMessages["channelNodeTypes.volume.changes_dataset.description"]).toBeUndefined();
+    expect(zhMessages["channelNodeTypes.volume.changes_dataset.description"]).toBeUndefined();
+    expect(enMessages["channels.config.fields.volume.changes_dataset.limit.description"]).toBe(
+      "Maximum change-log entries scanned in one execution, including entries the source filter hides. Default 1000000. Range 1–10000000.",
+    );
+    expect(zhMessages["channels.config.fields.volume.changes_dataset.limit.description"]).toBe(
+      "\u4e00\u6b21\u6267\u884c\u6700\u591a\u626b\u63cf\u7684\u53d8\u66f4\u65e5\u5fd7\u6761\u76ee\u6570\uff0c\u5305\u542b\u88ab\u6765\u6e90\u8fc7\u6ee4\u85cf\u6389\u7684\u6761\u76ee\u3002\u9ed8\u8ba4 1000000\u3002\u8303\u56f4 1\u201310000000\u3002",
+    );
+  });
+
   it("names Until, its fields, and the parent frame sentence in both languages", () => {
     const enMessages = en as Record<string, string>;
     const zhMessages = zh as Record<string, string>;
