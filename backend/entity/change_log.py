@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -360,25 +360,7 @@ def list_entries(
         {"entity_id": entity_id},
     ).mappings()
     target = _ImageTarget(attributes)
-    entries: list[ChangeLogEntry] = []
-    for row in rows:
-        before_raw, after_raw = _rebuild(
-            str(row["operation"]), _image_dict(row["image"])
-        )
-        entries.append(
-            ChangeLogEntry(
-                entity_id=str(row["entity_id"]),
-                physical_table=str(row["physical_table"]),
-                operation=str(row["operation"]),
-                sequence=int(row["seq"]),
-                occurred_at=row["occurred_at"],
-                source=None if row["source"] is None else str(row["source"]),
-                subject=None if row["subject"] is None else str(row["subject"]),
-                before=_decode_image(conn, before_raw, attributes, target),
-                after=_decode_image(conn, after_raw, attributes, target),
-            )
-        )
-    return entries
+    return _entries_decoded(conn, list(rows), lambda _row: target)
 
 
 def read_change_log(
@@ -432,18 +414,20 @@ def read_change_log(
         identity_sql, identity_params = _row_identity_sql(tables, row_identity)
         clauses.append(identity_sql)
         params.update(identity_params)
-    rows = conn.execute(
-        text(
-            "SELECT entity_id, physical_table, operation, seq, occurred_at, "
-            "source, subject, image "
-            f"FROM {_entry_table()} "
-            f"WHERE {' AND '.join(clauses)} "
-            "ORDER BY seq DESC "
-            "LIMIT :lim"
-        ),
-        params,
-    ).mappings()
-    items = [_entry_from_row(conn, row, tables) for row in rows]
+    rows = list(
+        conn.execute(
+            text(
+                "SELECT entity_id, physical_table, operation, seq, occurred_at, "
+                "source, subject, image "
+                f"FROM {_entry_table()} "
+                f"WHERE {' AND '.join(clauses)} "
+                "ORDER BY seq DESC "
+                "LIMIT :lim"
+            ),
+            params,
+        ).mappings()
+    )
+    items = _entries_from_rows(conn, rows, tables)
     next_before = items[-1].sequence if len(items) == CHANGE_LOG_PAGE_LIMIT else None
     return ChangeLogPage(
         items=items,
@@ -548,10 +532,47 @@ def read_entries_after(
     )
     has_more = len(rows) > limit
     page = rows[:limit]
+    entries = _entries_from_rows(conn, page, tables)
     return (
-        [(_entry_from_row(conn, row, tables), int(row["xact_n"])) for row in page],
+        [
+            (entry, int(row["xact_n"]))
+            for entry, row in zip(entries, page, strict=True)
+        ],
         has_more,
     )
+
+
+def _entries_from_rows(
+    conn: Connection,
+    rows: Sequence[Mapping[str, Any]],
+    tables: Sequence[ChangeLogTable],
+) -> list[ChangeLogEntry]:
+    return _entries_decoded(
+        conn,
+        rows,
+        lambda row: _target_for(str(row["physical_table"]), tables),
+    )
+
+
+def _entries_decoded(
+    conn: Connection,
+    rows: Sequence[Mapping[str, Any]],
+    target_for_row: Callable[[Mapping[str, Any]], _ImageTarget],
+) -> list[ChangeLogEntry]:
+    """One page: rebuild each image, decode the page once, keep entry order."""
+    slots: list[tuple[dict[str, Any] | None, _ImageTarget]] = []
+    for row in rows:
+        target = target_for_row(row)
+        before_raw, after_raw = _rebuild(
+            str(row["operation"]), _image_dict(row["image"])
+        )
+        slots.append((before_raw, target))
+        slots.append((after_raw, target))
+    decoded = _decode_images(conn, slots)
+    return [
+        _entry_from_decoded(row, decoded[index * 2], decoded[index * 2 + 1])
+        for index, row in enumerate(rows)
+    ]
 
 
 def _entry_from_row(
@@ -562,16 +583,28 @@ def _entry_from_row(
     physical = str(row["physical_table"])
     target = _target_for(physical, tables)
     before_raw, after_raw = _rebuild(str(row["operation"]), _image_dict(row["image"]))
+    return _entry_from_decoded(
+        row,
+        _decode_image(conn, before_raw, target.attributes, target),
+        _decode_image(conn, after_raw, target.attributes, target),
+    )
+
+
+def _entry_from_decoded(
+    row: Mapping[str, Any],
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> ChangeLogEntry:
     return ChangeLogEntry(
         entity_id=str(row["entity_id"]),
-        physical_table=physical,
+        physical_table=str(row["physical_table"]),
         operation=str(row["operation"]),
         sequence=int(row["seq"]),
         occurred_at=row["occurred_at"],
         source=None if row["source"] is None else str(row["source"]),
         subject=None if row["subject"] is None else str(row["subject"]),
-        before=_decode_image(conn, before_raw, target.attributes, target),
-        after=_decode_image(conn, after_raw, target.attributes, target),
+        before=before,
+        after=after,
     )
 
 
@@ -851,6 +884,195 @@ def _physical_cast(attr: AttributeRecord, target: _ImageTarget) -> str:
     return resolve(attr.type).physical_sql(attr)
 
 
+_ROW_ID_KEY = "'row_id'"
+
+
+def _cast_as(extracted: str, physical: str) -> str:
+    """``CAST((extracted) AS physical)``. One image and both page shapes share this."""
+    return f"CAST(({extracted}) AS {physical})"
+
+
+def _cast_expr(jsonb_expr: str, key_expr: str, physical: str) -> str:
+    """``CAST((jsonb ->> key) AS physical)``."""
+    return _cast_as(f"{jsonb_expr} ->> {key_expr}", physical)
+
+
+def _guarded_cast(group: int, key_expr: str, physical: str) -> str:
+    """``->>`` then ``CAST``, only when this image's target matches.
+
+    The same attribute name may use a different physical type on another
+    table in the page. ``target`` selects the image's own cast.
+    """
+    extracted = f"CASE WHEN target = {group} THEN CAST(img AS jsonb) ->> {key_expr} END"
+    return _cast_as(extracted, physical)
+
+
+def _cast_columns(
+    attributes: Sequence[AttributeRecord],
+    target: _ImageTarget,
+    params: dict[str, Any],
+    *,
+    key_prefix: str,
+    project: Callable[[str, str], str],
+    column_alias: Callable[[int], str],
+) -> list[str]:
+    """``row_id``, then each attribute, in list order.
+
+    ``project`` is ``(key_expr, physical) -> CAST expression``. Names are
+    bound parameters. ``column_alias`` names column 0, then each attribute.
+    """
+    selects = [f"{project(_ROW_ID_KEY, 'bigint')} AS {column_alias(0)}"]
+    for index, attr in enumerate(attributes):
+        key = f"{key_prefix}{index}"
+        params[key] = attr.name
+        physical = _physical_cast(attr, target)
+        selects.append(f"{project(f':{key}', physical)} AS {column_alias(index + 1)}")
+    return selects
+
+
+def _decode_images(
+    conn: Connection,
+    images: Sequence[tuple[dict[str, Any] | None, _ImageTarget]],
+) -> list[dict[str, Any] | None]:
+    """Decode the non-null images of one page in one statement.
+
+    A null image stays None and is not sent. A page that mixes physical
+    tables still sends one statement. Each column is cast only for the
+    target that owns it, with that target's ``_physical_cast`` type.
+    """
+    decoded: list[dict[str, Any] | None] = [None] * len(images)
+    pending: list[tuple[int, dict[str, Any], _ImageTarget]] = []
+    for index, (image, target) in enumerate(images):
+        if image is not None:
+            pending.append((index, image, target))
+    if not pending:
+        return decoded
+    groups, owners = _assign_groups(pending)
+    payload = [image for _index, image, _target in pending]
+    if len(groups) == 1:
+        rows = _decode_target_page(conn, groups[0], payload)
+    else:
+        rows = _decode_mixed_page(conn, groups, payload, owners)
+    _store_decoded(decoded, pending, rows, owners)
+    return decoded
+
+
+def _assign_groups(
+    pending: Sequence[tuple[int, dict[str, Any], _ImageTarget]],
+) -> tuple[list[_ImageTarget], list[int]]:
+    groups: list[_ImageTarget] = []
+    seen: dict[str, int] = {}
+    owners: list[int] = []
+    for _index, _image, target in pending:
+        key = _target_key(target)
+        gid = seen.get(key)
+        if gid is None:
+            gid = len(groups)
+            seen[key] = gid
+            groups.append(target)
+        owners.append(gid)
+    return groups, owners
+
+
+def _target_key(target: _ImageTarget) -> str:
+    snaps = json.dumps(dict(target.head.reference_snapshots), sort_keys=True)
+    identity = [
+        (
+            attr.name,
+            attr.type,
+            attr.max_length,
+            attr.precision,
+            attr.scale,
+            attr.dictionary_id,
+            attr.target_entity_id,
+        )
+        for attr in target.attributes
+    ]
+    return json.dumps({"attributes": identity, "snapshots": snaps}, sort_keys=True)
+
+
+def _decode_target_page(
+    conn: Connection,
+    target: _ImageTarget,
+    images: Sequence[dict[str, Any]],
+) -> Sequence[Mapping[str, Any]]:
+    params: dict[str, Any] = {"payload": json.dumps(list(images))}
+    jsonb_expr = "CAST(img AS jsonb)"
+    selects = _cast_columns(
+        target.attributes,
+        target,
+        params,
+        key_prefix="k",
+        project=lambda key_expr, physical: _cast_expr(jsonb_expr, key_expr, physical),
+        column_alias=lambda index: ident(f"g0c{index}"),
+    )
+    return list(
+        conn.execute(
+            text(
+                "SELECT n, "
+                + ", ".join(selects)
+                + " FROM jsonb_array_elements(CAST(:payload AS jsonb))"
+                " WITH ORDINALITY AS s(img, n)"
+            ),
+            params,
+        ).mappings()
+    )
+
+
+def _decode_mixed_page(
+    conn: Connection,
+    groups: Sequence[_ImageTarget],
+    images: Sequence[dict[str, Any]],
+    owners: Sequence[int],
+) -> Sequence[Mapping[str, Any]]:
+    payload = [
+        {"t": owners[index], "img": image} for index, image in enumerate(images)
+    ]
+    params: dict[str, Any] = {"payload": json.dumps(payload)}
+    selects: list[str] = []
+    for gid, target in enumerate(groups):
+        selects.extend(
+            _cast_columns(
+                target.attributes,
+                target,
+                params,
+                key_prefix=f"k{gid}_",
+                project=lambda key_expr, physical, group=gid: _guarded_cast(
+                    group, key_expr, physical
+                ),
+                column_alias=lambda index, group=gid: ident(f"g{group}c{index}"),
+            )
+        )
+    return list(
+        conn.execute(
+            text(
+                "WITH src AS ("
+                "SELECT CAST(elem ->> 't' AS integer) AS target, "
+                "elem -> 'img' AS img, n "
+                "FROM jsonb_array_elements(CAST(:payload AS jsonb)) "
+                "WITH ORDINALITY AS s(elem, n)"
+                ") SELECT n, " + ", ".join(selects) + " FROM src"
+            ),
+            params,
+        ).mappings()
+    )
+
+
+def _store_decoded(
+    decoded: list[dict[str, Any] | None],
+    pending: Sequence[tuple[int, dict[str, Any], _ImageTarget]],
+    rows: Sequence[Mapping[str, Any]],
+    owners: Sequence[int],
+) -> None:
+    by_n = {int(row["n"]): row for row in rows}
+    for ordinal, (index, _image, target) in enumerate(pending, start=1):
+        gid = owners[ordinal - 1]
+        columns = ["row_id", *[attr.name for attr in target.attributes]]
+        row = by_n[ordinal]
+        values = tuple(row[f"g{gid}c{col}"] for col in range(len(columns)))
+        decoded[index] = decode_row(columns, values, target)  # type: ignore[arg-type]
+
+
 def _decode_image(
     conn: Connection,
     image: dict[str, Any] | None,
@@ -861,15 +1083,17 @@ def _decode_image(
         return None
     columns = ["row_id", *[attr.name for attr in attributes]]
     params: dict[str, Any] = {"img": json.dumps(image)}
-    selects = ["CAST((CAST(:img AS jsonb) ->> 'row_id') AS bigint) AS row_id"]
-    for index, attr in enumerate(attributes):
-        key = f"k{index}"
-        params[key] = attr.name
-        physical = _physical_cast(attr, target)
-        selects.append(
-            f"CAST((CAST(:img AS jsonb) ->> :{key}) AS {physical}) "
-            f"AS {ident(attr.name)}"
-        )
+    jsonb_expr = "CAST(:img AS jsonb)"
+    selects = _cast_columns(
+        attributes,
+        target,
+        params,
+        key_prefix="k",
+        project=lambda key_expr, physical: _cast_expr(jsonb_expr, key_expr, physical),
+        column_alias=lambda index: (
+            "row_id" if index == 0 else ident(attributes[index - 1].name)
+        ),
+    )
     row = conn.execute(text("SELECT " + ", ".join(selects)), params).one()
     return decode_row(columns, tuple(row), target)  # type: ignore[arg-type]
 
