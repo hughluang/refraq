@@ -10,13 +10,9 @@ import {
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
 import { PasswordInput } from "@/components/form/PasswordInput";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { changeAccountPassword } from "@/features/account/api";
 
@@ -30,7 +26,6 @@ export function PasswordSection() {
   const t = useTranslate();
   const { open } = useNotification();
   const [passwordOpen, setPasswordOpen] = useState(false);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
 
   const passwordForm = useConsoleForm<PasswordForm>({
     initialValues: {
@@ -38,7 +33,6 @@ export function PasswordSection() {
       new_password: "",
       confirm_password: "",
     },
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       current_password: (value) =>
         value.length > 0 ? null : t("account.validation.required"),
@@ -53,7 +47,6 @@ export function PasswordSection() {
 
   function closePasswordModal() {
     setPasswordOpen(false);
-    setSaveFailure(null);
     passwordForm.reset();
   }
 
@@ -64,7 +57,6 @@ export function PasswordSection() {
         new_password: values.new_password,
       });
       passwordForm.markSaved();
-      setSaveFailure(null);
       passwordForm.reset();
       setPasswordOpen(false);
       open?.({
@@ -73,14 +65,7 @@ export function PasswordSection() {
         description: t("account.password.success"),
       });
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(
-          t,
-          err,
-          passwordForm.applyApiError(err),
-          t("account.password.error"),
-        ),
-      );
+      presentSaveFailure(t, err, passwordForm.applyApiError);
     }
   }
 
@@ -99,7 +84,6 @@ export function PasswordSection() {
         dirty={passwordForm.dirty}
         submitting={passwordForm.submitting}
         submitLabel={t("account.password.save")}
-        summary={<FormErrorSummary failure={saveFailure} />}
         onSubmit={() => void passwordForm.submit(onChangePassword)}
       >
         <Stack gap="md">

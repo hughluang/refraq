@@ -7,7 +7,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { type ConsoleMutation } from "@/components/feedback/consoleAction";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
-import { saveFailureFrom, type SaveFailure } from "@/components/form/FormErrorSummary";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import {
   dismissConsoleNotification,
   presentConsoleNotification,
@@ -25,7 +25,6 @@ export type ConsoleMutationController = {
   submitting: boolean;
   activeKey: string | null;
   isSubmitting: (key: string) => boolean;
-  failure: SaveFailure | null;
   dialog: ReactNode;
 };
 
@@ -33,19 +32,11 @@ function successTitle(t: Translate, outcome: string, recordName: string) {
   return t("feedback.success.title", { outcome, record: recordName });
 }
 
-function reportFailure(
-  t: Translate,
-  operation: ConsoleMutation,
-  error: unknown,
-  setFailure: (failure: SaveFailure | null) => void,
-) {
+function reportFailure(t: Translate, operation: ConsoleMutation, error: unknown) {
   if (operation.applyApiError) {
-    setFailure(
-      saveFailureFrom(t, error, operation.applyApiError(error), t("problems.unknown")),
-    );
+    presentSaveFailure(t, error, operation.applyApiError);
     return;
   }
-  setFailure(null);
   presentProblemNotification(t, error);
 }
 
@@ -63,7 +54,6 @@ export function useConsoleMutation(): ConsoleMutationController {
   const pendingRef = useRef<PendingConfirm | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
-  const [failure, setFailure] = useState<SaveFailure | null>(null);
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
 
   function release() {
@@ -76,7 +66,7 @@ export function useConsoleMutation(): ConsoleMutationController {
     try {
       await operation.onSuccess?.();
     } catch (error) {
-      reportFailure(t, operation, error, setFailure);
+      reportFailure(t, operation, error);
     }
   }
 
@@ -109,14 +99,13 @@ export function useConsoleMutation(): ConsoleMutationController {
     inFlight.current = true;
     setSubmitting(true);
     setActiveKey(operation.key ?? null);
-    setFailure(null);
     try {
       await operation.execute();
       pendingRef.current = null;
       setConfirm(null);
       announceSuccess(operation);
     } catch (error) {
-      reportFailure(t, operation, error, setFailure);
+      reportFailure(t, operation, error);
       return;
     } finally {
       release();
@@ -136,7 +125,7 @@ export function useConsoleMutation(): ConsoleMutationController {
         title: successTitle(t, t("feedback.undo.done"), operation.recordName),
       });
     } catch (error) {
-      reportFailure(t, operation, error, setFailure);
+      reportFailure(t, operation, error);
       return;
     } finally {
       release();
@@ -184,7 +173,6 @@ export function useConsoleMutation(): ConsoleMutationController {
     submitting,
     activeKey,
     isSubmitting: (key: string) => submitting && activeKey === key,
-    failure,
     dialog,
   };
 }

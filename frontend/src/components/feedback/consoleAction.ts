@@ -35,8 +35,8 @@ export type ConsoleMutation = ConsoleAction & {
   /** Refresh the list or record after the verb, and again after a successful undo. */
   onSuccess?: () => void | Promise<void>;
   /**
-   * When set, field and form errors stay on the form frame
-   * (`saveFailureFrom` / `FormErrorSummary`) instead of an error notification.
+   * When set, mapped 422 details stay on the fields.
+   * Every other failure is one error notification from `presentSaveFailure`.
    */
   applyApiError?: (error: unknown) => ApplyApiErrorResult;
   /** Identifies the triggering control when one hook serves several. */

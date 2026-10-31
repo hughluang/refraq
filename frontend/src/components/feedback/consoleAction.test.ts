@@ -1,12 +1,11 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { notifications } from "@mantine/notifications";
+import { notifications, notificationsStore } from "@mantine/notifications";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FormErrorSummary } from "@/components/form/FormErrorSummary";
 import { ApiError } from "@/lib/api";
 import { ConsoleNotifications } from "@/providers/notification-provider";
 
@@ -70,16 +69,24 @@ function shell(node: ReactNode) {
   );
 }
 
+function resetNotifications() {
+  const state = notificationsStore.getState();
+  for (const item of [...state.notifications, ...state.queue]) {
+    notifications.hide(item.id);
+  }
+  notifications.clean();
+}
+
 describe("console actions", () => {
   beforeEach(() => {
     stubDomApis();
     copy.text.mockClear();
-    notifications.clean();
+    resetNotifications();
   });
 
   afterEach(() => {
     cleanup();
-    notifications.clean();
+    resetNotifications();
   });
 
   it("confirm focuses Cancel and names the record", async () => {
@@ -245,7 +252,7 @@ describe("console actions", () => {
     });
   });
 
-  it("routes a form error through the save summary and keeps server text in the disclosure", async () => {
+  it("shows one error notification when a save is rejected", async () => {
     const { useConsoleMutation } = await import("@/components/feedback/useConsoleMutation");
 
     function Harness() {
@@ -272,25 +279,215 @@ describe("console actions", () => {
           },
           "Save",
         ),
-        mutation.failure
-          ? createElement(FormErrorSummary, { failure: mutation.failure })
-          : null,
+        createElement(
+          "span",
+          { "data-testid": "stored-failure" },
+          "failure" in mutation ? "stored" : "none",
+        ),
       );
     }
 
     render(shell(createElement(Harness)));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Something went wrong. Try again.");
-    expect(alert.textContent).not.toMatch(/^Raw English detail/);
-    expect(alert.querySelector("summary")?.textContent).toBe("Details");
-    expect(alert.textContent).toContain("Raw English detail");
-    expect(alert.textContent).toContain("req-9");
-    fireEvent.click(screen.getByRole("button", { name: "Copy details" }));
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    const title = screen.getByText("Something went wrong. Try again.");
+    expect(title.closest("details")).toBeNull();
+    fireEvent.click(screen.getByText("Details"));
+    expect(screen.getByText("Raw English detail").closest("details")).toBeTruthy();
+    expect(screen.getByText("Request ID: req-9").closest("details")).toBeTruthy();
+    expect(screen.queryByText("Saved — Intake")).toBeNull();
+    expect(screen.getByTestId("stored-failure").textContent).toBe("none");
+  });
+
+  it("shows one error notification when a 422 matches no field", async () => {
+    const { useConsoleMutation } = await import("@/components/feedback/useConsoleMutation");
+    const { useConsoleForm } = await import("@/components/form/useConsoleForm");
+
+    function Harness() {
+      const mutation = useConsoleMutation();
+      const form = useConsoleForm({ initialValues: { account: "", host: "" } });
+      return createElement(
+        "div",
+        null,
+        createElement("input", { "aria-label": "Account", ...form.fieldProps("account") }),
+        createElement("input", { "aria-label": "Host", ...form.fieldProps("host") }),
+        createElement("pre", { "data-testid": "errors" }, JSON.stringify(form.errors)),
+        createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => {
+              mutation.run({
+                safety: "immediate",
+                recordName: "Intake",
+                outcome: "Saved",
+                applyApiError: (error) => form.applyApiError(error),
+                execute: () =>
+                  Promise.reject(
+                    new ApiError(422, "REQUEST_INVALID", "Request validation failed", "req-422", {}, [
+                      { field: "missing", message: "Nope" },
+                    ]),
+                  ),
+              });
+            },
+          },
+          "Save",
+        ),
+      );
+    }
+
+    render(shell(createElement(Harness)));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByTestId("errors").textContent).toBe("{}");
+    fireEvent.click(screen.getByText("Details"));
+    const disclosure = screen.getByText("missing: Nope").closest("details");
+    expect(disclosure).toBeTruthy();
+    expect(disclosure?.textContent).toContain("Request validation failed");
+    expect(disclosure?.textContent).not.toContain("Saved — Intake");
+  });
+
+  it("marks every mapped field and sends no notification for a fully mapped 422", async () => {
+    const { useConsoleMutation } = await import("@/components/feedback/useConsoleMutation");
+    const { useConsoleForm } = await import("@/components/form/useConsoleForm");
+
+    function Harness() {
+      const mutation = useConsoleMutation();
+      const form = useConsoleForm({ initialValues: { account: "", host: "" } });
+      return createElement(
+        "div",
+        null,
+        createElement("input", { "aria-label": "Account", ...form.fieldProps("account") }),
+        createElement("input", { "aria-label": "Host", ...form.fieldProps("host") }),
+        createElement("pre", { "data-testid": "errors" }, JSON.stringify(form.errors)),
+        createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => {
+              mutation.run({
+                safety: "immediate",
+                recordName: "Intake",
+                outcome: "Saved",
+                applyApiError: (error) => form.applyApiError(error),
+                execute: () =>
+                  Promise.reject(
+                    new ApiError(422, "REQUEST_INVALID", "Request validation failed", "req-full", {}, [
+                      { field: "account", message: "Field required" },
+                      { field: "host", message: "Bad host" },
+                    ]),
+                  ),
+              });
+            },
+          },
+          "Save",
+        ),
+      );
+    }
+
+    render(shell(createElement(Harness)));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
     await waitFor(() => {
-      expect(copy.text).toHaveBeenCalledWith("Raw English detail\nRequest ID: req-9");
+      const errors = screen.getByTestId("errors").textContent ?? "";
+      expect(errors).toContain('"account":"Field required"');
+      expect(errors).toContain('"host":"Bad host"');
     });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("Details")).toBeNull();
+    expect(screen.queryByText("Saved — Intake")).toBeNull();
+  });
+
+  it("marks the mapped fields and discloses only the unmapped details", async () => {
+    const { useConsoleMutation } = await import("@/components/feedback/useConsoleMutation");
+    const { useConsoleForm } = await import("@/components/form/useConsoleForm");
+
+    function Harness() {
+      const mutation = useConsoleMutation();
+      const form = useConsoleForm({ initialValues: { account: "", host: "" } });
+      return createElement(
+        "div",
+        null,
+        createElement("input", { "aria-label": "Account", ...form.fieldProps("account") }),
+        createElement("input", { "aria-label": "Host", ...form.fieldProps("host") }),
+        createElement("pre", { "data-testid": "errors" }, JSON.stringify(form.errors)),
+        createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => {
+              mutation.run({
+                safety: "immediate",
+                recordName: "Intake",
+                outcome: "Saved",
+                applyApiError: (error) => form.applyApiError(error),
+                execute: () =>
+                  Promise.reject(
+                    new ApiError(422, "REQUEST_INVALID", "Request validation failed", "req-part", {}, [
+                      { field: "account", message: "Field required" },
+                      { field: "missing", message: "Nope" },
+                    ]),
+                  ),
+              });
+            },
+          },
+          "Save",
+        ),
+      );
+    }
+
+    render(shell(createElement(Harness)));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    await waitFor(() => {
+      const errors = screen.getByTestId("errors").textContent ?? "";
+      expect(errors).toContain('"account":"Field required"');
+      expect(errors).not.toContain("Nope");
+    });
+    fireEvent.click(screen.getByText("Details"));
+    const disclosure = screen.getByText("Details").closest("details");
+    expect(disclosure?.textContent).toContain("missing: Nope");
+    expect(disclosure?.textContent).not.toContain("Field required");
+    expect(disclosure?.textContent).not.toContain("account:");
+  });
+
+  it("shows one error notification when a 422 carries no details", async () => {
+    const { useConsoleMutation } = await import("@/components/feedback/useConsoleMutation");
+    const { useConsoleForm } = await import("@/components/form/useConsoleForm");
+
+    function Harness() {
+      const mutation = useConsoleMutation();
+      const form = useConsoleForm({ initialValues: { account: "" } });
+      return createElement(
+        "button",
+        {
+          type: "button",
+          onClick: () => {
+            mutation.run({
+              safety: "immediate",
+              recordName: "Intake",
+              outcome: "Saved",
+              applyApiError: (error) => form.applyApiError(error),
+              execute: () =>
+                Promise.reject(
+                  new ApiError(422, "REQUEST_INVALID", "Request validation failed", "req-empty", {}, []),
+                ),
+            });
+          },
+        },
+        "Save",
+      );
+    }
+
+    render(shell(createElement(Harness)));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    fireEvent.click(screen.getByText("Details"));
+    expect(screen.getByText("Request validation failed").closest("details")).toBeTruthy();
     expect(screen.queryByText("Saved — Intake")).toBeNull();
   });
 });

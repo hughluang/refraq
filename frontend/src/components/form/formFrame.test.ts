@@ -135,7 +135,6 @@ describe("form frame", () => {
 
   it("maps 422 details onto fields, focuses the first, and keeps the rest unmapped", async () => {
     const { useConsoleForm } = await import("@/components/form/useConsoleForm");
-    const { FormErrorSummary } = await import("@/components/form/FormErrorSummary");
 
     function Probe() {
       const form = useConsoleForm({
@@ -148,12 +147,7 @@ describe("form frame", () => {
       return createElement(
         "div",
         null,
-        createElement(FormErrorSummary, {
-          message: "Could not save this form.",
-          detail: "Request validation failed",
-          requestId: "rid-1",
-          unmapped,
-        }),
+        createElement("pre", { "data-testid": "unmapped" }, JSON.stringify(unmapped)),
         createElement("input", { "aria-label": "Account", ...form.getInputProps("account") }),
         createElement("input", { "aria-label": "Host", ...form.getInputProps("host") }),
         createElement("input", { "aria-label": "Name", ...form.getInputProps("name") }),
@@ -212,13 +206,10 @@ describe("form frame", () => {
     expect(errors).toContain('"host":"Bad host"');
     expect(errors).toContain('"name":"Bad name"');
     expect(errors).not.toContain("Nope");
-    const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("Could not save this form.");
-    const disclosure = alert.querySelector("details");
-    expect(disclosure?.textContent).toContain("Request validation failed");
-    expect(disclosure?.textContent).toContain("rid-1");
-    expect(disclosure?.textContent).toContain("missing: Nope");
-    expect(alert.querySelector("summary")?.textContent).toBe("form.error.details");
+    const unmapped = screen.getByTestId("unmapped").textContent ?? "";
+    expect(unmapped).toContain('"field":"missing"');
+    expect(unmapped).toContain('"message":"Nope"');
+    expect(screen.queryByRole("alert")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Apply failure" }));
     expect(screen.getByTestId("failure").textContent).toBe("0/0");
@@ -472,9 +463,7 @@ describe("form frame", () => {
   });
 
   it("localizes the summary and keeps a fully mapped 422 on the fields", async () => {
-    const { saveFailureFrom, FormErrorSummary } = await import(
-      "@/components/form/FormErrorSummary"
-    );
+    const { saveFailureFrom } = await import("@/components/form/FormErrorSummary");
     const translate = (key: string) =>
       (
         {
@@ -515,16 +504,8 @@ describe("form frame", () => {
         "fallback",
       ),
     ).toBeNull();
-
-    if (!generic) throw new Error("expected a form-level summary");
-    render(shell(createElement(FormErrorSummary, { failure: generic })));
-    const alert = screen.getByRole("alert");
-    const disclosure = alert.querySelector("details");
-    const main = (alert.textContent ?? "").replace(disclosure?.textContent ?? "", "");
-    expect(main).toContain("Something went wrong.");
-    expect(main).not.toContain("Internal server error");
-    expect(disclosure?.textContent).toContain("Internal server error");
-    expect(disclosure?.textContent).toContain("rid-500");
+    expect(generic?.detail).toBe("Internal server error");
+    expect(generic?.requestId).toBe("rid-500");
   });
 
   it("clears dirty after a successful submit and releases suppression when submit fails", async () => {
