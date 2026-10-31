@@ -37,6 +37,8 @@ const COLOR_ALLOW: Record<string, string> = {
     "Fixture for the default brand primary.",
   "features/branding/BrandingPanel.tsx":
     "Preset swatches are the Site Branding palette input.",
+  "features/branding/BrandingPanel.test.ts":
+    "Contrast fixtures use those same preset swatches.",
 };
 
 const STATIC_TABLES: Record<string, { roots: number; reason: string }> = {
