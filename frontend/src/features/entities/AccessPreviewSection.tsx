@@ -1,16 +1,16 @@
 "use client";
 
-import { Alert, Button, Checkbox, Collapse, Group, Stack, Table, Text } from "@mantine/core";
+import { Button, Checkbox, Collapse, Group, Stack, Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
-import { previewAccess } from "@/features/entities/accessApi";
-import { presentCell, withheldNames } from "@/features/entities/accessLogic";
-import { accessProblemText } from "@/features/entities/accessProblem";
-import type { AccessRun } from "@/features/entities/accessSession";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { RecordPicker } from "@/components/form/RecordPicker";
 import { userRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { SectionHeader } from "@/components/layout/SectionHeader";
+import { previewAccess } from "@/features/entities/accessApi";
+import { presentCell, withheldNames } from "@/features/entities/accessLogic";
+import type { AccessRun } from "@/features/entities/accessSession";
 
 type PreviewColumn = { name: string; marks: string };
 type PreviewModel = { columns: PreviewColumn[]; headers: string[]; rows: string[][] };
@@ -33,7 +33,6 @@ export function AccessPreviewSection({
   const [previewUser, setPreviewUser] = useState<string | null>(null);
   const [includeRows, setIncludeRows] = useState(false);
   const [preview, setPreview] = useState<PreviewModel | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const running = busyId === "preview";
 
   return (
@@ -113,10 +112,9 @@ export function AccessPreviewSection({
                       });
                     });
                     setPreview({ columns, headers, rows });
-                    setError(null);
                   } catch (err) {
                     setPreview(null);
-                    setError(accessProblemText(err, t));
+                    presentProblemNotification(t, err);
                   }
                 })
               }
@@ -129,7 +127,6 @@ export function AccessPreviewSection({
               {t("entities.access.preview.rowsDenied")}
             </Text>
           )}
-          {error ? <Alert color="red">{error}</Alert> : null}
           {preview ? (
             <Stack gap="sm">
               <Text fw={600}>{t("entities.access.preview.columns")}</Text>

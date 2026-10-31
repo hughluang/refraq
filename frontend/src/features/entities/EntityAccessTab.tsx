@@ -1,9 +1,10 @@
 "use client";
 
-import { Alert, Box, Stack } from "@mantine/core";
+import { Box, Stack } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { AccessGrantsSection } from "@/features/entities/AccessGrantsSection";
 import { AccessLaddersSection } from "@/features/entities/AccessLaddersSection";
 import { AccessOrientation } from "@/features/entities/AccessOrientation";
@@ -17,6 +18,7 @@ import type { AccessSectionId } from "@/features/entities/accessLogic";
 import type { AccessOption, AccessRun } from "@/features/entities/accessSession";
 import type { AccessSummary } from "@/features/entities/accessTypes";
 import { listAllSubjectAttributes } from "@/features/subjects/api";
+import { presentConsoleNotification } from "@/providers/notification-provider";
 
 type Props = {
   entityId: string;
@@ -27,8 +29,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
   const t = useTranslate();
   const { open } = useNotification();
   const [summary, setSummary] = useState<AccessSummary | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ id: AccessSectionId; nonce: number }>({
     id: "grants",
@@ -39,14 +40,20 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
 
   const load = useCallback(async () => {
     const next = await getAccessSummary(entityId);
-    setLoadError(null);
+    setLoadFailed(false);
     setSummary(next);
   }, [entityId]);
 
-  const reload = useCallback(
-    () => load().catch((err: unknown) => setLoadError(accessProblemText(err, t))),
-    [load, t],
-  );
+  const reloadRef = useRef<() => Promise<void>>(async () => {});
+
+  const reload = useCallback(() => {
+    return load().catch((err: unknown) => {
+      setLoadFailed(true);
+      presentProblemNotification(t, err, { onRetry: () => void reloadRef.current() });
+    });
+  }, [load, t]);
+
+  reloadRef.current = reload;
 
   const focusSection = (id: AccessSectionId) => {
     setFocus((current) => ({ id, nonce: current.nonce + 1 }));
@@ -68,21 +75,30 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
     void reload();
   }, [reload]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setOptionsError(null);
+  const optionsGeneration = useRef(0);
+  const loadOptionsRef = useRef<() => void>(() => {});
+
+  const loadOptions = useCallback(() => {
+    const generation = ++optionsGeneration.current;
     void listAllSubjectAttributes()
       .then((items) => {
-        if (cancelled) return;
+        if (generation !== optionsGeneration.current) return;
         setSubjectAttrs(items.map((row) => ({ value: row.key, label: row.name })));
       })
       .catch((err: unknown) => {
-        if (!cancelled) setOptionsError(accessProblemText(err, t));
+        if (generation !== optionsGeneration.current) return;
+        presentProblemNotification(t, err, { onRetry: () => loadOptionsRef.current() });
       });
-    return () => {
-      cancelled = true;
-    };
   }, [t]);
+
+  loadOptionsRef.current = loadOptions;
+
+  useEffect(() => {
+    loadOptions();
+    return () => {
+      optionsGeneration.current += 1;
+    };
+  }, [loadOptions]);
 
   const notify = (ok: boolean, detail?: string) => {
     open?.({
@@ -109,14 +125,12 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
     }
   };
 
-  const collectionLoading = summary == null && loadError == null;
-  const collectionError = summary == null ? loadError : null;
+  const collectionLoading = summary == null && !loadFailed;
+  const collectionError = summary == null && loadFailed ? "failed" : null;
   const reloadCollection = () => reload();
 
   return (
     <Stack gap="xl">
-      {summary && loadError ? <Alert color="red">{loadError}</Alert> : null}
-      {optionsError ? <Alert color="red">{optionsError}</Alert> : null}
       {summary ? <AccessPolicySummary summary={summary} /> : null}
       {summary ? (
         <AccessOrientation
@@ -146,7 +160,9 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
           summary={summary}
           busyId={busyId}
           run={run}
-          onOptionsError={setOptionsError}
+          onOptionsError={(message) => {
+            presentConsoleNotification({ type: "error", title: message });
+          }}
           loading={collectionLoading}
           error={collectionError}
           onReload={reloadCollection}

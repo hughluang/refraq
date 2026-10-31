@@ -1,8 +1,9 @@
 "use client";
 
-import { Alert, Stack, Text } from "@mantine/core";
+import { Group, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
+import { StatusBadge } from "@/components/display/StatusBadge";
 import {
   combinationBudgetVisible,
   formatGrantLine,
@@ -24,6 +25,7 @@ export function AccessPolicySummary({ summary }: Props) {
   const typeOf = (id: string) =>
     summary.ladders.find((ladder) => ladder.attribute_id === id)?.type ?? null;
   const attention = viewsNeedAttention(summary);
+  const viewKey = viewsStatusKey(summary);
   const budget = combinationBudgetVisible(summary.views);
   const over =
     summary.views.subjects_over_limit > 0 ||
@@ -58,21 +60,26 @@ export function AccessPolicySummary({ summary }: Props) {
           })}
         </Stack>
       )}
-      {attention ? (
-        <Alert color={summary.views.state === "failed" ? "red" : "yellow"}>
-          {t(viewsStatusKey(summary))}
-        </Alert>
-      ) : null}
-      {budget ? (
-        <Alert color={over ? "red" : "yellow"}>
-          <Text>
-            {t("entities.access.combinations", {
-              count: summary.views.combinations,
-              limit: summary.views.combination_limit,
-            })}
-          </Text>
-          {over ? <Text>{t("entities.access.overLimit")}</Text> : null}
-        </Alert>
+      {attention || budget ? (
+        <Group gap="xs">
+          {attention ? (
+            <StatusBadge
+              tone={summary.views.state === "failed" ? "danger" : "warning"}
+              labelKey={viewKey}
+              explanation={t(viewKey)}
+            />
+          ) : null}
+          {budget ? (
+            <StatusBadge
+              tone={over ? "danger" : "warning"}
+              labelKey={t("entities.access.combinations", {
+                count: summary.views.combinations,
+                limit: summary.views.combination_limit,
+              })}
+              explanation={over ? t("entities.access.overLimit") : null}
+            />
+          ) : null}
+        </Group>
       ) : null}
     </Stack>
   );
