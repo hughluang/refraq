@@ -8,14 +8,16 @@ import {
   ScrollArea,
   Stack,
   Text,
+  UnstyledButton,
 } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useRef } from "react";
 
 import { jobKindLabelKey } from "@/components/display/JobReference";
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
-import { StaleNotice } from "@/components/display/StaleNotice";
+import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentJobStatus } from "@/components/display/statusTone";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { ProblemDetails } from "@/components/feedback/ProblemDetails";
 import { isSessionExpiredError } from "@/lib/api";
 
@@ -25,7 +27,7 @@ import { formatJobError } from "@/features/jobs/formatJobError";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { useShowInstant } from "@/hooks/useFormatInstant";
-import { useLiveStatus } from "@/hooks/useLiveStatus";
+import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
 import { formatJobDuration } from "@/lib/datetime";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
@@ -41,9 +43,23 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
   const t = useTranslate();
   const showInstant = useShowInstant();
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  const unloadedNotice = useRef(false);
+  const tRef = useRef(t);
+  tRef.current = t;
+  const retryRef = useRef<() => Promise<void>>(async () => {});
+  const reportRefreshFailure = (result: LiveRefreshResult) => {
+    if (result.ok) return;
+    if (isSessionExpiredError(result.error)) return;
+    presentProblemNotification(tRef.current, result.error, {
+      onRetry: () => {
+        void retryRef.current();
+      },
+    });
+  };
   const live = useLiveStatus({
     enabled: opened && Boolean(jobId),
     key: opened ? jobId : null,
+    onRefreshResult: reportRefreshFailure,
     fetch: async (signal) => {
       if (!jobId) throw new Error("missing job");
       const [jobRes, logsRes] = await Promise.all([
@@ -56,8 +72,28 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
   });
   const job = live.data?.job ?? null;
   const logBody = live.data?.logs ?? "";
-  const showStale = live.stale && !isSessionExpiredError(live.error);
+  const sessionExpired = isSessionExpiredError(live.error);
+  retryRef.current = () => live.refresh();
+  const freshness =
+    job && live.stale && !sessionExpired
+      ? { updatedAt: live.lastSuccessAt, onRefresh: () => void retryRef.current() }
+      : null;
+  const unloaded = !job && live.stale && !sessionExpired;
   const statusLabel = job ? t(presentJobStatus(job.status).labelKey) : "";
+
+  useEffect(() => {
+    if (!opened || job || !live.stale || sessionExpired) {
+      if (job || !live.stale) unloadedNotice.current = false;
+      return;
+    }
+    if (unloadedNotice.current) return;
+    unloadedNotice.current = true;
+    presentProblemNotification(tRef.current, live.error, {
+      onRetry: () => {
+        void retryRef.current();
+      },
+    });
+  }, [opened, job, live.error, live.stale, sessionExpired]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -76,17 +112,18 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
       size="xl"
     >
       <LiveStatusAnnouncer text={statusLabel} />
-      {showStale ? (
-        <StaleNotice hasData={job != null} onRetry={() => void live.refresh()} />
-      ) : null}
-      {!job && live.loading ? (
+      {unloaded ? (
+        <UnstyledButton type="button" onClick={() => void retryRef.current()}>
+          <StatusBadge tone="danger" labelKey="status.unloaded" />
+        </UnstyledButton>
+      ) : !job && live.loading ? (
         <Text size="sm" c="dimmed">
           {t("jobs.detail.loading")}
         </Text>
       ) : job ? (
         <Stack gap="md">
           <Group gap="sm" wrap="wrap">
-            <JobStatusBadge status={job.status} />
+            <JobStatusBadge status={job.status} freshness={freshness} />
             <Text size="sm" ff="monospace">
               {job.id}
             </Text>
@@ -181,7 +218,7 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
                 size="xs"
                 variant="default"
                 loading={live.refreshing}
-                onClick={() => void live.refresh()}
+                onClick={() => void retryRef.current()}
               >
                 {t("jobs.pollRefresh")}
               </Button>
@@ -190,7 +227,7 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
                   jobId={job.id}
                   recordName={job.summary || job.id}
                   onCancelled={async () => {
-                    await live.refresh();
+                    await retryRef.current();
                     onChanged?.();
                   }}
                 />

@@ -9,7 +9,13 @@ export type UseLiveStatusOptions<T> = {
   isTerminal: (data: T) => boolean;
   enabled?: boolean;
   key?: string | number | null;
+  /** Fires for `refresh` only. Interval polls do not call it. */
+  onRefreshResult?: (result: LiveRefreshResult) => void;
 };
+
+export type LiveRefreshResult =
+  | { ok: true }
+  | { ok: false; error: unknown };
 
 export type LiveStatusState<T> = {
   data: T | null;
@@ -18,6 +24,8 @@ export type LiveStatusState<T> = {
   /** True only before the first result, while a fetch is in flight. */
   loading: boolean;
   refreshing: boolean;
+  /** Platform Instant text of the last successful fetch. Null before one succeeds. */
+  lastSuccessAt: string | null;
   refresh: () => Promise<void>;
 };
 
@@ -31,22 +39,25 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
 
   const fetchRef = useRef(options.fetch);
   const terminalRef = useRef(options.isTerminal);
+  const refreshResultRef = useRef(options.onRefreshResult);
   fetchRef.current = options.fetch;
   terminalRef.current = options.isTerminal;
+  refreshResultRef.current = options.onRefreshResult;
 
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [stale, setStale] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastSuccessAt, setLastSuccessAt] = useState<string | null>(null);
 
   const dataRef = useRef<T | null>(null);
   const pausedRef = useRef(typeof document !== "undefined" && document.hidden);
   const requestSeq = useRef(0);
-  const runRef = useRef<() => Promise<void>>(async () => {});
+  const runRef = useRef<() => Promise<LiveRefreshResult>>(async () => ({ ok: true }));
 
   useEffect(() => {
     if (!enabled) {
-      runRef.current = async () => {};
+      runRef.current = async () => ({ ok: true });
       return;
     }
 
@@ -57,27 +68,31 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
     setError(null);
     setStale(false);
     setRefreshing(false);
+    setLastSuccessAt(null);
 
-    const run = (): Promise<void> => {
-      if (!alive) return Promise.resolve();
+    const run = (): Promise<LiveRefreshResult> => {
+      if (!alive) return Promise.resolve({ ok: true });
       const seq = ++requestSeq.current;
       const controller = new AbortController();
       controllers.add(controller);
       setRefreshing(true);
       return fetchRef
         .current(controller.signal)
-        .then((next) => {
-          if (!alive || seq !== requestSeq.current) return;
+        .then((next): LiveRefreshResult => {
+          if (!alive || seq !== requestSeq.current) return { ok: true };
           dataRef.current = next;
           setData(next);
           setError(null);
           setStale(false);
+          setLastSuccessAt(new Date().toISOString());
+          return { ok: true };
         })
-        .catch((err: unknown) => {
-          if (!alive || seq !== requestSeq.current) return;
-          if (controller.signal.aborted || isAbortError(err)) return;
+        .catch((err: unknown): LiveRefreshResult => {
+          if (!alive || seq !== requestSeq.current) return { ok: true };
+          if (controller.signal.aborted || isAbortError(err)) return { ok: true };
           setError(err);
           setStale(true);
+          return { ok: false, error: err };
         })
         .finally(() => {
           controllers.delete(controller);
@@ -111,11 +126,15 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
       document.removeEventListener("visibilitychange", onVisibility);
       for (const controller of controllers) controller.abort();
       controllers.clear();
-      runRef.current = async () => {};
+      runRef.current = async () => ({ ok: true });
     };
   }, [enabled, key]);
 
-  const refresh = useCallback(() => runRef.current(), []);
+  const refresh = useCallback((): Promise<void> => {
+    return runRef.current().then((result) => {
+      refreshResultRef.current?.(result);
+    });
+  }, []);
 
   return {
     data,
@@ -123,6 +142,7 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
     stale,
     loading: data == null && refreshing && !stale,
     refreshing,
+    lastSuccessAt,
     refresh,
   };
 }

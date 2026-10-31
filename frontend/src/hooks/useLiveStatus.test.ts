@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
+import { notifications, notificationsStore } from "@mantine/notifications";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
 import { StaleNotice } from "@/components/display/StaleNotice";
 import { LIVE_STATUS_INTERVAL_MS, useLiveStatus } from "@/hooks/useLiveStatus";
+import { ConsoleNotifications } from "@/providers/notification-provider";
 
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string) => key,
@@ -39,6 +41,7 @@ function Probe({
     "div",
     null,
     createElement("div", { "data-testid": "value" }, label || "none"),
+    createElement("div", { "data-testid": "updated" }, live.lastSuccessAt ?? ""),
     createElement(LiveStatusAnnouncer, { text: label }),
     live.stale
       ? createElement(StaleNotice, {
@@ -188,6 +191,39 @@ describe("useLiveStatus", () => {
       resolveFirst({ status: "running" });
     });
     expect(screen.getByTestId("value").textContent).toBe("succeeded");
+  });
+
+  it("keeps the last successful update and does not notify when a later poll fails", async () => {
+    const state = notificationsStore.getState();
+    for (const item of [...state.notifications, ...state.queue]) {
+      notifications.hide(item.id);
+    }
+    notifications.clean();
+    vi.setSystemTime(new Date("2026-10-11T06:00:29Z"));
+    const load = vi
+      .fn<(signal: AbortSignal) => Promise<Row>>()
+      .mockResolvedValueOnce({ status: "running" })
+      .mockRejectedValueOnce(new Error("offline"));
+    render(
+      createElement(
+        MantineProvider,
+        { env: "test" },
+        createElement(ConsoleNotifications),
+        createElement(Probe, { load }),
+      ),
+    );
+
+    await advance(0);
+    expect(screen.getByTestId("value").textContent).toBe("running");
+    expect(screen.getByTestId("updated").textContent).toBe("2026-10-11T06:00:29.000Z");
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("value").textContent).toBe("running");
+    expect(screen.getByTestId("updated").textContent).toBe("2026-10-11T06:00:29.000Z");
+    expect(screen.getByText("liveStatus.stale")).toBeTruthy();
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 
   it("aborts the in-flight request when the watcher unmounts", async () => {
