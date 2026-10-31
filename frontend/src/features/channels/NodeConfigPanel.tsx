@@ -666,6 +666,7 @@ function ConfigField({
         bare={bare}
         min={field.minimum}
         max={field.maximum}
+        clampBehavior="none"
         value={typeof value === "number" ? value : ""}
         onChange={(next) => {
           if (typeof next === "number") onChange(next);

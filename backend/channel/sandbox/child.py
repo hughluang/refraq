@@ -10,13 +10,31 @@ import json
 import sys
 from typing import Any
 
-from backend.channel.sandbox.program import author_line, function_source
+from backend.channel.sandbox.program import (
+    STEP_ATTR,
+    STEP_SUB,
+    author_line,
+    compile_author_code,
+    compile_expression,
+)
 from backend.channel.template import _to_text
 
 try:
     import resource
 except ImportError:  # pragma: no cover - resource is present on Linux
     resource = None  # type: ignore[assignment]
+
+
+def _step_attr(value: Any, name: str) -> Any:
+    if value is None:
+        raise AttributeError(f"{name} does not resolve")
+    return getattr(value, name)
+
+
+def _step_sub(value: Any, key: Any) -> Any:
+    if value is None:
+        raise AttributeError(f"{key} does not resolve")
+    return value[key]
 
 
 SAFE_BUILTINS = {
@@ -41,9 +59,12 @@ SAFE_BUILTINS = {
     "round": round,
     "abs": abs,
     "isinstance": isinstance,
+    "slice": slice,
     "None": None,
     "True": True,
     "False": False,
+    STEP_ATTR: _step_attr,
+    STEP_SUB: _step_sub,
 }
 
 _ALLOWED_IMPORTS = frozenset(
@@ -117,7 +138,11 @@ def _safe_import(name: str, globals=None, locals=None, fromlist=(), level: int =
 
 
 class AttrDict(dict):
-    """A dict whose keys are also attributes. A key wins over a dict method."""
+    """A dict whose keys are also attributes. A key wins over a dict method.
+
+    Attribute access and subscript share one missing-key message. A stored
+    JSON null stays ``None``.
+    """
 
     def __getattribute__(self, name: str) -> Any:
         if name.startswith("__") and name.endswith("__"):
@@ -128,6 +153,12 @@ class AttrDict(dict):
             return object.__getattribute__(self, name)
         except AttributeError:
             raise AttributeError(f"{name} does not resolve") from None
+
+    def __getitem__(self, key: Any) -> Any:
+        try:
+            return dict.__getitem__(self, key)
+        except KeyError:
+            raise AttributeError(f"{key} does not resolve") from None
 
 
 def _wrap(value: Any) -> Any:
@@ -240,12 +271,12 @@ def _run_code(source: str) -> Any:
     namespace: dict[str, Any] = {
         "__builtins__": {**SAFE_BUILTINS, "__import__": _safe_import},
     }
-    exec(compile(function_source(source), "<code>", "exec"), namespace)  # noqa: S102
+    exec(compile_author_code(source), namespace)  # noqa: S102
     return _unwrap(namespace["main"](SELF))
 
 
 def _eval(expression: str) -> Any:
-    compiled = compile(expression, "<expression>", "eval")
+    compiled = compile_expression(expression)
     env = {
         "self": SELF,
         "url_quote": _url_quote,

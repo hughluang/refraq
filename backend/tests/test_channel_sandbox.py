@@ -41,6 +41,62 @@ def test_missing_key_names_the_key() -> None:
         sandbox.put_output(ref="read", name="Read", output={"nope": 1})
         with pytest.raises(ExpressionError, match=r"^ok does not resolve$"):
             sandbox.evaluate("self.read.output.ok")
+        with pytest.raises(ExpressionError, match=r"^missing does not resolve$"):
+            sandbox.evaluate('self.read.output["missing"]')
+
+
+def test_null_step_names_the_next_key() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        sandbox.put_output(
+            ref="batch",
+            name="Batch",
+            output={"rows": [{"after": None, "before": {"sku": "a"}}]},
+        )
+        assert sandbox.evaluate("self.batch.output.rows[0].after") is None
+        assert sandbox.evaluate("self.batch.output.rows[0]['after']") is None
+        assert sandbox.evaluate("self.batch.output.rows[0].after == None") is True
+        assert sandbox.evaluate("self.batch.output.rows[0]['after'] == None") is True
+        assert sandbox.evaluate("self.batch.output.rows[0].after is None") is True
+        assert sandbox.evaluate("self.batch.output.rows[0]['after'] is None") is True
+        assert sandbox.evaluate(
+            "self.batch.output.rows[0]['after'] is self.batch.output.rows[0].get('after')"
+        ) is True
+        assert sandbox.evaluate('self.batch.output.rows[0].get("after") is None') is True
+        assert sandbox.evaluate("dict(self.batch.output.rows[0])") == {
+            "after": None,
+            "before": {"sku": "a"},
+        }
+        assert sandbox.evaluate("{**self.batch.output.rows[0]}") == {
+            "after": None,
+            "before": {"sku": "a"},
+        }
+        with pytest.raises(ExpressionError, match=r"^sku does not resolve$"):
+            sandbox.evaluate("self.batch.output.rows[0].after.sku")
+        with pytest.raises(ExpressionError, match=r"^sku does not resolve$"):
+            sandbox.evaluate("self.batch.output.rows[0]['after']['sku']")
+        with pytest.raises(ExpressionError, match=r"^sku does not resolve$"):
+            sandbox.evaluate(
+                "[{'sku': row['after']['sku']} for row in self.batch.output.rows]"
+            )
+        with pytest.raises(ExpressionError, match=r"list index out of range"):
+            sandbox.evaluate("self.batch.output.rows[3]")
+        assert sandbox.evaluate("self.batch.output.rows[0:1][0]['before']['sku']") == "a"
+        assert sandbox.evaluate(
+            "self.batch.output.rows[0]['after']['sku']"
+            " if self.batch.output.rows[0]['after'] is not None"
+            " else self.batch.output.rows[0]['before']['sku']"
+        ) == "a"
+        assert sandbox.run_code(
+            "row = self.batch.output.rows[0]\n"
+            "return row['after']['sku'] if row['after'] is not None else row['before']['sku']",
+            5,
+        ) == "a"
+        with pytest.raises(CodeError) as coded:
+            sandbox.run_code("row = self.batch.output.rows[0]\nreturn row['after']['sku']", 5)
+        assert coded.value.detail["message"] == "sku does not resolve"
+        assert coded.value.detail["line"] == 2
+        assert "NoneType" not in str(coded.value)
 
 
 def test_import_os_is_denied() -> None:

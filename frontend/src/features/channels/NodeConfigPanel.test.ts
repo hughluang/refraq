@@ -562,6 +562,25 @@ describe("NodeConfigPanel integers", () => {
     expect(next.config).not.toHaveProperty("statement_timeout_sec");
   });
 
+  it("leaves an out-of-range integer in place when the field blurs", async () => {
+    const schema: SchemaObject = {
+      type: "object",
+      properties: {
+        statement_timeout_sec: { type: "integer", minimum: 1, maximum: 3600 },
+      },
+    };
+    const below = vi.fn();
+    await renderPanel(schema, node({ statement_timeout_sec: 0 }, "read.sql"), below);
+    fireEvent.blur(screen.getByRole("textbox", { name: "Statement timeout" }));
+    expect(below).not.toHaveBeenCalled();
+
+    cleanup();
+    const above = vi.fn();
+    await renderPanel(schema, node({ statement_timeout_sec: 3601 }, "read.sql"), above);
+    fireEvent.blur(screen.getByRole("textbox", { name: "Statement timeout" }));
+    expect(above).not.toHaveBeenCalled();
+  });
+
   it("states that a container's policy does not cover a body stop", async () => {
     await renderPanel(PAYLOAD, {
       ...node({ payload: {} }, "volume.for"),
