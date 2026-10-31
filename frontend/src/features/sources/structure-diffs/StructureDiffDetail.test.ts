@@ -129,4 +129,34 @@ describe("StructureDiffDetail load", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(getStructureDiff).toHaveBeenCalledTimes(2));
   });
+
+  it("shows a source mismatch as a notice and does not notify", async () => {
+    getStructureDiff.mockResolvedValue({
+      structure_diff: {
+        id: "diff_1",
+        source_id: "src_other",
+        job_id: "job_1",
+        class: "additive",
+        counts: {},
+        created_at: "2026-09-10T04:00:00Z",
+      },
+    });
+    const { StructureDiffDetail } = await import(
+      "@/features/sources/structure-diffs/StructureDiffDetail"
+    );
+    render(
+      shell(
+        createElement(StructureDiffDetail, { sourceId: "src_1", diffId: "diff_1" }),
+      ),
+    );
+
+    expect(
+      await screen.findByText("This Diff does not belong to the current Source"),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Not loaded" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Page not found" })).toBeNull();
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+    expect(getStructureDiff).toHaveBeenCalledTimes(1);
+  });
 });

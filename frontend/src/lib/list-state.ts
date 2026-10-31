@@ -1,4 +1,4 @@
-export type ListState = "loading" | "unloaded" | "error" | "empty" | "no-match" | "ready";
+export type ListState = "loading" | "unloaded" | "empty" | "no-match" | "ready";
 
 export type ListStateInput = {
   loading: boolean;
@@ -18,7 +18,6 @@ export type ListPresentation = {
  *
  * Unloaded only wins when there are no rows. Rows already on screen stay
  * ready; a later failure notifies only when the caller passed `onError`.
- * `"error"` stays on the union for a presentation a caller sets by hand.
  * The empty gate reads `total`, not `itemCount`, so a past-end page is not
  * an empty list. `filtered` splits a vacant collection from a vacant filter
  * result.
@@ -49,8 +48,6 @@ export function listPresentationOf(input: ListStateInput): ListPresentation {
 /** Fields a `ListTable` binds for a collection that is not an Offset Page fetch. */
 export type LocalListSession = {
   presentation: ListPresentation;
-  error: string | null;
-  errorRequestId: string | null;
   reload: () => void | Promise<void>;
   page: number;
   setPage: (page: number) => void;
@@ -81,8 +78,6 @@ export function localListSession(input: {
       itemCount,
       filtered: false,
     }),
-    error,
-    errorRequestId: null,
     reload: input.reload ?? (() => undefined),
     page: 1,
     setPage: ignorePage,

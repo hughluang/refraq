@@ -9,6 +9,7 @@ import { ListTable } from "@/components/display/ListTable";
 import { ListToolbar } from "@/components/display/ListToolbar";
 import { RecordReference } from "@/components/display/RecordReference";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { EntityListTagFilter } from "@/features/entities/EntityListTagFilter";
@@ -36,7 +37,7 @@ import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useListQuery } from "@/hooks/useListQuery";
 import type { ListPresentation } from "@/lib/list-state";
-import { listErrorMessage, listErrorRequestId } from "@/lib/paged-list-session";
+import { listErrorMessage } from "@/lib/paged-list-session";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -136,8 +137,6 @@ export function EntityList() {
   const arrivedWithQuery = useRef(query.initialSearch !== "").current;
   const [gate, setGate] = useState<Gate>(arrivedWithQuery ? "ready" : "reading");
   const [attempt, setAttempt] = useState(0);
-  const [gateError, setGateError] = useState<string | null>(null);
-  const [gateRequestId, setGateRequestId] = useState<string | null>(null);
   const [filters, setFilters] = useState<EntitySavedFilter[]>([]);
   const [rememberedId, setRememberedId] = useState<string | null>(null);
   const [appliedId, setAppliedId] = useState<string | null>(null);
@@ -224,9 +223,10 @@ export function EntityList() {
       .catch((error: unknown) => {
         if (cancelled) return;
         pendingQuery.current = null;
-        setGateError(listErrorMessage(error));
-        setGateRequestId(listErrorRequestId(error));
         setGate("failed");
+        presentProblemNotification(t, error, {
+          onRetry: () => setAttempt((value) => value + 1),
+        });
       });
     return () => {
       cancelled = true;
@@ -418,15 +418,13 @@ export function EntityList() {
 
   const heldPresentation: ListPresentation =
     gate === "failed"
-      ? { state: "error", refreshing: false }
+      ? { state: "unloaded", refreshing: false }
       : { state: "loading", refreshing: false };
   const tableList =
     gate === "ready"
       ? list
       : {
           presentation: heldPresentation,
-          error: gate === "failed" ? gateError : null,
-          errorRequestId: gate === "failed" ? gateRequestId : null,
           reload: () => setAttempt((value) => value + 1),
           page: 1,
           setPage: () => undefined,

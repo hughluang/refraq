@@ -135,6 +135,5 @@ describe("localListSession", () => {
   it("keeps an unloaded status retryable when nothing is on screen", () => {
     const list = localListSession({ total: 0, error: "offline" });
     expect(list.presentation.state).toBe("unloaded");
-    expect(list.error).toBe("offline");
   });
 });

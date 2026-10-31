@@ -208,8 +208,6 @@ describe("PageChrome", () => {
           {
             title: "Entities",
             status: "unloaded",
-            errorMessage: "Load failed",
-            requestId: "req-9",
             onRetry,
           },
           "Secret",
@@ -223,39 +221,9 @@ describe("PageChrome", () => {
     const badge = status.querySelector(".mantine-Badge-root");
     expect(badge?.getAttribute("style") ?? "").toContain("red");
     expect(document.querySelector("[data-page-scroll]")?.contains(status)).toBe(true);
-    expect(screen.queryByText("Load failed")).toBeNull();
-    expect(screen.queryByText("req-9")).toBeNull();
     expect(screen.queryByText("common.error")).toBeNull();
     expect(screen.queryByRole("button", { name: "common.retry" })).toBeNull();
     fireEvent.click(status);
-    expect(onRetry).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the problem alert when status is error", async () => {
-    const onRetry = vi.fn();
-    const { PageChrome } = await import("@/components/layout/PageChrome");
-    render(
-      shell(
-        createElement(
-          PageChrome,
-          {
-            title: "Entities",
-            status: "error",
-            errorMessage: "Load failed",
-            requestId: "req-9",
-            onRetry,
-          },
-          "Secret",
-        ),
-      ),
-    );
-    expect(screen.getByRole("heading", { name: "Entities" })).not.toBeNull();
-    expect(screen.queryByText("Secret")).toBeNull();
-    expect(screen.getByText("common.error")).not.toBeNull();
-    expect(screen.getByText("Load failed")).not.toBeNull();
-    expect(screen.getByText(/req-9/)).not.toBeNull();
-    expect(screen.queryByText("status.unloaded")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
     expect(onRetry).toHaveBeenCalledOnce();
   });
 

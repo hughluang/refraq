@@ -8,7 +8,6 @@ import { ListPager } from "@/components/display/ListPager";
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { FEEDBACK_DELAY_MS, TABLE_DENSITY } from "@/theme";
 import { EmptyState } from "@/components/feedback/EmptyState";
-import { PageError } from "@/components/feedback/PageError";
 import type { ListPresentation } from "@/lib/list-state";
 
 const DENSE_TABLE_FLOOR = 1080;
@@ -28,8 +27,6 @@ export function listTableMinWidth(columnCount: number, minWidth?: number): numbe
 /** Session fields `ListTable` binds to status, retry, and the pager. */
 export type ListTableList = {
   presentation: ListPresentation;
-  error: string | null;
-  errorRequestId: string | null;
   reload: () => void | Promise<void>;
   page: number;
   setPage: (page: number) => void;
@@ -120,17 +117,6 @@ export function ListTable({
           <UnstyledButton type="button" onClick={() => void list.reload()}>
             <StatusBadge tone="danger" labelKey="status.unloaded" />
           </UnstyledButton>
-        </StatusRow>
-      );
-      break;
-    case "error":
-      body = (
-        <StatusRow columnCount={columnCount}>
-          <PageError
-            message={list.error ?? ""}
-            requestId={list.errorRequestId}
-            onRetry={() => void list.reload()}
-          />
         </StatusRow>
       );
       break;

@@ -46,7 +46,7 @@ API timestamps stay JSON strings; `apiClient` returns them unchanged. Format a p
 
 A 422 `details[]` entry maps `field` onto a form path by identity, then an optional alias. A `body.`, `query.`, `path.`, `header.`, or `cookie.` prefix is ignored the same way the API builds the path from a validation location. Mapped entries become field errors and focus moves to the first invalid field. Client rules run on blur for touched fields, on submit for every field, and again on change once an error is showing.
 
-`saveFailureFrom` plus `FormErrorSummary` are the form-level error. The summary's main line is `problemMessage` (localized Problem Code, otherwise `problems.unknown`, never the server `detail`). Server `detail`, request id, and unmapped rows sit in a disclosure with click-to-copy. A 422 whose every row mapped onto a field does not show the summary.
+A save failure follows the four channels in `docs/ui-console-interaction.md` (sections 3 to 6). `presentSaveFailure` notifies unless a 422 mapped every detail onto a field.
 
 `FormSection` is a titled group with an optional description and a one- or two-column grid (two columns once the section is at least 36rem wide). Field components take `helper` for a persistent line under the control. `FormDialog` is a real form: Cancel, then the primary action, Enter submits, the first field is focused, and closing a dirty dialog (Escape, close, Cancel) asks before discard. The overlay does not dismiss a dirty dialog.
 

@@ -7,10 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
 
-const copy = vi.hoisted(() => ({
-  text: vi.fn(async (_value: string) => {}),
-}));
-
 const gate = {
   n: 0,
   release: null as (() => void) | null,
@@ -31,10 +27,6 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/console/sources",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
-}));
-
-vi.mock("@/lib/copy-text", () => ({
-  copyText: (value: string) => copy.text(value),
 }));
 
 function stubDomApis() {
@@ -68,7 +60,6 @@ function shell(node: ReactNode) {
 describe("form frame", () => {
   beforeEach(() => {
     stubDomApis();
-    copy.text.mockClear();
     gate.n = 0;
     gate.release = null;
   });
@@ -214,26 +205,6 @@ describe("form frame", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply failure" }));
     expect(screen.getByTestId("failure").textContent).toBe("0/0");
     expect(screen.getByTestId("errors").textContent).toContain("Field required");
-  });
-
-  it("copies the server detail, request id, and unmapped lines", async () => {
-    const { FormErrorSummary } = await import("@/components/form/FormErrorSummary");
-    render(
-      shell(
-        createElement(FormErrorSummary, {
-          message: "Could not save this form.",
-          detail: "Request validation failed",
-          requestId: "rid-9",
-          unmapped: [{ field: "missing", message: "Nope" }],
-        }),
-      ),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "form.error.copy" }));
-    await waitFor(() => {
-      expect(copy.text).toHaveBeenCalledWith(
-        "Request validation failed\ncommon.requestId: rid-9\nmissing: Nope",
-      );
-    });
   });
 
   it("validates on blur for a touched field and again on change after an error", async () => {
@@ -460,52 +431,6 @@ describe("form frame", () => {
     const errors = screen.getByTestId("errors").textContent ?? "";
     expect(errors).toContain('"account":"Field required"');
     expect(errors).toContain('"host":"Bad host"');
-  });
-
-  it("localizes the summary and keeps a fully mapped 422 on the fields", async () => {
-    const { saveFailureFrom } = await import("@/components/form/FormErrorSummary");
-    const translate = (key: string) =>
-      (
-        {
-          "problems.REQUEST_INVALID": "The request is not valid.",
-          "problems.unknown": "Something went wrong.",
-        } as Record<string, string>
-      )[key] ?? key;
-    const invalid = new ApiError(
-      422,
-      "REQUEST_INVALID",
-      "Request validation failed",
-      "rid-422",
-      {},
-      [{ field: "missing", message: "Nope" }],
-    );
-    const unmapped = saveFailureFrom(
-      translate,
-      invalid,
-      { mapped: [], unmapped: invalid.details ?? [] },
-      "fallback",
-    );
-    expect(unmapped?.message).toBe("The request is not valid.");
-    expect(unmapped?.detail).toBe("Request validation failed");
-    const server = new ApiError(500, "INTERNAL_ERROR", "Internal server error", "rid-500");
-    const generic = saveFailureFrom(
-      translate,
-      server,
-      { mapped: [], unmapped: [] },
-      "fallback",
-    );
-    expect(generic?.message).toBe("Something went wrong.");
-    expect(generic?.message).not.toBe("Internal server error");
-    expect(
-      saveFailureFrom(
-        translate,
-        invalid,
-        { mapped: [{ field: "account", message: "Field required" }], unmapped: [] },
-        "fallback",
-      ),
-    ).toBeNull();
-    expect(generic?.detail).toBe("Internal server error");
-    expect(generic?.requestId).toBe("rid-500");
   });
 
   it("clears dirty after a successful submit and releases suppression when submit fails", async () => {

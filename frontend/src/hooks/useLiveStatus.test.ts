@@ -7,7 +7,6 @@ import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
-import { StaleNotice } from "@/components/display/StaleNotice";
 import { LIVE_STATUS_INTERVAL_MS, useLiveStatus } from "@/hooks/useLiveStatus";
 import { ConsoleNotifications } from "@/providers/notification-provider";
 
@@ -42,15 +41,18 @@ function Probe({
     null,
     createElement("div", { "data-testid": "value" }, label || "none"),
     createElement("div", { "data-testid": "updated" }, live.lastSuccessAt ?? ""),
+    createElement("div", { "data-testid": "stale" }, live.stale ? "stale" : "fresh"),
     createElement(LiveStatusAnnouncer, { text: label }),
-    live.stale
-      ? createElement(StaleNotice, {
-          hasData: live.data != null,
-          onRetry: () => {
-            void live.refresh();
-          },
-        })
-      : null,
+    createElement(
+      "button",
+      {
+        type: "button",
+        onClick: () => {
+          void live.refresh();
+        },
+      },
+      "Refresh",
+    ),
   );
 }
 
@@ -160,12 +162,12 @@ describe("useLiveStatus", () => {
 
     await advance(LIVE_STATUS_INTERVAL_MS);
     expect(screen.getByTestId("value").textContent).toBe("running");
-    expect(screen.getByText("liveStatus.stale")).toBeTruthy();
+    expect(screen.getByTestId("stale").textContent).toBe("stale");
 
-    fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await advance(0);
     expect(load).toHaveBeenCalledTimes(3);
-    expect(screen.queryByText("liveStatus.stale")).toBeNull();
+    expect(screen.getByTestId("stale").textContent).toBe("fresh");
   });
 
   it("ignores a response from an earlier request", async () => {
@@ -222,7 +224,7 @@ describe("useLiveStatus", () => {
     expect(load).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("value").textContent).toBe("running");
     expect(screen.getByTestId("updated").textContent).toBe("2026-10-11T06:00:29.000Z");
-    expect(screen.getByText("liveStatus.stale")).toBeTruthy();
+    expect(screen.getByTestId("stale").textContent).toBe("stale");
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 

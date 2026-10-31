@@ -1,14 +1,17 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
+import { notifications, notificationsStore } from "@mantine/notifications";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { addEntityTags, listEntities } from "@/features/entities/api";
+import { loadEntitySavedFilters } from "@/features/entities/entityListFilter";
 import type { BusinessEntity } from "@/features/entities/types";
 import { listTags } from "@/features/tags/api";
 import { ApiError } from "@/lib/api";
+import { ConsoleNotifications } from "@/providers/notification-provider";
 
 const flags = vi.hoisted(() => ({ canWrite: true }));
 const notify = vi.hoisted(() => vi.fn());
@@ -90,6 +93,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/hooks/useFormatInstant", () => ({
   useShowInstant: () => (value: string) => value,
+  useFormatInstant: () => (value: string) => value,
 }));
 
 vi.mock("@/features/entities/api", () => ({
@@ -233,6 +237,11 @@ describe("EntityList bulk tags", () => {
 
   afterEach(() => {
     cleanup();
+    const state = notificationsStore.getState();
+    for (const item of [...state.notifications, ...state.queue]) {
+      notifications.hide(item.id);
+    }
+    notifications.clean();
   });
 
   it("sends only the checked ids on the current page", async () => {
@@ -323,6 +332,45 @@ describe("EntityList bulk tags", () => {
     expect(
       (screen.getByRole("checkbox", { name: "Select Beta" }) as HTMLInputElement).checked,
     ).toBe(true);
+  });
+
+  it("shows an unloaded row and one problem notice when the saved-filter gate fails", async () => {
+    const error = new ApiError(500, "NO_SUCH_CODE", "database offline", "req-gate");
+    vi.mocked(loadEntitySavedFilters).mockRejectedValueOnce(error);
+    const { EntityList } = await import("@/features/entities/EntityList");
+    const view = render(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(ConsoleNotifications),
+        createElement(EntityList),
+      ),
+    );
+
+    const status = await screen.findByRole("button", { name: "status.unloaded" });
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.textContent).toContain("Something went wrong. Try again.");
+    expect(alerts[0]?.textContent).toContain("database offline");
+    expect(alerts[0]?.textContent).not.toContain("feedback.repeated");
+    expect(within(alerts[0]!).getByRole("button", { name: "common.retry" })).toBeTruthy();
+    expect(screen.queryByText("common.error")).toBeNull();
+
+    view.rerender(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(ConsoleNotifications),
+        createElement(EntityList),
+      ),
+    );
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert").textContent).not.toContain("feedback.repeated");
+
+    fireEvent.click(status);
+    await screen.findByRole("checkbox", { name: "Select rows on this page" });
+    expect(vi.mocked(loadEntitySavedFilters).mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 
   it("hides the selection and the bulk actions from a read-only caller", async () => {

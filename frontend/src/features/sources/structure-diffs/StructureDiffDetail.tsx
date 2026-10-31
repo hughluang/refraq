@@ -13,6 +13,7 @@ import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { JobReference } from "@/components/display/JobReference";
+import { Callout } from "@/components/feedback/Callout";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
@@ -55,17 +56,14 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
   const [diff, setDiff] = useState<StructureDiff | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
-  const [mismatch, setMismatch] = useState(false);
   const [jobOpened, setJobOpened] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setFailed(false);
-    setMismatch(false);
     try {
       const diffRes = await getStructureDiff(diffId);
       if (diffRes.structure_diff.source_id !== sourceId) {
-        setMismatch(true);
         setDiff(null);
         return;
       }
@@ -102,15 +100,22 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
     );
   }
 
-  if (failed || mismatch || !diff) {
+  if (failed) {
     return (
       <PageChrome
         title={title}
         description={description}
-        status={failed ? "unloaded" : mismatch ? "error" : "notFound"}
-        errorMessage={mismatch ? t("structureDiffs.sourceMismatch") : undefined}
-        onRetry={failed || mismatch ? () => void load() : undefined}
+        status="unloaded"
+        onRetry={() => void load()}
       />
+    );
+  }
+
+  if (!diff) {
+    return (
+      <PageChrome title={title} description={description}>
+        <Callout tone="notice">{t("structureDiffs.sourceMismatch")}</Callout>
+      </PageChrome>
     );
   }
 

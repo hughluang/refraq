@@ -9,7 +9,6 @@ import { StatusBadge } from "@/components/display/StatusBadge";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { NotFoundState } from "@/components/feedback/NotFoundState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
-import { PageError } from "@/components/feedback/PageError";
 import { PageBreadcrumb } from "@/components/layout/PageBreadcrumb";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import {
@@ -22,7 +21,7 @@ import { useModuleIdentityStore } from "@/features/console/module-identity/store
 import { rememberRecent, type RecentInput } from "@/lib/recents";
 import { useSessionStore } from "@/providers/session-store";
 
-export type PageStatus = "ready" | "loading" | "unloaded" | "error" | "forbidden" | "notFound";
+export type PageStatus = "ready" | "loading" | "unloaded" | "forbidden" | "notFound";
 
 export type PageChromeProps = {
   title: string;
@@ -39,9 +38,6 @@ export type PageChromeProps = {
   fill?: boolean;
   status?: PageStatus;
   onRetry?: () => void;
-  /** Shown by `status="error"`. The unloaded region omits these. */
-  errorMessage?: string;
-  requestId?: string | null;
   forbiddenReason?: string;
   /**
    * Explicit visit. `href` defaults to the current path and query.
@@ -70,8 +66,6 @@ export function PageChrome({
   fill = false,
   status = "ready",
   onRetry,
-  errorMessage,
-  requestId,
   forbiddenReason,
   recent,
   children,
@@ -168,8 +162,6 @@ export function PageChrome({
         <PageStatusBody
           status={status}
           onRetry={onRetry}
-          errorMessage={errorMessage ?? t("common.error.loadFailed")}
-          requestId={requestId}
           forbiddenReason={forbiddenReason}
         >
           {children}
@@ -203,15 +195,11 @@ function documentPageTitle({
 function PageStatusBody({
   status,
   onRetry,
-  errorMessage,
-  requestId,
   forbiddenReason,
   children,
 }: {
   status: PageStatus;
   onRetry?: () => void;
-  errorMessage: string;
-  requestId?: string | null;
   forbiddenReason?: string;
   children?: ReactNode;
 }) {
@@ -222,9 +210,6 @@ function PageStatusBody({
         <StatusBadge tone="danger" labelKey="status.unloaded" />
       </UnstyledButton>
     );
-  }
-  if (status === "error") {
-    return <PageError message={errorMessage} requestId={requestId} onRetry={onRetry} />;
   }
   if (status === "forbidden") return <ForbiddenState reason={forbiddenReason} />;
   if (status === "notFound") return <NotFoundState />;

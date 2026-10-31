@@ -63,7 +63,7 @@ This document records the stable development conventions for contributors workin
 - Run lint: `npm run lint`
 - Run build: `npm run build`
 - Product theme tokens live in `frontend/src/theme/` (tones, motion, radius, component defaults). The console icon set is `frontend/src/components/icons.tsx`. Site Branding still supplies only the brand palette.
-- Console form frame (`useConsoleForm`, `FormSection`, `FormDialog`, `FormErrorSummary`) lives in `frontend/src/components/form/`. See `frontend/README.md`.
+- Console form frame (`useConsoleForm`, `FormSection`, `FormDialog`) lives in `frontend/src/components/form/`. See `frontend/README.md`.
 - Collection frame (`ListTable`, `ListToolbar`, `RowActions`, `useListQuery`) lives in `frontend/src/components/display/` and `frontend/src/hooks/useListQuery.ts`. See `docs/ui-console-layout.md`.
 - Command palette lives in `frontend/src/components/layout/CommandPalette.tsx`. See `docs/ui-console-interaction.md`.
 - Composition rules (`frontend/src/compositionRules.test.ts`) run with the console unit tests: `npm test` in `frontend/`. The rules are listed in `frontend/README.md`.
