@@ -1,31 +1,21 @@
 "use client";
 
-import {
-  Alert,
-  Badge,
-  Button,
-  Group,
-  Stack,
-  Text,
-} from "@mantine/core";
+import { Badge, Button, Group, Stack, Text } from "@mantine/core";
 import {
   useCan,
   useNotification,
   useTranslate,
 } from "@refinedev/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { StatusBadge } from "@/components/display/StatusBadge";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
-import { PageError } from "@/components/feedback/PageError";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { useLeaveGuardRegistration } from "@/components/navigation/leaveGuard";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
@@ -45,7 +35,6 @@ import {
 import type { SystemParameter } from "@/features/settings/types";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 
 function groupLabelKey(group: string): string {
   return `settings.group.${group}`;
@@ -69,7 +58,8 @@ export function SettingsPanel() {
   const [enumSearch, setEnumSearch] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const loadRef = useRef<() => Promise<void>>(async () => {});
 
   const applyCatalog = useCallback((items: SystemParameter[]) => {
     setParameters(items);
@@ -92,19 +82,22 @@ export function SettingsPanel() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setFailed(false);
     try {
       const data = await fetchPlatformSettings();
       applyCatalog(data.parameters);
     } catch (err) {
       setParameters([]);
-      setError(
-        problemMessage(t, err, t("common.error.loadFailed")),
-      );
+      setFailed(true);
+      presentProblemNotification(t, err, {
+        onRetry: () => void loadRef.current(),
+      });
     } finally {
       setLoading(false);
     }
   }, [applyCatalog, t]);
+
+  loadRef.current = load;
 
   useEffect(() => {
     void load();
@@ -114,12 +107,7 @@ export function SettingsPanel() {
     () => dirtyParameterValues(parameters, drafts),
     [drafts, parameters],
   );
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   useLeaveGuardRegistration(Object.keys(dirtyValues).length > 0);
-
-  useEffect(() => {
-    setSaveFailure(null);
-  }, [drafts]);
 
   const groups = useMemo(() => {
     const seen: string[] = [];
@@ -146,17 +134,10 @@ export function SettingsPanel() {
       });
     } catch (err) {
       const api = err instanceof ApiError ? err : null;
-      setSaveFailure(
-        saveFailureFrom(
-          t,
-          err,
-          {
-            mapped: [],
-            unmapped: api?.status === 422 ? [...(api.details ?? [])] : [],
-          },
-          t("common.error"),
-        ),
-      );
+      presentSaveFailure(t, err, () => ({
+        mapped: [],
+        unmapped: api?.status === 422 ? [...(api.details ?? [])] : [],
+      }));
     } finally {
       setSaving(false);
     }
@@ -182,6 +163,8 @@ export function SettingsPanel() {
     <PageChrome
       title={t("settings.title")}
       description={t("settings.description")}
+      status={!loading && failed ? "unloaded" : "ready"}
+      onRetry={() => void load()}
       actions={
         canWrite?.can ? (
           <Button
@@ -197,12 +180,8 @@ export function SettingsPanel() {
     >
       <Stack gap="lg">
         {resetAction.dialog}
-        <FormErrorSummary failure={saveFailure} />
         {loading ? <PageBodySkeleton rows={6} /> : null}
-        {!loading && error ? (
-          <PageError message={error} onRetry={() => void load()} />
-        ) : null}
-        {!loading && !error
+        {!loading && !failed
           ? groups.map((group) => (
               <Stack key={group} gap="md">
                 <Text size="sm" fw={600}>
@@ -297,9 +276,13 @@ export function SettingsPanel() {
                       />
                       )}
                       {servedViolates ? (
-                        <Alert color="yellow" title={t("settings.clamped.title")}>
-                          {t("settings.clamped.body", { value: effective })}
-                        </Alert>
+                        <StatusBadge
+                          tone="warning"
+                          labelKey="settings.clamped.badge"
+                          explanation={t("settings.clamped.body", {
+                            value: effective,
+                          })}
+                        />
                       ) : null}
                       <Text size="xs" c="dimmed">
                         {t(item.apply_note_key)}

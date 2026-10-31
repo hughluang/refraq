@@ -498,6 +498,7 @@
   "settings.validation.draft.below_min": "须不小于 {{min}}。",
   "settings.validation.draft.above_max": "须不大于 {{max}}。",
   "settings.validation.draft.not_allowed": "不在允许值中。",
+  "settings.clamped.badge": "已钳制",
   "settings.clamped.title": "存库值不满足当前约束",
   "settings.clamped.body": "当前生效值为 {{value}}。重置或保存一个满足约束的值即可清掉。",
   "settings.group.session": "会话",

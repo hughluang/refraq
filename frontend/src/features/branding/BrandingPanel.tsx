@@ -1,18 +1,19 @@
 "use client";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { FieldChrome } from "@/components/form/FieldChrome";
 import { SwitchField } from "@/components/form/SwitchField";
 import { TextField } from "@/components/form/TextField";
 import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
+  collectNotes,
+  type FieldNote,
+} from "@/components/form/fieldNotes";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { useLeaveGuardRegistration } from "@/components/navigation/leaveGuard";
 import { generateColors } from "@mantine/colors-generator";
 import {
-  Alert,
   Button,
   ColorInput,
   DEFAULT_THEME,
@@ -28,11 +29,17 @@ import {
 import { useDisclosure } from "@mantine/hooks";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
-import { PageError } from "@/components/feedback/PageError";
 import { PageChrome } from "@/components/layout/PageChrome";
 import {
   deleteBrandingAsset,
@@ -79,6 +86,27 @@ type FormValues = {
   showBrandNameWithLogo: boolean;
   showLogo: boolean;
 };
+
+type ColorFieldProps = {
+  label: string;
+  notes?: readonly FieldNote[];
+} & Omit<ComponentProps<typeof ColorInput>, "label" | "description">;
+
+function ColorField({ label, notes = [], error, ...props }: ColorFieldProps) {
+  const merged = collectNotes(error, notes);
+  return (
+    <FieldChrome label={label} notes={merged} editSignal={props.value}>
+      {({ id, invalid }) => (
+        <ColorInput
+          {...props}
+          id={id}
+          format="hex"
+          error={invalid || undefined}
+        />
+      )}
+    </FieldChrome>
+  );
+}
 
 function emptyLocalized(): Record<Locale, string> {
   return Object.fromEntries(
@@ -145,13 +173,12 @@ export function BrandingPanel() {
   const [logoCleared, setLogoCleared] = useState(false);
   const [faviconCleared, setFaviconCleared] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const loadRef = useRef<() => Promise<void>>(async () => {});
   const form = useConsoleForm<FormValues>({
     mode: "controlled",
     initialValues: formValues(DEFAULT_BRANDING),
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       primaryColor: (value) =>
         value.length === 0 || isHexColor(value)
@@ -188,17 +215,20 @@ export function BrandingPanel() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setFailed(false);
     try {
       applyBranding(await fetchPublicBranding());
     } catch (err) {
-      setError(
-        problemMessage(t, err, t("common.error.loadFailed")),
-      );
+      setFailed(true);
+      presentProblemNotification(t, err, {
+        onRetry: () => void loadRef.current(),
+      });
     } finally {
       setLoading(false);
     }
   }, [applyBranding, t]);
+
+  loadRef.current = load;
 
   useEffect(() => {
     void load();
@@ -221,6 +251,12 @@ export function BrandingPanel() {
     form.values.primaryColor,
     contrast.ratio,
   );
+  const contrastNotes: FieldNote[] = contrastWarning
+    ? [
+        { tone: "warning", text: t("branding.contrast.title") },
+        { tone: "warning", text: t("branding.contrast.body") },
+      ]
+    : [];
   const previewBranding = resolveBranding(
     {
       brand_names: form.values.brandNames,
@@ -264,7 +300,6 @@ export function BrandingPanel() {
       }
       publishBranding(next);
       form.markSaved();
-      setSaveFailure(null);
       notify?.({
         type: "success",
         message: t("branding.title"),
@@ -272,9 +307,7 @@ export function BrandingPanel() {
       });
     } catch (err) {
       await load();
-      setSaveFailure(
-        saveFailureFrom(t, err, form.applyApiError(err), t("common.error")),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   }
 
@@ -303,6 +336,8 @@ export function BrandingPanel() {
     <PageChrome
       title={t("branding.title")}
       description={t("branding.description")}
+      status={!loading && failed ? "unloaded" : "ready"}
+      onRetry={() => void load()}
       actions={
         canWrite?.can ? (
           <Group>
@@ -320,12 +355,7 @@ export function BrandingPanel() {
       }
     >
       {loading ? <PageBodySkeleton rows={8} /> : null}
-      {!loading && error ? (
-        <PageError message={error} onRetry={() => void load()} />
-      ) : null}
-      {!loading && !error ? (
-        <Stack gap="md">
-        <FormErrorSummary failure={saveFailure} />
+      {!loading && !failed ? (
         <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="xl">
           <Stack gap="lg">
             <Paper withBorder p="md">
@@ -394,10 +424,10 @@ export function BrandingPanel() {
             <Paper withBorder p="md">
               <Stack>
                 {canWrite?.can ? (
-                <ColorInput
+                <ColorField
                   label={t("branding.fields.color")}
+                  notes={contrastNotes}
                   placeholder={DEFAULT_PRIMARY_COLOR}
-                  format="hex"
                   swatches={[
                     "#228be6",
                     "#15aabf",
@@ -412,6 +442,7 @@ export function BrandingPanel() {
                   <DisplayField
                     label={t("branding.fields.color")}
                     value={form.values.primaryColor || undefined}
+                    notes={contrastNotes}
                   />
                 )}
                 <Group justify="space-between">
@@ -430,11 +461,6 @@ export function BrandingPanel() {
                     </Button>
                   ) : null}
                 </Group>
-                {contrastWarning ? (
-                  <Alert color="yellow" title={t("branding.contrast.title")}>
-                    {t("branding.contrast.body")}
-                  </Alert>
-                ) : null}
                 <SwitchField
                   label={t("branding.fields.showLogo")}
                   editable={Boolean(canWrite?.can)}
@@ -581,7 +607,6 @@ export function BrandingPanel() {
             </Paper>
           </Stack>
         </SimpleGrid>
-        </Stack>
       ) : null}
 
       <ConfirmActionModal

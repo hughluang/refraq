@@ -498,6 +498,7 @@
   "settings.validation.draft.below_min": "Value must be at least {{min}}.",
   "settings.validation.draft.above_max": "Value must be at most {{max}}.",
   "settings.validation.draft.not_allowed": "Not one of the allowed values.",
+  "settings.clamped.badge": "Clamped",
   "settings.clamped.title": "Stored value is outside the current constraint",
   "settings.clamped.body": "The running value is {{value}}. Reset or save a value the constraint accepts to clear this.",
   "settings.group.session": "Session",
