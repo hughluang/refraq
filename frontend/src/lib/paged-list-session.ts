@@ -12,7 +12,7 @@ export type PagedListLoadResult<T> =
   | { kind: "stale" }
   | { kind: "disabled" }
   | { kind: "ok"; page: OffsetPage<T> }
-  | { kind: "error"; message: string; requestId: string | null }
+  | { kind: "error"; message: string; requestId: string | null; error: unknown }
   | { kind: "redirect" };
 
 export function listErrorMessage(err: unknown): string {
@@ -61,6 +61,7 @@ function finishError(
     kind: "error",
     message: listErrorMessage(err),
     requestId: listErrorRequestId(err),
+    error: err,
   };
 }
 

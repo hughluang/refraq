@@ -1,4 +1,4 @@
-export type ListState = "loading" | "error" | "empty" | "no-match" | "ready";
+export type ListState = "loading" | "unloaded" | "error" | "empty" | "no-match" | "ready";
 
 export type ListStateInput = {
   loading: boolean;
@@ -16,8 +16,9 @@ export type ListPresentation = {
 /**
  * Decide which status a paged list should render.
  *
- * Error only wins when there are no rows (rows present stay on screen;
- * a later failure toasts only if the caller passed `usePagedList` `onError`).
+ * Unloaded only wins when there are no rows. Rows already on screen stay
+ * ready; a later failure notifies only when the caller passed `onError`.
+ * `"error"` stays on the union for a presentation a caller sets by hand.
  * The empty gate reads `total`, not `itemCount`, so a past-end page is not
  * an empty list. `filtered` splits a vacant collection from a vacant filter
  * result.
@@ -25,7 +26,7 @@ export type ListPresentation = {
 export function listStateOf(input: ListStateInput): ListState {
   const { loading, error, total, itemCount, filtered } = input;
   if (loading && itemCount === 0) return "loading";
-  if (error && itemCount === 0) return "error";
+  if (error && itemCount === 0) return "unloaded";
   if (total === 0) return filtered ? "no-match" : "empty";
   return "ready";
 }

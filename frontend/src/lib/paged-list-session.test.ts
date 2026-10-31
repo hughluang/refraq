@@ -134,19 +134,17 @@ describe("loadPagedGeneration", () => {
   });
 
   it("surfaces a contract failure as its translated copy and request id", async () => {
+    const error = new ApiError(
+      200,
+      "API_CONTRACT_INVALID",
+      "items[].last_login_at is not an Instant: yesterday",
+      "req-contract",
+    );
     const result = await loadPagedGeneration({
       started: 5,
       currentGeneration: () => 5,
       enabled: true,
-      fetch: () =>
-        Promise.reject(
-          new ApiError(
-            200,
-            "API_CONTRACT_INVALID",
-            "items[].last_login_at is not an Instant: yesterday",
-            "req-contract",
-          ),
-        ),
+      fetch: () => Promise.reject(error),
       page: 1,
       pageSize: 50,
     });
@@ -155,16 +153,17 @@ describe("loadPagedGeneration", () => {
       message:
         "The server response does not match the API contract. Give the request ID to whoever maintains the platform.",
       requestId: "req-contract",
+      error,
     });
   });
 
   it("returns the localized problem message and requestId", async () => {
+    const error = new ApiError(422, "REQUEST_INVALID", "bad offset", "rid");
     const result = await loadPagedGeneration({
       started: 3,
       currentGeneration: () => 3,
       enabled: true,
-      fetch: () =>
-        Promise.reject(new ApiError(422, "REQUEST_INVALID", "bad offset", "rid")),
+      fetch: () => Promise.reject(error),
       page: 2,
       pageSize: 50,
     });
@@ -172,6 +171,7 @@ describe("loadPagedGeneration", () => {
       kind: "error",
       message: "The request is not valid. Check the fields and try again.",
       requestId: "rid",
+      error,
     });
   });
 

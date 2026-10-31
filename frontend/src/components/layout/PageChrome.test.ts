@@ -198,7 +198,40 @@ describe("PageChrome", () => {
     expect(document.querySelector(".mantine-Skeleton-root")).not.toBeNull();
   });
 
-  it("keeps the header and retries from the content region", async () => {
+  it("keeps the header and retries from the unloaded status", async () => {
+    const onRetry = vi.fn();
+    const { PageChrome } = await import("@/components/layout/PageChrome");
+    render(
+      shell(
+        createElement(
+          PageChrome,
+          {
+            title: "Entities",
+            status: "unloaded",
+            errorMessage: "Load failed",
+            requestId: "req-9",
+            onRetry,
+          },
+          "Secret",
+        ),
+      ),
+    );
+    const heading = screen.getByRole("heading", { name: "Entities" });
+    expect(document.querySelector("[data-page-header]")?.contains(heading)).toBe(true);
+    expect(screen.queryByText("Secret")).toBeNull();
+    const status = screen.getByRole("button", { name: "status.unloaded" });
+    const badge = status.querySelector(".mantine-Badge-root");
+    expect(badge?.getAttribute("style") ?? "").toContain("red");
+    expect(document.querySelector("[data-page-scroll]")?.contains(status)).toBe(true);
+    expect(screen.queryByText("Load failed")).toBeNull();
+    expect(screen.queryByText("req-9")).toBeNull();
+    expect(screen.queryByText("common.error")).toBeNull();
+    expect(screen.queryByRole("button", { name: "common.retry" })).toBeNull();
+    fireEvent.click(status);
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the problem alert when status is error", async () => {
     const onRetry = vi.fn();
     const { PageChrome } = await import("@/components/layout/PageChrome");
     render(
@@ -209,6 +242,7 @@ describe("PageChrome", () => {
             title: "Entities",
             status: "error",
             errorMessage: "Load failed",
+            requestId: "req-9",
             onRetry,
           },
           "Secret",
@@ -217,8 +251,40 @@ describe("PageChrome", () => {
     );
     expect(screen.getByRole("heading", { name: "Entities" })).not.toBeNull();
     expect(screen.queryByText("Secret")).toBeNull();
+    expect(screen.getByText("common.error")).not.toBeNull();
+    expect(screen.getByText("Load failed")).not.toBeNull();
+    expect(screen.getByText(/req-9/)).not.toBeNull();
+    expect(screen.queryByText("status.unloaded")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
     expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("labels the unloaded status Not loaded in English", async () => {
+    const en = (await import("@/locales/en-US/common.json")).default as Record<string, string>;
+    expect(en["status.unloaded"]).toBe("Not loaded");
+  });
+
+  it("keeps forbidden and not found in the content region", async () => {
+    const { PageChrome } = await import("@/components/layout/PageChrome");
+    const view = render(
+      shell(
+        createElement(
+          PageChrome,
+          { title: "Entities", status: "forbidden", forbiddenReason: "entity:read" },
+          "Secret",
+        ),
+      ),
+    );
+    expect(screen.getByRole("heading", { name: "Entities" })).not.toBeNull();
+    expect(screen.queryByText("Secret")).toBeNull();
+    expect(screen.getByText("forbidden.description")).not.toBeNull();
+    view.rerender(
+      shell(createElement(PageChrome, { title: "Entities", status: "notFound" }, "Secret")),
+    );
+    expect(screen.getByRole("heading", { name: "Entities" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "layout.notFound.title" })).not.toBeNull();
+    expect(screen.queryByText("Secret")).toBeNull();
+    expect(screen.queryByText("status.unloaded")).toBeNull();
   });
 
   it("sets the document title from the page title, record title, and brand", async () => {

@@ -20,7 +20,7 @@ export type UsePagedListOptions<T> = {
   filtered?: boolean;
   /** First paint is a skeleton unless this is false (local Offset Page adapters). */
   initialLoading?: boolean;
-  onError?: (message: string) => void;
+  onError?: (error: unknown) => void;
   /**
    * URL page from `useListQuery`. With `onPageChange`, the pager writes that
    * page; omitted, the page stays inside the hook.
@@ -112,7 +112,7 @@ export function usePagedList<T>({
       }
       setError(result.message);
       setErrorRequestId(result.requestId);
-      onError?.(result.message);
+      onError?.(result.error);
       setLoading(false);
     },
     [onError],

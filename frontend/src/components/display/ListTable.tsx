@@ -1,10 +1,11 @@
 "use client";
 
-import { Button, Skeleton, Stack, Table } from "@mantine/core";
+import { Button, Skeleton, Stack, Table, UnstyledButton } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { ListPager } from "@/components/display/ListPager";
+import { StatusBadge } from "@/components/display/StatusBadge";
 import { FEEDBACK_DELAY_MS, TABLE_DENSITY } from "@/theme";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
@@ -112,6 +113,15 @@ export function ListTable({
   switch (state) {
     case "loading":
       body = <SkeletonRows columnCount={columnCount} />;
+      break;
+    case "unloaded":
+      body = (
+        <StatusRow columnCount={columnCount}>
+          <UnstyledButton type="button" onClick={() => void list.reload()}>
+            <StatusBadge tone="danger" labelKey="status.unloaded" />
+          </UnstyledButton>
+        </StatusRow>
+      );
       break;
     case "error":
       body = (

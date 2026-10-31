@@ -2206,6 +2206,7 @@
   "status.job.failed": "失败",
   "status.job.cancelled": "已取消",
   "status.unknown": "未知",
+  "status.unloaded": "未能加载",
   "channels.editor.status.running": "运行中",
   "sources.status.active": "启用",
   "sources.status.disabled": "已停用",

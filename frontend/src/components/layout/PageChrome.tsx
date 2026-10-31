@@ -1,10 +1,11 @@
 "use client";
 
-import { Box, Group, Stack, Text } from "@mantine/core";
+import { Box, Group, Stack, Text, UnstyledButton } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useLayoutEffect, type ReactNode } from "react";
 
+import { StatusBadge } from "@/components/display/StatusBadge";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { NotFoundState } from "@/components/feedback/NotFoundState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
@@ -21,7 +22,7 @@ import { useModuleIdentityStore } from "@/features/console/module-identity/store
 import { rememberRecent, type RecentInput } from "@/lib/recents";
 import { useSessionStore } from "@/providers/session-store";
 
-export type PageStatus = "ready" | "loading" | "error" | "forbidden" | "notFound";
+export type PageStatus = "ready" | "loading" | "unloaded" | "error" | "forbidden" | "notFound";
 
 export type PageChromeProps = {
   title: string;
@@ -38,6 +39,7 @@ export type PageChromeProps = {
   fill?: boolean;
   status?: PageStatus;
   onRetry?: () => void;
+  /** Shown by `status="error"`. The unloaded region omits these. */
   errorMessage?: string;
   requestId?: string | null;
   forbiddenReason?: string;
@@ -214,6 +216,13 @@ function PageStatusBody({
   children?: ReactNode;
 }) {
   if (status === "loading") return <PageBodySkeleton />;
+  if (status === "unloaded") {
+    return (
+      <UnstyledButton type="button" onClick={onRetry}>
+        <StatusBadge tone="danger" labelKey="status.unloaded" />
+      </UnstyledButton>
+    );
+  }
   if (status === "error") {
     return <PageError message={errorMessage} requestId={requestId} onRetry={onRetry} />;
   }

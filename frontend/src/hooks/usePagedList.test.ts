@@ -1,9 +1,34 @@
 /** @vitest-environment jsdom */
-import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { MantineProvider } from "@mantine/core";
+import { notifications, notificationsStore } from "@mantine/notifications";
+import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { createElement } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { usePagedList } from "@/hooks/usePagedList";
+import { ApiError } from "@/lib/api";
 import type { OffsetPage, PageQuery } from "@/lib/pagination";
+import { ConsoleNotifications } from "@/providers/notification-provider";
+
+const harness = vi.hoisted(() => ({
+  open: vi.fn(),
+  dictionary: {
+    "problems.REQUEST_INVALID": "The request is not valid. Check the fields and try again.",
+    "problems.unknown": "Something went wrong. Try again.",
+    "form.error.details": "Details",
+    "form.error.copy": "Copy details",
+    "common.requestId": "Request ID",
+    "common.copy.success": "Copied",
+    "common.copy.failed": "Copy failed",
+    "common.retry": "Retry",
+  } as Record<string, string>,
+}));
+
+vi.mock("@refinedev/core", () => ({
+  useTranslate: () => (key: string) => harness.dictionary[key] ?? key,
+  useNotification: () => ({ open: harness.open }),
+}));
 
 function pageOf<T>(items: T[], query: PageQuery): OffsetPage<T> {
   return {
@@ -142,5 +167,132 @@ describe("usePagedList resetDeps reload", () => {
     expect(result.current.page).toBe(1);
     expect(onPageChange).toHaveBeenCalledWith(1);
     expect(fetch.mock.calls.at(-1)?.[0]).toEqual({ limit: 50, offset: 0 });
+  });
+});
+
+function stubDomApis() {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }),
+  });
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub;
+}
+
+function resetNotifications() {
+  const state = notificationsStore.getState();
+  for (const item of [...state.notifications, ...state.queue]) {
+    notifications.hide(item.id);
+  }
+  notifications.clean();
+}
+
+describe("useConsolePagedList", () => {
+  beforeEach(() => {
+    stubDomApis();
+    harness.open.mockClear();
+    resetNotifications();
+    render(createElement(MantineProvider, { env: "test" }, createElement(ConsoleNotifications)));
+  });
+
+  afterEach(() => {
+    resetNotifications();
+    cleanup();
+  });
+
+  it("notifies once with server detail, request id, and retry when the first load fails", async () => {
+    const fetch = vi.fn((_query: PageQuery) =>
+      Promise.reject(new ApiError(422, "REQUEST_INVALID", "bad offset", "req-9")),
+    );
+    const { result } = renderHook(() =>
+      useConsolePagedList({
+        pageSize: 50,
+        fetch,
+        initialLoading: false,
+      }),
+    );
+
+    await act(async () => {});
+
+    expect(harness.open).not.toHaveBeenCalled();
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByText("The request is not valid. Check the fields and try again.")).toBeTruthy();
+    fireEvent.click(screen.getByText("Details"));
+    expect(screen.getByText("bad offset").closest("details")).toBeTruthy();
+    expect(screen.getByText("Request ID: req-9").closest("details")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(result.current.items).toEqual([]);
+    expect(result.current.presentation.state).toBe("unloaded");
+  });
+
+  it("clears the unloaded status after a successful retry", async () => {
+    const fetch = vi.fn((query: PageQuery) => {
+      if (fetch.mock.calls.length === 1) {
+        return Promise.reject(new ApiError(422, "REQUEST_INVALID", "bad offset", "req-9"));
+      }
+      return Promise.resolve(pageOf(["row-a"], query));
+    });
+    const { result } = renderHook(() =>
+      useConsolePagedList({
+        pageSize: 50,
+        fetch,
+        initialLoading: false,
+      }),
+    );
+
+    await act(async () => {});
+    expect(result.current.presentation.state).toBe("unloaded");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(result.current.items).toEqual(["row-a"]);
+    expect(result.current.error).toBeNull();
+    expect(result.current.errorRequestId).toBeNull();
+    expect(result.current.presentation.state).toBe("ready");
+    expect(harness.open).not.toHaveBeenCalled();
+  });
+
+  it("keeps the rows and notifies once when a later refresh fails", async () => {
+    const fetch = vi.fn((query: PageQuery) => {
+      if (fetch.mock.calls.length === 1) return Promise.resolve(pageOf(["row-a", "row-b"], query));
+      return Promise.reject(new ApiError(500, "NO_SUCH_CODE", "upstream timed out", "req-later"));
+    });
+    const { result } = renderHook(() =>
+      useConsolePagedList({
+        pageSize: 50,
+        fetch,
+        initialLoading: false,
+      }),
+    );
+
+    await act(async () => {});
+    expect(result.current.items).toEqual(["row-a", "row-b"]);
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+    await act(async () => {
+      await result.current.reload();
+    });
+
+    expect(result.current.items).toEqual(["row-a", "row-b"]);
+    expect(result.current.presentation.state).toBe("ready");
+    expect(harness.open).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByText("Something went wrong. Try again.")).toBeTruthy();
+    fireEvent.click(screen.getByText("Details"));
+    expect(screen.getByText("upstream timed out").closest("details")).toBeTruthy();
+    expect(screen.getByText("Request ID: req-later").closest("details")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });

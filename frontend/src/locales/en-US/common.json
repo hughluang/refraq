@@ -2206,6 +2206,7 @@
   "status.job.failed": "Failed",
   "status.job.cancelled": "Cancelled",
   "status.unknown": "Unknown",
+  "status.unloaded": "Not loaded",
   "channels.editor.status.running": "Running",
   "sources.status.active": "Active",
   "sources.status.disabled": "Disabled",

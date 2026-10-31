@@ -40,8 +40,8 @@ describe("listStateOf", () => {
     ).toBe("ready");
   });
 
-  it("shows error only when there are no rows to keep", () => {
-    expect(listStateOf({ ...base, error: "failed to load" })).toBe("error");
+  it("shows unloaded only when there are no rows to keep", () => {
+    expect(listStateOf({ ...base, error: "failed to load" })).toBe("unloaded");
     expect(
       listStateOf({
         ...base,
@@ -132,9 +132,9 @@ describe("localListSession", () => {
     );
   });
 
-  it("keeps an error retryable when nothing is on screen", () => {
+  it("keeps an unloaded status retryable when nothing is on screen", () => {
     const list = localListSession({ total: 0, error: "offline" });
-    expect(list.presentation.state).toBe("error");
+    expect(list.presentation.state).toBe("unloaded");
     expect(list.error).toBe("offline");
   });
 });

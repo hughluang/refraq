@@ -88,6 +88,101 @@ describe("ListTable status rows", () => {
     vi.useRealTimers();
   });
 
+  it("shows unloaded instead of an empty list and retries from the status", () => {
+    const reload = vi.fn();
+    render(
+      shell(
+        createElement(ListTable, {
+          list: {
+            ...list({ state: "unloaded", refreshing: false }),
+            error: "Load failed",
+            errorRequestId: "req-1",
+            reload,
+          },
+          columnCount: 2,
+          emptyMessage: "Nothing here",
+          emptyAction: createElement("button", { type: "button" }, "Create"),
+          head: createElement(Table.Tr, null, createElement(Table.Th, null, "Name")),
+          children: createElement(Table.Tr, null, createElement(Table.Td, null, "Secret row")),
+        }),
+      ),
+    );
+
+    const status = screen.getByRole("button", { name: "status.unloaded" });
+    const badge = status.querySelector(".mantine-Badge-root");
+    expect(badge?.getAttribute("style") ?? "").toContain("red");
+    expect(status.closest("td")?.getAttribute("colspan")).toBe("2");
+    expect(screen.queryByText("Secret row")).toBeNull();
+    expect(screen.queryByText("Nothing here")).toBeNull();
+    expect(screen.queryByText("common.empty")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create" })).toBeNull();
+    expect(screen.queryByText("Load failed")).toBeNull();
+    expect(screen.queryByText("req-1")).toBeNull();
+    expect(screen.queryByText("common.error")).toBeNull();
+    expect(screen.queryByRole("button", { name: "common.retry" })).toBeNull();
+    fireEvent.click(status);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the problem alert when the list state is error", () => {
+    const reload = vi.fn();
+    render(
+      shell(
+        createElement(ListTable, {
+          list: {
+            ...list({ state: "error", refreshing: false }),
+            error: "Load failed",
+            errorRequestId: "req-1",
+            reload,
+          },
+          columnCount: 2,
+          emptyMessage: "Nothing here",
+          emptyAction: createElement("button", { type: "button" }, "Create"),
+          head: createElement(Table.Tr, null, createElement(Table.Th, null, "Name")),
+          children: createElement(Table.Tr, null, createElement(Table.Td, null, "Secret row")),
+        }),
+      ),
+    );
+
+    expect(screen.getByText("common.error")).toBeTruthy();
+    expect(screen.getByText("Load failed")).toBeTruthy();
+    expect(screen.getByText(/req-1/)).toBeTruthy();
+    expect(screen.queryByText("Secret row")).toBeNull();
+    expect(screen.queryByText("status.unloaded")).toBeNull();
+    expect(screen.queryByText("Nothing here")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create" })).toBeNull();
+    const retry = screen.getByRole("button", { name: "common.retry" });
+    expect(retry.closest("td")?.getAttribute("colspan")).toBe("2");
+    fireEvent.click(retry);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("keeps ready rows when a later failure still has them", () => {
+    const row = createElement(Table.Tr, null, createElement(Table.Td, null, "Kept row"));
+    render(
+      shell(
+        createElement(ListTable, {
+          list: {
+            ...list({ state: "ready", refreshing: false }, 1),
+            error: "failed to load",
+            errorRequestId: "req-2",
+          },
+          columnCount: 1,
+          emptyAction: createElement("button", { type: "button" }, "Create"),
+          head: createElement(Table.Tr, null, createElement(Table.Th, null, "Name")),
+          children: row,
+        }),
+      ),
+    );
+
+    expect(screen.getByText("Kept row")).toBeTruthy();
+    expect(screen.queryByText("status.unloaded")).toBeNull();
+    expect(screen.queryByText("common.empty")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create" })).toBeNull();
+    expect(screen.queryByText("failed to load")).toBeNull();
+    expect(screen.queryByText("req-2")).toBeNull();
+  });
+
   it("offers the empty action and clear filters on no match", () => {
     const { rerender } = render(
       shell(
