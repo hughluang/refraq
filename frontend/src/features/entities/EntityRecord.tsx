@@ -12,16 +12,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { useConsoleTab } from "@/components/layout/consoleTabs";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { suppressLeaveGuard } from "@/components/navigation/leaveGuard";
@@ -169,7 +166,7 @@ export function EntityRecord(props: Props) {
   const [versions, setVersions] = useState<EntityVersion[]>([]);
   const [current, setCurrent] = useState<EntityVersion | null>(null);
   const [loading, setLoading] = useState(mode !== "create");
-  const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobOpened, setJobOpened] = useState(false);
@@ -208,9 +205,7 @@ export function EntityRecord(props: Props) {
     return issue.values ? t(issue.key, issue.values) : t(issue.key);
   };
 
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<EntityRecordFormValues>({
-    onValuesChange: () => setSaveFailure(null),
     initialValues: {
       table_name: "",
       name: "",
@@ -255,7 +250,7 @@ export function EntityRecord(props: Props) {
     if (!entityId) return;
     const generation = ++loadGeneration.current;
     setLoading(true);
-    setError(null);
+    setLoadFailed(false);
     try {
       const [entityRes, versionsRes] = await Promise.all([
         getEntity(entityId),
@@ -284,8 +279,9 @@ export function EntityRecord(props: Props) {
       form.markSaved();
     } catch (err) {
       if (generation !== loadGeneration.current) return;
-      setError(problemMessage(t, err, String(err)));
+      setLoadFailed(true);
       setEntity(null);
+      presentProblemNotification(t, err, { onRetry: () => void load() });
     } finally {
       if (generation === loadGeneration.current) setLoading(false);
     }
@@ -385,18 +381,10 @@ export function EntityRecord(props: Props) {
         change_log_retention_days: retentionDays(values.change_log_retention_days),
       });
       form.markSaved();
-      setSaveFailure(null);
       open?.({ type: "success", message: t("entities.update.success") });
       await load();
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(
-          t,
-          err,
-          form.applyApiError(err),
-          mode === "create" ? String(err) : t("entities.update.failed"),
-        ),
-      );
+      presentSaveFailure(t, err, form.applyApiError);
     }
   };
 
@@ -485,14 +473,23 @@ export function EntityRecord(props: Props) {
     );
   }
 
-  if (mode !== "create" && (error || !entity)) {
+  if (mode !== "create" && loadFailed) {
     return (
       <PageChrome
         title={t("entities.title")}
         description={t("entities.description")}
-        status={error ? "error" : "notFound"}
-        errorMessage={error ?? undefined}
-        onRetry={error ? () => void load() : undefined}
+        status="unloaded"
+        onRetry={() => void load()}
+      />
+    );
+  }
+
+  if (mode !== "create" && !entity) {
+    return (
+      <PageChrome
+        title={t("entities.title")}
+        description={t("entities.description")}
+        status="notFound"
       />
     );
   }
@@ -834,7 +831,6 @@ export function EntityRecord(props: Props) {
             )(event);
           }}
         >
-          <FormErrorSummary failure={saveFailure} />
           <Stack>{panels}</Stack>
         </form>
       )}

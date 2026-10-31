@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Alert,
   Button,
   Group,
   Loader,
@@ -14,6 +13,9 @@ import { useGetIdentity, useTranslate } from "@refinedev/core";
 import { useEffect, useRef, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { Callout } from "@/components/feedback/Callout";
+import { ProblemDetails } from "@/components/feedback/ProblemDetails";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { listAccountGroups } from "@/features/account/api";
 import { loadDataSchema, queryDataRows } from "@/features/entities/accessApi";
 import {
@@ -27,10 +29,24 @@ import type { DataSchema } from "@/features/entities/accessTypes";
 import { ApiError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
-import { problemMessage } from "@/lib/problem";
+import { presentConsoleNotification } from "@/providers/notification-provider";
 import type { CurrentUser } from "@/providers/session-store";
 
 const PAGE_SIZE = 50;
+/** List status only reads this as a flag. The unloaded row does not render it. */
+const QUERY_FAILED = "query-failed";
+
+type Translate = (key: string) => string;
+
+/** Copy that replaces a misleading server detail. Null means use the problem message. */
+function replacedTitle(translate: Translate, err: ApiError): string | null {
+  if (err.code === "ENTITY_NOT_FOUND") return translate("entities.data.noGrant");
+  if (err.code === "ENTITY_ACCESS_INVALID") return translate("entities.data.narrowRejected");
+  const problem = classifyAccessProblem(err.code);
+  if (problem === "pending") return translate("entities.data.pending");
+  if (problem === "combination_limit") return translate("entities.access.overLimit");
+  return null;
+}
 
 type Props = {
   tableName: string;
@@ -39,7 +55,7 @@ type Props = {
 };
 
 type ViewAs = "none" | "user" | "role" | "group";
-/** null: not listing groups (or list failed; failure text is in `message`). */
+/** null: not listing groups, including after that list fails. */
 type GroupsLoad = "loading" | "ready" | null;
 
 export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) {
@@ -54,7 +70,7 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [message, setMessage] = useState<string | null>(null);
+  const [queryFailed, setQueryFailed] = useState(false);
   const [pending, setPending] = useState(false);
   const [busy, setBusy] = useState(active);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -67,15 +83,52 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
   const narrowKey = kind === "role" ? (roleId ?? "") : kind === "group" ? (groupId ?? "") : kind;
   const selectionReady = kind === "role" || kind === "group" ? narrowKey !== "" : true;
 
-  const explain = (err: unknown) => {
+  const notifyFailure = (err: unknown, onRetry: () => void) => {
     const translate = tRef.current;
-    if (!(err instanceof ApiError)) return String(err);
-    if (err.code === "ENTITY_NOT_FOUND") return translate("entities.data.noGrant");
-    if (err.code === "ENTITY_ACCESS_INVALID") return translate("entities.data.narrowRejected");
-    const problem = classifyAccessProblem(err.code);
-    if (problem === "pending") return translate("entities.data.pending");
-    if (problem === "combination_limit") return translate("entities.access.overLimit");
-    return problemMessage(translate, err, err.detail);
+    if (!(err instanceof ApiError)) {
+      presentProblemNotification(translate, err, { onRetry });
+      return;
+    }
+    const replaced = replacedTitle(translate, err);
+    if (replaced == null) {
+      presentProblemNotification(translate, err, { onRetry });
+      return;
+    }
+    const requestId = err.requestId?.trim() ? err.requestId : null;
+    const retry = (
+      <Button type="button" size="compact-xs" variant="subtle" onClick={onRetry}>
+        {translate("common.retry")}
+      </Button>
+    );
+    presentConsoleNotification({
+      type: "error",
+      title: replaced,
+      message:
+        requestId == null ? (
+          retry
+        ) : (
+          <Stack gap={4}>
+            <ProblemDetails
+              detail={null}
+              requestId={requestId}
+              labels={{
+                summary: translate("form.error.details"),
+                requestId: translate("common.requestId"),
+                copy: translate("form.error.copy"),
+                copied: translate("common.copy.success"),
+                copyFailed: translate("common.copy.failed"),
+              }}
+            />
+            {retry}
+          </Stack>
+        ),
+    });
+  };
+
+  const reportQueryFailure = (err: unknown, onRetry: () => void) => {
+    setPending(err instanceof ApiError && classifyAccessProblem(err.code) === "pending");
+    setQueryFailed(true);
+    notifyFailure(err, onRetry);
   };
 
   const clearResults = (nextBusy: boolean) => {
@@ -84,7 +137,7 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
     setSchema(null);
     setRows([]);
     setTotal(0);
-    setMessage(null);
+    setQueryFailed(false);
     setPending(false);
     setBusy(nextBusy);
     setPage(1);
@@ -99,6 +152,10 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
     setGroups([]);
     setGroupsLoad(next === "group" ? "loading" : null);
     if (next !== "group") return;
+    loadGroups(listSeq);
+  };
+
+  const loadGroups = (listSeq: number) => {
     void listAccountGroups()
       .then((listed) => {
         if (listSeq !== groupsSeq.current) return;
@@ -108,7 +165,11 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
       .catch((err: unknown) => {
         if (listSeq !== groupsSeq.current) return;
         setGroupsLoad(null);
-        setMessage(explain(err));
+        notifyFailure(err, () => {
+          if (listSeq !== groupsSeq.current) return;
+          setGroupsLoad("loading");
+          loadGroups(listSeq);
+        });
       });
   };
 
@@ -122,7 +183,7 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
     const seq = ++requestSeq.current;
     setBusy(true);
     setPending(false);
-    setMessage(null);
+    setQueryFailed(false);
     const schemaBody = narrowBody(kind, narrowKey);
     const queryBody = {
       limit: PAGE_SIZE,
@@ -139,7 +200,7 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
         setSchema(next);
         setRows(result.items);
         setTotal(result.total);
-        setMessage(null);
+        setQueryFailed(false);
       } catch (err) {
         if (seq !== requestSeq.current) return;
         if (!held.current) {
@@ -147,8 +208,7 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
           setRows([]);
           setTotal(0);
         }
-        setPending(err instanceof ApiError && classifyAccessProblem(err.code) === "pending");
-        setMessage(explain(err));
+        reportQueryFailure(err, () => setReloadNonce((current) => current + 1));
       } finally {
         if (seq === requestSeq.current) setBusy(false);
       }
@@ -158,17 +218,17 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
     };
   }, [active, selectionReady, kind, narrowKey, tableName, page, reloadNonce]);
 
-  const showError = Boolean(message) && rows.length === 0 && !busy;
+  const showError = queryFailed && rows.length === 0 && !busy;
   const columnCount = Math.max(schema?.attributes.length ?? 1, 1);
   const list = {
     presentation: listPresentationOf({
       loading: busy,
-      error: showError ? message : null,
+      error: showError ? QUERY_FAILED : null,
       total,
       itemCount: rows.length,
       filtered: kind !== "none",
     }),
-    error: showError ? message : null,
+    error: showError ? QUERY_FAILED : null,
     errorRequestId: null,
     reload: () => setReloadNonce((current) => current + 1),
     page,
@@ -176,11 +236,13 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
     pageSize: PAGE_SIZE,
     total,
   };
-  const showTable = active && (selectionReady || schema != null || message != null || busy);
+  const showTable = active && (selectionReady || schema != null || queryFailed || busy);
 
   return (
     <Stack>
-      {physicalHidden ? <Alert>{t("entities.data.physicalHidden")}</Alert> : null}
+      {physicalHidden ? (
+        <Callout tone="info">{t("entities.data.physicalHidden")}</Callout>
+      ) : null}
       <Group align="end">
         <Select
           label={t("entities.data.narrow")}
@@ -233,9 +295,6 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
           {pending ? t("entities.data.retry") : t("entities.data.refresh")}
         </Button>
       </Group>
-      {message && rows.length > 0 ? (
-        <Alert color={pending ? "yellow" : "red"}>{message}</Alert>
-      ) : null}
       {showTable ? (
         <ListTable
           embedded

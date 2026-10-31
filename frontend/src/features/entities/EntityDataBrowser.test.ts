@@ -1,9 +1,12 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
+import { notifications, notificationsStore } from "@mantine/notifications";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { ConsoleNotifications } from "@/providers/notification-provider";
 
 import { listAccountGroups } from "@/features/account/api";
 import { loadDataSchema, queryDataRows } from "@/features/entities/accessApi";
@@ -69,18 +72,37 @@ const schema: DataSchema = {
   business_key: "sku",
 };
 
-function renderBrowser(active = true) {
+function resetNotifications() {
+  const state = notificationsStore.getState();
+  for (const item of [...state.notifications, ...state.queue]) {
+    notifications.hide(item.id);
+  }
+  notifications.clean();
+}
+
+function renderBrowser(active = true, physicalHidden = false) {
   return render(
     createElement(
       MantineProvider,
-      null,
+      { env: "test" },
+      createElement(ConsoleNotifications),
       createElement(EntityDataBrowser, {
         tableName: "material",
-        physicalHidden: false,
+        physicalHidden,
         active,
       }),
     ) as ReactNode,
   );
+}
+
+function paintedStyle(node: HTMLElement): string {
+  let current: HTMLElement | null = node;
+  while (current) {
+    const style = current.getAttribute("style") ?? "";
+    if (style.includes("--alert-") || style.includes("--refraq-tone-")) return style;
+    current = current.parentElement;
+  }
+  return "";
 }
 
 function chooseView(optionName: string) {
@@ -101,6 +123,7 @@ function refreshButton() {
 describe("EntityDataBrowser", () => {
   beforeEach(() => {
     stubDomApis();
+    resetNotifications();
     session.role_id = "role_operator";
     session.role_name = "Operator";
     vi.mocked(loadDataSchema).mockResolvedValue(schema);
@@ -115,7 +138,19 @@ describe("EntityDataBrowser", () => {
 
   afterEach(() => {
     cleanup();
+    resetNotifications();
     vi.clearAllMocks();
+  });
+
+  it("explains hidden physical columns in an info callout", async () => {
+    renderBrowser(true, true);
+
+    const copy = await screen.findByText("entities.data.physicalHidden");
+    expect(copy.closest("[role='alert']")).toBeNull();
+    expect(copy.closest("[role='group']")).toBeTruthy();
+    expect(paintedStyle(copy)).toContain("var(--refraq-tone-info)");
+    expect(paintedStyle(copy)).not.toMatch(/red/i);
+    expect(copy.closest("[role='group']")?.querySelector("button")).toBeNull();
   });
 
   it("shows a dynamic time cell as the response string", async () => {
@@ -229,6 +264,31 @@ describe("EntityDataBrowser", () => {
     });
   });
 
+  it("notifies a group-list failure without marking the data table unloaded", async () => {
+    vi.mocked(listAccountGroups).mockRejectedValue(
+      new ApiError(500, "NO_SUCH_CODE", "groups offline", "req-groups"),
+    );
+    renderBrowser();
+    await screen.findByText("ABC");
+    const schemaCalls = vi.mocked(loadDataSchema).mock.calls.length;
+    chooseView("entities.data.narrow.group");
+
+    const notice = await screen.findByRole("alert");
+    expect(notice.textContent).toContain("problems.unknown");
+    expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(loadDataSchema).toHaveBeenCalledTimes(schemaCalls);
+    expect(queryDataRows).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("form.error.details"));
+    expect(screen.getByText("groups offline").closest("details")).toBeTruthy();
+    expect(screen.getByText("common.requestId: req-groups").closest("details")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
+    await waitFor(() => expect(listAccountGroups).toHaveBeenCalledTimes(2));
+    expect(loadDataSchema).toHaveBeenCalledTimes(schemaCalls);
+    expect(queryDataRows).toHaveBeenCalledTimes(1);
+  });
+
   it("does not query when the caller has no groups", async () => {
     renderBrowser();
     await screen.findByText("ABC");
@@ -246,14 +306,27 @@ describe("EntityDataBrowser", () => {
         404,
         "ENTITY_NOT_FOUND",
         "Business Entity with table_name 'material' was not found",
+        "req-grant",
       ),
     );
     renderBrowser();
 
-    expect(await screen.findByText("entities.data.noGrant")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "status.unloaded" })).toBeTruthy();
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    const notice = screen.getByRole("alert");
+    expect(notice.textContent).toContain("entities.data.noGrant");
+    expect(screen.getByRole("table").querySelector("[role='alert']")).toBeNull();
     expect(
       screen.queryByText("Business Entity with table_name 'material' was not found"),
     ).toBeNull();
+    fireEvent.click(screen.getByText("form.error.details"));
+    expect(screen.getByText("common.requestId: req-grant").closest("details")).toBeTruthy();
+    expect(screen.queryByText("status.unloaded")?.closest("[role='alert']")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
+    await waitFor(() => {
+      expect(loadDataSchema).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("shows the narrow-rejected copy for an identity the caller does not hold", async () => {
@@ -262,7 +335,10 @@ describe("EntityDataBrowser", () => {
     );
     renderBrowser();
 
-    expect(await screen.findByText("entities.data.narrowRejected")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "status.unloaded" })).toBeTruthy();
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert").textContent).toContain("entities.data.narrowRejected");
+    expect(screen.getByRole("table").querySelector("[role='alert']")).toBeNull();
     expect(screen.queryByText("narrow group is not an identity of the subject")).toBeNull();
   });
 
@@ -318,6 +394,44 @@ describe("EntityDataBrowser", () => {
     await waitFor(() => {
       expect(queryDataRows).toHaveBeenCalledWith("material", { limit: 50, offset: 50 });
     });
+  });
+
+  it("keeps the rows and sends one error notification when a later refresh fails", async () => {
+    renderBrowser();
+    expect(await screen.findByText("ABC")).toBeTruthy();
+
+    vi.mocked(queryDataRows).mockRejectedValue(
+      new ApiError(500, "NO_SUCH_CODE", "upstream timed out", "req-later"),
+    );
+    fireEvent.click(refreshButton());
+
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    const notice = screen.getByRole("alert");
+    expect(notice.textContent).toContain("problems.unknown");
+    expect(screen.getByText("ABC")).toBeTruthy();
+    expect(screen.getByRole("table").querySelector("[role='alert']")).toBeNull();
+    expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
+    fireEvent.click(screen.getByText("form.error.details"));
+    expect(screen.getByText("upstream timed out").closest("details")).toBeTruthy();
+    expect(screen.getByText("common.requestId: req-later").closest("details")).toBeTruthy();
+  });
+
+  it("reports access pending as an error notification and keeps the rows", async () => {
+    renderBrowser();
+    expect(await screen.findByText("ABC")).toBeTruthy();
+
+    vi.mocked(loadDataSchema).mockRejectedValue(
+      new ApiError(503, "ENTITY_ACCESS_PENDING", "views are generating", "req-pending"),
+    );
+    fireEvent.click(refreshButton());
+
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    const notice = screen.getByRole("alert");
+    expect(notice.textContent).toContain("entities.data.pending");
+    expect(notice.textContent).not.toContain("views are generating");
+    expect(screen.getByText("ABC")).toBeTruthy();
+    expect(screen.getByRole("table").querySelector("[role='alert']")).toBeNull();
+    expect(screen.queryByText("status.unloaded")).toBeNull();
   });
 
   it("ignores a slow response from the previous identity", async () => {
