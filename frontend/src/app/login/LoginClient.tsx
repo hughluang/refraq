@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Alert,
   Anchor,
   Divider,
   Button,
@@ -17,9 +16,9 @@ import { TextField } from "@/components/form/TextField";
 import { BrandMark } from "@/components/display/BrandMark";
 import { useLogin, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
-import { PageError } from "@/components/feedback/PageError";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { LangSwitcher } from "@/components/LangSwitcher";
 import { useBranding } from "@/features/branding/BrandingProvider";
 import { resolveFromPath } from "@/lib/return-path";
@@ -27,7 +26,7 @@ import {
   probeLoginSession,
   type LoginSessionProbe,
 } from "@/providers/auth-provider";
-import { useSessionStore } from "@/providers/session-store";
+import { presentConsoleNotification } from "@/providers/notification-provider";
 import { ApiError, apiClient } from "@/lib/api";
 import type { PublicAuthProvider } from "@/features/identity-providers/types";
 
@@ -40,21 +39,20 @@ function LoginForm() {
   }>();
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
-  const [failure, setFailure] = useState<string | null>(null);
   const [providers, setProviders] = useState<PublicAuthProvider[]>([]);
-  const [providersError, setProvidersError] = useState<string | null>(null);
 
   const loadProviders = useCallback(() => {
     void apiClient<{ items: PublicAuthProvider[] }>("/auth/providers")
       .then((data) => {
         setProviders(data.items);
-        setProvidersError(null);
       })
       .catch((err: unknown) => {
         setProviders([]);
-        setProvidersError(
-          err instanceof ApiError ? err.detail : t("common.error.loadFailed"),
-        );
+        if (err instanceof ApiError) {
+          presentProblemNotification(t, err, { onRetry: loadProviders });
+          return;
+        }
+        presentLoadFailure(t, loadProviders, t("auth.login.error.network"));
       });
   }, [t]);
 
@@ -69,10 +67,12 @@ function LoginForm() {
       {
         onSuccess: (result) => {
           if (!result.success) {
-            setFailure(loginFailureText(result.error, t("auth.login.error.invalidCredentials")));
+            presentConsoleNotification({
+              type: "error",
+              title: passwordFailureTitle(result.error, t),
+            });
             return;
           }
-          setFailure(null);
           // Hard navigation avoids Refine soft go() + App Router replace/refresh
           // races that leave the client stuck after a successful login.
           window.location.assign(resolveFromPath(searchParams.get("from")));
@@ -90,7 +90,6 @@ function LoginForm() {
           value={account}
           onChange={(event) => {
             setAccount(event.currentTarget.value);
-            setFailure(null);
           }}
           required
           autoComplete="username"
@@ -100,22 +99,14 @@ function LoginForm() {
           value={password}
           onChange={(event) => {
             setPassword(event.currentTarget.value);
-            setFailure(null);
           }}
           required
           autoComplete="current-password"
         />
-        {failure ? (
-          <Text role="alert" c="red" size="sm">
-            {failure}
-          </Text>
-        ) : null}
         <Button type="submit" loading={isPending} fullWidth>
           {t("auth.login.submit")}
         </Button>
-        {providersError ? (
-          <PageError message={providersError} onRetry={loadProviders} />
-        ) : providers.length ? (
+        {providers.length ? (
           <>
             <Divider label={t("auth.login.ssoDivider")} />
             <Stack gap="xs">
@@ -161,6 +152,20 @@ function LoginFallback() {
   );
 }
 
+const PASSWORD_FAILURE_KEYS = [
+  "auth.login.error.invalidCredentials",
+  "auth.login.error.network",
+  "auth.login.error.consoleAccess",
+  "auth.login.error.disabled",
+] as const;
+
+function passwordFailureTitle(error: unknown, t: (key: string) => string): string {
+  const fallback = t("auth.login.error.invalidCredentials");
+  const message = loginFailureText(error, fallback);
+  const allowed = new Set(PASSWORD_FAILURE_KEYS.map((key) => t(key)));
+  return allowed.has(message) ? message : fallback;
+}
+
 function loginFailureText(error: unknown, fallback: string): string {
   if (
     error
@@ -174,28 +179,57 @@ function loginFailureText(error: unknown, fallback: string): string {
   return fallback;
 }
 
-type LoginGateView = "probing" | "form" | "load_error";
+type LoginGateView = "probing" | "form";
+
+function presentLoadFailure(
+  t: (key: string) => string,
+  onRetry: () => void,
+  title = t("common.error.loadFailed"),
+) {
+  presentConsoleNotification({
+    type: "error",
+    title,
+    message: (
+      <Button type="button" size="compact-xs" variant="subtle" onClick={onRetry}>
+        {t("common.retry")}
+      </Button>
+    ),
+  });
+}
 
 function applyLoginProbe(
   result: LoginSessionProbe,
   fromPath: string,
-  setView: (view: Exclude<LoginGateView, "probing">) => void,
+  setView: (view: "form") => void,
+  onLoadError: () => void,
 ) {
   if (result === "active") {
     window.location.assign(fromPath);
     return;
   }
-  setView(result === "load_error" ? "load_error" : "form");
+  setView("form");
+  if (result === "load_error") onLoadError();
 }
 
 function LoginGate() {
   const t = useTranslate();
   const branding = useBranding();
   const searchParams = useSearchParams();
-  const identityError = useSessionStore((s) => s.identityError);
   const errorCode = searchParams.get("error");
   const [view, setView] = useState<LoginGateView>("probing");
   const fromPath = resolveFromPath(searchParams.get("from"));
+  const fromPathRef = useRef(fromPath);
+  fromPathRef.current = fromPath;
+  const tRef = useRef(t);
+  tRef.current = t;
+
+  const reportProbe = useCallback((result: LoginSessionProbe) => {
+    applyLoginProbe(result, fromPathRef.current, setView, () => {
+      presentLoadFailure(tRef.current, () => {
+        void probeLoginSession().then(reportProbe);
+      });
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -203,12 +237,30 @@ function LoginGate() {
       if (cancelled) {
         return;
       }
-      applyLoginProbe(result, fromPath, setView);
+      reportProbe(result);
     });
     return () => {
       cancelled = true;
     };
-  }, [fromPath]);
+  }, [fromPath, reportProbe]);
+
+  useEffect(() => {
+    if (!errorCode) return;
+    if (errorCode === "AUTH_SSO_NOT_ADMITTED") {
+      presentConsoleNotification({
+        type: "warning",
+        title: t("auth.login.sso.pendingTitle"),
+        message: t("auth.login.error.AUTH_SSO_NOT_ADMITTED"),
+      });
+      return;
+    }
+    presentConsoleNotification({
+      type: "error",
+      title: t(`auth.login.error.${errorCode}`, {
+        defaultValue: t("auth.login.error.sso"),
+      }),
+    });
+  }, [errorCode, t]);
 
   if (view === "probing") {
     return <LoginFallback />;
@@ -232,38 +284,7 @@ function LoginGate() {
               </Text>
             ) : null}
           </Stack>
-          {view === "load_error" ? (
-            <PageError
-              message={
-                identityError === "identity_load_failed" || !identityError
-                  ? t("common.error.loadFailed")
-                  : identityError
-              }
-              onRetry={() => {
-                void probeLoginSession().then((result) => {
-                  applyLoginProbe(result, fromPath, setView);
-                });
-              }}
-            />
-          ) : (
-            <>
-              {errorCode === "AUTH_SSO_NOT_ADMITTED" ? (
-                <Alert
-                  color="yellow"
-                  title={t("auth.login.sso.pendingTitle")}
-                >
-                  {t("auth.login.error.AUTH_SSO_NOT_ADMITTED")}
-                </Alert>
-              ) : errorCode ? (
-                <PageError
-                  message={t(`auth.login.error.${errorCode}`, {
-                    defaultValue: t("auth.login.error.sso"),
-                  })}
-                />
-              ) : null}
-              <LoginForm />
-            </>
-          )}
+          <LoginForm />
           <Anchor
             fz={10}
             lh={1.3}
