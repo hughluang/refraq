@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.checkpoints import CheckpointPosition
+from backend.channel.change_range import (
+    ChangeRangeError,
+    open_change_range,
+    propose_change_range,
+    read_change_range,
+)
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
     MAIN_INPUT,
@@ -15,15 +20,7 @@ from backend.channel.nodes.spec import (
     OutputView,
     object_schema,
 )
-from backend.entity.changes import (
-    ChangeEntry,
-    ChangeLogOff,
-    ChangePosition,
-    purge_mark,
-    read_changes,
-    recording_enabled,
-)
-from backend.entity.errors import EntityNotFound
+from backend.entity.changes import ChangeEntry
 
 __all__ = ["NODE_TYPE"]
 
@@ -59,42 +56,20 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     limit = int(config.get("limit") or _DEFAULT_LIMIT)
     shape = str(config.get("shape") or "entries")
     sources = _sources(config.get("sources"))
+    session = hooks.checkpoints
     try:
-        if not recording_enabled(entity_id):
-            return _off()
-        session = hooks.checkpoints
-        if not hooks.ignore_checkpoints:
-            durable = session.durable(node_id, entity_id)
-            mark = purge_mark(entity_id)
-            if (
-                durable is not None
-                and mark is not None
-                and (durable.xact, durable.seq) < (mark.xact, mark.seq)
-            ):
-                return NodeResult(
-                    status="failed",
-                    error_code="CHANNEL_CHECKPOINT_INVALID",
-                    error_message="Checkpoint is behind deleted change-log entries.",
-                )
-        after = (
-            session.proposed(node_id, entity_id)
-            if hooks.ignore_checkpoints
-            else session.stored(node_id, entity_id)
-        )
-        bound = session.bound(node_id, entity_id)
-        page = read_changes(
+        opened = open_change_range(
             entity_id,
-            after=_change_position(after),
-            bound=bound,
-            limit=limit,
+            node_id,
+            session,
+            ignore_checkpoints=hooks.ignore_checkpoints,
         )
-    except ChangeLogOff:
-        return _off()
-    except EntityNotFound:
+        page = read_change_range(opened, limit=limit)
+    except ChangeRangeError as exc:
         return NodeResult(
             status="failed",
-            error_code="CHANNEL_NODE_FAILED",
-            error_message="Entity does not resolve",
+            error_code=exc.code,
+            error_message=exc.message,
         )
     except Exception as exc:  # noqa: BLE001
         return NodeResult(
@@ -102,13 +77,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_code="CHANNEL_NODE_FAILED",
             error_message=str(exc),
         )
-    if page.entries:
-        last = page.entries[-1]
-        session.propose(
-            node_id,
-            entity_id,
-            CheckpointPosition(xact=last.xact, seq=last.sequence),
-        )
+    propose_change_range(session, opened, page.entries)
     visible = [entry for entry in page.entries if _kept(entry, sources)]
     rows = _net(visible) if shape == "net" else [_record(entry) for entry in visible]
     return NodeResult(
@@ -119,14 +88,6 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             "has_more": page.has_more,
             "last_sequence": page.entries[-1].sequence if page.entries else None,
         },
-    )
-
-
-def _off() -> NodeResult:
-    return NodeResult(
-        status="failed",
-        error_code="CHANNEL_CHANGE_LOG_OFF",
-        error_message="Change recording is off for this entity.",
     )
 
 
@@ -141,12 +102,6 @@ def _kept(entry: ChangeEntry, sources: set[str] | None) -> bool:
         return True
     label = entry.source if entry.source is not None else "unattributed"
     return label in sources
-
-
-def _change_position(position: CheckpointPosition | None) -> ChangePosition | None:
-    if position is None:
-        return None
-    return ChangePosition(xact=position.xact, seq=position.seq)
 
 
 def _record(entry: ChangeEntry) -> dict[str, Any]:
