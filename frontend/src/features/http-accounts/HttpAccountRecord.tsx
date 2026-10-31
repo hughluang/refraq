@@ -6,11 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
@@ -31,8 +27,6 @@ import type {
   HttpAccountWrite,
   HttpAuthType,
 } from "@/features/http-accounts/types";
-import { ApiError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 
 const FORM_ID = "http-account-record-form";
 
@@ -76,10 +70,8 @@ function HttpAccountCreate() {
   const t = useTranslate();
   const { open } = useNotification();
   const baseline = useRef<Baseline | null>(null);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<Values>({
     initialValues: EMPTY,
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => validateAccount(values, t, baseline.current),
   });
   return (
@@ -119,12 +111,11 @@ function HttpAccountCreate() {
               window.location.replace(`/console/http-accounts/${created.http_account.id}/edit`);
             })
             .catch((error: unknown) => {
-              setSaveFailure(saveFailureFrom(t, error, form.applyApiError(error), String(error)));
+              presentSaveFailure(t, error, form.applyApiError);
             });
         })}
       >
         <Stack gap="sm">
-          <FormErrorSummary failure={saveFailure} />
           <AccountFields form={form} editable secretState="empty" mode="create" />
         </Stack>
       </form>
@@ -149,18 +140,16 @@ function HttpAccountExisting({
   const baseline = useRef<Baseline | null>(null);
   const [record, setRecord] = useState<HttpAccount | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<unknown>(null);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const form = useConsoleForm<Values>({
     initialValues: EMPTY,
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => validateAccount(values, t, baseline.current),
   });
   const load = useCallback(() => {
     setLoading(true);
-    setError(null);
+    setLoadFailed(false);
     void getHttpAccount(accountId)
       .then((body) => {
         const account = body.http_account;
@@ -169,7 +158,10 @@ function HttpAccountExisting({
         form.markSaved();
         setRecord(account);
       })
-      .catch((err: unknown) => setError(err))
+      .catch((err: unknown) => {
+        setLoadFailed(true);
+        presentProblemNotification(t, err, { onRetry: load });
+      })
       .finally(() => setLoading(false));
   }, [accountId]);
   useEffect(() => {
@@ -182,10 +174,8 @@ function HttpAccountExisting({
     return (
       <PageChrome
         title={t("httpAccounts.title")}
-        status={error ? "error" : "loading"}
-        errorMessage={error ? problemMessage(t, error, t("httpAccounts.loadFailed")) : undefined}
-        requestId={error instanceof ApiError ? error.requestId : null}
-        onRetry={load}
+        status={loadFailed ? "unloaded" : "loading"}
+        onRetry={loadFailed ? load : undefined}
       />
     );
   }
@@ -241,12 +231,11 @@ function HttpAccountExisting({
               open?.({ type: "success", message: t("httpAccounts.saved") });
             })
             .catch((err: unknown) => {
-              setSaveFailure(saveFailureFrom(t, err, form.applyApiError(err), String(err)));
+              presentSaveFailure(t, err, form.applyApiError);
             });
         })}
       >
         <Stack gap="sm">
-          <FormErrorSummary failure={saveFailure} />
           <AccountFields
             form={form}
             editable={editable}

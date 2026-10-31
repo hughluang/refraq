@@ -6,11 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { SwitchField } from "@/components/form/SwitchField";
@@ -34,8 +30,6 @@ import type {
   EmailAccountTestResult,
   EmailEncryption,
 } from "@/features/email-accounts/types";
-import { ApiError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 
 const FORM_ID = "email-account-record-form";
 
@@ -73,10 +67,8 @@ export function EmailAccountRecord(props: Props) {
 function EmailAccountCreate() {
   const t = useTranslate();
   const { open } = useNotification();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<Values>({
     initialValues: EMPTY,
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => validateAccount(values, t),
   });
   return (
@@ -126,12 +118,11 @@ function EmailAccountCreate() {
               window.location.replace(`/console/email-accounts/${created.email_account.id}/edit`);
             })
             .catch((error: unknown) => {
-              setSaveFailure(saveFailureFrom(t, error, form.applyApiError(error), String(error)));
+              presentSaveFailure(t, error, form.applyApiError);
             });
         })}
       >
         <Stack gap="sm">
-          <FormErrorSummary failure={saveFailure} />
           <AccountFields form={form} editable passwordMode="create" />
         </Stack>
       </form>
@@ -155,8 +146,7 @@ function EmailAccountExisting({
   });
   const [record, setRecord] = useState<EmailAccount | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<unknown>(null);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -164,12 +154,11 @@ function EmailAccountExisting({
   const [testResult, setTestResult] = useState<EmailAccountTestResult | null>(null);
   const form = useConsoleForm<Values>({
     initialValues: EMPTY,
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => validateAccount(values, t),
   });
   const load = useCallback(() => {
     setLoading(true);
-    setError(null);
+    setLoadFailed(false);
     void getEmailAccount(accountId)
       .then((body) => {
         setRecord(body.email_account);
@@ -186,7 +175,10 @@ function EmailAccountExisting({
         });
         form.markSaved();
       })
-      .catch((err: unknown) => setError(err))
+      .catch((err: unknown) => {
+        setLoadFailed(true);
+        presentProblemNotification(t, err, { onRetry: load });
+      })
       .finally(() => setLoading(false));
   }, [accountId]);
   useEffect(() => {
@@ -199,10 +191,8 @@ function EmailAccountExisting({
     return (
       <PageChrome
         title={t("emailAccounts.title")}
-        status={error ? "error" : "loading"}
-        errorMessage={error ? problemMessage(t, error, t("emailAccounts.loadFailed")) : undefined}
-        requestId={error instanceof ApiError ? error.requestId : null}
-        onRetry={load}
+        status={loadFailed ? "unloaded" : "loading"}
+        onRetry={loadFailed ? load : undefined}
       />
     );
   }
@@ -303,12 +293,11 @@ function EmailAccountExisting({
               open?.({ type: "success", message: t("emailAccounts.saved") });
             })
             .catch((err: unknown) => {
-              setSaveFailure(saveFailureFrom(t, err, form.applyApiError(err), String(err)));
+              presentSaveFailure(t, err, form.applyApiError);
             });
         })}
       >
         <Stack gap="sm">
-          <FormErrorSummary failure={saveFailure} />
           <AccountFields
             form={form}
             editable={editable}

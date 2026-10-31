@@ -14,19 +14,15 @@ import {
   useTranslate,
 } from "@refinedev/core";
 import { useChangeLanguage } from "next-i18next/client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
-import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormSection } from "@/components/form/FormSection";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -40,7 +36,7 @@ import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { McpSection } from "@/features/account/McpSection";
 import { TokenList } from "@/features/tokens/TokenList";
 import { FOLLOW_BROWSER_TIMEZONE } from "@/providers/display-timezone-catalog";
-import { useTimeZones } from "@/providers/time-zones";
+import { loadTimeZones, type TimeZoneItem } from "@/providers/time-zones";
 import {
   isLocale,
   LOCALE_COOKIE_NAME,
@@ -65,13 +61,35 @@ export function AccountPanel() {
   const { data: identity } = useGetIdentity<CurrentUser>();
   const setUser = useSessionStore((s) => s.setUser);
   const changeLanguage = useChangeLanguage(LOCALE_COOKIE_NAME);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const [timeZones, setTimeZones] = useState<TimeZoneItem[]>([]);
+  const [timeZonesLoading, setTimeZonesLoading] = useState(true);
+  const [timeZonesFailed, setTimeZonesFailed] = useState(false);
+  const [zoneAttempt, setZoneAttempt] = useState(0);
+  const reloadTimeZones = useCallback(() => {
+    setZoneAttempt((value) => value + 1);
+  }, []);
 
-  const {
-    items: timeZones,
-    loading: timeZonesLoading,
-    error: timeZonesError,
-  } = useTimeZones();
+  useEffect(() => {
+    let cancelled = false;
+    setTimeZonesLoading(true);
+    setTimeZonesFailed(false);
+    void loadTimeZones()
+      .then((loaded) => {
+        if (cancelled) return;
+        setTimeZones(loaded);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setTimeZonesFailed(true);
+        presentProblemNotification(t, err, { onRetry: reloadTimeZones });
+      })
+      .finally(() => {
+        if (!cancelled) setTimeZonesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadTimeZones, zoneAttempt]);
   const catalogZones = useMemo(
     () => timeZones.map((zone) => zone.id),
     [timeZones],
@@ -85,7 +103,6 @@ export function AccountPanel() {
       locale: "en-US",
       display_timezone: FOLLOW_BROWSER_TIMEZONE,
     },
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       display_name: (value) =>
         value.trim().length > 0 ? null : t("account.validation.required"),
@@ -144,21 +161,13 @@ export function AccountPanel() {
         await changeLanguage(user.locale);
       }
       profileForm.markSaved();
-      setSaveFailure(null);
       open?.({
         type: "success",
         message: t("account.title"),
         description: t("account.profile.success"),
       });
     } catch (err) {
-      setSaveFailure(
-        saveFailureFrom(
-          t,
-          err,
-          profileForm.applyApiError(err),
-          t("account.profile.error"),
-        ),
-      );
+      presentSaveFailure(t, err, profileForm.applyApiError);
     }
   }
 
@@ -168,6 +177,8 @@ export function AccountPanel() {
     <PageChrome
       title={t("account.title")}
       description={t("account.description")}
+      status={timeZonesFailed ? "unloaded" : "ready"}
+      onRetry={timeZonesFailed ? reloadTimeZones : undefined}
       actions={
         <HeaderActions
           standard={
@@ -207,7 +218,6 @@ export function AccountPanel() {
 
             <form id={PROFILE_FORM_ID} onSubmit={profileForm.onSubmit(onSaveProfile)}>
               <Stack gap="sm">
-                <FormErrorSummary failure={saveFailure} />
                 <FormSection
                   title={t("account.section.profile")}
                   columns={1}
@@ -235,20 +245,15 @@ export function AccountPanel() {
                 {timeZonesLoading ? (
                   <PageBodySkeleton rows={1} />
                 ) : (
-                  <>
-                    {timeZonesError ? (
-                      <PageError message={timeZonesError} />
-                    ) : null}
-                    <SelectField
-                      label={t("account.fields.displayTimezone")}
-                      helper={t("account.fields.displayTimezone.hint")}
-                      data={timezoneSelectData}
-                      searchable
-                      allowDeselect={false}
-                      editable
-                      {...profileForm.fieldProps("display_timezone")}
-                    />
-                  </>
+                  <SelectField
+                    label={t("account.fields.displayTimezone")}
+                    helper={t("account.fields.displayTimezone.hint")}
+                    data={timezoneSelectData}
+                    searchable
+                    allowDeselect={false}
+                    editable
+                    {...profileForm.fieldProps("display_timezone")}
+                  />
                 )}
                 </FormSection>
               </Stack>

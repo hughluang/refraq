@@ -6,11 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { TextField } from "@/components/form/TextField";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
@@ -27,8 +23,6 @@ import {
   testWebhook,
 } from "@/features/webhooks/api";
 import type { Webhook, WebhookTestResult } from "@/features/webhooks/types";
-import { ApiError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 
 const FORM_ID = "webhook-record-form";
 
@@ -49,10 +43,8 @@ export function WebhookRecord(props: Props) {
 function WebhookCreate() {
   const t = useTranslate();
   const { open } = useNotification();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<Values>({
     initialValues: { name: "", url: "", secret: "", clearSecret: false },
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => validateWebhook(values, t),
   });
   return (
@@ -91,12 +83,11 @@ function WebhookCreate() {
               window.location.replace(`/console/webhooks/${created.webhook.id}/edit`);
             })
             .catch((error: unknown) => {
-              setSaveFailure(saveFailureFrom(t, error, form.applyApiError(error), String(error)));
+              presentSaveFailure(t, error, form.applyApiError);
             });
         })}
       >
         <Stack gap="sm">
-          <FormErrorSummary failure={saveFailure} />
           <WebhookFields form={form} editable secretMode="create" />
         </Stack>
       </form>
@@ -120,20 +111,18 @@ function WebhookExisting({
   });
   const [record, setRecord] = useState<Webhook | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<unknown>(null);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<WebhookTestResult | null>(null);
   const form = useConsoleForm<Values>({
     initialValues: { name: "", url: "", secret: "", clearSecret: false },
-    onValuesChange: () => setSaveFailure(null),
     validate: (values) => validateWebhook(values, t),
   });
   const load = useCallback(() => {
     setLoading(true);
-    setError(null);
+    setLoadFailed(false);
     void getWebhook(webhookId)
       .then((body) => {
         setRecord(body.webhook);
@@ -145,7 +134,10 @@ function WebhookExisting({
         });
         form.markSaved();
       })
-      .catch((err: unknown) => setError(err))
+      .catch((err: unknown) => {
+        setLoadFailed(true);
+        presentProblemNotification(t, err, { onRetry: load });
+      })
       .finally(() => setLoading(false));
   }, [webhookId]);
   useEffect(() => {
@@ -158,10 +150,8 @@ function WebhookExisting({
     return (
       <PageChrome
         title={t("webhooks.title")}
-        status={error ? "error" : "loading"}
-        errorMessage={error ? problemMessage(t, error, t("webhooks.loadFailed")) : undefined}
-        requestId={error instanceof ApiError ? error.requestId : null}
-        onRetry={load}
+        status={loadFailed ? "unloaded" : "loading"}
+        onRetry={loadFailed ? load : undefined}
       />
     );
   }
@@ -243,12 +233,11 @@ function WebhookExisting({
               open?.({ type: "success", message: t("webhooks.saved") });
             })
             .catch((err: unknown) => {
-              setSaveFailure(saveFailureFrom(t, err, form.applyApiError(err), String(err)));
+              presentSaveFailure(t, err, form.applyApiError);
             });
         })}
       >
         <Stack gap="sm">
-          <FormErrorSummary failure={saveFailure} />
           <WebhookFields
             form={form}
             editable={editable}
