@@ -11,13 +11,9 @@ import {
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
 import { PasswordInput } from "@/components/form/PasswordInput";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { RecordPicker } from "@/components/form/RecordPicker";
 import {
   roleRecordAdapter,
@@ -73,7 +69,6 @@ export function UserList() {
   const [claimTarget, setClaimTarget] = useState<PendingFederatedIdentity | null>(
     null,
   );
-  const [claimFailure, setClaimFailure] = useState<SaveFailure | null>(null);
   const claimForm = useConsoleForm<{
     mode: "create" | "existing";
     account: string;
@@ -88,7 +83,6 @@ export function UserList() {
       role_id: null,
       user_id: null,
     },
-    onValuesChange: () => setClaimFailure(null),
     validate: {
       account: (value, values) =>
         values.mode === "create" && !value.trim()
@@ -219,13 +213,11 @@ export function UserList() {
       user_id: null,
     });
     claimForm.markSaved();
-    setClaimFailure(null);
     setClaimTarget(item);
   };
 
   const closeClaim = () => {
     setClaimTarget(null);
-    setClaimFailure(null);
     claimForm.reset();
   };
 
@@ -253,19 +245,11 @@ export function UserList() {
         });
       }
       claimForm.markSaved();
-      setClaimFailure(null);
       closeClaim();
       await reloadPendingList();
       await reload();
     } catch (err) {
-      setClaimFailure(
-        saveFailureFrom(
-          t,
-          err,
-          claimForm.applyApiError(err),
-          t("common.error.loadFailed"),
-        ),
-      );
+      presentSaveFailure(t, err, claimForm.applyApiError);
     }
   }
 
@@ -414,7 +398,6 @@ export function UserList() {
         dirty={claimForm.dirty}
         submitting={claimForm.submitting}
         submitLabel={t("users.pending.claim")}
-        summary={<FormErrorSummary failure={claimFailure} />}
         onSubmit={() => void claimForm.submit(submitClaim)}
       >
         <Stack gap="sm">

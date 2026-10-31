@@ -1,17 +1,12 @@
 "use client";
 
 import { Button, Stack } from "@mantine/core";
-import { useState } from "react";
 
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { PasswordInput } from "@/components/form/PasswordInput";
 import { RecordPicker } from "@/components/form/RecordPicker";
 import { roleRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { TextField } from "@/components/form/TextField";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { useForm as useRefineForm, useTranslate } from "@refinedev/core";
 import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
@@ -25,7 +20,6 @@ const USER_CREATE_FORM_ID = "user-create-form";
 
 export function UserCreateForm() {
   const t = useTranslate();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const { onFinish } = useRefineForm<UserCreateValues>({
     resource: ModuleId.users,
     action: ModuleAction.create,
@@ -45,7 +39,6 @@ export function UserCreateForm() {
       password: "",
       role_id: null,
     },
-    onValuesChange: () => setSaveFailure(null),
     validate: {
       account: (value) =>
         value.trim().length > 0 ? null : t("users.validation.required"),
@@ -92,19 +85,11 @@ export function UserCreateForm() {
               });
               suppressLeaveGuard();
             } catch (error) {
-              setSaveFailure(
-                saveFailureFrom(
-                  t,
-                  error,
-                  form.applyApiError(error),
-                  t("common.error.loadFailed"),
-                ),
-              );
+              presentSaveFailure(t, error, form.applyApiError);
             }
           })}
         >
           <Stack gap="sm">
-            <FormErrorSummary failure={saveFailure} />
             <TextField
               label={t("users.fields.account")}
               required

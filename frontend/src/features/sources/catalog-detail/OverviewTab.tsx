@@ -10,16 +10,12 @@ import {
   Title,
 } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import { Instant } from "@/components/display/Instant";
+import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { MultiSelectField } from "@/components/form/MultiSelectField";
-import {
-  FormErrorSummary,
-  saveFailureFrom,
-  type SaveFailure,
-} from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { SelectField } from "@/components/form/SelectField";
 import { TagsField } from "@/components/form/TagsField";
@@ -70,16 +66,12 @@ function formFromObject(obj: CatalogObject): OverviewFormValues {
 
 export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
   const t = useTranslate();
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<OverviewFormValues>({
     initialValues: formFromObject(object),
-    onValuesChange: () => setSaveFailure(null),
   });
   const { save: saveSemantics } = useSemanticsSave(onSaved, {
     onError: (error) => {
-      setSaveFailure(
-        saveFailureFrom(t, error, form.applyApiError(error), t("common.error")),
-      );
+      presentSaveFailure(t, error, form.applyApiError);
     },
   });
 
@@ -110,7 +102,6 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
     if (saved) {
       form.setValues(formFromObject(saved));
       form.markSaved();
-      setSaveFailure(null);
     }
   };
 
@@ -118,7 +109,6 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
     <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
       <form onSubmit={form.onSubmit((values) => save(values))}>
       <Stack>
-        <FormErrorSummary failure={saveFailure} />
         <TextField
           label={t("catalog.semantics.businessName")}
           editable={writable}
