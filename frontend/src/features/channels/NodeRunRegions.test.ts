@@ -1,12 +1,15 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
+import { notifications, notificationsStore } from "@mantine/notifications";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getExecutionOutput, listRounds, nodeSample } from "@/features/channels/api";
 import { ResultRegion, SampleBar, UpstreamRegion, useNodeSample } from "@/features/channels/NodeRunRegions";
+import { ApiError } from "@/lib/api";
+import { ConsoleNotifications } from "@/providers/notification-provider";
 import {
   EMPTY_GRAPH,
   type ChannelRunDetail,
@@ -208,7 +211,17 @@ function upstream(overrides: Partial<NodeSampleUpstream> = {}): NodeSampleUpstre
 }
 
 function mount(node: ReturnType<typeof createElement>) {
-  render(createElement(MantineProvider, { env: "test" }, node));
+  render(
+    createElement(MantineProvider, { env: "test" }, createElement(ConsoleNotifications), node),
+  );
+}
+
+function resetNotifications() {
+  const state = notificationsStore.getState();
+  for (const item of [...state.notifications, ...state.queue]) {
+    notifications.hide(item.id);
+  }
+  notifications.clean();
 }
 
 beforeEach(() => {
@@ -221,9 +234,17 @@ beforeEach(() => {
       removeEventListener: vi.fn(),
     }),
   });
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub;
+  resetNotifications();
 });
 
 afterEach(() => {
+  resetNotifications();
   cleanup();
   vi.clearAllMocks();
 });
@@ -634,7 +655,7 @@ describe("node run regions", () => {
     expect(screen.getByText("Idle")).toBeTruthy();
   });
 
-  it("shows a load failure instead of an empty result", () => {
+  it("shows unloaded when a result failed and there is nothing to show", async () => {
     mount(
       createElement(ResultRegion, {
         channelId: "chn_1",
@@ -654,11 +675,84 @@ describe("node run regions", () => {
         onRoundsTotal: vi.fn(),
       }),
     );
-    expect(screen.getByText("Output failed")).toBeTruthy();
-    expect(screen.queryByText("Absent")).toBeNull();
+    const region = screen.getByRole("region", { name: "This node's result" });
+    expect(within(region).getByRole("button", { name: "status.unloaded" })).toBeTruthy();
+    expect(within(region).queryByText("Output failed")).toBeNull();
+    expect(within(region).queryByText("Absent")).toBeNull();
+    const alert = await screen.findByRole("alert");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(alert.textContent).toContain("Output failed");
   });
 
-  it("keeps the previous result when a later sample fails", () => {
+  it("shows unloaded when upstream failed and there is nothing to show", async () => {
+    mount(
+      createElement(UpstreamRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        hasUpstream: true,
+        detail: detail("succeeded"),
+        sample: null,
+        loading: false,
+        failure: new Error("down"),
+        catalog,
+        ports: [],
+        roundOf: () => 0,
+      }),
+    );
+    const region = screen.getByRole("region", { name: "Upstream outputs" });
+    expect(within(region).getByRole("button", { name: "status.unloaded" })).toBeTruthy();
+    expect(within(region).queryByText("Output failed")).toBeNull();
+    expect(within(region).queryByText("No upstream output")).toBeNull();
+  });
+
+  it("retries the sample from the unloaded status", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(nodeSample).mockRejectedValue(new Error("down"));
+      function Probe() {
+        const state = useNodeSample({
+          channelId: "chn_1",
+          jobId: "job_1",
+          nodeId: "b",
+          graph: EMPTY_GRAPH,
+          scope: undefined,
+          enabled: true,
+        });
+        return createElement(ResultRegion, {
+          channelId: "chn_1",
+          jobId: "job_1",
+          nodeId: "b",
+          nodeType: "transform.set_fields",
+          nodes: [],
+          detail: detail("succeeded"),
+          sample: state.sample,
+          loading: state.loading,
+          failure: state.failure,
+          catalog,
+          ports: [],
+          graph: null,
+          selectedRound: null,
+          onRound: vi.fn(),
+          onRoundsTotal: vi.fn(),
+        });
+      }
+      mount(createElement(Probe));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(nodeSample).toHaveBeenCalledTimes(1);
+      const region = screen.getByRole("region", { name: "This node's result" });
+      fireEvent.click(within(region).getByRole("button", { name: "status.unloaded" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(nodeSample).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the previous result when a later sample fails", async () => {
     mount(
       createElement(ResultRegion, {
         channelId: "chn_1",
@@ -680,8 +774,91 @@ describe("node run regions", () => {
         onRoundsTotal: vi.fn(),
       }),
     );
-    expect(screen.getByRole("alert").textContent).toBe("Output failed");
+    const region = screen.getByRole("region", { name: "This node's result" });
+    expect(within(region).queryByRole("alert")).toBeNull();
+    expect(within(region).queryByText("Output failed")).toBeNull();
+    expect(within(region).getByText("kept")).toBeTruthy();
+    const alert = await screen.findByRole("alert");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(alert.textContent).toContain("Output failed");
+    expect(alert.textContent).not.toContain("feedback.repeated");
+  });
+
+  it("keeps upstream output when a later sample fails", async () => {
+    mount(
+      createElement(UpstreamRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        hasUpstream: true,
+        detail: detail("succeeded"),
+        sample: sample({ upstream: [upstream()] }),
+        loading: false,
+        failure: new Error("down"),
+        catalog,
+        ports: [],
+        roundOf: () => 0,
+      }),
+    );
+    const region = screen.getByRole("region", { name: "Upstream outputs" });
+    expect(within(region).queryByRole("alert")).toBeNull();
+    expect(within(region).queryByText("Output failed")).toBeNull();
+    expect(within(region).getByText("S-01")).toBeTruthy();
+    const alert = await screen.findByRole("alert");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(alert.textContent).toContain("Output failed");
+    expect(alert.textContent).not.toContain("feedback.repeated");
+  });
+
+  it("notifies once when upstream and result share one sample failure", async () => {
+    const failure = new ApiError(500, "CHANNEL_NODE_FAILED", "backend said this", "req-3");
+    const kept = sample({
+      node: { ...sample().node, state: "ok", output: { code: "kept" } },
+      upstream: [upstream()],
+    });
+    mount(
+      createElement(
+        "div",
+        null,
+        createElement(UpstreamRegion, {
+          channelId: "chn_1",
+          jobId: "job_1",
+          hasUpstream: true,
+          detail: detail("succeeded"),
+          sample: kept,
+          loading: false,
+          failure,
+          catalog,
+          ports: [],
+          roundOf: () => 0,
+        }),
+        createElement(ResultRegion, {
+          channelId: "chn_1",
+          jobId: "job_1",
+          nodeId: "b",
+          nodeType: "transform.set_fields",
+          nodes: [],
+          detail: detail("succeeded"),
+          sample: kept,
+          loading: false,
+          failure,
+          catalog,
+          ports: [],
+          graph: null,
+          selectedRound: null,
+          onRound: vi.fn(),
+          onRoundsTotal: vi.fn(),
+        }),
+      ),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(alert.textContent).not.toContain("feedback.repeated");
+    expect(screen.getByText("Node failed").closest("details")).toBeNull();
+    expect(screen.getByText("common.requestId: req-3").closest("details")).toBeTruthy();
     expect(screen.getByText("kept")).toBeTruthy();
+    expect(screen.getByText("S-01")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Upstream outputs" }).querySelector("[role='alert']")).toBeNull();
+    expect(screen.getByRole("region", { name: "This node's result" }).querySelector("[role='alert']")).toBeNull();
   });
 
   it("does not page a preview-only rows result", () => {

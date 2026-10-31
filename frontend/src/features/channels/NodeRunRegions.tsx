@@ -1,14 +1,18 @@
 "use client";
 
-import { Button, Group, Stack, Text } from "@mantine/core";
+import { Button, Group, Stack, Text, UnstyledButton } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { listRounds, nodeSample } from "@/features/channels/api";
 import { listItemProperties, readBatchOutput } from "@/features/channels/datasetView";
 import { NodeRegion } from "@/features/channels/NodeRegion";
 import { RunExecutionOutput, type OutputPick, type PathSegment } from "@/features/channels/RunExecutionOutput";
 import { roundControlIds } from "@/features/channels/runSession";
+import { ApiError } from "@/lib/api";
+import { presentConsoleNotification } from "@/providers/notification-provider";
 import type {
   ChannelRun,
   ChannelRunDetail,
@@ -36,6 +40,49 @@ export type RunNodeInfo = {
 };
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+let reportedOutputFailure: unknown;
+let sampleRetry: (() => void) | null = null;
+
+function UnloadedStatus() {
+  return (
+    <UnstyledButton type="button" onClick={() => sampleRetry?.()}>
+      <StatusBadge tone="danger" labelKey="status.unloaded" />
+    </UnstyledButton>
+  );
+}
+
+function showUnloaded(
+  failure: unknown,
+  sample: NodeSample | null,
+  sentence: string | null,
+  errorText: string | null,
+): boolean {
+  return failure != null && sample == null && errorText != null && sentence === errorText;
+}
+
+function reportOutputFailure(t: Translate, failure: unknown) {
+  if (failure == null) {
+    reportedOutputFailure = null;
+    return;
+  }
+  if (Object.is(reportedOutputFailure, failure)) return;
+  reportedOutputFailure = failure;
+  const onRetry = () => sampleRetry?.();
+  if (failure instanceof ApiError) {
+    presentProblemNotification(t, failure, { onRetry });
+    return;
+  }
+  presentConsoleNotification({
+    type: "error",
+    title: t("channels.run.outputFailed"),
+    message: (
+      <Button type="button" size="compact-xs" variant="subtle" onClick={onRetry}>
+        {t("common.retry")}
+      </Button>
+    ),
+  });
+}
 
 export function useNodeSample({
   channelId,
@@ -70,6 +117,14 @@ export function useNodeSample({
   const request = useRef(0);
   const previous = useRef<{ graphKey: string; other: string } | null>(null);
   const seenIdentity = useRef<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    sampleRetry = () => setAttempt((value) => value + 1);
+    return () => {
+      sampleRetry = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!enabled || !channelId || !jobId || !nodeId) {
@@ -120,7 +175,7 @@ export function useNodeSample({
       window.clearTimeout(timer);
       if (request.current === id) request.current += 1;
     };
-  }, [enabled, channelId, jobId, nodeId, graphKey, scopeKey, recordedKey, containerRound]);
+  }, [enabled, channelId, jobId, nodeId, graphKey, scopeKey, recordedKey, containerRound, attempt]);
 
   return { sample, loading, failure };
 }
@@ -336,19 +391,20 @@ export function UpstreamRegion({
   const t = useTranslate();
   const errorText = failure == null ? null : problemMessage(t, failure, t("channels.run.outputFailed"));
   const sentence = upstreamSentence(t, hasUpstream, detail, channelId, jobId, sample, loading, errorText);
+  useEffect(() => {
+    reportOutputFailure(t, failure);
+  }, [failure, t]);
+  const unloaded = showUnloaded(failure, sample, sentence, errorText);
   return (
     <NodeRegion title={t("channels.run.upstream")} tone="run">
-      {errorText && sample ? (
-        <Text size="xs" c="red" role="alert">
-          {errorText}
-        </Text>
-      ) : null}
       {onInsert && !insertReady ? (
         <Text size="xs" c="dimmed">
           {t("channels.template.focusRequired")}
         </Text>
       ) : null}
-      {sentence || !sample ? (
+      {unloaded ? (
+        <UnloadedStatus />
+      ) : sentence || !sample ? (
         <Text size="sm" c="dimmed">
           {sentence}
         </Text>
@@ -623,6 +679,10 @@ export function ResultRegion({
   const t = useTranslate();
   const errorText = failure == null ? null : problemMessage(t, failure, t("channels.run.outputFailed"));
   const sentence = resultSentence(t, detail, channelId, jobId, sample, loading, errorText);
+  useEffect(() => {
+    reportOutputFailure(t, failure);
+  }, [failure, t]);
+  const unloaded = showUnloaded(failure, sample, sentence, errorText);
   const bodyStopId =
     sample?.node.error?.code === "CHANNEL_LOOP_BODY_STOPPED" ? detail?.run.failed_node_id : null;
   const bodyStopName = bodyStopId
@@ -633,12 +693,9 @@ export function ResultRegion({
   const batch = readBatchOutput(output);
   return (
     <NodeRegion title={t("channels.run.result")} tone="run">
-      {errorText && sample ? (
-        <Text size="xs" c="red" role="alert">
-          {errorText}
-        </Text>
-      ) : null}
-      {sentence ? (
+      {unloaded ? (
+        <UnloadedStatus />
+      ) : sentence ? (
         <Text size="sm" c="dimmed">
           {sentence}
         </Text>

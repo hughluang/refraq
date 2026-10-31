@@ -1,7 +1,8 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { notifications, notificationsStore } from "@mantine/notifications";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -10,6 +11,7 @@ import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
 import { EMPTY_GRAPH, type Graph, type NodeExecution, type OutputView } from "@/features/channels/types";
 import { ApiError } from "@/lib/api";
 import { copyText } from "@/lib/copy-text";
+import { ConsoleNotifications } from "@/providers/notification-provider";
 
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
@@ -65,6 +67,14 @@ vi.mock("@/lib/copy-text", () => ({
   copyText: vi.fn(() => Promise.resolve()),
 }));
 
+function resetNotifications() {
+  const state = notificationsStore.getState();
+  for (const item of [...state.notifications, ...state.queue]) {
+    notifications.hide(item.id);
+  }
+  notifications.clean();
+}
+
 beforeEach(() => {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -75,15 +85,25 @@ beforeEach(() => {
       removeEventListener: vi.fn(),
     }),
   });
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub;
+  resetNotifications();
 });
 
 afterEach(() => {
+  resetNotifications();
   cleanup();
   vi.clearAllMocks();
 });
 
 function mount(node: ReturnType<typeof createElement>) {
-  render(createElement(MantineProvider, { env: "test" }, node));
+  return render(
+    createElement(MantineProvider, { env: "test" }, createElement(ConsoleNotifications), node),
+  );
 }
 
 function roundCell(round: number, column: number): HTMLElement {
@@ -294,8 +314,13 @@ it("shows a clipboard failure for the dataset id", async () => {
       },
     }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Copy dataset id dst_1" }));
-  expect((await screen.findByText("common.copy.failed")).textContent).toBe("common.copy.failed");
+  const copyId = screen.getByRole("button", { name: "Copy dataset id dst_1" });
+  fireEvent.click(copyId);
+  const alert = await screen.findByRole("alert");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(alert.textContent).toContain("common.copy.failed");
+  expect(copyId.parentElement?.querySelector("[role='alert']")).toBeNull();
+  expect(screen.getByRole("button", { name: "Copy dataset id dst_1" })).toBeTruthy();
 });
 
 it("reports a rows page that is not a list and does not keep another page's rows", async () => {
@@ -330,8 +355,113 @@ it("reports a rows page that is not a list and does not keep another page's rows
   expect(screen.queryByText("FROM-TOTAL")).toBeNull();
   expect(screen.queryByText("E-0")).toBeNull();
   resolvePage({ value: { nope: true } });
-  expect(await screen.findByText("The rows could not be loaded")).toBeTruthy();
+  const table = await screen.findByRole("table");
+  expect(within(table).queryByText("The rows could not be loaded")).toBeNull();
+  expect(within(table).queryByRole("alert")).toBeNull();
+  expect(within(table).getByRole("button", { name: "status.unloaded" })).toBeTruthy();
+  const alert = await screen.findByRole("alert");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(alert.textContent).toContain("The rows could not be loaded");
   expect(screen.queryByText("FROM-TOTAL")).toBeNull();
+  expect(screen.queryByText("E-0")).toBeNull();
+  fireEvent.click(within(table).getByRole("button", { name: "status.unloaded" }));
+  await waitFor(() => expect(getExecutionOutput).toHaveBeenCalledTimes(3));
+});
+
+it("keeps preview rows when a later row page fails", async () => {
+  vi.mocked(getExecutionOutput).mockRejectedValue(
+    new ApiError(500, "CHANNEL_NODE_FAILED", "rows down", "req-4"),
+  );
+  mount(
+    createElement(RunExecutionOutput, {
+      channelId: "chn_1",
+      jobId: "job_1",
+      view: rowsView,
+      value: { rows: [{ code: "E-0" }] },
+      truncated: true,
+      seq: 4,
+    }),
+  );
+  expect(await screen.findByText("E-0")).toBeTruthy();
+  const alert = await screen.findByRole("alert");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(screen.getByText("Node failed").closest("details")).toBeNull();
+  expect(screen.getByText("common.requestId: req-4").closest("details")).toBeTruthy();
+  expect(screen.getByRole("table").querySelector("[role='alert']")).toBeNull();
+  expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
+  expect(screen.getByText("E-0")).toBeTruthy();
+});
+
+it("notifies when recorded steps fail to load and shows unloaded", async () => {
+  vi.mocked(listRounds).mockRejectedValue(
+    new ApiError(500, "CHANNEL_NODE_FAILED", "rounds down", "req-8"),
+  );
+  mount(
+    createElement(RunExecutionOutput, {
+      channelId: "chn_1",
+      jobId: "job_1",
+      view: forView,
+      value: { count: 2 },
+      seq: 7,
+      rowProperties: ["code"],
+    }),
+  );
+  const table = await screen.findByRole("table");
+  expect(within(table).queryByRole("alert")).toBeNull();
+  expect(within(table).queryByText("Output failed")).toBeNull();
+  const status = within(table).getByRole("button", { name: "status.unloaded" });
+  const alert = await screen.findByRole("alert");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(screen.getByText("Node failed").closest("details")).toBeNull();
+  expect(screen.getByText("common.requestId: req-8").closest("details")).toBeTruthy();
+  fireEvent.click(status);
+  await waitFor(() => expect(listRounds).toHaveBeenCalledTimes(2));
+});
+
+it("keeps recorded steps when a later load fails", async () => {
+  const rounds = {
+    items: [
+      {
+        round: 0,
+        step_preview: { current: { code: "S-01" } },
+        step_truncated: false,
+        step_totals: {},
+        status_counts: { succeeded: 1 },
+      },
+    ],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  };
+  vi.mocked(listRounds).mockReset();
+  vi.mocked(listRounds).mockResolvedValue(rounds);
+  const props = {
+    channelId: "chn_1",
+    jobId: "job_1",
+    view: forView,
+    value: { count: 1, current: { code: "S-01" } },
+    seq: 7,
+    rowProperties: ["code"],
+    recordedKey: "one",
+  };
+  const shown = mount(createElement(RunExecutionOutput, props));
+  expect(await screen.findByText("S-01")).toBeTruthy();
+  vi.mocked(listRounds).mockReset();
+  vi.mocked(listRounds).mockRejectedValue(new Error("down"));
+  shown.rerender(
+    createElement(
+      MantineProvider,
+      { env: "test" },
+      createElement(ConsoleNotifications),
+      createElement(RunExecutionOutput, { ...props, recordedKey: "two" }),
+    ),
+  );
+  const alert = await screen.findByRole("alert");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(alert.textContent).toContain("Output failed");
+  expect(screen.getByText("S-01")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
+  expect(screen.getByRole("table").querySelector("[role='alert']")).toBeNull();
 });
 
 it("renders counts as labeled metrics and keeps a failed output beside its error", () => {

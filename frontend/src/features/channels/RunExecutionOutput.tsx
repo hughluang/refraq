@@ -1,9 +1,11 @@
 "use client";
 
-import { Code, Pagination, Stack, Table, Text } from "@mantine/core";
+import { Button, Code, Pagination, Stack, Table, Text, UnstyledButton } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useRef, useState } from "react";
 
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { getExecutionOutput, listRounds } from "@/features/channels/api";
 import { BatchRoundRows } from "@/features/channels/BatchRoundRows";
 import { DatasetCard, DatasetRowTable } from "@/features/channels/DatasetRows";
@@ -22,12 +24,57 @@ import type {
   NodeExecution,
   OutputView,
 } from "@/features/channels/types";
+import { ApiError } from "@/lib/api";
 import { copyText } from "@/lib/copy-text";
 import { pageCountOf } from "@/lib/pagination";
-import { problemMessage } from "@/lib/problem";
+import { presentConsoleNotification } from "@/providers/notification-provider";
 
 const ROW_PAGE = 100;
 const ROUND_PAGE = 50;
+
+function useLoadFailureNotice(failure: unknown, titleKey: string, retry: () => void) {
+  const t = useTranslate();
+  const reported = useRef<unknown>(null);
+  const retryRef = useRef(retry);
+  retryRef.current = retry;
+  const tRef = useRef(t);
+  tRef.current = t;
+  useEffect(() => {
+    if (failure == null) {
+      reported.current = null;
+      return;
+    }
+    if (reported.current === failure) return;
+    reported.current = failure;
+    const onRetry = () => retryRef.current();
+    const translate = tRef.current;
+    if (failure instanceof ApiError) {
+      presentProblemNotification(translate, failure, { onRetry });
+      return;
+    }
+    presentConsoleNotification({
+      type: "error",
+      title: translate(titleKey),
+      message: (
+        <Button type="button" size="compact-xs" variant="subtle" onClick={onRetry}>
+          {translate("common.retry")}
+        </Button>
+      ),
+    });
+  }, [failure, titleKey]);
+}
+
+function UnloadedRow({ columns, onRetry }: { columns: number; onRetry: () => void }) {
+  return (
+    <Table.Tr>
+      <Table.Td colSpan={columns}>
+        <UnstyledButton type="button" onClick={onRetry}>
+          <StatusBadge tone="danger" labelKey="status.unloaded" />
+        </UnstyledButton>
+      </Table.Td>
+    </Table.Tr>
+  );
+}
 
 export type PathSegment = string | number;
 export type OutputPick = (path: PathSegment[]) => void;
@@ -318,23 +365,26 @@ function RowsTable({
   const t = useTranslate();
   const [page, setPage] = useState(1);
   const [remote, setRemote] = useState<{ page: number; items: unknown[]; total: number } | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
+  const retry = () => setAttempt((value) => value + 1);
+  useLoadFailureNotice(failure, "channels.run.rowsFailed", retry);
   const knownTotal = totals[listKey];
   const total = remote?.total ?? knownTotal ?? embedded.length;
 
   useEffect(() => {
     setPage(1);
     setRemote(null);
-    setFailed(false);
+    setFailure(null);
   }, [channelId, jobId, seq, listKey]);
 
   useEffect(() => {
     if (previewOnly || seq == null || (page === 1 && (knownTotal != null || !truncated))) {
-      setFailed(false);
+      setFailure(null);
       return;
     }
     let cancelled = false;
-    setFailed(false);
+    setFailure(null);
     void getExecutionOutput(channelId, jobId, seq, {
       path: listKey,
       limit: ROW_PAGE,
@@ -344,37 +394,35 @@ function RowsTable({
         if (cancelled) return;
         if ("items" in body && Array.isArray(body.items) && typeof body.total === "number") {
           setRemote({ page, items: body.items, total: body.total });
+          setFailure(null);
           return;
         }
         setRemote((current) => (current?.page === page ? null : current));
-        setFailed(true);
+        setFailure({ shape: true });
       })
-      .catch(() => {
+      .catch((reason: unknown) => {
         if (cancelled) return;
         setRemote((current) => (current?.page === page ? null : current));
-        setFailed(true);
+        setFailure(reason);
       });
     return () => {
       cancelled = true;
     };
-  }, [previewOnly, seq, page, knownTotal, truncated, channelId, jobId, listKey]);
+  }, [previewOnly, seq, page, knownTotal, truncated, channelId, jobId, listKey, attempt]);
 
   const shown = page === 1 ? embedded.slice(0, ROW_PAGE) : remote?.page === page ? remote.items : [];
   const offset = (page - 1) * ROW_PAGE;
   const columns = rowColumnKeys(rowProperties, shown);
   const scalar = columns.length === 0;
+  const columnCount = Math.max(1, scalar ? 1 : columns.length);
   const pageCount =
     previewOnly || seq == null ? 1 : Math.max(1, pageCountOf(total, ROW_PAGE));
+  const unloaded = failure != null && shown.length === 0;
   return (
     <Stack gap={4}>
       <Text size="xs" c="dimmed">
         {t("channels.run.showingRows", { shown: shown.length, total })}
       </Text>
-      {failed ? (
-        <Text size="xs" c="red" role="alert">
-          {t("channels.run.rowsFailed")}
-        </Text>
-      ) : null}
       <Table>
         <Table.Thead>
           <Table.Tr>
@@ -388,7 +436,10 @@ function RowsTable({
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
-          {shown.map((row, index) => {
+          {unloaded ? <UnloadedRow columns={columnCount} onRetry={retry} /> : null}
+          {unloaded
+            ? null
+            : shown.map((row, index) => {
             const absolute = offset + index;
             return (
               <Table.Tr key={absolute}>
@@ -466,7 +517,6 @@ function DatasetBlock({
   onPick?: OutputPick;
 }) {
   const t = useTranslate();
-  const [copyFailed, setCopyFailed] = useState(false);
   return (
     <Stack gap={4}>
       <Text size="xs">
@@ -481,19 +531,16 @@ function DatasetBlock({
         aria-label={t("channels.run.copyDatasetId", { id: dataset.dataset_id })}
         onClick={() => {
           onPick?.([...path, "dataset_id"]);
-          void copyText(dataset.dataset_id).then(
-            () => setCopyFailed(false),
-            () => setCopyFailed(true),
-          );
+          void copyText(dataset.dataset_id).catch(() => {
+            presentConsoleNotification({
+              type: "error",
+              title: t("common.copy.failed"),
+            });
+          });
         }}
       >
         {dataset.dataset_id}
       </button>
-      {copyFailed ? (
-        <Text size="xs" c="red" role="alert">
-          {t("common.copy.failed")}
-        </Text>
-      ) : null}
       <DatasetRowTable
         channelId={channelId}
         jobId={jobId}
@@ -620,34 +667,49 @@ function RoundTable({
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<ContainerRound[]>([]);
   const [total, setTotal] = useState(0);
-  const [failed, setFailed] = useState<string | null>(null);
+  const [failure, setFailure] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
   const [expanded, setExpanded] = useState<number | null>(null);
   const onTotal = useRef(onRoundsTotal);
   onTotal.current = onRoundsTotal;
+  const loadedPage = useRef<number | null>(null);
+  const roundIdentity = `${channelId}:${jobId}:${seq ?? ""}`;
+  const roundIdentityRef = useRef(roundIdentity);
+  if (roundIdentityRef.current !== roundIdentity) {
+    roundIdentityRef.current = roundIdentity;
+    loadedPage.current = null;
+  }
+  const retry = () => setAttempt((value) => value + 1);
+  useLoadFailureNotice(failure, "channels.run.outputFailed", retry);
 
   useEffect(() => {
     if (seq == null) return;
     let cancelled = false;
-    setFailed(null);
+    setFailure(null);
     void listRounds(channelId, jobId, seq, {
       limit: ROUND_PAGE,
       offset: (page - 1) * ROUND_PAGE,
     })
       .then((body) => {
         if (cancelled) return;
+        loadedPage.current = page;
         setItems(body.items);
         setTotal(body.total);
+        setFailure(null);
         onTotal.current?.(body.total);
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
-        setItems([]);
-        setFailed(problemMessage(t, reason, t("channels.run.outputFailed")));
+        if (loadedPage.current !== page) {
+          setItems([]);
+          setTotal(0);
+        }
+        setFailure(reason);
       });
     return () => {
       cancelled = true;
     };
-  }, [channelId, jobId, seq, page, recordedKey, t]);
+  }, [channelId, jobId, seq, page, recordedKey, attempt]);
 
   if (seq == null) {
     return (
@@ -660,13 +722,10 @@ function RoundTable({
   const spread = itemKey === "current" && (rowProperties.length > 0 || currents.some(isRecord));
   const columns = spread ? rowColumnKeys(rowProperties, currents.filter(isRecord)) : [];
   const pageCount = pageCountOf(total, ROUND_PAGE);
+  const roundColumns = roundColumnCount(itemKey, spread, columns);
+  const unloaded = failure != null && items.length === 0;
   return (
     <Stack gap={4}>
-      {failed ? (
-        <Text size="xs" c="red" role="alert">
-          {failed}
-        </Text>
-      ) : null}
       <Table>
         <Table.Thead>
           <Table.Tr>
@@ -710,7 +769,10 @@ function RoundTable({
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
-          {items.map((item) => {
+          {unloaded ? <UnloadedRow columns={roundColumns} onRetry={retry} /> : null}
+          {unloaded
+            ? null
+            : items.map((item) => {
             const failedRound = (item.status_counts.failed ?? 0) > 0;
             const selected = selectedRound === item.round;
             const step = isRecord(item.step_preview) ? item.step_preview : null;
@@ -908,6 +970,15 @@ function batchFigures(
   }
   const window = batchOrdWindow(step.index, batchSize, total);
   return { from: window.afterOrd + 1, to: window.endOrd, count };
+}
+
+function roundColumnCount(itemKey: string, spread: boolean, columns: readonly string[]): number {
+  let count = 2;
+  if (itemKey === "rows") count += 2;
+  else if (spread) count += columns.length;
+  else count += 1;
+  if (itemKey === "index") count += 1;
+  return count;
 }
 
 function statusText(t: (key: string, options?: Record<string, unknown>) => string, counts: Record<string, number>): string {
