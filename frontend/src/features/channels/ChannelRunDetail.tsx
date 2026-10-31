@@ -2,11 +2,11 @@
 
 import { Button, Group, Stack, Text } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
-import { StaleNotice } from "@/components/display/StaleNotice";
 import { presentJobStatus } from "@/components/display/statusTone";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
@@ -19,8 +19,8 @@ import { formatRunError } from "@/features/channels/problemLabel";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import { isTerminalRun } from "@/features/channels/runSession";
 import type { NodeTypeSpec } from "@/features/channels/types";
-import { useLiveStatus } from "@/hooks/useLiveStatus";
-import { ApiError } from "@/lib/api";
+import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
+import { isSessionExpiredError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
 export function ChannelRunDetail({
@@ -38,14 +38,44 @@ export function ChannelRunDetail({
   });
   const [catalog, setCatalog] = useState<NodeTypeSpec[]>([]);
   const [rerunning, setRerunning] = useState(false);
+  const tRef = useRef(t);
+  tRef.current = t;
+  const unloadedNotice = useRef(false);
+  const retryRef = useRef<() => Promise<void>>(async () => {});
+  const reportRefreshFailure = (result: LiveRefreshResult) => {
+    if (result.ok || isSessionExpiredError(result.error)) return;
+    presentProblemNotification(tRef.current, result.error, {
+      onRetry: () => {
+        void retryRef.current();
+      },
+    });
+  };
   const live = useLiveStatus({
     key: `${channelId}:${jobId}`,
+    onRefreshResult: reportRefreshFailure,
     fetch: (signal) => getRun(channelId, jobId, { signal }),
     isTerminal: (body) => isTerminalRun(body.run.status),
   });
   const detail = live.data;
-  const failed = live.stale && detail == null;
-  const loadError = live.error instanceof ApiError ? live.error : null;
+  const sessionExpired = isSessionExpiredError(live.error);
+  retryRef.current = () => live.refresh();
+  const freshness =
+    detail && live.stale && !sessionExpired
+      ? { updatedAt: live.lastSuccessAt, onRefresh: () => void retryRef.current() }
+      : null;
+  useEffect(() => {
+    if (detail || !live.stale || sessionExpired) {
+      if (detail || !live.stale) unloadedNotice.current = false;
+      return;
+    }
+    if (unloadedNotice.current) return;
+    unloadedNotice.current = true;
+    presentProblemNotification(tRef.current, live.error, {
+      onRetry: () => {
+        void retryRef.current();
+      },
+    });
+  }, [detail, live.error, live.stale, sessionExpired]);
   useEffect(() => {
     let cancelled = false;
     void listNodeTypes().then((page) => {
@@ -99,16 +129,13 @@ export function ChannelRunDetail({
   );
   const graph = detail?.graph ?? null;
   if (!detail || !graph) {
+    const unloaded = detail == null && live.stale && !sessionExpired;
     return (
       <PageChrome
         title={t("channels.title")}
         actions={back}
-        status={failed ? "error" : "loading"}
-        errorMessage={
-          failed ? problemMessage(t, live.error, t("liveStatus.unavailable")) : undefined
-        }
-        requestId={loadError?.requestId}
-        onRetry={() => void live.refresh()}
+        status={unloaded ? "unloaded" : "loading"}
+        onRetry={unloaded ? () => void retryRef.current() : undefined}
       />
     );
   }
@@ -126,12 +153,11 @@ export function ChannelRunDetail({
         moduleId: "channels",
         title: subject || detail.run.job_id,
       }}
-      titleExtra={<JobStatusBadge status={detail.run.status} />}
+      titleExtra={<JobStatusBadge status={detail.run.status} freshness={freshness} />}
       actions={back}
     >
     <Stack gap="sm" style={{ height: "100%", minHeight: 0 }}>
       <LiveStatusAnnouncer text={t(presentJobStatus(detail.run.status).labelKey)} />
-      {live.stale ? <StaleNotice onRetry={() => void live.refresh()} /> : null}
       <Stack gap={4}>
         {detail.run.ignore_checkpoints || detail.run.stopped_node_id ? (
           <Text>

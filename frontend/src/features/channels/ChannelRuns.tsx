@@ -2,31 +2,44 @@
 
 import { Anchor, Box, Group, Table, Text, Tooltip } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Instant } from "@/components/display/Instant";
 import { ListTable } from "@/components/display/ListTable";
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
-import { StaleNotice } from "@/components/display/StaleNotice";
-import { presentJobStatus, toneVariable } from "@/components/display/statusTone";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentJobStatus } from "@/components/display/statusTone";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { PencilIcon } from "@/components/icons";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { listRuns } from "@/features/channels/api";
 import { formatRunError } from "@/features/channels/problemLabel";
 import { isTerminalRun } from "@/features/channels/runSession";
-import { useLiveStatus } from "@/hooks/useLiveStatus";
-import { ApiError } from "@/lib/api";
+import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
+import { isSessionExpiredError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
-import { problemMessage } from "@/lib/problem";
 
 const PAGE_SIZE = 50;
 
 export function ChannelRuns({ channelId }: { channelId: string }) {
   const t = useTranslate();
+  const tRef = useRef(t);
+  tRef.current = t;
+  const unloadedNotice = useRef(false);
+  const retryRef = useRef<() => Promise<void>>(async () => {});
+  const reportRefreshFailure = (result: LiveRefreshResult) => {
+    if (result.ok || isSessionExpiredError(result.error)) return;
+    presentProblemNotification(tRef.current, result.error, {
+      onRetry: () => {
+        void retryRef.current();
+      },
+    });
+  };
   const [page, setPage] = useState(1);
   const live = useLiveStatus({
     key: `${channelId}:${page}`,
+    onRefreshResult: reportRefreshFailure,
     fetch: (signal) =>
       listRuns(
         channelId,
@@ -41,21 +54,39 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
   });
   const items = live.data?.items ?? [];
   const total = live.data?.total ?? 0;
-  const failed = live.stale && live.data == null;
-  const errorText = problemMessage(t, live.error, t("liveStatus.unavailable"));
+  const sessionExpired = isSessionExpiredError(live.error);
+  const unloaded = live.data == null && live.stale && !sessionExpired;
+  retryRef.current = () => live.refresh();
+  const freshness =
+    live.data != null && live.stale && !sessionExpired
+      ? { updatedAt: live.lastSuccessAt, onRefresh: () => void retryRef.current() }
+      : null;
+  useEffect(() => {
+    if (live.data || !live.stale || sessionExpired) {
+      if (live.data || !live.stale) unloadedNotice.current = false;
+      return;
+    }
+    if (unloadedNotice.current) return;
+    unloadedNotice.current = true;
+    presentProblemNotification(tRef.current, live.error, {
+      onRetry: () => {
+        void retryRef.current();
+      },
+    });
+  }, [live.data, live.error, live.stale, sessionExpired]);
   const statusText = items
     .map((run) => t(presentJobStatus(run.status).labelKey))
     .join(", ");
   const list = {
     presentation: listPresentationOf({
-      loading: live.loading || live.refreshing,
-      error: failed ? errorText : null,
+      loading: live.loading || live.refreshing || (sessionExpired && live.data == null),
+      error: unloaded ? "unloaded" : null,
       total,
       itemCount: items.length,
       filtered: false,
     }),
-    error: failed ? errorText : null,
-    errorRequestId: live.error instanceof ApiError ? live.error.requestId : null,
+    error: null,
+    errorRequestId: null,
     reload: () => live.refresh(),
     page,
     setPage,
@@ -66,9 +97,6 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
   return (
     <div className="channel-drawer-list">
       <LiveStatusAnnouncer text={statusText} />
-      {live.stale && live.data != null ? (
-        <StaleNotice hasData onRetry={() => void live.refresh()} />
-      ) : null}
       <ListTable
         list={list}
         columnCount={1}
@@ -84,26 +112,18 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
           const presentation = presentJobStatus(run.status);
           const error = formatRunError(t, run.error_code, run.error_message);
           const hasError = Boolean(run.error_code || run.error_message);
-          const statusLabel = t(presentation.labelKey);
-          const tip = hasError && error.label ? error.label : statusLabel;
           const href = `/console/channels/${channelId}/runs/${run.job_id}`;
           return (
             <Table.Tr key={run.job_id}>
               <Table.Td>
                 <Group gap="xs" wrap="nowrap" align="center">
-                  <Tooltip label={tip}>
-                    <Box
-                      role="img"
-                      aria-label={statusLabel}
-                      w={8}
-                      h={8}
-                      style={{
-                        borderRadius: 999,
-                        flex: "none",
-                        background: toneVariable(presentation.tone),
-                      }}
-                    />
-                  </Tooltip>
+                  <StatusBadge
+                    size="xs"
+                    tone={presentation.tone}
+                    labelKey={presentation.labelKey}
+                    explanation={hasError && error.label ? error.label : null}
+                    freshness={freshness}
+                  />
                   <Anchor component={ConsoleLink} href={href} size="sm">
                     <Instant value={run.started_at ?? run.created_at} />
                   </Anchor>

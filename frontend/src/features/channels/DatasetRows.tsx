@@ -2,9 +2,10 @@
 
 import { Button, Stack, Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { listDatasetRows } from "@/features/channels/api";
 import {
   datasetRowLimit,
@@ -82,21 +83,27 @@ export function DatasetRowTable({
   onCellPick?: (column: string, rowIndex: number) => void;
 }) {
   const t = useTranslate();
+  const tRef = useRef(t);
+  tRef.current = t;
+  const retryRef = useRef(() => {});
   const span = Math.max(0, endOrd - afterOrd);
   const pageSize = datasetRowLimit(afterOrd, endOrd) ?? 1;
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [reason, setReason] = useState<string | null>(null);
+  const [failure, setFailure] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  retryRef.current = () => setReloadToken((token) => token + 1);
 
   useEffect(() => {
     let cancelled = false;
-    setRows([]);
-    setReason(null);
     const cursor = afterOrd + (page - 1) * pageSize;
     const limit = datasetRowLimit(cursor, endOrd);
     if (limit == null) {
+      setRows([]);
+      setReason(null);
+      setFailure(null);
       setLoading(false);
       return;
     }
@@ -104,8 +111,17 @@ export function DatasetRowTable({
     void readPage(channelId, jobId, datasetId, cursor, limit, endOrd)
       .then((result) => {
         if (cancelled) return;
+        if (result.failure) {
+          setReason(null);
+          setFailure(result.failure);
+          presentProblemNotification(tRef.current, result.failure, {
+            onRetry: () => retryRef.current(),
+          });
+          return;
+        }
         setRows(result.rows);
         setReason(result.reason);
+        setFailure(null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -115,7 +131,7 @@ export function DatasetRowTable({
     };
   }, [channelId, jobId, datasetId, afterOrd, endOrd, page, pageSize, reloadToken]);
 
-  if (reason && reason !== "error") {
+  if (reason) {
     const known = REASONS.find((item) => item === reason);
     return (
       <Text size="xs" role="status">
@@ -124,18 +140,17 @@ export function DatasetRowTable({
     );
   }
 
-  const error = reason === "error" ? t("channels.run.rowsFailed") : null;
   const list = {
     presentation: listPresentationOf({
       loading,
-      error,
+      error: failure != null && rows.length === 0 ? "unloaded" : null,
       total: span,
       itemCount: rows.length,
       filtered: false,
     }),
-    error,
+    error: null,
     errorRequestId: null,
-    reload: () => setReloadToken((token) => token + 1),
+    reload: () => retryRef.current(),
     page,
     setPage,
     pageSize,
@@ -196,7 +211,7 @@ async function readPage(
   afterOrd: number,
   limit: number,
   endOrd: number,
-): Promise<{ rows: Record<string, unknown>[]; reason: string | null }> {
+): Promise<{ rows: Record<string, unknown>[]; reason: string | null; failure: unknown }> {
   try {
     const page = await listDatasetRows(channelId, jobId, datasetId, {
       after_ord: afterOrd,
@@ -210,13 +225,14 @@ async function readPage(
       }),
       endOrd,
     );
-    return { rows: visible, reason: null };
+    return { rows: visible, reason: null, failure: null };
   } catch (error: unknown) {
     const unavailable =
       error instanceof ApiError && error.code === "CHANNEL_DATASET_UNAVAILABLE"
         ? String(error.extensions.reason ?? "not_found")
         : null;
-    return { rows: [], reason: unavailable ?? "error" };
+    if (unavailable) return { rows: [], reason: unavailable, failure: null };
+    return { rows: [], reason: null, failure: error };
   }
 }
 

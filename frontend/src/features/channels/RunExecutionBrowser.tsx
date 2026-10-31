@@ -2,12 +2,13 @@
 
 import { Button, Stack, Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Instant } from "@/components/display/Instant";
 import { ListTable } from "@/components/display/ListTable";
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentNodeStatus } from "@/components/display/statusTone";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { listExecutions } from "@/features/channels/api";
 import { BatchRoundRows } from "@/features/channels/BatchRoundRows";
 import { nodeDisplayName } from "@/features/channels/formatRunSubject";
@@ -17,7 +18,6 @@ import type { Graph, NodeExecution, NodeTypeSpec } from "@/features/channels/typ
 import { successRequestId } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
-import { problemMessage } from "@/lib/problem";
 
 const PAGE_SIZE = 50;
 
@@ -33,14 +33,18 @@ export function RunExecutionBrowser({
   catalog?: readonly NodeTypeSpec[];
 }) {
   const t = useTranslate();
+  const tRef = useRef(t);
+  tRef.current = t;
+  const retryRef = useRef(() => {});
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<NodeExecution[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<unknown>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  retryRef.current = () => setReloadToken((token) => token + 1);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,10 +58,14 @@ export function RunExecutionBrowser({
         setItems(body.items);
         setTotal(body.total);
         setRequestId(successRequestId(body));
-        setError(null);
+        setFailure(null);
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(problemMessage(t, reason, t("channels.run.outputFailed")));
+        if (cancelled) return;
+        setFailure(reason);
+        presentProblemNotification(tRef.current, reason, {
+          onRetry: () => retryRef.current(),
+        });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -65,20 +73,20 @@ export function RunExecutionBrowser({
     return () => {
       cancelled = true;
     };
-  }, [channelId, jobId, page, reloadToken, t]);
+  }, [channelId, jobId, page, reloadToken]);
 
   const current = items.find((item) => item.seq === selected) ?? null;
   const list = {
     presentation: listPresentationOf({
       loading,
-      error,
+      error: failure != null && items.length === 0 ? "unloaded" : null,
       total,
       itemCount: items.length,
       filtered: false,
     }),
-    error,
+    error: null,
     errorRequestId: null,
-    reload: () => setReloadToken((token) => token + 1),
+    reload: () => retryRef.current(),
     page,
     setPage,
     pageSize: PAGE_SIZE,

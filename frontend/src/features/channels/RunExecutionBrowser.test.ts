@@ -1,13 +1,17 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
+import { notifications, notificationsStore } from "@mantine/notifications";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { listDatasetRows, listExecutions, previewTemplate } from "@/features/channels/api";
 import { RunExecutionBrowser } from "@/features/channels/RunExecutionBrowser";
 import { EMPTY_GRAPH, type Graph, type NodeExecution } from "@/features/channels/types";
+import { ApiError } from "@/lib/api";
+import { bindClientI18n } from "@/providers/i18n-runtime";
+import { ConsoleNotifications } from "@/providers/notification-provider";
 
 vi.mock("@refinedev/core", () => ({
   useNotification: () => ({ open: vi.fn() }),
@@ -101,8 +105,22 @@ beforeEach(() => {
   });
 });
 
+function resetNotifications() {
+  const state = notificationsStore.getState();
+  for (const item of [...state.notifications, ...state.queue]) {
+    notifications.hide(item.id);
+  }
+  notifications.clean();
+}
+
+function shell(node: ReactNode) {
+  return createElement(MantineProvider, { env: "test" }, createElement(ConsoleNotifications), node);
+}
+
 afterEach(() => {
   cleanup();
+  resetNotifications();
+  bindClientI18n({ t: (key: string) => key } as never);
   vi.clearAllMocks();
 });
 
@@ -173,4 +191,53 @@ it("pages executions and loads one batch round through the row window", async ()
   await waitFor(() => {
     expect(listExecutions).toHaveBeenCalledWith("chn_1", "job_1", { limit: 50, offset: 50 });
   });
+});
+
+it("shows unloaded and one notification when the first execution load fails", async () => {
+  bindClientI18n({
+    t: (key: string) => (key === "feedback.repeated" ? "Repeated {{count}} times" : key),
+  } as never);
+  vi.mocked(listExecutions).mockRejectedValue(
+    new ApiError(500, "NO_SUCH_CODE", "upstream timed out", "req-exec"),
+  );
+  render(shell(createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph })));
+
+  expect(await screen.findByRole("button", { name: "status.unloaded" })).toBeTruthy();
+  expect(screen.queryByText("channels.run.outputFailed")).toBeNull();
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(screen.getByText("problems.unknown")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "common.retry" })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
+  await waitFor(() => expect(listExecutions).toHaveBeenCalledTimes(2));
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(screen.getByText("problems.unknown Repeated 2 times")).toBeTruthy();
+});
+
+it("keeps execution rows and sends one notification when a later refresh fails", async () => {
+  const child = execution({ seq: 9, node_id: "write" });
+  let rejectPage: (error: unknown) => void = () => {};
+  vi.mocked(listExecutions)
+    .mockResolvedValueOnce({ items: [child], total: 51, limit: 50, offset: 0 })
+    .mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectPage = reject;
+        }),
+    );
+  render(shell(createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph })));
+
+  expect(await screen.findByRole("button", { name: "Write" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "2" }));
+  await waitFor(() => expect(listExecutions).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("button", { name: "Write" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
+  expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+  rejectPage(new ApiError(500, "NO_SUCH_CODE", "upstream timed out", "req-later"));
+  expect(await screen.findAllByRole("alert")).toHaveLength(1);
+  expect(screen.getByText("problems.unknown")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
+  expect(screen.queryByText("channels.run.outputFailed")).toBeNull();
 });
