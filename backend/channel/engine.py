@@ -22,6 +22,7 @@ from backend.channel.graph import ancestor_closure, refine_ports
 from backend.channel.node_support import (
     InputCapture,
     bind_execution_input,
+    output_schema,
     render_field,
     reset_execution_input,
 )
@@ -392,11 +393,17 @@ class _Run:
                 error_code="CHANNEL_NODE_FAILED",
                 error_message=f"No executor for {node['type']}",
             )
-        if spec.container is not None:
-            body = _ContainerBody(self, node_id, seq, spec.container.round_templates)
-            result = spec.container.run(node, self.hooks, body)
-        else:
-            result = spec.execute(node, self.hooks)
+        produced = self.schemas.get(node_id, {})
+        main = produced.get("main") if isinstance(produced, Mapping) else None
+        token = output_schema.set(main if isinstance(main, Mapping) else None)
+        try:
+            if spec.container is not None:
+                body = _ContainerBody(self, node_id, seq, spec.container.round_templates)
+                result = spec.container.run(node, self.hooks, body)
+            else:
+                result = spec.execute(node, self.hooks)
+        finally:
+            output_schema.reset(token)
         return _apply_output_check(node_id, spec, result, self.schemas)
 
     def _failure(self, node_id: str, result: NodeResult) -> RunOutcome | None:
@@ -421,8 +428,19 @@ class _Run:
         return _position(self.nodes[node_id])
 
 
+_BODY_STOP_CODE = "CHANNEL_LOOP_BODY_STOPPED"
+_BODY_STOP_MESSAGE = "A loop body node stopped the run."
+
+
 def _round_stop_result(stopped: _RoundStopped) -> NodeResult:
     outcome = stopped.outcome
+    if outcome.failed_node_id is not None:
+        return NodeResult(
+            status="failed",
+            error_code=_BODY_STOP_CODE,
+            error_message=_BODY_STOP_MESSAGE,
+            error_detail={"index": stopped.index, "node_id": outcome.failed_node_id},
+        )
     return NodeResult(
         status="failed",
         error_code=outcome.error_code,

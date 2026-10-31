@@ -1601,7 +1601,7 @@ def test_batch_read_stop_names_the_failed_batch_and_skips_done(monkeypatch) -> N
     assert hooks.order == ["batch", "step", "step"]
     assert "after" not in hooks.order
     assert ("step", "succeeded", None) in hooks.finished
-    assert ("batch", "failed", {"index": 1}) in hooks.finished
+    assert ("batch", "failed", {"index": 1, "node_id": "step"}) in hooks.finished
 
 
 def test_batch_read_and_for_nest_in_either_direction(monkeypatch) -> None:
@@ -2003,7 +2003,8 @@ def test_batch_read_stores_a_preview_of_a_successful_body_and_the_full_failed_bo
     assert failed["step"].preview_totals == {}
     assert failed["step"].output["rows"] is rows
     assert len(failed["step"].output["rows"]) == 120
-    assert failed["batch"].error_detail == {"index": 0}
+    assert failed["batch"].error_code == "CHANNEL_LOOP_BODY_STOPPED"
+    assert failed["batch"].error_detail == {"index": 0, "node_id": "step"}
 
 
 def test_dynamic_set_fields_and_downstream_code_still_succeed() -> None:
@@ -2270,9 +2271,9 @@ def test_a_body_stop_records_the_round_index_and_skips_container_policy() -> Non
     stopped = [result for node_id, result in hooks.finished if node_id == "box"]
     assert len(stopped) == 1
     assert stopped[0].status == "failed"
-    assert stopped[0].error_detail == {"index": 1}
-    assert stopped[0].error_code == "CHANNEL_NODE_FAILED"
-    assert stopped[0].error_message == "nope"
+    assert stopped[0].error_detail == {"index": 1, "node_id": "step"}
+    assert stopped[0].error_code == "CHANNEL_LOOP_BODY_STOPPED"
+    assert stopped[0].error_message == "A loop body node stopped the run."
 
 
 def test_a_container_failure_is_retried() -> None:
@@ -2358,6 +2359,49 @@ class _InputLog(_RoundLog):
 
     def note_round_template(self, seq: int, index: int, path: str, entry: object) -> None:
         self.templates.append((seq, index, path, entry))
+
+
+def test_continue_null_fails_the_done_field_against_the_success_schema() -> None:
+    from backend.channel.nodes import list_node_types
+
+    fields = next(item for item in list_node_types() if item.type_id == "transform.set_fields")
+    walk = _node("walk", 0, type_id="volume.for")
+    walk["config"] = {"items": "1"}
+    walk["on_error"] = "continue"
+    tail = _node("tail", 1, type_id="transform.set_fields")
+    tail["config"] = {
+        "fields": [{"name": "done", "value": "{{ self.walk.output }}"}]
+    }
+    graph = {
+        "nodes": [walk, tail],
+        "edges": [_edge("walk", "tail", "done")],
+        "settings": {},
+    }
+
+    def evaluate(expression: str) -> object:
+        if expression == "self.walk.output":
+            return None
+        raise AssertionError(expression)
+
+    hooks = _InputLog()
+    hooks._evaluate = evaluate
+    outcome = execute(graph, "walk", [_for_type(), fields], _RESOLVER, hooks)
+    assert outcome.status == "failed"
+    assert outcome.failed_node_id == "tail"
+    assert outcome.error_code == "CHANNEL_VALUE_TYPE_MISMATCH"
+    recorded = [
+        capture.fields.get("fields.0.value")
+        for capture in hooks.captures.values()
+        if "fields.0.value" in capture.fields
+    ]
+    assert recorded == [
+        {
+            "error": {
+                "code": "CHANNEL_VALUE_TYPE_MISMATCH",
+                "message": "Value does not match the declared type",
+            }
+        }
+    ]
 
 
 def test_a_round_template_stays_on_the_round() -> None:

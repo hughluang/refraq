@@ -623,6 +623,11 @@ export function ResultRegion({
   const t = useTranslate();
   const errorText = failure == null ? null : problemMessage(t, failure, t("channels.run.outputFailed"));
   const sentence = resultSentence(t, detail, channelId, jobId, sample, loading, errorText);
+  const bodyStopId =
+    sample?.node.error?.code === "CHANNEL_LOOP_BODY_STOPPED" ? detail?.run.failed_node_id : null;
+  const bodyStopName = bodyStopId
+    ? nodes.find((node) => node.id === bodyStopId)?.name.trim() || bodyStopId
+    : null;
   const view = viewFor(catalog, nodeType);
   const output = sample?.node.output;
   const batch = readBatchOutput(output);
@@ -643,6 +648,9 @@ export function ResultRegion({
             <Text size="xs">
               {t(sample.node.state === "failed" ? "channels.run.upstreamFailed" : "channels.run.skipped")}
             </Text>
+          ) : null}
+          {bodyStopName ? (
+            <Text size="xs">{t("channels.run.bodyStoppedBy", { name: bodyStopName })}</Text>
           ) : null}
           <RunExecutionOutput
           channelId={channelId}

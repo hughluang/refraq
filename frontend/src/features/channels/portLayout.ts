@@ -114,6 +114,44 @@ function measureFrame(
   };
 }
 
+type OccupiedBox = { x: number; y: number; width: number; height: number };
+
+/** A point whose rectangle does not overlap `occupied`. The search starts around `center`. */
+export function clearPosition(
+  center: { x: number; y: number },
+  placed: { width: number; height: number },
+  occupied: readonly OccupiedBox[],
+): { x: number; y: number } {
+  const clear = (position: { x: number; y: number }) =>
+    occupied.every(
+      (item) =>
+        position.x + placed.width <= item.x ||
+        item.x + item.width <= position.x ||
+        position.y + placed.height <= item.y ||
+        item.y + item.height <= position.y,
+    );
+  const stepX = 180;
+  const stepY = 96;
+  for (let index = 0; index < 16; index += 1) {
+    const column = index % 4;
+    const row = Math.floor(index / 4);
+    const position = {
+      x: center.x + (column - 1.5) * stepX,
+      y: center.y + (row - 0.5) * stepY,
+    };
+    if (clear(position)) return position;
+  }
+  for (let extra = 0; extra < 8; extra += 1) {
+    const position = {
+      x: center.x + occupied.length * 24 + extra * placed.width,
+      y: center.y,
+    };
+    if (clear(position)) return position;
+  }
+  const right = occupied.reduce((max, item) => Math.max(max, item.x + item.width), center.x);
+  return { x: right, y: center.y };
+}
+
 function place(
   ports: readonly PortLike[],
   position: HandleSide,

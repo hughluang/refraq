@@ -67,6 +67,98 @@ describe("formatGraphProblem", () => {
     );
   });
 
+  it("writes a catalog bound with the field's interface name", () => {
+    const translate = (key: string, options?: Record<string, unknown>) => {
+      const table: Record<string, string> = {
+        "problems.CHANNEL_NODE_CONFIG_INVALID": "Invalid node configuration",
+        "channels.config.fields.volume.until.max_iterations": "Max rounds",
+        "channels.config.fields.volume.until.until": "Until",
+        "channels.config.constraint.required": "{{name}} is required.",
+        "channels.config.constraint.minimum": "{{name}} is below the minimum of {{bound}}.",
+        "channels.config.constraint.maximum": "{{name}} is above the maximum of {{bound}}.",
+        "channels.config.constraint.minLength": "{{name}} is shorter than the minimum length of {{bound}}.",
+      };
+      const raw = table[key] ?? key;
+      if (!options) return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
+    };
+    const withSchema: ProblemGraph = {
+      nodes: [{ id: "nd_read", name: "Read suppliers", type: "volume.until" }],
+      edges: [],
+      configSchemas: {
+        "volume.until": {
+          type: "object",
+          required: ["max_iterations", "until"],
+          properties: {
+            max_iterations: { type: "integer", minimum: 1, maximum: 100000 },
+            until: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    };
+    expect(
+      formatGraphProblem(
+        translate,
+        problem(["max_iterations"], "0 is less than the minimum of 1"),
+        withSchema,
+      ),
+    ).toBe("Invalid node configuration: Max rounds is below the minimum of 1. (Read suppliers)");
+    expect(
+      formatGraphProblem(
+        translate,
+        problem(["max_iterations"], "100001 is greater than the maximum of 100000"),
+        withSchema,
+      ),
+    ).toBe("Invalid node configuration: Max rounds is above the maximum of 100000. (Read suppliers)");
+    expect(
+      formatGraphProblem(
+        translate,
+        problem(["until"], "'until' is a required property"),
+        withSchema,
+      ),
+    ).toBe("Invalid node configuration: Until is required. (Read suppliers)");
+    expect(
+      formatGraphProblem(translate, problem(["until"], "'' should be non-empty"), withSchema),
+    ).toBe(
+      "Invalid node configuration: Until is shorter than the minimum length of 1. (Read suppliers)",
+    );
+    expect(
+      formatGraphProblem(
+        translate,
+        problem(["max_iterations"], "None is not of type 'integer'"),
+        withSchema,
+      ),
+    ).toBe(
+      "Invalid node configuration: max_iterations — None is not of type 'integer' (Read suppliers)",
+    );
+  });
+
+  it("omits a contract sentence that repeats the localized line", () => {
+    const messages = zh as Record<string, string>;
+    const english = en as Record<string, string>;
+    const translate = catalogTranslate(messages);
+    const cases = [
+      ["CHANNEL_TEMPLATE_TYPE_MISMATCH", "until"],
+      ["CHANNEL_TEMPLATE_TYPE_UNKNOWN", "fields.0.value"],
+      ["CHANNEL_EXPRESSION_INVALID", "name"],
+    ] as const;
+    for (const [code, path] of cases) {
+      expect(
+        formatGraphProblem(
+          translate,
+          {
+            code,
+            node_id: "nd_read",
+            edge_id: null,
+            path: path.split("."),
+            detail: english[`problems.${code}`],
+          },
+          graph,
+        ),
+      ).toBe(`${messages[`problems.${code}`]}: ${path} (Read suppliers)`);
+    }
+  });
+
   it("omits the node name when the panel already shows that node", () => {
     expect(
       formatGraphProblem(t, problem([], "Mapping names an attribute more than once"), graph, {
@@ -141,7 +233,7 @@ describe("fieldMessages", () => {
         node_id: "nd_read",
         edge_id: null,
         path: ["value"],
-        detail: "Template result type is not known until the node runs",
+        detail: (en as Record<string, string>)["problems.CHANNEL_TEMPLATE_TYPE_UNKNOWN"],
         severity: "warning" as const,
       },
     ];
@@ -159,7 +251,7 @@ describe("fieldMessages", () => {
     ]);
     expect(fieldMessages(t, problems, "value", graph)).toEqual([
       {
-        text: "Checked at run time: value — Template result type is not known until the node runs",
+        text: "Checked at run time: value",
         severity: "warning",
       },
     ]);

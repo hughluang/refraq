@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-from backend.channel.node_support import render_field
+from backend.channel.node_support import output_schema, render_field
 from backend.channel.nodes.spec import (
     MAIN_INPUT,
     MAIN_OUTPUT,
@@ -95,11 +95,24 @@ def _refine(
     }
 
 
+def _runtime_field_schema(name: str) -> dict[str, Any]:
+    schema = output_schema.get()
+    found: dict[str, Any] = _ANY
+    if isinstance(schema, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and isinstance(properties.get(name), dict):
+            found = properties[name]
+    return {**found, "x-refraq-json-template": True}
+
+
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     output: dict[str, Any] = {}
     for index, field in enumerate(node["config"]["fields"]):
         value, error = render_field(
-            hooks, field.get("value"), _ANY, path=f"fields.{index}.value"
+            hooks,
+            field.get("value"),
+            _runtime_field_schema(str(field.get("name"))),
+            path=f"fields.{index}.value",
         )
         if error is not None:
             return error

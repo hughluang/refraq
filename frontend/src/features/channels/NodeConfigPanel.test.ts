@@ -6,6 +6,7 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
+import en from "@/locales/en-US/common.json";
 import zh from "@/locales/zh-CN/common.json";
 import type { FlowNodeData } from "@/features/channels/graphValidation";
 import { problemIdentity } from "@/features/channels/problemLabel";
@@ -16,6 +17,7 @@ import { listSources } from "@/features/sources/api/sources";
 import type { Source } from "@/features/sources/types";
 import type { EntityAttribute, EntityVersion } from "@/features/entities/types";
 
+const enMessages = en as Record<string, string>;
 const zhMessages = zh as Record<string, string>;
 
 const LABELS: Record<string, string> = {
@@ -23,6 +25,8 @@ const LABELS: Record<string, string> = {
   "channels.node.ref": "Ref",
   "channels.node.close": "Close",
   "channels.node.onError": "On error",
+  "channels.node.containerPolicy":
+    "These apply only to a failure this node returns. A loop body node's stop ends the run without this continue or retry.",
   "channels.node.onError.stop": "Stop",
   "channels.node.onError.continue": "Continue",
   "channels.node.onError.error_output": "Error output",
@@ -558,6 +562,19 @@ describe("NodeConfigPanel integers", () => {
     expect(next.config).not.toHaveProperty("statement_timeout_sec");
   });
 
+  it("states that a container's policy does not cover a body stop", async () => {
+    await renderPanel(PAYLOAD, {
+      ...node({ payload: {} }, "volume.for"),
+      container: { round_templates: [] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "On error Description" }));
+    expect(
+      screen.getByText(
+        "These apply only to a failure this node returns. A loop body node's stop ends the run without this continue or retry.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("offers stop and continue after the node fields", async () => {
     const onChange = await renderPanel(PAYLOAD, node({ payload: {} }, "trigger.manual"));
 
@@ -685,7 +702,7 @@ describe("NodeConfigPanel display mode", () => {
         node_id: "n1",
         edge_id: null,
         path: ["sql"],
-        detail: "Template result type is not known until the node runs",
+        detail: enMessages["problems.CHANNEL_TEMPLATE_TYPE_UNKNOWN"],
         severity: "warning",
       },
     ]);
@@ -713,7 +730,7 @@ describe("NodeConfigPanel display mode", () => {
         node_id: "n1",
         edge_id: null,
         path: ["sql"],
-        detail: "Template result type is not known until the node runs",
+        detail: enMessages["problems.CHANNEL_TEMPLATE_TYPE_UNKNOWN"],
         severity: "warning",
       },
       {
@@ -721,7 +738,7 @@ describe("NodeConfigPanel display mode", () => {
         node_id: "n1",
         edge_id: null,
         path: ["sql"],
-        detail: "Template expression does not parse",
+        detail: enMessages["problems.CHANNEL_EXPRESSION_INVALID"],
       },
     ]);
 
@@ -732,12 +749,12 @@ describe("NodeConfigPanel display mode", () => {
     fireEvent.click(screen.getByRole("button", { name: "SQL Problems" }));
     expect(
       screen.getByText(
-        "Checked at run time: sql — Template result type is not known until the node runs",
+        "Checked at run time: sql",
       ),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "A template expression does not parse: sql — Template expression does not parse",
+        "A template expression does not parse: sql",
       ),
     ).toBeTruthy();
     expect(document.querySelector(".channel-template-field__editor")?.textContent ?? "").not.toContain(

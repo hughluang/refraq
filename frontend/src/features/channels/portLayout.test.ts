@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { frameBox, layoutNodePorts, parentsFirst } from "@/features/channels/portLayout";
+import {
+  clearPosition,
+  frameBox,
+  layoutNodePorts,
+  parentsFirst,
+} from "@/features/channels/portLayout";
 import type { ContainerDeclaration } from "@/features/channels/types";
 
 describe("layoutNodePorts", () => {
@@ -128,6 +133,34 @@ describe("frameBox", () => {
     ];
     expect(frameBox("inner", nodes)).toEqual({ width: 456, height: 304 });
     expect(frameBox("outer", nodes)).toEqual({ width: 544, height: 400 });
+  });
+});
+
+describe("clearPosition", () => {
+  const placed = { width: 208, height: 56 };
+  const center = { x: 0, y: 0 };
+
+  function overlaps(
+    position: { x: number; y: number },
+    item: { x: number; y: number; width: number; height: number },
+  ) {
+    return !(
+      position.x + placed.width <= item.x ||
+      item.x + item.width <= position.x ||
+      position.y + placed.height <= item.y ||
+      item.y + item.height <= position.y
+    );
+  }
+
+  it("uses the first cell around the center when nothing is occupied", () => {
+    expect(clearPosition(center, placed, [])).toEqual({ x: -270, y: -48 });
+  });
+
+  it("steps past a full neighborhood to the right of every occupied box", () => {
+    const occupied = [{ x: -10000, y: -10000, width: 20000, height: 20000 }];
+    const position = clearPosition(center, placed, occupied);
+    expect(position).toEqual({ x: 10000, y: 0 });
+    expect(occupied.some((item) => overlaps(position, item))).toBe(false);
   });
 });
 

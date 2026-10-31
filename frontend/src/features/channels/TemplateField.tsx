@@ -388,7 +388,9 @@ function templateNotes(
     tone: message.severity === "warning" ? "warning" : "error",
   }));
   if (preview.state === "error") {
-    notes.push({ text: t("channels.template.parseFailed"), tone: "error" });
+    if (!messages.some((message) => message.severity === "error")) {
+      notes.push({ text: t("channels.template.parseFailed"), tone: "error" });
+    }
   } else if (preview.state === "invalid") {
     notes.push({ text: t("problems.CHANNEL_EXPRESSION_INVALID"), tone: "error" });
   } else if (showMatch && preview.state === "ok") {

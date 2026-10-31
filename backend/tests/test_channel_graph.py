@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from backend.channel.graph import ancestor_closure, refine_ports, validate
 from backend.channel.schemas.channels import NodeIn
 from backend.channel.nodes import list_node_types
@@ -473,6 +476,59 @@ def test_expression_source_warns_until_run_time() -> None:
         item for item in problems if item.code == "CHANNEL_TEMPLATE_TYPE_UNKNOWN"
     ]
     assert [(item.severity, item.path) for item in unknown] == [("warning", ("source",))]
+
+
+def test_fixed_template_explanations_match_the_english_catalog() -> None:
+    catalog_path = (
+        Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "src"
+        / "locales"
+        / "en-US"
+        / "common.json"
+    )
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    unknown_graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _read(),
+            _write(source="{{ self.read.output.rows }}"),
+        ],
+        [
+            _edge("ed_1", "nd_trigger", "nd_read"),
+            _edge("ed_2", "nd_read", "nd_write"),
+        ],
+    )
+    unknown = [
+        item
+        for item in validate(unknown_graph, FakeResolver({"ent_src": SKU, "ent_dst": SKU}))
+        if item.code == "CHANNEL_TEMPLATE_TYPE_UNKNOWN"
+    ]
+    assert [item.detail for item in unknown] == [
+        catalog["problems.CHANNEL_TEMPLATE_TYPE_UNKNOWN"]
+    ]
+    assert [item.severity for item in unknown] == ["warning"]
+
+    invalid_graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_var",
+                "state.variable",
+                "Counter",
+                {"operation": "set", "name": "{{", "value": "not-json"},
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_var")],
+    )
+    invalid = [
+        item
+        for item in validate(invalid_graph, FakeResolver())
+        if item.code == "CHANNEL_EXPRESSION_INVALID"
+    ]
+    assert [item.detail for item in invalid] == [
+        catalog["problems.CHANNEL_EXPRESSION_INVALID"]
+    ]
 
 
 def test_node_in_accepts_an_optional_parent() -> None:

@@ -13,6 +13,7 @@ __all__ = [
     "InputCapture",
     "bind_execution_input",
     "canonical_json",
+    "output_schema",
     "render_field",
     "reset_execution_input",
 ]
@@ -49,6 +50,11 @@ def bind_execution_input(capture: InputCapture) -> Token[InputCapture | None]:
 
 def reset_execution_input(token: Token[InputCapture | None]) -> None:
     _active.reset(token)
+
+
+output_schema: ContextVar[Mapping[str, Any] | None] = ContextVar(
+    "channel_execution_output_schema", default=None
+)
 
 
 def render_field(

@@ -424,8 +424,10 @@
 }
 
 .channel-flow-port--inset {
-  left: 36px;
-  transform: translateY(-50%);
+  left: 2px;
+  width: 44px;
+  text-align: center;
+  transform: translateY(calc(-50% - 14px));
 }
 
 .channel-canvas-stage .react-flow__edge:hover .react-flow__edge-path,

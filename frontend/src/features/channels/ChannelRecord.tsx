@@ -467,7 +467,13 @@ function ChannelExisting({
       type: "error",
       message: firstError
         ? t("channels.validate.failedWith", {
-            problem: formatGraphProblem(t, firstError, source),
+            problem: formatGraphProblem(t, firstError, {
+              nodes: source.nodes,
+              edges: source.edges,
+              configSchemas: Object.fromEntries(
+                catalog.map((item) => [item.type, item.config_schema]),
+              ),
+            }),
           })
         : t("channels.validate.failed"),
     });

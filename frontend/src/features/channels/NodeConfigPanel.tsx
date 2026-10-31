@@ -377,6 +377,7 @@ export function NodeConfigPanel({
           <SelectField
             editable={editable}
             label={t("channels.node.onError")}
+            description={data.container != null ? t("channels.node.containerPolicy") : undefined}
             data={onErrorOptions}
             value={data.onError}
             onChange={(next) => {

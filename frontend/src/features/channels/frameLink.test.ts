@@ -71,7 +71,7 @@ describe("frameLinkAllowed", () => {
     expect(walk.container).toBeNull();
     expect(freezeFrames([walk, step])).toEqual([]);
     expect(frameLinkAllowed([walk, step], { source: "walk", target: "step", sourceHandle: "done" })).toBe(
-      true,
+      null,
     );
   });
 
@@ -80,11 +80,17 @@ describe("frameLinkAllowed", () => {
     const step = member("step", "transform.set_fields", { x: 40, y: 48 }, "hold");
     const after = member("after", "transform.set_fields", { x: 400, y: 0 });
     const members = [hold, step, after];
-    expect(frameLinkAllowed(members, { source: "hold", target: "step", sourceHandle: "each" })).toBe(true);
-    expect(frameLinkAllowed(members, { source: "hold", target: "after", sourceHandle: "each" })).toBe(false);
-    expect(frameLinkAllowed(members, { source: "hold", target: "after", sourceHandle: "done" })).toBe(true);
-    expect(frameLinkAllowed(members, { source: "hold", target: "step", sourceHandle: "done" })).toBe(false);
-    expect(frameLinkAllowed(members, { source: "step", target: "after", sourceHandle: "main" })).toBe(false);
+    expect(frameLinkAllowed(members, { source: "hold", target: "step", sourceHandle: "each" })).toBe(null);
+    expect(frameLinkAllowed(members, { source: "hold", target: "after", sourceHandle: "each" })).toBe(
+      "each connects only to a direct child of this container",
+    );
+    expect(frameLinkAllowed(members, { source: "hold", target: "after", sourceHandle: "done" })).toBe(null);
+    expect(frameLinkAllowed(members, { source: "hold", target: "step", sourceHandle: "done" })).toBe(
+      "A container frame is entered only from each",
+    );
+    expect(frameLinkAllowed(members, { source: "step", target: "after", sourceHandle: "main" })).toBe(
+      "Edge crosses a container frame",
+    );
     expect(freezeFrames(members).map((item) => item.id)).toEqual(["hold"]);
   });
 
@@ -94,10 +100,14 @@ describe("frameLinkAllowed", () => {
     const step = member("step", "read.sql", { x: 16, y: 16 }, "batch");
     const after = member("after", "read.sql", { x: 400, y: 40 });
     const members = [batch, nested, step, after];
-    expect(frameLinkAllowed(members, { source: "batch", target: "step", sourceHandle: "each" })).toBe(true);
-    expect(frameLinkAllowed(members, { source: "batch", target: "after", sourceHandle: "each" })).toBe(false);
-    expect(frameLinkAllowed(members, { source: "batch", target: "after", sourceHandle: "done" })).toBe(true);
-    expect(frameLinkAllowed(members, { source: "batch", target: "step", sourceHandle: "done" })).toBe(false);
+    expect(frameLinkAllowed(members, { source: "batch", target: "step", sourceHandle: "each" })).toBe(null);
+    expect(frameLinkAllowed(members, { source: "batch", target: "after", sourceHandle: "each" })).toBe(
+      "each connects only to a direct child of this container",
+    );
+    expect(frameLinkAllowed(members, { source: "batch", target: "after", sourceHandle: "done" })).toBe(null);
+    expect(frameLinkAllowed(members, { source: "batch", target: "step", sourceHandle: "done" })).toBe(
+      "A container frame is entered only from each",
+    );
     expect(freezeFrames(members).map((item) => item.id)).toEqual(["batch", "inner"]);
     const placed = placementFromPort(members, "batch", "each", { x: 48, y: 64 });
     expect(placed.parentId).toBe("batch");
@@ -106,14 +116,22 @@ describe("frameLinkAllowed", () => {
   });
 
   it("allows each only onto a direct child and rejects every other way across a frame", () => {
-    expect(frameLinkAllowed(nodes, { source: "inner", target: "leaf", sourceHandle: "each" })).toBe(true);
-    expect(frameLinkAllowed(nodes, { source: "inner", target: "body", sourceHandle: "each" })).toBe(false);
-    expect(frameLinkAllowed(nodes, { source: "inner", target: "leaf", sourceHandle: "done" })).toBe(false);
-    expect(frameLinkAllowed(nodes, { source: "inner", target: "body", sourceHandle: "done" })).toBe(true);
-    expect(frameLinkAllowed(nodes, { source: "body", target: "inner", sourceHandle: "main" })).toBe(true);
-    expect(frameLinkAllowed(nodes, { source: "body", target: "leaf", sourceHandle: "main" })).toBe(false);
-    expect(frameLinkAllowed(nodes, { source: "leaf", target: "inner", sourceHandle: "main" })).toBe(false);
-    expect(frameLinkAllowed(nodes, { source: "after", target: "outer", sourceHandle: "main" })).toBe(true);
+    expect(frameLinkAllowed(nodes, { source: "inner", target: "leaf", sourceHandle: "each" })).toBe(null);
+    expect(frameLinkAllowed(nodes, { source: "inner", target: "body", sourceHandle: "each" })).toBe(
+      "each connects only to a direct child of this container",
+    );
+    expect(frameLinkAllowed(nodes, { source: "inner", target: "leaf", sourceHandle: "done" })).toBe(
+      "A container frame is entered only from each",
+    );
+    expect(frameLinkAllowed(nodes, { source: "inner", target: "body", sourceHandle: "done" })).toBe(null);
+    expect(frameLinkAllowed(nodes, { source: "body", target: "inner", sourceHandle: "main" })).toBe(null);
+    expect(frameLinkAllowed(nodes, { source: "body", target: "leaf", sourceHandle: "main" })).toBe(
+      "Edge crosses a container frame",
+    );
+    expect(frameLinkAllowed(nodes, { source: "leaf", target: "inner", sourceHandle: "main" })).toBe(
+      "Edge crosses a container frame",
+    );
+    expect(frameLinkAllowed(nodes, { source: "after", target: "outer", sourceHandle: "main" })).toBe(null);
   });
 });
 

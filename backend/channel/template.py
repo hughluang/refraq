@@ -400,8 +400,13 @@ def _is_string(schema: Mapping[str, Any]) -> bool:
     return _type_names(schema) - {"null"} == {"string"}
 
 
+def _json_template(schema: Mapping[str, Any]) -> bool:
+    """A JSON template. A string result is parsed JSON, not concatenated text."""
+    return schema.get("x-refraq-json-template") is True
+
+
 def _coerce_native(value: Any, schema: Mapping[str, Any]) -> Any:
-    if _is_string(schema):
+    if _is_string(schema) and not _json_template(schema):
         if value is None:
             if "null" in _type_names(schema):
                 return None
@@ -415,7 +420,7 @@ def _coerce_native(value: Any, schema: Mapping[str, Any]) -> Any:
 
 
 def _coerce_text(text: str, schema: Mapping[str, Any]) -> Any:
-    if _is_string(schema):
+    if _is_string(schema) and not _json_template(schema):
         return text
     try:
         parsed = json.loads(text)

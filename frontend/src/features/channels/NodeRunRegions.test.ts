@@ -64,6 +64,8 @@ const LABELS: Record<string, string> = {
   "channels.view.nested": "Nested",
   "channels.editor.status.succeeded": "Succeeded",
   "problems.CHANNEL_NODE_FAILED": "Node failed",
+  "problems.CHANNEL_LOOP_BODY_STOPPED": "A loop body node stopped the run.",
+  "channels.run.bodyStoppedBy": "{{name}} stopped this run.",
 };
 
 vi.mock("@refinedev/core", () => ({
@@ -329,6 +331,42 @@ describe("node run regions", () => {
     expect(screen.getByText("write refused")).toBeTruthy();
     expect(screen.getByRole("button", { name: "code" })).toBeTruthy();
     expect(screen.getByText("kept")).toBeTruthy();
+  });
+
+  it("names the body node that stopped a container", () => {
+    const run = detail("failed");
+    run.run.failed_node_id = "step";
+    mount(
+      createElement(ResultRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        nodeId: "loop",
+        nodeType: "volume.for",
+        nodes: [{ id: "step", name: "Hold", ref: "hold", type: "code.python", container: null }],
+        detail: run,
+        sample: sample({
+          node: {
+            ...sample().node,
+            state: "failed",
+            output: null,
+            error: {
+              code: "CHANNEL_LOOP_BODY_STOPPED",
+              message: "A loop body node stopped the run.",
+            },
+          },
+        }),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        graph: null,
+        selectedRound: null,
+        onRound: vi.fn(),
+        onRoundsTotal: vi.fn(),
+      }),
+    );
+    expect(screen.getByText("Hold stopped this run.")).toBeTruthy();
+    expect(screen.getByText("A loop body node stopped the run.")).toBeTruthy();
   });
 
   it("expands referenced upstream and collapses the rest", () => {

@@ -253,7 +253,7 @@ def _template_problems(
         return [
             Problem(
                 "CHANNEL_EXPRESSION_INVALID",
-                "Template expression does not parse",
+                "A template expression does not parse",
                 node_id=node_id,
                 path=path,
             )
@@ -302,7 +302,7 @@ def _template_problems(
         problems.append(
             Problem(
                 "CHANNEL_TEMPLATE_TYPE_UNKNOWN",
-                "Template result type is not known until the node runs",
+                "This template's type is checked when the channel runs",
                 node_id=node_id,
                 path=path,
                 severity="warning",

@@ -424,9 +424,11 @@ def test_a_body_stop_skips_done_and_keeps_the_earlier_round() -> None:
     assert [index for index, _entry, _order, _status in hooks.conditions] == [0]
     hold_stop = [result for node_id, result in hooks.finished if node_id == "hold"][-1]
     assert hold_stop.status == "failed"
-    assert hold_stop.error_code == "CHANNEL_NODE_FAILED"
-    assert hold_stop.error_message == "nope"
-    assert hold_stop.error_detail == {"index": 1}
+    assert hold_stop.error_code == "CHANNEL_LOOP_BODY_STOPPED"
+    assert hold_stop.error_message == "A loop body node stopped the run."
+    assert hold_stop.error_detail == {"index": 1, "node_id": "step"}
+    assert outcome.error_code == "CHANNEL_NODE_FAILED"
+    assert outcome.error_message == "nope"
 
 
 def test_continue_and_error_output_keep_their_meanings() -> None:

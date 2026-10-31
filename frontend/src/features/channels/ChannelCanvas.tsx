@@ -117,7 +117,12 @@ import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPrev
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import { nodeTypeLabel } from "@/features/channels/nodeTypeCopy";
 import {
+  CARD_HEIGHT,
+  CARD_WIDTH,
   EACH_INSET,
+  FRAME_MIN_HEIGHT,
+  FRAME_MIN_WIDTH,
+  clearPosition,
   frameBox,
   layoutNodePorts,
   parentsFirst,
@@ -157,7 +162,11 @@ import {
   type FrozenFrame,
   type LinkMember,
 } from "@/features/channels/frameLink";
-import { problemIdentity, type ProblemGraph } from "@/features/channels/problemLabel";
+import {
+  LOOP_BODY_DETAIL_KEYS,
+  problemIdentity,
+  type ProblemGraph,
+} from "@/features/channels/problemLabel";
 import { completionSamples, templateInsertion, upstreamOutputs } from "@/features/channels/templateLogic";
 import { outputPath } from "@/features/channels/templateScope";
 import type { TemplateCaret } from "@/features/channels/TemplateField";
@@ -519,7 +528,7 @@ function ChannelCanvasBody({
   const [connectNote, setConnectNote] = useState<{
     x: number;
     y: number;
-    message?: "addRejected";
+    message?: string;
   } | null>(null);
   const [skipNote, setSkipNote] = useState("");
   const [contextMenu, setContextMenu] = useState<CanvasMenuState | null>(null);
@@ -896,7 +905,7 @@ function ChannelCanvasBody({
       const anchor = picker?.anchor;
       setPicker(null);
       if (!anchor) return;
-      setConnectNote({ x: anchor.x + 12, y: anchor.y + 12, message: "addRejected" });
+      setConnectNote({ x: anchor.x + 12, y: anchor.y + 12, message: "channels.canvas.addRejected" });
     };
     let placement: { parentId?: string; position: { x: number; y: number } };
     if (link && continueTo) {
@@ -939,7 +948,7 @@ function ChannelCanvasBody({
     const draftOf = (edgesNow: Edge[]) => graphOf(nextNodes, edgesNow);
     const accepts = (connection: Connection) =>
       connectionAllowed(draftOf(nextEdges), catalog, connection) &&
-      frameLinkAllowed(linkMembers(nextNodes), connection);
+      frameLinkAllowed(linkMembers(nextNodes), connection) == null;
     if (link) {
       const input = spec.inputs.find((port) => {
         const connection = {
@@ -1027,7 +1036,7 @@ function ChannelCanvasBody({
     void setCenter(position.x + 104, position.y + 28, { duration: canvasViewportDuration() });
   };
 
-  const openPosition = () => {
+  const openPosition = (spec: NodeTypeSpec) => {
     const pane = flowRootRef.current?.querySelector(".react-flow");
     const rect = pane instanceof HTMLElement ? pane.getBoundingClientRect() : null;
     const center = rect
@@ -1036,23 +1045,21 @@ function ChannelCanvasBody({
           y: rect.top + rect.height / 2,
         })
       : { x: 160, y: 120 };
-    const stepX = 180;
-    const stepY = 96;
-    for (let index = 0; index < 16; index += 1) {
-      const column = index % 4;
-      const row = Math.floor(index / 4);
-      const position = {
-        x: center.x + (column - 1.5) * stepX,
-        y: center.y + (row - 0.5) * stepY,
-      };
-      const blocked = nodesRef.current.some(
-        (node) =>
-          Math.abs(node.position.x - position.x) < 100 &&
-          Math.abs(node.position.y - position.y) < 48,
-      );
-      if (!blocked) return position;
-    }
-    return { x: center.x + nodesRef.current.length * 24, y: center.y };
+    const placed =
+      spec.container != null
+        ? { width: FRAME_MIN_WIDTH, height: FRAME_MIN_HEIGHT }
+        : { width: CARD_WIDTH, height: CARD_HEIGHT };
+    const members = linkMembers(nodesRef.current);
+    const occupied = members.flatMap((member) => {
+      const at = absolutePosition(members, member.id);
+      if (!at) return [];
+      const box =
+        member.container != null
+          ? frameBox(member.id, members)
+          : { width: CARD_WIDTH, height: CARD_HEIGHT };
+      return [{ x: at.x, y: at.y, ...box }];
+    });
+    return clearPosition(center, placed, occupied);
   };
 
   const stagePoint = (screen: { x: number; y: number }) => {
@@ -1293,7 +1300,7 @@ function ChannelCanvasBody({
 
   const onConnect = (connection: Connection) => {
     if (!connectionAllowed(graphNow(), catalog, connection)) return;
-    if (!frameLinkAllowed(linkMembers(nodesRef.current), connection)) return;
+    if (frameLinkAllowed(linkMembers(nodesRef.current), connection) != null) return;
     const priorEdges = edgesRef.current;
     const next = channelEdges(
       addEdge(connection, edgesRef.current, { getEdgeId: () => newGraphId("ed") }),
@@ -1321,8 +1328,36 @@ function ChannelCanvasBody({
     const under = document.elementFromPoint(point.x, point.y);
     if (!under?.closest(".react-flow")) return;
     const sourceHandle = connectionState.fromHandle.id || "main";
-    const specs = outputTargetTypes(graphNow(), catalog, connectionState.fromNode.id, sourceHandle);
     const anchor = stagePoint(point);
+    const nodeEl = under.closest(".react-flow__node");
+    if (nodeEl instanceof HTMLElement) {
+      const targetId = nodeEl.getAttribute("data-id");
+      const frameDetail = targetId
+        ? frameLinkAllowed(linkMembers(nodesRef.current), {
+            source: connectionState.fromNode.id,
+            target: targetId,
+            sourceHandle,
+          })
+        : null;
+      const frameKey = frameDetail ? (LOOP_BODY_DETAIL_KEYS[frameDetail] ?? null) : null;
+      const portsAllowed =
+        targetId != null &&
+        connectionAllowed(graphNow(), catalog, {
+          source: connectionState.fromNode.id,
+          target: targetId,
+          sourceHandle,
+          targetHandle: "main",
+        });
+      if (frameKey || !portsAllowed) {
+        setConnectNote({
+          x: anchor.x + 12,
+          y: anchor.y + 12,
+          message: frameKey ?? "problems.CHANNEL_PORT_TYPE_MISMATCH",
+        });
+      }
+      return;
+    }
+    const specs = outputTargetTypes(graphNow(), catalog, connectionState.fromNode.id, sourceHandle);
     if (specs.length === 0) {
       setConnectNote({ x: anchor.x + 12, y: anchor.y + 12 });
       return;
@@ -1441,7 +1476,7 @@ function ChannelCanvasBody({
     null;
   const selectedSpec = catalog.find((item) => item.type === selected?.data.nodeType);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const labelGraph = problemGraphOf(nodes, edges);
+  const labelGraph = problemGraphOf(nodes, edges, catalog);
   const revealKey =
     selected != null && highlight?.nodeId === selected.id ? highlight.key : null;
   const outputSchemas = new Map<string, SchemaObject | null>();
@@ -1763,7 +1798,7 @@ function ChannelCanvasBody({
     }
     if (place.mode === "beside") {
       const handle = firstOutputHandle(place.sourceId, spec);
-      const position = portPlacePosition(nodesRef.current, place.sourceId) ?? openPosition();
+      const position = portPlacePosition(nodesRef.current, place.sourceId) ?? openPosition(spec);
       placeNode(
         spec,
         position,
@@ -1775,7 +1810,7 @@ function ChannelCanvasBody({
       placeNode(spec, place.position);
       return;
     }
-    placeNode(spec, openPosition());
+    placeNode(spec, openPosition(spec));
   };
 
   const selectAll = () => {
@@ -2263,11 +2298,7 @@ function ChannelCanvasBody({
               c="dimmed"
               aria-live="polite"
             >
-              {t(
-                connectNote.message === "addRejected"
-                  ? "channels.canvas.addRejected"
-                  : "channels.canvas.connectNone",
-              )}
+              {t(connectNote.message ?? "channels.canvas.connectNone")}
             </Text>
           ) : null}
           {skipNote ? (
@@ -2558,7 +2589,7 @@ function ChannelCanvasBody({
     if (!mutable) return false;
     return (
       connectionAllowed(graphNow(), catalog, connection) &&
-      frameLinkAllowed(linkMembers(nodesRef.current), connection)
+      frameLinkAllowed(linkMembers(nodesRef.current), connection) == null
     );
   }
 
@@ -2937,11 +2968,18 @@ function CanvasContextMenu({
   );
 }
 
-function problemGraphOf(nodes: CanvasNode[], edges: Edge[]): ProblemGraph {
+function problemGraphOf(
+  nodes: CanvasNode[],
+  edges: Edge[],
+  catalog: readonly NodeTypeSpec[],
+): ProblemGraph {
   return {
     nodes: nodes.flatMap((node) =>
-      isChannelNode(node) ? [{ id: node.id, name: node.data.name }] : [],
+      isChannelNode(node)
+        ? [{ id: node.id, name: node.data.name, type: node.data.nodeType }]
+        : [],
     ),
+    configSchemas: Object.fromEntries(catalog.map((item) => [item.type, item.config_schema])),
     edges: edges.map((edge) => ({
       id: edge.id,
       source: { node_id: edge.source },
@@ -3108,7 +3146,7 @@ function NodeToolButton({
   children: ReactNode;
 }) {
   return (
-    <Tooltip label={label} openDelay={200}>
+    <Tooltip label={label} openDelay={200} withinPortal={false}>
       <ActionIcon
         type="button"
         variant="default"
@@ -3420,7 +3458,7 @@ function NodePhaseMark({
     return () => node.removeEventListener("animationend", onEnd);
   }, [pop, onPopEnd]);
   return (
-    <Tooltip label={label} openDelay={200}>
+    <Tooltip label={label} openDelay={200} withinPortal={false}>
       <span
         ref={markRef}
         className={

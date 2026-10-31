@@ -44,6 +44,11 @@ export function crossesFrame(
   return target !== sourceId;
 }
 
+const FRAME_CROSS = "Edge crosses a container frame";
+const FRAME_ENTRY = "A container frame is entered only from each";
+const FRAME_EACH = "each connects only to a direct child of this container";
+
+/** `null` when the link is allowed. Otherwise the same `detail` the graph check records. */
 export function frameLinkAllowed(
   nodes: readonly {
     id: string;
@@ -51,17 +56,19 @@ export function frameLinkAllowed(
     container: ContainerDeclaration | null;
   }[],
   connection: { source?: string | null; target?: string | null; sourceHandle?: string | null },
-): boolean {
-  if (!connection.source || !connection.target) return false;
+): string | null {
+  if (!connection.source || !connection.target) return "unresolved";
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const source = byId.get(connection.source);
   const target = byId.get(connection.target);
-  if (!source || !target) return false;
-  if (crossesFrame(source.parentId, target.parentId, source.id)) return false;
-  if (source.container == null) return true;
+  if (!source || !target) return "unresolved";
+  if (crossesFrame(source.parentId, target.parentId, source.id)) return FRAME_CROSS;
+  if (source.container == null) return null;
   const targetParent = none(target.parentId);
-  if (connection.sourceHandle === "each") return targetParent === source.id;
-  return targetParent !== source.id;
+  if (connection.sourceHandle === "each") {
+    return targetParent === source.id ? null : FRAME_EACH;
+  }
+  return targetParent === source.id ? FRAME_ENTRY : null;
 }
 
 /** A For rect in flow space, captured when a drag starts and kept for the whole gesture. */
@@ -124,12 +131,13 @@ export function edgesAfterReparent<E extends LinkEdge>(
     container: ContainerDeclaration | null;
   }[],
 ): E[] {
-  return edges.filter((edge) =>
-    frameLinkAllowed(nodes, {
-      source: edge.source,
-      target: edge.target,
-      sourceHandle: edge.sourceHandle,
-    }),
+  return edges.filter(
+    (edge) =>
+      frameLinkAllowed(nodes, {
+        source: edge.source,
+        target: edge.target,
+        sourceHandle: edge.sourceHandle,
+      }) == null,
   );
 }
 

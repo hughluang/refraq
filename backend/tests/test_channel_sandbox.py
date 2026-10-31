@@ -31,8 +31,16 @@ def test_self_path_and_comprehension() -> None:
 def test_missing_node_fails() -> None:
     with SandboxSession() as sandbox:
         sandbox.set_context(channel={}, run={}, platform={})
-        with pytest.raises(ExpressionError):
+        with pytest.raises(ExpressionError, match=r"^self\.missing does not resolve$"):
             sandbox.evaluate("self.missing.output.rows")
+
+
+def test_missing_key_names_the_key() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        sandbox.put_output(ref="read", name="Read", output={"nope": 1})
+        with pytest.raises(ExpressionError, match=r"^ok does not resolve$"):
+            sandbox.evaluate("self.read.output.ok")
 
 
 def test_import_os_is_denied() -> None:

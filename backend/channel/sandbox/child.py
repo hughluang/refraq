@@ -124,7 +124,10 @@ class AttrDict(dict):
             return object.__getattribute__(self, name)
         if dict.__contains__(self, name):
             return dict.__getitem__(self, name)
-        return object.__getattribute__(self, name)
+        try:
+            return object.__getattribute__(self, name)
+        except AttributeError:
+            raise AttributeError(f"{name} does not resolve") from None
 
 
 def _wrap(value: Any) -> Any:
