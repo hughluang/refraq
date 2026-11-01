@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -63,17 +64,25 @@ def execute_entity_statement(
     *,
     timeout_sec: int,
     max_rows: int,
+    params: Sequence[Any] | None = None,
 ) -> EntityStatement:
     """Run ``sql`` as the entity owner with ``search_path`` set to ``entity_data``.
 
     The text must already be exactly one statement. The transaction commits when
     this returns. A driver error rolls the transaction back. A result past
-    ``max_rows`` raises and rolls back.
+    ``max_rows`` raises and rolls back. ``params`` is omitted from the driver
+    call when it is absent. A present list, including an empty one, is bound.
     """
     if not _exactly_one_postgres_statement(sql):
         raise EntityStatementRejected()
     with get_entity_engine().begin() as conn:
-        return _run_statement(conn, sql, timeout_sec=timeout_sec, max_rows=max_rows)
+        return _run_statement(
+            conn,
+            sql,
+            timeout_sec=timeout_sec,
+            max_rows=max_rows,
+            params=params,
+        )
 
 
 def _run_statement(
@@ -82,6 +91,7 @@ def _run_statement(
     *,
     timeout_sec: int,
     max_rows: int,
+    params: Sequence[Any] | None,
 ) -> EntityStatement:
     timeout_ms = str(max(1, int(timeout_sec)) * 1000)
     conn.execute(
@@ -96,7 +106,10 @@ def _run_statement(
         text("SELECT set_config('lock_timeout', :ms, true)"),
         {"ms": timeout_ms},
     )
-    result = conn.exec_driver_sql(sql)
+    if params is None:
+        result = conn.exec_driver_sql(sql)
+    else:
+        result = conn.exec_driver_sql(sql, tuple(params))
     if not result.returns_rows:
         return EntityStatement(rows=[], rowcount=_rowcount(result))
     fetched = result.mappings().fetchmany(max_rows + 1)

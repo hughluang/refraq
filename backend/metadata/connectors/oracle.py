@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -19,6 +20,7 @@ from backend.metadata.connectors.base import (
     SourceEndpoint,
     StreamColumn,
     StreamedStatement,
+    exec_author_sql,
     fetch_query_result,
     finish_statement,
     query_endpoint_error,
@@ -86,11 +88,12 @@ class OracleConnector:
         *,
         max_rows: int,
         timeout_sec: int,
+        params: Sequence[Any] | None = None,
     ):
         eng = self._engine(endpoint, timeout_sec=timeout_sec)
         try:
             with eng.connect() as conn:
-                result = conn.exec_driver_sql(sql)
+                result = exec_author_sql(conn, sql, params)
                 return finish_statement(conn, result, max_rows=max_rows)
         except Exception as exc:  # noqa: BLE001
             raise query_endpoint_error(exc) from exc

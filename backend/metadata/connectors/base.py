@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -246,10 +246,12 @@ class EngineConnector(Protocol):
         *,
         max_rows: int,
         timeout_sec: int,
+        params: Sequence[Any] | None = None,
     ) -> StatementResult:
         """Execute one author statement and return the driver result.
 
         Commits when the result fits in ``max_rows``. Rolls back when it does not.
+        Absent ``params`` are left off the driver call. A present sequence is bound.
         """
 
     def stream_statement(
@@ -340,6 +342,13 @@ def statement_rowcount(result: Any) -> int | None:
     if count is None or count < 0:
         return None
     return int(count)
+
+
+def exec_author_sql(conn: Any, sql: str, params: Sequence[Any] | None) -> Any:
+    """Run author SQL. An absent parameter list is not sent as an empty tuple."""
+    if params is None:
+        return conn.exec_driver_sql(sql)
+    return conn.exec_driver_sql(sql, tuple(params))
 
 
 def finish_statement(conn: Any, result: Any, *, max_rows: int) -> StatementResult:

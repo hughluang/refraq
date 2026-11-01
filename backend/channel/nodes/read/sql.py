@@ -20,6 +20,8 @@ from backend.channel.values import LIST_OF_OBJECTS
 
 __all__ = ["NODE_TYPE"]
 
+_JSON_SCALAR = {"type": ["string", "number", "boolean", "null"]}
+
 _ROWS = {
     "type": "object",
     "additionalProperties": False,
@@ -41,6 +43,26 @@ def _refine(
     return {"main": _ROWS}
 
 
+def _bound_params(
+    hooks: EngineHooks, raw: Any
+) -> tuple[list[Any] | None, NodeResult | None]:
+    if raw is None:
+        return None, None
+    if not isinstance(raw, list):
+        return None, NodeResult(
+            status="failed",
+            error_code="CHANNEL_VALUE_TYPE_MISMATCH",
+            error_message="Parameters must be a list",
+        )
+    values: list[Any] = []
+    for index, item in enumerate(raw):
+        value, error = render_field(hooks, item, _JSON_SCALAR, path=f"params.{index}")
+        if error is not None:
+            return None, error
+        values.append(value)
+    return values, None
+
+
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
     statement, error = render_field(
@@ -48,12 +70,23 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     )
     if error is not None:
         return error
+    params, error = _bound_params(hooks, config.get("params"))
+    if error is not None:
+        return error
     try:
-        output = run_channel_sql(
-            str(statement),
-            source=config["source"],
-            statement_timeout_sec=config.get("statement_timeout_sec", 30),
-        )
+        if params is None:
+            output = run_channel_sql(
+                str(statement),
+                source=config["source"],
+                statement_timeout_sec=config.get("statement_timeout_sec", 30),
+            )
+        else:
+            output = run_channel_sql(
+                str(statement),
+                source=config["source"],
+                statement_timeout_sec=config.get("statement_timeout_sec", 30),
+                params=params,
+            )
     except SqlReadError as exc:
         return NodeResult(status="failed", error_code=exc.code, error_message=exc.message)
     return NodeResult(status="succeeded", output=output)
@@ -83,6 +116,7 @@ NODE_TYPE = NodeType(
         "The source is required: the entity database, or one registered Source. "
         "On the entity database, unqualified names resolve in schema entity_data. "
         "The statement text is a template, and expression results are spliced as text. "
+        "Optional parameters are bound by the driver and are not spliced into the statement. "
         "The node returns the driver result."
     ),
     trigger=False,
@@ -139,6 +173,24 @@ NODE_TYPE = NodeType(
                     "Quote literals in the statement."
                 ),
                 "x-refraq-template": {"type": "string"},
+            },
+            "params": {
+                "type": "array",
+                "title": "Parameters",
+                "description": (
+                    "Optional bound values, in positional order. "
+                    "Each item renders to one JSON scalar or null and is passed "
+                    "to the driver. It is not spliced into the statement."
+                ),
+                "items": {
+                    "type": "string",
+                    "title": "Parameter",
+                    "description": (
+                        "Template for one bound value. "
+                        "The result must be a string, number, boolean, or null."
+                    ),
+                    "x-refraq-template": _JSON_SCALAR,
+                },
             },
             "statement_timeout_sec": {
                 "type": "integer",

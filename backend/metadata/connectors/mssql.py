@@ -7,6 +7,8 @@ A long read does not change the session isolation level.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
 from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, text
@@ -21,6 +23,7 @@ from backend.metadata.connectors.base import (
     ConnectorError,
     StreamColumn,
     StreamedStatement,
+    exec_author_sql,
     fetch_query_result,
     finish_statement,
     query_endpoint_error,
@@ -90,11 +93,12 @@ class MssqlConnector:
         *,
         max_rows: int,
         timeout_sec: int,
+        params: Sequence[Any] | None = None,
     ):
         eng = self._engine(endpoint, timeout_sec=timeout_sec)
         try:
             with eng.connect() as conn:
-                result = conn.exec_driver_sql(sql)
+                result = exec_author_sql(conn, sql, params)
                 return finish_statement(conn, result, max_rows=max_rows)
         except Exception as exc:  # noqa: BLE001
             raise query_endpoint_error(exc) from exc

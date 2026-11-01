@@ -101,6 +101,84 @@ def test_sql_returns_rows_and_write_results() -> None:
             reset_settings_cache()
 
 
+def test_bound_parameter_keeps_a_quote_and_a_semicolon() -> None:
+    _skip_without_entity_database()
+    value = "O'Brien; DROP TABLE entity_data.bound_probe"
+    with bootstrapped_entity_database(_MAINTENANCE, "refraq_chsqlb") as urls:
+        admin = create_engine(urls.admin_url)
+        with admin.begin() as conn:
+            conn.execute(text("CREATE TABLE entity_data.bound_probe (code text)"))
+            conn.execute(
+                text(
+                    f'ALTER TABLE entity_data.bound_probe OWNER TO "{ENTITY_OWNER_ROLE}"'
+                )
+            )
+        admin.dispose()
+        os.environ["ENTITY_DATABASE_URL"] = urls.owner_url
+        reset_settings_cache()
+        reset_entity_engine()
+        try:
+            written = run_channel_sql(
+                "INSERT INTO bound_probe (code) VALUES (%s)",
+                source=_ENTITY,
+                statement_timeout_sec=30,
+                params=(value,),
+            )
+            assert written == {"rows": [], "count": 0, "rowcount": 1}
+            read = run_channel_sql(
+                "SELECT code FROM bound_probe",
+                source=_ENTITY,
+                statement_timeout_sec=30,
+            )
+            assert read["rows"] == [{"code": value}]
+            run_channel_sql(
+                "INSERT INTO bound_probe (code) VALUES (%s)",
+                source=_ENTITY,
+                statement_timeout_sec=30,
+                params=(None,),
+            )
+            nulls = run_channel_sql(
+                "SELECT code FROM bound_probe WHERE code IS NULL",
+                source=_ENTITY,
+                statement_timeout_sec=30,
+            )
+            assert nulls["rows"] == [{"code": None}]
+            with pytest.raises(SqlReadError) as extra:
+                run_channel_sql(
+                    "SELECT %s AS code",
+                    source=_ENTITY,
+                    statement_timeout_sec=30,
+                    params=("a", "b"),
+                )
+            assert extra.value.code == "CHANNEL_NODE_FAILED"
+            assert "placeholder" in extra.value.message.lower()
+            with pytest.raises(SqlReadError) as missing:
+                run_channel_sql(
+                    "SELECT %s AS a, %s AS b",
+                    source=_ENTITY,
+                    statement_timeout_sec=30,
+                    params=("only",),
+                )
+            assert missing.value.code == "CHANNEL_NODE_FAILED"
+            assert "placeholder" in missing.value.message.lower()
+        finally:
+            reset_entity_engine()
+            reset_settings_cache()
+
+
+def _skip_without_entity_database() -> None:
+    probe = None
+    try:
+        probe = create_engine(_MAINTENANCE)
+        with probe.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        pytest.skip(f"entity database is not available: {exc}")
+    finally:
+        if probe is not None:
+            probe.dispose()
+
+
 def test_sql_node_during_a_channel_run_stays_unattributed() -> None:
     probe = None
     try:

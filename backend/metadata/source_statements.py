@@ -261,8 +261,14 @@ def execute_source_statement(
     *,
     timeout_sec: int,
     max_rows: int,
+    params: Sequence[Any] | None = None,
 ) -> StatementResult:
-    """Run ``sql`` on the Source connection. Raises ``ConnectorError`` on failure."""
+    """Run ``sql`` on the Source connection. Raises ``ConnectorError`` on failure.
+
+    ``params`` is passed through when the caller supplied it, including an
+    empty sequence. Absent parameters stay ``None`` so the connector can omit
+    them from the driver call.
+    """
     record, engine = _source_for_statement(source_id, sql)
     access = decrypt_access_blob(record.access_ciphertext or "")
     prepared = prepare(engine=engine, access=access)
@@ -271,6 +277,7 @@ def execute_source_statement(
         sql,
         max_rows=max_rows,
         timeout_sec=timeout_sec,
+        params=params,
     )
 
 

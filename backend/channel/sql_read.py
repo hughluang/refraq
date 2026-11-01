@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Mapping
 
 from pydantic_core import to_jsonable_python
@@ -35,20 +36,24 @@ def run_channel_sql(
     *,
     source: Mapping[str, Any],
     statement_timeout_sec: int,
+    params: Sequence[Any] | None = None,
 ) -> dict[str, Any]:
     """Execute one statement and return ``{rows, count, rowcount}``.
 
     Text that is not exactly one statement fails before either driver runs.
     More than ``ITEM_LIMIT`` rows fails the read.
     A database error fails the read with the database message.
+    Absent ``params`` are not sent. A present sequence is bound by the driver.
     """
     kind = source["kind"]
     try:
+        bound = {} if params is None else {"params": params}
         if kind == "entity":
             page = execute_entity_statement(
                 statement,
                 timeout_sec=statement_timeout_sec,
                 max_rows=ITEM_LIMIT,
+                **bound,
             )
             rows = [
                 {key: _jsonable(value) for key, value in row.items()}
@@ -61,6 +66,7 @@ def run_channel_sql(
                 statement,
                 timeout_sec=statement_timeout_sec,
                 max_rows=ITEM_LIMIT,
+                **bound,
             )
             if page.truncated:
                 raise SqlReadError(
