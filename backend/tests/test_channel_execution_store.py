@@ -537,6 +537,17 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
     same = "{{ n }}"
     samples = {
         "trigger.error": {},
+        "trigger.inbound": {
+            "path": "orders",
+            "credential_id": "cred",
+            "response": {"mode": "immediate", "body": "ok"},
+            "sample_request": {
+                "method": "POST",
+                "headers": {"content-type": "application/json"},
+                "query": {"n": "1"},
+                "body": {"n": 1},
+            },
+        },
         "trigger.manual": {},
         "trigger.scheduled": {},
         "read.changes": {"entity_id": "ent_1"},
@@ -591,10 +602,17 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
             "body": "{{ body }}",
             "content_type": "{{ text }}",
         },
+        "action.respond": {
+            "status": "{{ status }}",
+            "content_type": "{{ text }}",
+            "headers": {"X-Test": "{{ text }}"},
+            "body": "{{ body }}",
+        },
         "action.webhook": {"webhook_id": "hook", "body": "{{ body }}"},
     }
     expected = {
         "trigger.error": set(),
+        "trigger.inbound": set(),
         "trigger.manual": set(),
         "trigger.scheduled": set(),
         "read.changes": set(),
@@ -624,6 +642,7 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
             "body",
             "content_type",
         },
+        "action.respond": {"status", "content_type", "headers.X-Test", "body"},
         "action.webhook": {"body"},
     }
     values = {
@@ -642,6 +661,7 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "value": {"ok": True},
         "expected": {"ok": False},
         "source": [{"n": 1}],
+        "status": 200,
         "text": "hello",
         "body": "{}",
     }
