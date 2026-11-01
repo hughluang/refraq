@@ -538,6 +538,8 @@ All keys are `platform`-scoped.
 | `email_account:write` | Create, update, test, and delete **Email Account**s. Not implied by `channel:write` |
 | `http_account:read` | List and read **HTTP Account**s. Controls the Console Module |
 | `http_account:write` | Create, update, and delete **HTTP Account**s. Not implied by `channel:write`. The seeded `operator` Role does not receive `http_account:read` or `http_account:write` |
+| `inbound_credential:read` | List and read Inbound Credentials |
+| `inbound_credential:write` | Create, update, and delete Inbound Credentials. Not implied by `channel:write`. The seeded `operator` Role does not receive `inbound_credential:read` or `inbound_credential:write` |
 | `mirror:write` | Operate Source Mirrors (disable, delete data, resnapshot overrides) |
 
 Draft save compares the submitted graph with the stored draft. For a node whose type declares a permission: adding it (no stored node with that id, or the stored node had another type), or changing its `type`, `type_version`, or `config`, requires that permission. Otherwise the save is `403 AUTH_FORBIDDEN` and the detail names the node. An unchanged guarded node does not require the permission. Deleting one does not. Publish requires the caller to hold every permission declared by node types present in the draft, including nodes that did not change. Missing one is `403 AUTH_FORBIDDEN` and the detail names the node.

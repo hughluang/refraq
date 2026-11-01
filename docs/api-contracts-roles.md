@@ -92,7 +92,9 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "email_account:read", "description": "List and view Email Accounts" },
     { "key": "email_account:write", "description": "Create, update, test, and delete Email Accounts" },
     { "key": "http_account:read", "description": "List and view HTTP Accounts" },
-    { "key": "http_account:write", "description": "Create, update, and delete HTTP Accounts" }
+    { "key": "http_account:write", "description": "Create, update, and delete HTTP Accounts" },
+    { "key": "inbound_credential:read", "description": "List and view Inbound Credentials" },
+    { "key": "inbound_credential:write", "description": "Create, update, and delete Inbound Credentials" }
   ]
 }
 ```

@@ -50,6 +50,8 @@ Permission = Literal[
     "email_account:write",
     "http_account:read",
     "http_account:write",
+    "inbound_credential:read",
+    "inbound_credential:write",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -95,6 +97,8 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "email_account:write",
     "http_account:read",
     "http_account:write",
+    "inbound_credential:read",
+    "inbound_credential:write",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -140,6 +144,8 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "email_account:write": "Create, update, test, and delete Email Accounts",
     "http_account:read": "List and view HTTP Accounts",
     "http_account:write": "Create, update, and delete HTTP Accounts",
+    "inbound_credential:read": "List and view Inbound Credentials",
+    "inbound_credential:write": "Create, update, and delete Inbound Credentials",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

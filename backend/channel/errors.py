@@ -23,6 +23,8 @@ __all__ = [
     "EmailAccountNotFound",
     "HttpAccountInUse",
     "HttpAccountNotFound",
+    "InboundCredentialInUse",
+    "InboundCredentialNotFound",
     "TemporalTargetIncompatible",
     "WebhookInUse",
     "WebhookNotFound",
@@ -188,6 +190,22 @@ class HttpAccountInUse(AppError):
 
     def _default_message(self) -> str:
         return "HTTP Account is still referenced by a Data Channel"
+
+
+class InboundCredentialInUse(AppError):
+    code = "INBOUND_CREDENTIAL_IN_USE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Inbound Credential is still referenced by a Data Channel"
+
+
+class InboundCredentialNotFound(AppError):
+    code = "INBOUND_CREDENTIAL_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Inbound Credential not found"
 
 
 class WebhookNotFound(AppError):
