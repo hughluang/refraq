@@ -96,7 +96,7 @@ Avoid the User contact `email`, an inbox, **Data Channel**, a per-workflow mail 
 ### Webhook
 
 A site-wide saved HTTPS endpoint. An `action.webhook` node POSTs one JSON body to it when that node executes. The catalog test POSTs a fixed body. The platform does not call a Webhook for any other reason. A bearer secret is optional and is not returned by the API. Deleting one that a Data Channel draft or published version still names is refused.
-Avoid **Data Channel**, a per-workflow route, chat integrations, **Email Account**, **System Parameter**, **Management Audit Event**, and a platform event bus.
+Avoid **Data Channel**, a per-workflow route, chat integrations, **Email Account**, **System Parameter**, **Management Audit Event**, a platform event bus, and an inbound URL.
 
 ### HTTP Account
 
@@ -576,7 +576,7 @@ Avoid **Management Audit Event** for data access, or treating it as a database s
 ### Data Channel
 
 The product domain of user-orchestrated, versioned data workflows, and one such workflow. A Data Channel is a graph of trigger, read, transform, volume, state, write, and action nodes joined by edges that order execution. It owns the mapping, transform, and lineage that a **Business Entity** definition does not carry, and one Data Channel may write several **Entity Table**s. Its draft is edited freely. Unattended triggers run only a published **Channel Version**. An on-demand **Channel Run** may execute a frozen draft and still writes Entity Tables. The author orchestrates increments, deletes, concurrency, checkpoint policy, and error handling with nodes; the platform does not derive them. Write nodes are safe to re-execute. An `active` switch outside versions decides whether schedules and event triggers fire. A delivery target outside the Entity Table is another write target kind on this domain, not a second write implementation. Rules: `docs/business-data-channel.md`.
-Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine. Network access belongs only to the **Webhook** node, the **Email Account** node, and `action.http`. The Code sandbox has no network. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task". Avoid treating an edge as a carrier of rows.
+Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine. Network access belongs only to the **Webhook** node, the **Email Account** node, and `action.http`. The Code sandbox has no network. An **Inbound Trigger** is not outbound network access. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task". Avoid treating an edge as a carrier of rows.
 
 ### Channel Version
 
@@ -585,8 +585,28 @@ Avoid **Entity Version**, a mutable published graph, and an unattended trigger r
 
 ### Channel Run
 
-One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node. There is no separate testing action and no pinned output. Every node the run reaches performs its normal effects. User cancel kills the worker child process. Runs may target a frozen draft or the published version and may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run or a run pinned to a version. A rerun of a failed published run is a new Job pinned to that version. The run stores the graph it executed, the **Expression Context** it evaluated with, each node execution's output and **Execution Input**, and each **Container Round**.
+One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node. There is no separate testing action and no pinned output. Every node the run reaches performs its normal effects. User cancel kills the worker child process. Runs may target a frozen draft or the published version and may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run or a run pinned to a version. A rerun of a failed published run is a new Job pinned to that version. The run stores the graph it executed, the **Expression Context** it evaluated with, each node execution's output and **Execution Input**, and each **Container Round**. The channel's keeping settings may delete that record and the Job after the run is terminal. A cancelled run stays.
 Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution. Avoid a dry-run interpretation: every node the run reaches performs its normal effects. Avoid a separate testing action and a pinned output that skips execution.
+
+### Inbound Trigger
+
+A **Data Channel** trigger (`trigger.inbound`) that publishes one path. A third party calls that path, and an accepted call starts one **Channel Run**. The trigger names an **Inbound Credential**. The graph does not hold the secret. The path answers only while the published version that registered it is current, and editing the draft does not move it.
+Avoid **Webhook**, an outbound call, a **User Session**, a **User PAT**, and a second trigger beside it.
+
+### Inbound Credential
+
+A site-wide secret an **Inbound Trigger** names. The secret is not returned by the API. Deleting one that a Data Channel draft or published **Channel Version** still names is refused. The credential has no URL of its own.
+Avoid **HTTP Account**, a **Webhook** bearer secret, a secret stored on the graph, and a per-channel catalog.
+
+### Respond
+
+A **Data Channel** action node (`action.respond`) that builds the HTTP response for an **Inbound Trigger** waiting on the run. The first execution that produces the caller's response is the one that was sent. A later execution is recorded and does not replace it.
+Avoid **Webhook**, an HTTP request node, and a second public URL.
+
+### Inbound Rejection
+
+A record of one request an **Inbound Trigger** refused. It is not a **Channel Run**. A repeat that receives an answer already stored is counted and is not one of these records.
+Avoid a **Channel Run**, a **Management Audit Event**, and a log of accepted calls.
 
 ### Channel Note
 

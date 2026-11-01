@@ -2,9 +2,9 @@
 
 ## 1. Purpose
 
-This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, container rounds of a container execution, a **Node Sample** of one node against a run, **Template Preview**, dataset-row reads, and the **Channel Variable** list and manual delete. Paths address a channel by opaque `id`.
+This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, container rounds of a container execution, a **Node Sample** of one node against a run, **Template Preview**, dataset-row reads, the **Channel Variable** list and manual delete, the public **Inbound Trigger** hook, and the **Inbound Rejection** list. Paths address a channel by opaque `id`.
 
-**Source Mirror**s are not defined here. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. **HTTP Account** HTTP is `docs/api-contracts-http-accounts.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
+**Source Mirror**s are not defined here. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. **HTTP Account** HTTP is `docs/api-contracts-http-accounts.md`. **Inbound Credential** HTTP is `docs/api-contracts-inbound-credentials.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
 Related boundaries:
 
@@ -23,7 +23,7 @@ Related boundaries:
 
 Success responses use `application/json`. Every HTTP failure uses RFC 9457 Problem Details (`application/problem+json`) with `type` derived as `urn:refraq:problem:{CODE}`. First-party clients branch on `code`.
 
-Authentication is a Session cookie or a **User PAT** Bearer token. Unauthenticated requests return `401 AUTH_UNAUTHENTICATED`. Authenticated callers lacking the required **Permission** return `403`. Every permission in this document is `platform`-scoped.
+Authentication is a Session cookie or a **User PAT** Bearer token. Unauthenticated requests return `401 AUTH_UNAUTHENTICATED`. Authenticated callers lacking the required **Permission** return `403`. Every permission in this document is `platform`-scoped. The public hook in §5.22 does not use a Session or a **User PAT** and does not require a Permission.
 
 Every response echoes `X-Request-ID`. Instants on the wire are UTC with a `Z` suffix. Unknown fields on a request object are rejected with `422 REQUEST_INVALID`.
 
@@ -42,6 +42,7 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
 | Channel Note | `nt_intro` | Client-assigned; same character rule as a node id; unique across the node, edge, and note ids of the graph |
 | Job | `job_01HZX` | Platform Job id (`docs/api-contracts-jobs.md`) |
 | Dataset | `ds_01HZX` | Opaque server-issued id. The reference carries this id and no physical relation |
+| Inbound Rejection | `irj_` + 12 hex | Server-issued. Twelve lowercase hex characters after `irj_` |
 
 ## 3. Resource Shapes
 
@@ -130,7 +131,7 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
       "text": "Suppliers land in the material entity."
     }
   ],
-  "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null }
+  "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true }
 }
 ```
 
@@ -149,7 +150,7 @@ Node fields:
 | `on_error` | `stop`, `continue`, or `error_output`. `error_output` fails validation unless the node type declares an `error` output. A failure the container returns, including a failure after its rounds start, follows this `on_error`. A body node's `stop` ends the run without the container's `on_error` |
 | `retry` | `null`, or `{ "max_tries", "wait_sec" }`. `max_tries` is 1 to 10 and includes the first execution. `wait_sec` is 0 to 3600. Null executes once. A failure the container returns, including a failure after its rounds start, follows this `retry`, and each attempt runs the container again, rounds included. A body node's `stop` ends the run without the container's `retry` |
 
-Edge `source.port` and `target.port` name ports declared by the node types. An edge orders execution and selects a branch. It does not carry items. A container is a node type whose catalog entry declares `container`. An edge from S to T crosses a container frame when the two `parent` values differ and S is not T's parent. Two omitted `parent` values are equal. A crossing is `CHANNEL_LOOP_BODY_INVALID` in either direction, including an edge from a body node to its container. The only edge that may enter a frame is that container's `each` port connected to a node whose `parent` is that container, and `each` connects only to such a node. `done` connects only to a node outside that frame. A `parent` that names a missing node or a node that is not a container, or a parent chain that contains a cycle, is `CHANNEL_LOOP_BODY_INVALID`. Containers may nest in any combination. A cycle among edges is `CHANNEL_GRAPH_CYCLE`. Graph `settings.run_timeout_sec` is `null` or a positive integer of seconds at most 252460800. `settings.run_retry_limit` is `null` or an integer 0 to 10. `settings.error_channel_id` is `null` or another Data Channel id. Publish requires that channel's current published version to use `trigger.error` as its only trigger.
+Edge `source.port` and `target.port` name ports declared by the node types. An edge orders execution and selects a branch. It does not carry items. A container is a node type whose catalog entry declares `container`. An edge from S to T crosses a container frame when the two `parent` values differ and S is not T's parent. Two omitted `parent` values are equal. A crossing is `CHANNEL_LOOP_BODY_INVALID` in either direction, including an edge from a body node to its container. The only edge that may enter a frame is that container's `each` port connected to a node whose `parent` is that container, and `each` connects only to such a node. `done` connects only to a node outside that frame. A `parent` that names a missing node or a node that is not a container, or a parent chain that contains a cycle, is `CHANNEL_LOOP_BODY_INVALID`. Containers may nest in any combination. A cycle among edges is `CHANNEL_GRAPH_CYCLE`. Graph `settings.run_timeout_sec` is `null` or a positive integer of seconds at most 252460800. `settings.run_retry_limit` is `null` or an integer 0 to 10. `settings.error_channel_id` is `null` or another Data Channel id. Publish requires that channel's current published version to use `trigger.error` as its only trigger. `settings.keep_succeeded_runs`, `settings.keep_failed_runs`, and `settings.keep_test_runs` are booleans and default to true. A missing key means true. A save that omits one stores true. A new empty draft stores true for each. A stored graph may omit a key, and a reader treats that omission as true. The keeping rules are `docs/business-data-channel.md` §6.9.
 
 `notes` is optional and defaults to an empty list. A graph has at most 200 **Channel Note**s. Draft save, validate, and template preview accept this same graph shape.
 
@@ -187,10 +188,11 @@ SQL configuration (`read.sql`):
 | Field | Rule |
 | --- | --- |
 | `source` | Required object. `{"kind":"entity"}` or `{"kind":"source","source_id":"<Source id>"}`. `kind` `entity` rejects `source_id`. `kind` `source` requires `source_id`. Absent or any other shape is `CHANNEL_NODE_CONFIG_INVALID`. Validate and publish do not default a missing source to the entity database. A `source_id` that does not resolve is `CHANNEL_REFERENCE_UNRESOLVED` |
-| `sql` | A template. Each `{{ }}` result is spliced as text, and the author quotes literals in the statement. The rendered text must be exactly one statement; otherwise the node fails with `CHANNEL_SQL_NOT_ONE_STATEMENT` and the driver is not called. On the entity database, unqualified names resolve in schema `entity_data` |
+| `sql` | A template. Each `{{ }}` result is spliced as text, and the author quotes literals in the statement. The rendered text must be exactly one statement; otherwise the node fails with `CHANNEL_SQL_NOT_ONE_STATEMENT` and the driver is not called. On the entity database, unqualified names resolve in schema `entity_data`. The platform does not apply **Controlled Query** guards |
+| `params` | Optional list of template fields, in positional order. Each result is one JSON scalar or null and is passed to the driver as a bound value. It is not spliced into the statement. Absent means the statement runs with no bound values. A present list, including an empty list, is bound. The author writes the engine's placeholder: `%s` for PostgreSQL, including the entity database, and for MSSQL, and `:1`, `:2`, and so on for Oracle. The platform does not rewrite the statement. A count the database rejects is the database error. Publish does not inspect the placeholders |
 | `statement_timeout_sec` | Integer seconds from 1 to 3600. Absent means 30 |
 
-A successful SQL execution returns `{rows, count, rowcount}`. `rows` is an array of objects and `count` is its length. Both are empty and 0 when the statement returns no result set. `rowcount` is an integer when the driver reports an affected-row count, otherwise `null`. More than 100000 rows fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` and the message `Use Dataset Query, then Batch Read.` SQL does not return a **Dataset Reference**. Text that is not exactly one statement fails the node with `CHANNEL_SQL_NOT_ONE_STATEMENT` before the driver runs. A database error fails the node with `CHANNEL_NODE_FAILED` and the database message.
+Ports are the input `main` and the outputs `main` and `error`. A successful SQL execution returns `{rows, count, rowcount}`. `rows` is an array of objects and `count` is its length. Both are empty and 0 when the statement returns no result set. `rowcount` is an integer when the driver reports an affected-row count, otherwise `null`. More than 100000 rows fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` and the message `Use Dataset Query, then Batch Read.` SQL does not return a **Dataset Reference**. Text that is not exactly one statement fails the node with `CHANNEL_SQL_NOT_ONE_STATEMENT` before the driver runs. A database error fails the node with `CHANNEL_NODE_FAILED` and the database message.
 
 Read Changes configuration (`read.changes`):
 
@@ -336,7 +338,7 @@ Code configuration (`transform.code`):
 | `code` | Python source, the body of `def main(self)`. 1 byte to 64 KiB. `contentMediaType` is `text/x-python`. Validation compiles it in the parent process and does not execute it. A syntax error is `CHANNEL_CODE_INVALID` with `path` `["code"]` and the author's line number in `detail` |
 | `timeout_sec` | Integer seconds from 1 to 300. Absent means 30 |
 
-The returned value is the node output and must be JSON. Ports: input `main`, output `main`. A run failure is `CHANNEL_NODE_FAILED`. `error_detail.reason` is `network` (any socket or network attempt; the audit hook is the guard), `import` (a module outside the allow list), `timeout` (wall-clock over `timeout_sec`; the sandbox is killed, restarted, and replayed), `memory` (MemoryError under the address-space limit; the sandbox restarts afterwards), or `error` (any other exception: `error_detail` also carries `type`, `message`, and `line` in the author's code). One sandbox subprocess is reused for the run. The process CPU limit is a safety net; each call's wall-clock limit governs.
+The returned value is the node output and must be JSON. Ports: input `main`, output `main`. A run failure is `CHANNEL_NODE_FAILED`. `error_detail.reason` is `network` (any socket or network attempt; the audit hook is the guard), `import` (a module outside the allow list), `timeout` (wall-clock over `timeout_sec`; the sandbox is killed, restarted, and replayed), `memory` (MemoryError under the address-space limit; the sandbox restarts afterwards), or `error` (any other exception: `error_detail` also carries `type`, `message`, and `line` in the author's code). One sandbox subprocess is reused for the run. The process CPU limit is a safety net; each call's wall-clock limit governs. `xml.etree.ElementTree` is allowed. Network access is not.
 
 Live Source query configuration (`read.source_query`):
 
@@ -347,6 +349,39 @@ Live Source query configuration (`read.source_query`):
 | `row_cap` | Integer of at least 1. Absent means 100. A cap above the platform `query_max_rows` fails the node |
 
 A successful execution returns `{rows, count, truncated}`. `rows` is an array of objects keyed by column name. `count` is the length of `rows`. `truncated` is true when the result was cut at `row_cap`. Ports: input `main`, output `main`. A guard, timeout, or row-limit failure is `CHANNEL_NODE_FAILED` with the Controlled Query message. `error_detail.code` is that Controlled Query code. The node does not require `query:run`.
+
+Inbound Trigger configuration (`trigger.inbound`):
+
+| Field | Rule |
+| --- | --- |
+| `path` | 1 to 64 characters matching `^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$`. Required. Unique among published paths |
+| `credential_id` | **Inbound Credential** id. Required. The secret is not stored on the node |
+| `allow_get` | Boolean. Absent means false. POST is always allowed |
+| `input` | Optional list of `{name, type, required}`. `type` is `string`, `integer`, `number`, `boolean`, `object`, or `array`. Applied only to a parsed body. Undeclared keys pass through |
+| `event_id` | Optional `{from, key}`. `from` is `header`, `query`, or `body`. A body key is a dotted path. Header lookup is case-insensitive. Absent means no deduplication. An empty value is treated as none |
+| `dedup_window_sec` | Integer from 60 to 604800. Absent means 86400 |
+| `max_in_flight` | Integer from 1 to 1000. Absent means 10. Counts this path's `channel_run` Jobs with `trigger_kind` `inbound` that are `queued` or `running` |
+| `response` | Required. `mode` is `immediate` or `respond_node`. Fields of the other mode are `CHANNEL_NODE_CONFIG_INVALID` |
+| `response.status` | `immediate` only. Integer from 100 to 599. Absent means 200 |
+| `response.content_type` | `immediate` only. Absent or blank means `application/json`. A header named `content-type` is ignored; this field wins |
+| `response.headers` | `immediate` only. Object of strings. A `content-type` name is skipped |
+| `response.body` | `immediate` only. Required in this mode. `{kind: static, text}` or `{kind: echo, from, key}` with `from` of `query` or `body`. A missing echo is an empty body. A non-string echo of a JSON value is compact JSON text |
+| `response.wait_sec` | `respond_node` only. Integer from 1 to 30. Absent means 5 |
+| `response.fallback` | `respond_node` only. `status` from 100 to 599, absent means 503. Optional static `body`. The media type is `text/plain`. The run continues. The fallback is not stored as the deduplication answer |
+| `sample_request` | Optional `{method, headers, query, body}`. Additional properties are rejected. A test run copies it into the trigger output. A missing sample, or a blank method, yields method `POST`. `raw_body` and `event_id` are null unless the request carries them. `received_at` is the run's `started_at` |
+
+These fields are static. They are not templates. Ports: no input, output `main`. The output is `{method, headers, query, body, raw_body, event_id, received_at}`. Header names are lowercase. The credential header or query parameter is absent. `received_at` is an Instant. `permission` is null. Publish and the public call are §5.8 and §5.22. A **Respond** node present when the trigger is not this type in `respond_node` mode, or this mode with no Respond node reachable from the trigger, including a direct child of a container, is `CHANNEL_NODE_CONFIG_INVALID`.
+
+Respond configuration (`action.respond`):
+
+| Field | Rule |
+| --- | --- |
+| `status` | Required template. Renders to an integer from 100 to 599. A static value outside that range is `CHANNEL_NODE_CONFIG_INVALID`. A rendered value outside it fails the node |
+| `content_type` | Template. Absent, or a blank result, means `application/json`. This field wins over a header named `content-type` |
+| `headers` | Object of string templates. A `content-type` name is not sent; the content type field is |
+| `body` | Template rendered to any JSON value. Absent means null. A string is sent as text. Any other JSON value is sent as compact JSON. The content type does not add a charset parameter |
+
+Ports: input `main`, outputs `main` and `error`. The node may be a direct child of a container. The output is `{status, headers, body, delivered}`. `delivered` is true only when this execution produced the caller's HTTP response. It is false after the fallback, for a later execution, and in a test run. The first Respond, including one after the fallback, is the stored answer a later duplicate receives. A later Respond does not replace it. `permission` is null.
 
 `config_schema` may carry the custom keyword `x-refraq-ref`. It is ignored by JSON Schema validation and tells the Console which control to render, and tells validation how to resolve the value:
 
@@ -367,7 +402,7 @@ A successful execution returns `{rows, count, truncated}`. `rows` is an array of
 {
   "channel_id": "chn_01HZX",
   "number": 3,
-  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } },
   "published_at": "2026-10-08T09:30:00Z",
   "published_by_user_id": "usr_01HZX",
   "published_by_name": "Alice"
@@ -446,7 +481,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - `failed_node_id` names the node whose `on_error` `stop` failed the run, or `null`. A `continue` or `error_output` execution does not set it.
 - `stop_at_node_id` is the optional on-demand stop node, or `null` when the run executes every node reachable from the trigger.
 - `stopped_node_id` names the node that was next when a timeout or a newer version stopped the run between nodes, or the node a user cancel interrupted, or `null` when cancel killed the process before that node was recorded.
-- `trigger_kind` is `user` for an on-demand run or a rerun, `schedule` for a Scheduled node, `retry` for a Job minted by `run_retry_limit`, `error` for an error workflow, and `system` for platform-event and change-arrival triggers. `trigger_ref` is the acting User for `user`, the source Job id for `error`, and otherwise follows the Job contract. `trigger_actor_name` and `trigger_schedule_name` follow the Job contract.
+- `trigger_kind` is `user` for an on-demand run or a rerun, `schedule` for a Scheduled node, `retry` for a Job minted by `run_retry_limit`, `error` for an error workflow, `system` for platform-event and change-arrival triggers, and `inbound` for an accepted **Inbound Trigger** call. `trigger_ref` is the acting User for `user`, the source Job id for `error`, the published path for `inbound`, and otherwise follows the Job contract. `trigger_actor_name` and `trigger_schedule_name` follow the Job contract. An inbound run's actor is the **System Identity**. The path is not looked up as a user id.
 - Duration is derived by clients from `started_at` and `finished_at`.
 
 ### 3.7 Node Type
@@ -497,7 +532,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - Each port is `{ "port", "description", "coarse_type" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `main` is the primary input or output port. It orders execution. An expression reads an upstream output by name; the port does not deliver items or a dataset reference from the previous node. `error` is an output that carries items the node failed when `on_error` is `error_output`.
 - `type_version` is the current version of the node type. A node instance's `type_version` must match it.
 - `config_schema` is a JSON Schema object that the Console renders as the configuration panel and the server enforces at validate and publish. Every property, including properties nested under array items, has `title` and `description`.
-- `permission` names the extra Permission needed to add or edit a node of this type (`channel:code_write` for `transform.code`, `channel:source_query` for `read.source_query`), or `null`.
+- `permission` names the extra Permission needed to add or edit a node of this type (`channel:code_write` for `transform.code`, `channel:source_query` for `read.source_query`), or `null`. `trigger.inbound` and `action.respond` are `null`.
 - The Console prefers locale keys `channelNodeTypes.<type>.label` and `channelNodeTypes.<type>.summary`, and falls back to the served English `label` and `summary`.
 
 ## 4. Job Kind `channel_run`
@@ -521,7 +556,7 @@ A `channel_run` Job follows the platform Job lifecycle (`docs/business-jobs.md`)
 }
 ```
 
-`pin_version` defaults to false. When it is true, `version` is the published version number the runner must execute, and a newer version neither replaces it nor cancels the run. A `published` run with `pin_version` false resolves the current published version at start. A `draft` run executes the snapshot stored on the run record and ignores `pin_version`. `stop_at_node_id` is optional. When set, the run enters the graph's only trigger and executes that node's ancestor closure, including the node. `retry_of_job_id` is the previous Job in a `run_retry_limit` chain, or null. `error_source` is null except on an error workflow, where it is `{ "channel_id", "channel_name", "job_id", "version", "attempt", "error": { "code", "message", "node_id" } }`. Unattended schedule runs set `target` to `published`, omit `stop_at_node_id`, and omit a user-chosen trigger when the schedule names the node.
+`pin_version` defaults to false. When it is true, `version` is the published version number the runner must execute, and a newer version neither replaces it nor cancels the run. A `published` run with `pin_version` false resolves the current published version at start. A `draft` run executes the snapshot stored on the run record and ignores `pin_version`. `stop_at_node_id` is optional. When set, the run enters the graph's only trigger and executes that node's ancestor closure, including the node. `retry_of_job_id` is the previous Job in a `run_retry_limit` chain, or null. `error_source` is null except on an error workflow, where it is `{ "channel_id", "channel_name", "job_id", "version", "attempt", "error": { "code", "message", "node_id" } }`. Unattended schedule runs set `target` to `published`, omit `stop_at_node_id`, and omit a user-chosen trigger when the schedule names the node. An inbound Job sets `target` to `published`, `ignore_checkpoints` to false, and `created_by` to null, and adds `request`: `{method, headers, query, body, raw_body, event_id, received_at}`. Other Jobs omit `request`. The channel's keeping settings may delete a `channel_run` Job and its run record (`docs/business-data-channel.md` §6.9). A cancelled run stays.
 
 ### 4.3 Result
 
@@ -567,6 +602,8 @@ On `succeeded` only:
 | `GET` | `/channels/{id}/runs/{job_id}/datasets/{dataset_id}/rows` | `channel:read` | Page dataset rows by `_ord` |
 | `POST` | `/channels/{id}/runs/{job_id}/template-preview` | `channel:write` | Evaluate one template field against a run record |
 | `POST` | `/channels/{id}/runs/{job_id}/node-sample` | `channel:write` | Read one node's sample against a run record |
+| `GET`, `POST` | `/hooks/{path}` | none | Public **Inbound Trigger** call (§5.22) |
+| `GET` | `/channels/{id}/inbound-rejections` | `channel:read` | List **Inbound Rejection**s (§5.23) |
 
 ### 5.1 `GET /channel-node-types`
 
@@ -582,7 +619,7 @@ On `succeeded` only:
 
 An omitted `tags`, or both arrays empty, leaves the new channel with no Tags and `tag_revision` 1. `tag_ids` names existing Tags. `names` creates Tags in the same request. A rejected name or a set of more than ten leaves neither the channel nor a new Tag. A name that folds onto an existing Tag attaches it and does not return `TAG_NAME_CONFLICT`.
 
-`201` `{ "channel": { … } }`. The draft starts as `{ "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } }` with `draft_revision` 1. `active` is `false`.
+`201` `{ "channel": { … } }`. The draft starts as `{ "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } }` with `draft_revision` 1. `active` is `false`.
 
 ### 5.3 `GET /channels`
 
@@ -648,7 +685,7 @@ The call is allowed while a draft run is queued or running, and while the channe
 
 ### 5.5 `DELETE /channels/{id}`
 
-`204`. Withdraws schedule rows whose `owner_ref` is `channel:{id}`, requests cancel of the channel's other unfinished runs, and removes the channel, its draft, its versions, its checkpoints, its run records, its **Channel Variable**s, and its Tag assignments. A refused delete leaves the assignments. Historical Jobs remain. Rows already written to Entity Tables stay. **Global Variable**s stay.
+`204`. Withdraws schedule rows whose `owner_ref` is `channel:{id}`, withdraws the published inbound path, requests cancel of the channel's other unfinished runs, and removes the channel, its draft, its versions, its checkpoints, its run records, its **Channel Variable**s, and its Tag assignments. A refused delete leaves the assignments. Historical Jobs remain. Rows already written to Entity Tables stay. **Global Variable**s stay.
 
 ### 5.6 `GET` and `PUT /channels/{id}/draft`
 
@@ -657,7 +694,7 @@ The call is allowed while a draft run is queued or running, and while the channe
 `PUT` body:
 
 ```json
-{ "base_revision": 12, "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } } }
+{ "base_revision": 12, "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } } }
 ```
 
 - `base_revision` must equal the stored `draft_revision`; otherwise `409 CHANNEL_DRAFT_CONFLICT`.
@@ -668,7 +705,7 @@ The call is allowed while a draft run is queued or running, and while the channe
 ### 5.7 `POST /channels/{id}/draft/validate`
 
 ```json
-{ "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } } }
+{ "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } } }
 ```
 
 `graph` is the same shape as a draft save (§3.2). The body is required. Validate checks that graph and does not read or write the stored draft. It does not record an audit event. A graph that fails the save shape is `422`. The channel must exist (`404` otherwise). `200`:
@@ -692,7 +729,7 @@ The call is allowed while a draft run is queued or running, and while the channe
 
 The response describes the submitted graph. `valid` is false when any problem has severity `error`. `ports` lists every declared port of that graph. `schema` is the refined JSON Schema, or `null` when it is not known. An invalid graph is a `200` result, not a Problem Details failure.
 
-`context` is the JSON Schema of `self.channel`, `self.run`, and `self.platform`. It does not depend on the submitted graph. `channel` has `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `run_retry_limit`, `error_channel_id`). `run` has `id`, `target`, `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `platform` has `site_name`, `schedule_timezone`, `now`, and `parameters`. `parameters` lists every registered System Parameter: an integer constraint is `integer`, and every other constraint is `string`.
+`context` is the JSON Schema of `self.channel`, `self.run`, and `self.platform`. It does not depend on the submitted graph. `channel` has `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `run_retry_limit`, `error_channel_id`, `keep_succeeded_runs`, `keep_failed_runs`, `keep_test_runs`). `run` has `id`, `target`, `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `platform` has `site_name`, `schedule_timezone`, `now`, and `parameters`. `parameters` lists every registered System Parameter: an integer constraint is `integer`, and every other constraint is `string`.
 
 ### 5.8 `POST /channels/{id}/publish/preview` and `POST /channels/{id}/publish`
 
@@ -707,7 +744,8 @@ Publish body:
 - `draft_revision` must equal the stored revision, so the published graph is the previewed graph; otherwise `409 CHANNEL_DRAFT_CONFLICT`.
 - An invalid draft is refused with `422 CHANNEL_GRAPH_INVALID`; `detail` names the first error. The body carries `problems`, the errors that blocked the request, each shaped as in §5.7. The full list, including warnings, comes from validate.
 - The caller must hold every Permission declared by node types present in the draft, including nodes that did not change. Missing one is `403 AUTH_FORBIDDEN`; `detail` names the node.
-- `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` lists the running published runs the new version will stop between nodes. Publish stores the version and reconciles the schedule row. It does not change `active` and it does not cancel Jobs itself.
+- `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` lists the running published runs the new version will stop between nodes. Publish stores the version, reconciles the schedule row, and reconciles the inbound path. It does not change `active` and it does not cancel Jobs itself.
+- A published **Inbound Trigger** whose path another channel holds is `409` `CHANNEL_INBOUND_PATH_TAKEN`. One whose **Inbound Credential** does not exist is `422` `CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND`. Both are refused before the version is stored. Saving the draft does not change the path row. A later publish whose trigger is not inbound withdraws the row. Deactivation does not.
 
 ### 5.9 `GET /channels/{id}/versions` and `GET /channels/{id}/versions/{number}`
 
@@ -715,7 +753,7 @@ List query: `limit` (default 50, max 200), `offset` (default 0). Ordered by `num
 
 ### 5.10 `POST /channels/{id}/activate` and `POST /channels/{id}/deactivate`
 
-Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active channel, or deactivating an inactive one, succeeds without change. Activate sets every synced schedule row `enabled`; deactivate disables them and does not cancel queued or running Jobs. Activating a channel with no published version is allowed and has no schedule rows to enable. Requires `channel:write`. Activation and deactivation do not change Tags or `tag_revision`.
+Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active channel, or deactivating an inactive one, succeeds without change. Activate sets every synced schedule row `enabled`; deactivate disables them and does not cancel queued or running Jobs. An inbound path stays registered. A call to it while the channel is inactive is `503` `CHANNEL_INBOUND_INACTIVE` (§5.22). Activating a channel with no published version is allowed and has no schedule rows to enable. Requires `channel:write`. Activation and deactivation do not change Tags or `tag_revision`.
 
 ### 5.11 `POST /channels/{id}/runs`
 
@@ -748,7 +786,7 @@ Query: `status` (optional Job status), `target` (`draft` | `published` | omitted
 ```json
 {
   "run": { },
-  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } },
   "node_summaries": [
     {
       "node_id": "nd_read",
@@ -771,7 +809,7 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 
 ```json
 {
-  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } },
   "node_id": "nd_write",
   "path": ["source"],
   "scope": [{ "container_node_id": "nd_for", "round": 0 }]
@@ -890,7 +928,7 @@ The registry row must belong to `job_id` and be readable. Otherwise `404` `CHANN
 
 ```json
 {
-  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } },
   "node_id": "nd_write",
   "scope": [{ "container_node_id": "nd_for", "round": 0 }]
 }
@@ -996,6 +1034,31 @@ Query: `limit` (default 50, max 200), `offset` (default 0). Requires `channel:re
 
 Check order: a name that does not match the name rule is `422 CHANNEL_VARIABLE_NAME_INVALID`; else a missing channel is `404 CHANNEL_NOT_FOUND` (the list does not return an empty page); else a delete of a name with no live value is `404 CHANNEL_VARIABLE_NOT_FOUND` and writes no audit event. That order applies to a `{name}` bound as one path segment. A URL whose decoded path contains `/` in the name position is not this operation; an unmatched route is `HTTP_NOT_FOUND`. A trailing slash resolves to the collection, which does not allow `DELETE`, and that is `HTTP_METHOD_NOT_ALLOWED`. A successful delete is a **Management Audit Event** with action `channel.owned_variable_delete`, resource type `channel_owned_variable`, resource id `{channel_id}/{name}`, and detail `{ "channel_id", "name" }`.
 
+### 5.22 `GET` and `POST /hooks/{path}`
+
+The process path is `/hooks/{path}`. On the site origin the same call is `/api/hooks/{path}`. It does not use a Session or a **User PAT**, and §2.1's JSON success envelope does not apply. A caller is authenticated only by the published node's **Inbound Credential**. The credential shape is `docs/api-contracts-inbound-credentials.md`. A token check hashes both sides and then compares the digests. HMAC-SHA256 accepts hex or base64, an optional prefix, and an optional timestamp header. With a timestamp header the signed message is the timestamp, a `.`, and the raw body, and a timestamp more than 300 seconds from now is refused. A missing credential fails the check.
+
+The route also accepts `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`. Those methods follow the same admission until the method check, and then they are not allowed.
+
+Admission, in order:
+
+1. An unknown path, or a path whose channel is gone, is `404` `HTTP_NOT_FOUND` and is not recorded.
+2. An inactive channel is `503` `CHANNEL_INBOUND_INACTIVE` and is recorded with reason `inactive`, including when the published node is gone.
+3. A published node that is gone is `404` `HTTP_NOT_FOUND` and is not recorded.
+4. A method other than `POST`, or `GET` when `allow_get` is not true, is `405` `HTTP_METHOD_NOT_ALLOWED` and is recorded with reason `method_not_allowed`.
+5. A body over 1 MiB is `413` `HTTP_ERROR` and is recorded with reason `body_too_large`. The stored rejection keeps no body.
+6. A failed credential check is `401` `CHANNEL_INBOUND_UNAUTHENTICATED` and is recorded with reason `unauthenticated`.
+7. A body that does not parse, or a declared field that is missing or of the wrong type, is `422` `CHANNEL_INBOUND_INPUT_INVALID` and is recorded with reason `input_invalid`. `details` is a list of `{field, code, message}`. `code` is `VALUE_MISSING` or `VALUE_INVALID`. JSON that is not an object, and JSON that does not parse, use field `body`. Declared fields apply only to a parsed object. JSON and `application/x-www-form-urlencoded` parse to an object. Any other content type, including XML, leaves `body` null and `raw_body` the UTF-8 text, or null when the bytes are not UTF-8.
+8. When an event id is present, a repeat inside the window is decided before the cap and before a Job is created. A stored answer is returned again and increments that channel's deduplication count. It is not an **Inbound Rejection**. A repeat that is still in flight, including after a fallback while that run continues, is `503` `HTTP_ERROR` with `Retry-After: 5` and is recorded with reason `duplicate_in_flight`.
+9. At `max_in_flight` the call is `503` `CHANNEL_INBOUND_BUSY` with `Retry-After: 5` and is recorded with reason `busy`. A deduplication row reserved for that call and not yet attached to a Job is released.
+10. An accepted call creates one `channel_run` Job (§4.2). `immediate` answers after that Job is created and does not wait for the run. `respond_node` waits `wait_sec` for the first **Respond** node, then sends the fallback as `text/plain` and lets the run continue. A `respond_node` run that ends with no stored answer releases the event id.
+
+A refusal from step 2 onward, except a returned stored answer, is an Inbound Rejection (§5.23). Header names on the trigger output are lowercase. The credential's header or query parameter is removed from that output. A rejection also removes `authorization` and `cookie`. The rejection body is the first 16 KiB, decoded as UTF-8 with replacement, except for `body_too_large`.
+
+### 5.23 `GET /channels/{channel_id}/inbound-rejections`
+
+Requires `channel:read`. An unknown channel is `404` `CHANNEL_NOT_FOUND`. The response is an **Offset Page** with default `limit` 50 and max 200, plus `hit_count`, the integer deduplication count for that channel. Items are newest first (`received_at` descending, then `id` descending). Accepted calls are not in the list. Each item is `{id, channel_id, node_id, path, received_at, reason, method, headers, query, body}`. `reason` is `inactive`, `method_not_allowed`, `body_too_large`, `unauthenticated`, `input_invalid`, `duplicate_in_flight`, or `busy`. `id` is §2.3. Retention is `inbound_rejection_retention_days`.
+
 ## 6. Errors
 
 ### 6.1 HTTP Problem Codes
@@ -1014,6 +1077,15 @@ Check order: a name that does not match the name rule is `422 CHANNEL_VARIABLE_N
 | `CHANNEL_DATASET_UNAVAILABLE` | 404 | The dataset row endpoint cannot read the dataset. `reason` is `not_found`, `expired`, `lost`, or `foreign_run`. `reason` is a domain extension on this code |
 | `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, a Template Preview `node_id` and `path` that name no template field, a Node Sample `node_id` that is not in `graph`, a Node Sample or Template Preview `scope` that is not that node's outer-to-inner container chain, a rounds `seq` that is not a container execution, or a body that contains `pinned` |
 | `CHANNEL_RUN_NOT_RERUNNABLE` | 422 | Rerun of a run that is not `failed` or whose `target` is not `published` |
+| `CHANNEL_INBOUND_PATH_TAKEN` | 409 | Publish of an **Inbound Trigger** whose path another channel holds. Refused before the version is stored |
+| `CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND` | 422 | Publish of an Inbound Trigger whose **Inbound Credential** does not exist. Distinct from a catalog `404`. Refused before the version is stored |
+| `CHANNEL_INBOUND_INACTIVE` | 503 | The public hook's channel is inactive |
+| `CHANNEL_INBOUND_BUSY` | 503 | The public hook is at `max_in_flight`. The response carries `Retry-After: 5` |
+| `CHANNEL_INBOUND_UNAUTHENTICATED` | 401 | The public hook's credential check failed |
+| `CHANNEL_INBOUND_INPUT_INVALID` | 422 | The public hook's body does not parse, or a declared field is missing or of the wrong type. `details` lists `{field, code, message}` |
+| `HTTP_NOT_FOUND` | 404 | The public hook's path is unknown, the channel is gone, or the published node is gone. Not recorded |
+| `HTTP_METHOD_NOT_ALLOWED` | 405 | The public hook's method is not allowed |
+| `HTTP_ERROR` | 413 or 503 | The public hook's body is over 1 MiB (`413`), or an event id is already in flight (`503` with `Retry-After: 5`). The in-flight repeat has no second code |
 
 ### 6.2 Validation Problem Codes
 
@@ -1027,7 +1099,7 @@ Check order: a name that does not match the name rule is `422 CHANNEL_VARIABLE_N
 | `CHANNEL_LOOP_BODY_INVALID` | A node's `parent` names a missing node or a node that is not a container, a parent chain contains a cycle, or an edge crosses a container frame. A container is a node type whose catalog entry declares `container`. An edge from S to T crosses when the two `parent` values differ and S is not T's parent. The only entry is that container's `each` connected to a node whose `parent` is that container, and `each` connects only to such a node. `done` connects only outside that frame |
 | `CHANNEL_GRAPH_EDGE_INVALID` | An edge names an unknown node or port |
 | `CHANNEL_NODE_TYPE_UNKNOWN` | A node names an unknown node type |
-| `CHANNEL_NODE_CONFIG_INVALID` | A node configuration does not satisfy its `config_schema` |
+| `CHANNEL_NODE_CONFIG_INVALID` | A node configuration does not satisfy its `config_schema`. Also a **Respond** node when the trigger is not an **Inbound Trigger** in `respond_node` mode, `respond_node` mode with no Respond node reachable from the trigger, and response fields that belong to the other mode |
 | `CHANNEL_CODE_INVALID` | A Code node's source does not compile. `path` is `["code"]`. `detail` includes the line number in the author's code |
 | `CHANNEL_NODE_NAME_DUP` | Two nodes share a name |
 | `CHANNEL_NODE_REF_INVALID` | A `ref` is missing, not a Python identifier, reserved, or duplicated |

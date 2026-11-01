@@ -57,7 +57,7 @@ Required body fields (OpenAPI `ProblemDetails`; `additionalProperties: true`):
 | `detail` | English occurrence text (today's `AppError.message`). Not locale-negotiated. Clients localize UI by `code` |
 | `code` | Problem Code |
 | `request_id` | Same value as `X-Request-ID` |
-| `details` | Only for `REQUEST_INVALID` (422); omit otherwise |
+| `details` | `REQUEST_INVALID` (422) and `CHANNEL_INBOUND_INPUT_INVALID` (422). Items are `{field, code, message}`. Omit otherwise |
 | `title` / `instance` | **Not sent now**; forever optional. Adding them does not change identity. If `instance` is added later, use the request URI or `urn:uuid:…` — never as request-id |
 
 Frozen extension names: `code`, `request_id`, `details`. Do not introduce `correlationId`, `traceId`, `errorCode`, or a second array named `errors`.
