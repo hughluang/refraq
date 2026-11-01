@@ -82,6 +82,9 @@ _ALLOWED_IMPORTS = frozenset(
     }
 )
 
+# Exact module names. The root "xml" stays closed so other xml imports stay refused.
+_ALLOWED_MODULES = frozenset({"xml.etree.ElementTree"})
+
 _NETWORK_ROOTS = frozenset(
     {
         "socket",
@@ -132,7 +135,11 @@ def _audit(event: str, args: tuple[Any, ...]) -> None:
 
 def _safe_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):  # noqa: A002
     root = name.split(".", 1)[0]
-    if level != 0 or (root not in _ALLOWED_IMPORTS and root not in _NETWORK_ROOTS):
+    if level != 0 or (
+        name not in _ALLOWED_MODULES
+        and root not in _ALLOWED_IMPORTS
+        and root not in _NETWORK_ROOTS
+    ):
         raise ImportError(f"import of {name} is not allowed")
     return _REAL_IMPORT(name, globals, locals, fromlist, level)
 

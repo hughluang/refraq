@@ -163,6 +163,32 @@ def test_run_code_reads_rows_and_reuses_one_process() -> None:
         assert sandbox._proc.pid == pid
 
 
+def test_run_code_parses_xml_with_element_tree() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        assert sandbox.run_code(
+            "import xml.etree.ElementTree as ET\n"
+            "root = ET.fromstring('<note>hello</note>')\n"
+            "return root.text",
+            5,
+        ) == "hello"
+
+
+def test_run_code_denies_xmlrpc_and_other_xml() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        with pytest.raises(CodeError) as xmlrpc:
+            sandbox.run_code("import xmlrpc.client\nreturn 1", 5)
+        with pytest.raises(CodeError) as other_xml:
+            sandbox.run_code("import xml.dom.minidom\nreturn 1", 5)
+    assert xmlrpc.value.reason == "network"
+    assert other_xml.value.reason == "import"
+    assert str(xmlrpc.value) == "Code tried to use the network"
+    assert str(other_xml.value) == "Code imported a module that is not allowed"
+    assert xmlrpc.value.detail["reason"] == "network"
+    assert other_xml.value.detail["reason"] == "import"
+
+
 def test_run_code_denies_network_and_import() -> None:
     with SandboxSession() as sandbox:
         sandbox.set_context(channel={}, run={}, platform={})
