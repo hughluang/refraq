@@ -53,7 +53,7 @@ function cleanResponse(
   source: Record<string, unknown>,
   patch: Record<string, unknown>,
 ): Record<string, unknown> {
-  const merged = { ...source, ...patch, mode };
+  const merged: Record<string, unknown> = { ...source, ...patch, mode };
   if (mode === "respond_node") {
     const next: Record<string, unknown> = { mode };
     if (typeof merged.wait_sec === "number") next.wait_sec = merged.wait_sec;
