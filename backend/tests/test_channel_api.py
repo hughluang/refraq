@@ -324,6 +324,7 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
     items = catalog.json()["items"]
     assert [item["type"] for item in items] == [
         "trigger.error",
+        "trigger.inbound",
         "trigger.manual",
         "trigger.scheduled",
         "read.changes",
@@ -345,6 +346,7 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "write.entity",
         "action.email",
         "action.http",
+        "action.respond",
         "action.webhook",
     ]
     manual = next(item for item in items if item["type"] == "trigger.manual")
@@ -504,6 +506,265 @@ def test_publish_syncs_and_activation_toggles_the_schedule(client: TestClient) -
 
     deleted = client.delete(f"/channels/{channel_id}")
     assert deleted.status_code == 204
+
+
+def _credential(client: TestClient, name: str = "Hook token") -> str:
+    created = client.post(
+        "/inbound-credentials",
+        json={
+            "name": name,
+            "type": "token",
+            "secret": "token-secret-9f3a",
+            "config": {"location": "header", "name": "X-Hook-Token"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["inbound_credential"]["id"]
+
+
+def _channel(client: TestClient, name: str) -> str:
+    created = client.post("/channels", json={"name": name, "description": None})
+    assert created.status_code == 201, created.text
+    return created.json()["channel"]["id"]
+
+
+def _hook_node(
+    credential_id: str,
+    path: str,
+    *,
+    mode: str = "immediate",
+    sample: dict | None = None,
+) -> dict:
+    response: dict = {"mode": mode}
+    if mode == "immediate":
+        response["body"] = {"kind": "static", "text": "ok"}
+    config: dict = {
+        "path": path,
+        "credential_id": credential_id,
+        "response": response,
+    }
+    if sample is not None:
+        config["sample_request"] = sample
+    return {
+        "id": "nd_hook",
+        "ref": "hook",
+        "type": "trigger.inbound",
+        "name": "Inbound",
+        "position": {"x": 0, "y": 0},
+        "config": config,
+        "on_error": "stop",
+        "retry": None,
+    }
+
+
+def _inbound_graph(*nodes: dict, edges: list | None = None) -> dict:
+    return {
+        "nodes": list(nodes),
+        "edges": [] if edges is None else edges,
+        "settings": {"run_timeout_sec": None, "error_channel_id": None},
+    }
+
+
+def _publish(client: TestClient, channel_id: str, graph: dict) -> object:
+    revision = _save_draft(client, channel_id, graph)
+    return client.post(
+        f"/channels/{channel_id}/publish", json={"draft_revision": revision}
+    )
+
+
+def test_publish_registers_one_inbound_path(client: TestClient) -> None:
+    from backend.channel.inbound_paths import get_inbound_path_store
+
+    credential_id = _credential(client)
+    channel_id = _channel(client, "Orders")
+    published = _publish(
+        client, channel_id, _inbound_graph(_hook_node(credential_id, "orders"))
+    )
+    assert published.status_code == 201, published.text
+    store = get_inbound_path_store()
+    row = store.get("orders")
+    assert row is not None
+    assert row.channel_id == channel_id
+    assert row.node_id == "nd_hook"
+
+    drafted = _save_draft(
+        client, channel_id, _inbound_graph(_hook_node(credential_id, "shipments"))
+    )
+    assert store.get("orders") is not None
+    assert store.get("orders").channel_id == channel_id
+    assert store.get("shipments") is None
+
+    moved = client.post(
+        f"/channels/{channel_id}/publish", json={"draft_revision": drafted}
+    )
+    assert moved.status_code == 201, moved.text
+    assert store.get("orders") is None
+    shipped = store.get("shipments")
+    assert shipped is not None
+    assert shipped.channel_id == channel_id
+    assert shipped.node_id == "nd_hook"
+
+    activated = client.post(f"/channels/{channel_id}/activate")
+    assert activated.status_code == 200, activated.text
+    deactivated = client.post(f"/channels/{channel_id}/deactivate")
+    assert deactivated.status_code == 200, deactivated.text
+    assert store.get("shipments").channel_id == channel_id
+
+    replaced = _publish(client, channel_id, TRIGGER_GRAPH)
+    assert replaced.status_code == 201, replaced.text
+    assert store.get("shipments") is None
+
+    again = _publish(
+        client, channel_id, _inbound_graph(_hook_node(credential_id, "orders"))
+    )
+    assert again.status_code == 201, again.text
+    deleted = client.delete(f"/channels/{channel_id}")
+    assert deleted.status_code == 204
+    assert store.get("orders") is None
+
+
+def test_taken_inbound_path_does_not_replace_the_other_channel(client: TestClient) -> None:
+    from backend.channel.inbound_paths import get_inbound_path_store
+
+    credential_id = _credential(client, "Shared token")
+    owner = _channel(client, "Owner")
+    other = _channel(client, "Other")
+    held = _publish(client, owner, _inbound_graph(_hook_node(credential_id, "orders")))
+    assert held.status_code == 201, held.text
+    refused = _publish(
+        client, other, _inbound_graph(_hook_node(credential_id, "orders"))
+    )
+    assert_problem(refused, status=409, code="CHANNEL_INBOUND_PATH_TAKEN")
+    row = get_inbound_path_store().get("orders")
+    assert row is not None
+    assert row.channel_id == owner
+    assert row.node_id == "nd_hook"
+    versions = client.get(f"/channels/{other}/versions")
+    assert versions.status_code == 200, versions.text
+    assert versions.json()["total"] == 0
+
+
+def test_publish_refuses_a_missing_inbound_credential(client: TestClient) -> None:
+    from backend.channel.inbound_paths import get_inbound_path_store
+
+    channel_id = _channel(client, "Missing credential")
+    graph = _inbound_graph(_hook_node("icr_missing", "orders"))
+    checked = client.post(
+        f"/channels/{channel_id}/draft/validate", json={"graph": graph}
+    )
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["valid"] is True
+    refused = _publish(client, channel_id, graph)
+    assert_problem(refused, status=422, code="CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND")
+    assert get_inbound_path_store().get("orders") is None
+    versions = client.get(f"/channels/{channel_id}/versions")
+    assert versions.status_code == 200, versions.text
+    assert versions.json()["total"] == 0
+
+
+def test_test_run_uses_the_sample_and_records_an_undelivered_response(
+    client: TestClient,
+) -> None:
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
+
+    credential_id = _credential(client, "Sample token")
+    channel_id = _channel(client, "Sample")
+    bare = _publish(
+        client,
+        channel_id,
+        _inbound_graph(_hook_node(credential_id, "bare")),
+    )
+    assert bare.status_code == 201, bare.text
+    previous = set_dispatcher(run_job)
+    try:
+        started = client.post(
+            f"/channels/{channel_id}/runs", json={"target": "draft"}
+        )
+    finally:
+        set_dispatcher(previous)
+    assert started.status_code == 202, started.text
+    job_id = started.json()["run"]["job_id"]
+    run = get_run_store().get_run(job_id)
+    assert run is not None and run.context is not None
+    execution = get_run_store().list_executions(job_id)
+    assert execution[0].node_id == "nd_hook"
+    assert execution[0].output == {
+        "method": "POST",
+        "headers": {},
+        "query": {},
+        "body": None,
+        "raw_body": None,
+        "event_id": None,
+        "received_at": run.context["run"]["started_at"],
+    }
+
+    sample = {
+        "method": "PUT",
+        "headers": {"X-Request-Id": "abc"},
+        "query": {"id": "9"},
+        "body": {"n": 1},
+    }
+    reply = {
+        "id": "nd_reply",
+        "ref": "reply",
+        "type": "action.respond",
+        "name": "Respond",
+        "position": {"x": 240, "y": 0},
+        "config": {
+            "status": "202",
+            "content_type": "text/plain",
+            "headers": {"X-Trace": "abc"},
+            "body": '"accepted"',
+        },
+        "on_error": "stop",
+        "retry": None,
+    }
+    edge = {
+        "id": "ed_reply",
+        "source": {"node_id": "nd_hook", "port": "main"},
+        "target": {"node_id": "nd_reply", "port": "main"},
+    }
+    saved = _save_draft(
+        client,
+        channel_id,
+        _inbound_graph(
+            _hook_node(credential_id, "bare", mode="respond_node", sample=sample),
+            reply,
+            edges=[edge],
+        ),
+    )
+    assert saved
+    previous = set_dispatcher(run_job)
+    try:
+        answered = client.post(
+            f"/channels/{channel_id}/runs", json={"target": "draft"}
+        )
+    finally:
+        set_dispatcher(previous)
+    assert answered.status_code == 202, answered.text
+    answered_id = answered.json()["run"]["job_id"]
+    answered_run = get_run_store().get_run(answered_id)
+    assert answered_run is not None and answered_run.context is not None
+    by_node = {
+        item.node_id: item
+        for item in get_run_store().list_executions(answered_id)
+    }
+    assert by_node["nd_hook"].output == {
+        "method": "PUT",
+        "headers": {"x-request-id": "abc"},
+        "query": {"id": "9"},
+        "body": {"n": 1},
+        "raw_body": None,
+        "event_id": None,
+        "received_at": answered_run.context["run"]["started_at"],
+    }
+    assert by_node["nd_reply"].output == {
+        "status": 202,
+        "headers": {"X-Trace": "abc", "Content-Type": "text/plain"},
+        "body": "accepted",
+        "delivered": False,
+    }
 
 
 def test_global_variable_list_and_delete(client: TestClient) -> None:

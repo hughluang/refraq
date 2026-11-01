@@ -1971,3 +1971,258 @@ def test_refine_ports_resolves_a_node_name_to_its_ref() -> None:
     assert schema["properties"]["who"]["properties"]["id"] == {"type": "string"}
     assert schema["properties"]["expr"] == {}
     assert schema["required"] == ["who", "expr"]
+
+
+def _inbound(
+    node_id: str = "nd_hook",
+    *,
+    path: str = "orders",
+    mode: str = "immediate",
+    **extra: object,
+) -> dict:
+    response: dict = {"mode": mode}
+    if mode == "immediate":
+        response["body"] = {"kind": "static", "text": "ok"}
+    config = {
+        "path": path,
+        "credential_id": "icr_present",
+        "response": response,
+    }
+    config.update(extra)
+    return _node(node_id, "trigger.inbound", "Inbound", config)
+
+
+def _respond(
+    node_id: str = "nd_respond",
+    *,
+    parent: str | None = None,
+    status: str = "201",
+    headers: dict | None = None,
+    body: str | None = None,
+) -> dict:
+    config: dict = {"status": status}
+    if headers is not None:
+        config["headers"] = headers
+    if body is not None:
+        config["body"] = body
+    return _node(node_id, "action.respond", "Respond", config, parent=parent)
+
+
+def _problems(graph: dict) -> list:
+    return validate(graph, FakeResolver())
+
+
+def test_inbound_path_shape_is_checked_on_the_node() -> None:
+    for path in ("a", "ab", "a-b", "a--b", "a" * 64):
+        errors = [
+            item
+            for item in _problems(_graph([_inbound(path=path)]))
+            if item.severity == "error"
+        ]
+        assert errors == [], path
+    for path in ("-a", "a-", "-", "A", "a_b", "a" * 65):
+        problems = [
+            item
+            for item in _problems(_graph([_inbound(path=path)]))
+            if item.code == "CHANNEL_NODE_CONFIG_INVALID" and item.path[:1] == ("path",)
+        ]
+        assert problems, path
+
+
+def test_inbound_config_ranges_and_defaults_match_the_spec() -> None:
+    bare = _inbound()
+    assert [
+        item
+        for item in _problems(_graph([bare]))
+        if item.severity == "error"
+    ] == []
+    too_wide = _inbound(
+        dedup_window_sec=59,
+        max_in_flight=1001,
+        response={"mode": "respond_node", "wait_sec": 31},
+    )
+    paths = {
+        item.path
+        for item in _problems(_graph([too_wide]))
+        if item.code == "CHANNEL_NODE_CONFIG_INVALID"
+    }
+    assert ("dedup_window_sec",) in paths
+    assert ("max_in_flight",) in paths
+    assert ("response", "wait_sec") in paths
+    immediate = _inbound(
+        response={"mode": "immediate", "status": 99, "body": {"kind": "static"}}
+    )
+    immediate_paths = {
+        item.path
+        for item in _problems(_graph([immediate]))
+        if item.code == "CHANNEL_NODE_CONFIG_INVALID"
+    }
+    assert ("response", "status") in immediate_paths
+    assert ("response", "body", "text") in immediate_paths
+    missing_credential = _node(
+        "nd_hook",
+        "trigger.inbound",
+        "Inbound",
+        {"path": "orders", "response": {"mode": "respond_node"}},
+    )
+    missing = [
+        item
+        for item in _problems(_graph([missing_credential]))
+        if item.code == "CHANNEL_NODE_CONFIG_INVALID" and item.path == ("credential_id",)
+    ]
+    assert missing
+
+
+def test_respond_is_refused_unless_the_trigger_waits_for_it() -> None:
+    manual = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _respond(),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_respond")],
+    )
+    problems = _problems(manual)
+    refused = [
+        item
+        for item in problems
+        if item.code == "CHANNEL_NODE_CONFIG_INVALID" and item.node_id == "nd_respond"
+    ]
+    assert refused
+    assert all(item.code != "CHANNEL_GRAPH_UNREACHABLE" for item in problems)
+    immediate = _graph(
+        [_inbound(mode="immediate"), _respond()],
+        [_edge("ed_1", "nd_hook", "nd_respond")],
+    )
+    assert any(
+        item.code == "CHANNEL_NODE_CONFIG_INVALID" and item.node_id == "nd_respond"
+        for item in _problems(immediate)
+    )
+
+
+def test_respond_node_mode_requires_a_reachable_respond() -> None:
+    alone = _problems(_graph([_inbound(mode="respond_node")]))
+    missing = [
+        item
+        for item in alone
+        if item.code == "CHANNEL_NODE_CONFIG_INVALID" and item.node_id == "nd_hook"
+    ]
+    assert missing
+    assert all(
+        item.code != "CHANNEL_GRAPH_UNREACHABLE" or item.node_id != "nd_hook"
+        for item in alone
+    )
+    disconnected = _graph(
+        [_inbound(mode="respond_node"), _respond()],
+    )
+    disconnected_problems = _problems(disconnected)
+    assert any(
+        item.code == "CHANNEL_NODE_CONFIG_INVALID" and item.node_id == "nd_hook"
+        for item in disconnected_problems
+    )
+    linked = _graph(
+        [_inbound(mode="respond_node"), _respond()],
+        [_edge("ed_1", "nd_hook", "nd_respond")],
+    )
+    assert [
+        item for item in _problems(linked) if item.severity == "error"
+    ] == []
+
+
+def test_respond_inside_a_container_counts_as_reachable() -> None:
+    graph = _graph(
+        [
+            _inbound(mode="respond_node"),
+            _node("nd_each", "volume.for", "Each", {"items": "[1]"}),
+            _respond(parent="nd_each"),
+        ],
+        [
+            _edge("ed_in", "nd_hook", "nd_each"),
+            _edge("ed_each", "nd_each", "nd_respond", source_port="each"),
+        ],
+    )
+    assert [item for item in _problems(graph) if item.severity == "error"] == []
+
+
+def test_respond_header_templates_are_checked() -> None:
+    graph = _graph(
+        [
+            _inbound(mode="respond_node"),
+            _respond(headers={"X-Trace": "{{"}),
+        ],
+        [_edge("ed_1", "nd_hook", "nd_respond")],
+    )
+    invalid = [
+        item
+        for item in _problems(graph)
+        if item.code == "CHANNEL_EXPRESSION_INVALID"
+    ]
+    assert [item.path for item in invalid] == [("headers", "X-Trace")]
+
+
+def test_open_object_without_the_template_marker_is_not_walked() -> None:
+    open_node = NodeType(
+        execute=_idle,
+        output_view=OutputView(kind="record"),
+        type_id="test.open",
+        family="trigger",
+        label="Open",
+        summary="Holds an open object.",
+        description="Test type. Extra keys are not templates.",
+        trigger=True,
+        inputs=(),
+        outputs=(PortSpec("main", "An object.", coarse_type="object"),),
+        config_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                }
+            },
+        },
+    )
+    graph = _graph(
+        [_node("nd_open", "test.open", "Open", {"headers": {"A": "{{"}})]
+    )
+    assert "CHANNEL_EXPRESSION_INVALID" not in _codes(
+        graph, catalog=[open_node]
+    )
+
+
+def test_respond_status_is_a_template_string_not_a_stored_integer() -> None:
+    stored_integer = _graph(
+        [
+            _inbound(mode="respond_node"),
+            _node(
+                "nd_respond",
+                "action.respond",
+                "Respond",
+                {"status": 201},
+            ),
+        ],
+        [_edge("ed_1", "nd_hook", "nd_respond")],
+    )
+    assert any(
+        item.code == "CHANNEL_NODE_CONFIG_INVALID" and item.path == ("status",)
+        for item in _problems(stored_integer)
+    )
+    low = _graph(
+        [
+            _inbound(mode="respond_node"),
+            _respond(status="99"),
+        ],
+        [_edge("ed_1", "nd_hook", "nd_respond")],
+    )
+    assert any(
+        item.code == "CHANNEL_NODE_CONFIG_INVALID" and item.path == ("status",)
+        for item in _problems(low)
+    )
+    ok = _graph(
+        [
+            _inbound(mode="respond_node"),
+            _respond(status="201", body='{"ok": true}'),
+        ],
+        [_edge("ed_1", "nd_hook", "nd_respond")],
+    )
+    assert [item for item in _problems(ok) if item.severity == "error"] == []

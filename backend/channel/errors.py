@@ -10,6 +10,8 @@ __all__ = [
     "ChannelDatasetUnavailable",
     "ChannelDraftConflict",
     "ChannelGraphInvalid",
+    "ChannelInboundCredentialNotFound",
+    "ChannelInboundPathTaken",
     "ChannelNotFound",
     "ChannelNotPublished",
     "ChannelRequestInvalid",
@@ -110,6 +112,22 @@ class ChannelGraphInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Draft graph is invalid"
+
+
+class ChannelInboundPathTaken(AppError):
+    code = "CHANNEL_INBOUND_PATH_TAKEN"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Inbound path is already published by another Data Channel"
+
+
+class ChannelInboundCredentialNotFound(AppError):
+    code = "CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Inbound Credential was not found"
 
 
 class ChannelNotPublished(AppError):

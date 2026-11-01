@@ -23,6 +23,7 @@ _NODES_ROOT = Path(__file__).resolve().parents[1] / "channel" / "nodes"
 # Literals from the output-view contract, not derived from the node modules.
 _OUTPUT_VIEWS = {
     "trigger.error": OutputView(kind="record"),
+    "trigger.inbound": OutputView(kind="record"),
     "trigger.manual": OutputView(kind="record"),
     "trigger.scheduled": OutputView(kind="record"),
     "read.changes": OutputView(
@@ -63,8 +64,25 @@ _OUTPUT_VIEWS = {
     ),
     "action.email": OutputView(kind="record"),
     "action.http": OutputView(kind="record"),
+    "action.respond": OutputView(kind="record"),
     "action.webhook": OutputView(kind="record"),
 }
+
+
+def test_inbound_and_respond_are_catalogued_without_an_extra_permission() -> None:
+    types = {item.type_id: item for item in list_node_types()}
+    inbound = types["trigger.inbound"]
+    respond = types["action.respond"]
+    assert inbound.trigger is True
+    assert inbound.permission is None
+    assert [port.port for port in inbound.inputs] == []
+    assert [port.port for port in inbound.outputs] == ["main"]
+    assert inbound.output_view == OutputView(kind="record")
+    assert respond.trigger is False
+    assert respond.permission is None
+    assert [port.port for port in respond.inputs] == ["main"]
+    assert [port.port for port in respond.outputs] == ["main", "error"]
+    assert respond.output_view == OutputView(kind="record")
 
 
 def test_every_type_states_its_function_and_ports() -> None:

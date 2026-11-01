@@ -19,10 +19,12 @@ from backend.channel.nodes.transform.filter import NODE_TYPE as FILTER
 from backend.channel.nodes.transform.merge import NODE_TYPE as MERGE
 from backend.channel.nodes.transform.set_fields import NODE_TYPE as SET_FIELDS
 from backend.channel.nodes.trigger.error import NODE_TYPE as TRIGGER_ERROR
+from backend.channel.nodes.trigger.inbound import NODE_TYPE as TRIGGER_INBOUND
 from backend.channel.nodes.trigger.manual import NODE_TYPE as TRIGGER_MANUAL
 from backend.channel.nodes.trigger.scheduled import NODE_TYPE as TRIGGER_SCHEDULED
 from backend.channel.nodes.action.email import NODE_TYPE as ACTION_EMAIL
 from backend.channel.nodes.action.http import NODE_TYPE as ACTION_HTTP
+from backend.channel.nodes.action.respond import NODE_TYPE as ACTION_RESPOND
 from backend.channel.nodes.action.webhook import NODE_TYPE as ACTION_WEBHOOK
 from backend.channel.nodes.volume.batch_read import NODE_TYPE as VOLUME_BATCH_READ
 from backend.channel.nodes.volume.changes_dataset import NODE_TYPE as VOLUME_CHANGES_DATASET
@@ -51,6 +53,7 @@ _FAMILY_ORDER = {
 
 _CATALOG: tuple[NodeType, ...] = (
     TRIGGER_ERROR,
+    TRIGGER_INBOUND,
     TRIGGER_MANUAL,
     TRIGGER_SCHEDULED,
     READ_CHANGES,
@@ -72,6 +75,7 @@ _CATALOG: tuple[NodeType, ...] = (
     WRITE_ENTITY,
     ACTION_EMAIL,
     ACTION_HTTP,
+    ACTION_RESPOND,
     ACTION_WEBHOOK,
 )
 

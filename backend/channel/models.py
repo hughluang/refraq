@@ -134,6 +134,21 @@ class HttpAccountRow(Base):
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
+class InboundPathRow(Base):
+    """One published inbound path. The path is unique across the site."""
+
+    __tablename__ = "channel_inbound_paths"
+
+    path: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("channels.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    node_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class InboundCredentialRow(Base):
     __tablename__ = "inbound_credentials"
 

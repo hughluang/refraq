@@ -75,6 +75,7 @@ def validate(
     problems.extend(_expression_problems(nodes, edges, by_id, by_type, resolver))
     problems.extend(_edge_problems(edges, by_id, by_type))
     problems.extend(_trigger_problems(nodes, edges, by_id, by_type))
+    problems.extend(_respond_problems(nodes, edges, by_id, by_type))
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
     problems.extend(_cycle_problems(nodes, edges, by_id))
     problems.extend(_container_frame_problems(nodes, edges, by_id, by_type))
@@ -324,8 +325,8 @@ def _template_fields(
         found.append((value, _declared_schema(marker, None, entity_id, resolver), path))
     if schema.get("type") == "object" and isinstance(value, dict):
         properties = schema.get("properties")
+        local_entity = entity_id
         if isinstance(properties, dict):
-            local_entity = entity_id
             for key, subschema in properties.items():
                 if (
                     isinstance(subschema, dict)
@@ -352,6 +353,23 @@ def _template_fields(
                 found.extend(
                     _template_fields(
                         subschema, item, local_entity, resolver, (*path, str(key))
+                    )
+                )
+        additional = schema.get("additionalProperties")
+        if isinstance(additional, dict) and isinstance(
+            additional.get("x-refraq-template"), dict
+        ):
+            named = set(properties) if isinstance(properties, dict) else set()
+            for key, item in value.items():
+                if str(key) in named:
+                    continue
+                found.extend(
+                    _template_fields(
+                        additional,
+                        item,
+                        local_entity,
+                        resolver,
+                        (*path, str(key)),
                     )
                 )
     if schema.get("type") == "array" and isinstance(value, list):
@@ -612,12 +630,12 @@ def _trigger_problems(
     return problems
 
 
-def _reachability_problems(
+def _reachable_ids(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     by_id: dict[str, dict[str, Any]],
     by_type: dict[str, NodeType],
-) -> list[Problem]:
+) -> set[str]:
     outgoing = _outgoing(edges, by_id)
     seen: set[str] = set()
     stack = [str(node["id"]) for node in nodes if _is_trigger(node, by_type)]
@@ -630,6 +648,54 @@ def _reachability_problems(
             target_id = str(edge["target"]["node_id"])
             if target_id in by_id:
                 stack.append(target_id)
+    return seen
+
+
+def _respond_mode(node: Mapping[str, Any]) -> bool:
+    if node.get("type") != "trigger.inbound":
+        return False
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    response = config.get("response") if isinstance(config.get("response"), dict) else {}
+    return response.get("mode") == "respond_node"
+
+
+def _respond_problems(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
+    by_type: dict[str, NodeType],
+) -> list[Problem]:
+    responds = [node for node in nodes if node.get("type") == "action.respond"]
+    triggers = [node for node in nodes if _is_trigger(node, by_type)]
+    inbound = triggers[0] if len(triggers) == 1 and _respond_mode(triggers[0]) else None
+    if inbound is None:
+        return [
+            Problem(
+                "CHANNEL_NODE_CONFIG_INVALID",
+                "Respond requires an Inbound Trigger in respond_node mode",
+                node_id=str(node["id"]),
+            )
+            for node in responds
+        ]
+    reachable = _reachable_ids(nodes, edges, by_id, by_type)
+    if any(str(node["id"]) in reachable for node in responds):
+        return []
+    return [
+        Problem(
+            "CHANNEL_NODE_CONFIG_INVALID",
+            "respond_node mode requires a Respond node reachable from the trigger",
+            node_id=str(inbound["id"]),
+        )
+    ]
+
+
+def _reachability_problems(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
+    by_type: dict[str, NodeType],
+) -> list[Problem]:
+    seen = _reachable_ids(nodes, edges, by_id, by_type)
     return [
         Problem(
             "CHANNEL_GRAPH_UNREACHABLE",

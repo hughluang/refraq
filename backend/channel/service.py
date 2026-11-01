@@ -18,6 +18,11 @@ from backend.channel.errors import (
 )
 from backend.channel.graph import validate
 from backend.channel.checkpoints import get_checkpoint_store
+from backend.channel.inbound_paths import (
+    get_inbound_path_store,
+    require_inbound_publish,
+    sync_published_inbound_path,
+)
 from backend.channel.ids import new_channel_id
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import Problem
@@ -347,6 +352,7 @@ def delete_channel(
     if get_channel_store().get(channel_id) is None:
         raise ChannelNotFound()
     withdraw_schedules_by_owner_ref(owner_ref_for(channel_id))
+    get_inbound_path_store().withdraw_channel(channel_id)
     cancel_channel_jobs(channel_id)
 
     def _clear(session: Any) -> None:
@@ -423,6 +429,7 @@ def publish_channel(
     errors = [problem for problem in problems if problem.severity == "error"]
     if errors:
         raise ChannelGraphInvalid(errors[0].detail, problems=errors)
+    require_inbound_publish(channel_id, record.draft_graph)
     version = get_channel_store().publish_version(
         channel_id,
         draft_revision=draft_revision,
@@ -432,6 +439,7 @@ def publish_channel(
     confirmation = _confirmation(record)
     confirmation["draft_revision"] = draft_revision
     sync_published_schedule(record, version.graph)
+    sync_published_inbound_path(channel_id, version.graph)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
