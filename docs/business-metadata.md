@@ -511,7 +511,7 @@ Rules:
 
 ## 11. Controlled Query (Slice D)
 
-Console, MCP, Catalog Sample, and a Data Channel live Source query use this guard. A Data Channel SQL node does not (`docs/business-data-channel.md`). The live Source query is the guarded alternative to that SQL node on a Source.
+Console, MCP, Catalog Sample, and a Data Channel live Source query use this guard. A Data Channel SQL node does not (`docs/business-data-channel.md`).
 
 - Allowed: single read-only statement (SELECT, UNION/INTERSECT/EXCEPT, or `WITH … SELECT`).
 - Reject: DDL, DML, multi-statement batches, row locking (`FOR UPDATE`), dangerous functions (for example `pg_sleep`, `xp_cmdshell`), and anything the platform cannot classify as read-only.
