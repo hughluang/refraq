@@ -748,6 +748,22 @@
   overflow: auto;
 }
 
+/* A side column is a quarter of the panel. CJK breaks between glyphs, so a
+   width:100% table folds a header into one character and pushes the first
+   row below the fold. Size the table to its content and scroll sideways. */
+.channel-node-region__body table {
+  width: max-content;
+  min-width: 100%;
+}
+
+.channel-node-region__body th,
+.channel-node-region__body td,
+.channel-node-region__body th button,
+.channel-node-region__body td button {
+  white-space: nowrap;
+  vertical-align: top;
+}
+
 .channel-sample-bar {
   flex: none;
   display: flex;

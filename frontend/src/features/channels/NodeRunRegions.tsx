@@ -180,6 +180,12 @@ export function useNodeSample({
   return { sample, loading, failure };
 }
 
+/** The sample bar names the stop node. It does not say whether execution halted. */
+function stopNodeKey(stopAt: string | null | undefined, nodeId: string): string {
+  if (stopAt == null) return "channels.run.noStopNode";
+  return stopAt === nodeId ? "channels.run.stoppedAtThis" : "channels.run.notStoppedHere";
+}
+
 export function SampleBar({
   run,
   nodeId,
@@ -214,13 +220,7 @@ export function SampleBar({
       <Text size="xs" c="dimmed">
         {t("channels.run.startedAt", { time: showInstant(run.started_at) })}
       </Text>
-      <Text size="xs">
-        {t(
-          run.stop_at_node_id === nodeId
-            ? "channels.run.stoppedAtThis"
-            : "channels.run.notStoppedHere",
-        )}
-      </Text>
+      <Text size="xs">{t(stopNodeKey(run.stop_at_node_id, nodeId))}</Text>
       {sample?.config_changed ? (
         <Text size="xs">{t("channels.run.configChanged")}</Text>
       ) : null}

@@ -46,8 +46,9 @@ const LABELS: Record<string, string> = {
   "channels.run.target.draft": "Draft run",
   "channels.run.target.published": "Published run",
   "channels.run.startedAt": "Started {{time}}",
-  "channels.run.stoppedAtThis": "Stops here",
-  "channels.run.notStoppedHere": "Does not stop here",
+  "channels.run.noStopNode": "This run has no stop node",
+  "channels.run.stoppedAtThis": "Stop node is this node",
+  "channels.run.notStoppedHere": "Stop node is not this node",
   "channels.run.configChanged": "Configuration changed",
   "channels.run.sampleLoading": "Loading sample",
   "channels.run.round": "Round {{n}} / {{total}}",
@@ -1191,10 +1192,29 @@ describe("sample bar", () => {
       }),
     );
     expect(screen.getByText("Draft run")).toBeTruthy();
-    expect(screen.getByText("Does not stop here")).toBeTruthy();
+    expect(screen.getByText("Stop node is not this node")).toBeTruthy();
     expect(screen.getByText("Configuration changed")).toBeTruthy();
     expect(screen.getByText("Loading sample")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Previous round" })).toBeNull();
+  });
+
+  it("says the run has no stop node when none was set", () => {
+    mount(
+      createElement(SampleBar, {
+        run: { ...run, stop_at_node_id: null },
+        nodeId: "plain",
+        nodes: [{ id: "plain", name: "Plain", ref: "plain", type: "transform.set_fields", container: null }],
+        sample: sample(),
+        loading: false,
+        channelId: "chn_1",
+        jobId: "job_1",
+        roundOf: () => 0,
+        totalOf: () => 0,
+        onRound: vi.fn(),
+      }),
+    );
+    expect(screen.getByText("This run has no stop node")).toBeTruthy();
+    expect(screen.queryByText("Stop node is not this node")).toBeNull();
   });
 
   it("counts rounds from 1 and sends a zero-based round", async () => {
@@ -1223,7 +1243,7 @@ describe("sample bar", () => {
       }),
     );
     expect(screen.getByText("Published run")).toBeTruthy();
-    expect(screen.getByText("Stops here")).toBeTruthy();
+    expect(screen.getByText("Stop node is this node")).toBeTruthy();
     expect(screen.getByText("Round 1 / 5")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Previous round" }) as HTMLButtonElement).disabled).toBe(
       true,
