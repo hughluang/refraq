@@ -9,7 +9,7 @@ import json
 import threading
 import time
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl
 
@@ -18,11 +18,13 @@ from starlette.responses import Response
 
 from backend.channel.channel_run import dispatch, mint_inbound_run
 from backend.channel.errors import (
+    ChannelInboundBusy,
     ChannelInboundInactive,
     ChannelInboundInputInvalid,
     ChannelInboundUnauthenticated,
 )
 from backend.channel.inbound_credentials import get_inbound_credential_store
+from backend.channel.inbound_dedup import DedupReplay, get_inbound_dedup_store
 from backend.channel.inbound_paths import InboundPathRecord, get_inbound_path_store
 from backend.channel.inbound_response import (
     InboundResponseStore,
@@ -44,6 +46,9 @@ from backend.core.errors import (
     problem_response,
 )
 from backend.core.time import format_instant, utc_now
+from backend.jobs.store import get_job_store
+
+_RETRY_AFTER = "5"
 
 _MAX_BODY = 1024 * 1024
 _KEEP_BODY = 16 * 1024
@@ -119,25 +124,84 @@ async def receive_inbound(request: Request, hook_path: str) -> Response:
         raise ChannelInboundInputInvalid(errors)
     response_config = config["response"]
     received_at = format_instant(now)
-    job, _run = mint_inbound_run(
-        channel_id=channel.id,
-        channel_name=channel.name,
-        path=path_row.path,
-        trigger_node_id=path_row.node_id,
-        request={
-            "method": method,
-            "headers": _output_headers(headers, credential),
-            "query": _output_query(query, credential),
-            "body": parsed,
-            "raw_body": raw_text,
-            "event_id": _event_id(config, headers, query, parsed),
-            "received_at": received_at,
-        },
-    )
+    event_id = _event_id(config, headers, query, parsed)
+    if event_id is not None:
+        decision = get_inbound_dedup_store().admit(
+            channel_id=channel.id,
+            path=path_row.path,
+            event_id=event_id,
+            received_at=now,
+            expires_at=now + timedelta(seconds=config.get("dedup_window_sec", 86400)),
+        )
+        if isinstance(decision, DedupReplay):
+            return _http_from_respond(
+                {
+                    "status": decision.status,
+                    "headers": decision.headers,
+                    "body": decision.body,
+                }
+            )
+        if decision == "in_flight":
+            _record(
+                path_row,
+                method,
+                headers,
+                query,
+                credential,
+                "duplicate_in_flight",
+                _kept(body.raw),
+            )
+            return _retry_unavailable()
+    if _unfinished_inbound(path_row.path) >= config.get("max_in_flight", 10):
+        if event_id is not None:
+            get_inbound_dedup_store().abandon(
+                channel_id=channel.id, path=path_row.path, event_id=event_id
+            )
+        _record(path_row, method, headers, query, credential, "busy", _kept(body.raw))
+        raise ChannelInboundBusy()
+    try:
+        job, _run = mint_inbound_run(
+            channel_id=channel.id,
+            channel_name=channel.name,
+            path=path_row.path,
+            trigger_node_id=path_row.node_id,
+            request={
+                "method": method,
+                "headers": _output_headers(headers, credential),
+                "query": _output_query(query, credential),
+                "body": parsed,
+                "raw_body": raw_text,
+                "event_id": event_id,
+                "received_at": received_at,
+            },
+        )
+    except Exception:
+        if event_id is not None:
+            get_inbound_dedup_store().abandon(
+                channel_id=channel.id, path=path_row.path, event_id=event_id
+            )
+        raise
+    if event_id is not None:
+        get_inbound_dedup_store().attach_job(
+            channel_id=channel.id,
+            path=path_row.path,
+            event_id=event_id,
+            job_id=job.id,
+        )
     if response_config.get("mode") == "immediate":
-        answer = _immediate_response(response_config, query, parsed)
+        payload = _immediate_payload(response_config, query, parsed)
+        if event_id is not None:
+            get_inbound_dedup_store().answer(
+                channel_id=channel.id,
+                path=path_row.path,
+                event_id=event_id,
+                job_id=job.id,
+                status=payload["status"],
+                headers=payload["headers"],
+                body=payload["body"],
+            )
         dispatch(job.id)
-        return answer
+        return _http_from_respond(payload)
     return _respond_node_response(job.id, response_config)
 
 
@@ -155,6 +219,34 @@ def _method_not_allowed() -> Response:
 
 def _too_large() -> Response:
     return problem_response(status=413, code=CODE_HTTP_ERROR, detail="Payload Too Large")
+
+
+def _retry_unavailable() -> Response:
+    return problem_response(
+        status=503,
+        code=CODE_HTTP_ERROR,
+        detail="Service Unavailable",
+        headers={"Retry-After": _RETRY_AFTER},
+    )
+
+
+def _unfinished_inbound(path: str) -> int:
+    store = get_job_store()
+    _queued, queued = store.list(
+        kind="channel_run",
+        status="queued",
+        trigger_kind="inbound",
+        trigger_ref=path,
+        limit=0,
+    )
+    _running, running = store.list(
+        kind="channel_run",
+        status="running",
+        trigger_kind="inbound",
+        trigger_ref=path,
+        limit=0,
+    )
+    return queued + running
 
 
 def _respond_node_response(job_id: str, config: Mapping[str, Any]) -> Response:
@@ -600,9 +692,9 @@ def _dotted(body: Any, key: str) -> Any:
     return current
 
 
-def _immediate_response(
+def _immediate_payload(
     config: Mapping[str, Any], query: dict[str, str], body: dict[str, Any] | None
-) -> Response:
+) -> dict[str, Any]:
     spec = config.get("body")
     text = ""
     if isinstance(spec, dict):
@@ -611,12 +703,9 @@ def _immediate_response(
             text = raw if isinstance(raw, str) else ""
         elif spec.get("kind") == "echo":
             text = _as_text(_picked(spec, {}, query, body))
-    return Response(
-        content=text,
-        status_code=_status(config),
-        media_type=_content_type(config),
-        headers=_response_headers(config),
-    )
+    headers = _response_headers(config)
+    headers["Content-Type"] = _content_type(config)
+    return {"status": _status(config), "headers": headers, "body": text}
 
 
 def _status(config: Mapping[str, Any]) -> int:

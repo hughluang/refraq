@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
+from backend.channel.inbound_dedup import get_inbound_dedup_store
 from backend.channel.inbound_response import get_inbound_response_store
 from backend.channel.node_support import render_field
+from backend.jobs.store import get_job_store
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
     MAIN_INPUT,
@@ -92,6 +94,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         hooks.run_id,
         {"status": status_code, "headers": sent, "body": body},
     )
+    _remember_replay(hooks.run_id, status_code, sent, body)
     return NodeResult(
         status="succeeded",
         output={
@@ -100,6 +103,32 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             "body": body,
             "delivered": delivered,
         },
+    )
+
+
+def _remember_replay(
+    job_id: str, status: int, headers: dict[str, str], body: Any
+) -> None:
+    """Store the first Respond output as the dedup replay.
+
+    ``claim`` is true only while the HTTP slot is open. A Respond after the
+    fallback still has to become the replay, and a later Respond must not
+    replace that first output.
+    """
+    job = get_job_store().get(job_id)
+    if job is None or job.trigger_kind != "inbound" or not job.trigger_ref:
+        return
+    event_id = job.input["request"]["event_id"]
+    if not isinstance(event_id, str):
+        return
+    get_inbound_dedup_store().answer(
+        channel_id=job.input["channel_id"],
+        path=job.trigger_ref,
+        event_id=event_id,
+        job_id=job_id,
+        status=status,
+        headers=headers,
+        body=body,
     )
 
 

@@ -10,6 +10,7 @@ __all__ = [
     "ChannelDatasetUnavailable",
     "ChannelDraftConflict",
     "ChannelGraphInvalid",
+    "ChannelInboundBusy",
     "ChannelInboundCredentialNotFound",
     "ChannelInboundInactive",
     "ChannelInboundInputInvalid",
@@ -128,6 +129,15 @@ class ChannelInboundPathTaken(AppError):
 class ChannelInboundInactive(AppError):
     code = "CHANNEL_INBOUND_INACTIVE"
     http_status = 503
+
+    def _default_message(self) -> str:
+        return "Service Unavailable"
+
+
+class ChannelInboundBusy(AppError):
+    code = "CHANNEL_INBOUND_BUSY"
+    http_status = 503
+    retry_after_sec = 5
 
     def _default_message(self) -> str:
         return "Service Unavailable"

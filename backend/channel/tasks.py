@@ -14,8 +14,11 @@ from backend.channel.dataset_registry import (
     seal_dataset_expiry,
     seal_unsealed_terminal_datasets,
 )
+from backend.channel.inbound_dedup import get_inbound_dedup_store
 from backend.channel.inbound_rejections import get_inbound_rejection_store
 from backend.channel.parameters import (
+    DEDUP_SCHEDULE_KEY,
+    DEDUP_TASK_NAME,
     REJECTION_SCHEDULE_KEY,
     REJECTION_TASK_NAME,
     RUN_RECORD_SCHEDULE_KEY,
@@ -40,6 +43,7 @@ def run_job(job_id: str) -> dict[str, str]:
         seal_dataset_expiry(job_id)
         if result.get("status") == "cancelled":
             note_killed_run(job_id)
+        _release_settled_inbound_dedup(job_id, result.get("status"))
         return result
     except Exception as exc:  # noqa: BLE001
         current = get_job_store().get(job_id)
@@ -48,10 +52,23 @@ def run_job(job_id: str) -> dict[str, str]:
             summary = str(exc)[:400]
             mark_failed(job_id, error_code="JOB_EXECUTION_FAILED", error_summary=summary)
             seal_dataset_expiry(job_id)
+            _release_settled_inbound_dedup(job_id, "failed")
             return {"status": "failed"}
         if current is not None and current.status in TERMINAL:
             seal_dataset_expiry(job_id)
+            _release_settled_inbound_dedup(job_id, current.status)
         raise
+
+
+def _release_settled_inbound_dedup(job_id: str, status: object) -> None:
+    """Drop an unanswered event id once its run is terminal.
+
+    A keeping policy may already have deleted the Job row. The dedup record
+    still names that job, and an answered record is left in place.
+    """
+    if status in {"queued", "running"}:
+        return
+    get_inbound_dedup_store().release_unanswered(job_id)
 
 
 def purge_expired_run_records() -> int:
@@ -92,3 +109,15 @@ def purge_inbound_rejections() -> dict[str, int]:
     if record is not None:
         consume_due_tick(record.id)
     return {"deleted": purge_expired_inbound_rejections()}
+
+
+@shared_task(name=DEDUP_TASK_NAME)
+def purge_inbound_dedup() -> dict[str, int]:
+    """Delete dedup records whose window has elapsed.
+
+    The window is stored on the record. Run-keeping settings do not apply.
+    """
+    record = get_schedule_store().get_by_key(DEDUP_SCHEDULE_KEY)
+    if record is not None:
+        consume_due_tick(record.id)
+    return {"deleted": get_inbound_dedup_store().delete_expired(utc_now())}

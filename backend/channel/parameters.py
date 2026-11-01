@@ -6,6 +6,9 @@ from backend.admin.system_parameters import IntConstraint, ParameterSpec, resolv
 
 __all__ = [
     "CHANNEL_PARAMETER_SPECS",
+    "DEDUP_INTERVAL_SECONDS",
+    "DEDUP_SCHEDULE_KEY",
+    "DEDUP_TASK_NAME",
     "REJECTION_INTERVAL_SECONDS",
     "REJECTION_SCHEDULE_KEY",
     "REJECTION_TASK_NAME",
@@ -29,6 +32,12 @@ RUN_RECORD_INTERVAL_SECONDS = 3600
 REJECTION_SCHEDULE_KEY = "channel_inbound_rejection_retention"
 REJECTION_TASK_NAME = "backend.channel.tasks.purge_inbound_rejections"
 REJECTION_INTERVAL_SECONDS = 3600
+
+# Hidden system Scheduled Task. Hourly, in code, not a System Parameter.
+# Dedup expiry is stored on each record and is not the run-keeping retention.
+DEDUP_SCHEDULE_KEY = "channel_inbound_dedup_retention"
+DEDUP_TASK_NAME = "backend.channel.tasks.purge_inbound_dedup"
+DEDUP_INTERVAL_SECONDS = 3600
 
 CHANNEL_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
     ParameterSpec(

@@ -183,6 +183,40 @@ class InboundRejectionRow(Base):
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class InboundDedupRow(Base):
+    """One in-flight or answered event id for a published inbound path."""
+
+    __tablename__ = "channel_inbound_dedup"
+
+    channel_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("channels.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    path: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    headers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    body: Mapped[Any] = mapped_column(JSONB, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+    job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+
+class InboundDedupHitRow(Base):
+    """How many dedup replays a channel's inbound trigger has served."""
+
+    __tablename__ = "channel_inbound_dedup_hits"
+
+    channel_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("channels.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    hit_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class ChannelVariableRow(Base):
     __tablename__ = "channel_variables"
 

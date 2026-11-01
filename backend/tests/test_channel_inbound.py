@@ -6,6 +6,8 @@ import base64
 import hashlib
 import hmac
 import os
+import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
@@ -676,9 +678,13 @@ def test_immediate_call_creates_one_inbound_run(client: TestClient) -> None:
     assert response.headers["content-type"].split(";")[0] == "text/plain"
     assert response.headers["x-ack"] == "yes"
     assert again.status_code == 202, again.text
+    assert again.text == "acked"
+    assert again.headers["x-ack"] == "yes"
     runs = _runs(client, channel_id)
-    assert runs["total"] == 2
-    assert _rejections(client, channel_id)["total"] == 0
+    assert runs["total"] == 1
+    page = _rejections(client, channel_id)
+    assert page["total"] == 0
+    assert page["hit_count"] == 1
     first = next(
         item
         for item in runs["items"]
@@ -802,7 +808,7 @@ def test_rejection_list_is_newest_first_and_hides_accepted_calls(
     assert page["limit"] == 1
     assert page["offset"] == 0
     assert len(page["items"]) == 1
-    assert "hit_count" not in page
+    assert page["hit_count"] == 0
     assert page["items"][0]["received_at"] == format_instant(_WHEN + timedelta(seconds=2))
     older = _rejections(client, channel_id, limit=1, offset=1)
     assert older["items"][0]["received_at"] == format_instant(_WHEN)
@@ -1151,6 +1157,613 @@ def test_rejection_retention_parameter_and_purge(client: TestClient) -> None:
     page = _rejections(client, channel_id)
     assert page["total"] == 1
     assert page["items"][0]["received_at"] == format_instant(start + timedelta(days=2))
+
+
+def test_immediate_repeat_returns_the_first_response_without_a_new_run(
+    client: TestClient,
+) -> None:
+    credential_id = _token(client)
+    channel_id = _live(
+        client,
+        "Dedup",
+        "dedup",
+        credential_id,
+        event_id={"from": "body", "key": "meta.id"},
+        response={
+            "mode": "immediate",
+            "status": 202,
+            "content_type": "text/plain",
+            "headers": {"X-Trace": "one"},
+            "body": {"kind": "static", "text": "accepted"},
+        },
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    first = client.post(
+        "/hooks/dedup", json={"meta": {"id": "evt-1"}}, headers=headers
+    )
+    assert first.status_code == 202, first.text
+    assert first.text == "accepted"
+    assert first.headers["x-trace"] == "one"
+    assert first.headers["content-type"].split(";")[0] == "text/plain"
+    again = client.post(
+        "/hooks/dedup",
+        json={"meta": {"id": "evt-1"}, "other": True},
+        headers=headers,
+    )
+    assert again.status_code == 202, again.text
+    assert again.text == "accepted"
+    assert again.headers["x-trace"] == "one"
+    assert _runs(client, channel_id)["total"] == 1
+    page = _rejections(client, channel_id)
+    assert page["total"] == 0
+    assert page["items"] == []
+    assert page["hit_count"] == 1
+    other = client.post(
+        "/hooks/dedup", json={"meta": {"id": "evt-2"}}, headers=headers
+    )
+    assert other.status_code == 202, other.text
+    assert other.text == "accepted"
+    assert _runs(client, channel_id)["total"] == 2
+    assert _rejections(client, channel_id)["hit_count"] == 1
+
+
+def test_without_an_event_id_location_every_call_starts_a_run(
+    client: TestClient,
+) -> None:
+    credential_id = _token(client)
+    channel_id = _live(
+        client,
+        "Open",
+        "open",
+        credential_id,
+        response={"mode": "immediate", "body": {"kind": "static", "text": "ok"}},
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    assert client.post("/hooks/open", json={"id": "same"}, headers=headers).status_code == 200
+    assert client.post("/hooks/open", json={"id": "same"}, headers=headers).status_code == 200
+    assert _runs(client, channel_id)["total"] == 2
+    assert _rejections(client, channel_id)["hit_count"] == 0
+    assert _rejections(client, channel_id)["total"] == 0
+
+
+def test_a_missing_event_id_value_does_not_deduplicate(client: TestClient) -> None:
+    credential_id = _token(client)
+    channel_id = _live(
+        client,
+        "Blank",
+        "blank",
+        credential_id,
+        event_id={"from": "body", "key": "meta.id"},
+        response={"mode": "immediate", "body": {"kind": "static", "text": "ok"}},
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    assert client.post("/hooks/blank", json={}, headers=headers).status_code == 200
+    assert client.post("/hooks/blank", json={}, headers=headers).status_code == 200
+    assert _runs(client, channel_id)["total"] == 2
+
+
+def test_query_event_id_replays_the_first_response(client: TestClient) -> None:
+    credential_id = _token(client)
+    channel_id = _live(
+        client,
+        "Query id",
+        "qid",
+        credential_id,
+        allow_get=True,
+        event_id={"from": "query", "key": "event_id"},
+        response={
+            "mode": "immediate",
+            "content_type": "text/plain",
+            "body": {"kind": "static", "text": "from-query"},
+        },
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    first = client.get("/hooks/qid", params={"event_id": "evt-q"}, headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.text == "from-query"
+    again = client.get(
+        "/hooks/qid", params={"event_id": "evt-q", "extra": "1"}, headers=headers
+    )
+    assert again.status_code == 200, again.text
+    assert again.text == "from-query"
+    assert _runs(client, channel_id)["total"] == 1
+    assert _rejections(client, channel_id)["hit_count"] == 1
+    assert _rejections(client, channel_id)["total"] == 0
+
+
+def test_header_event_id_match_is_case_insensitive(client: TestClient) -> None:
+    credential_id = _token(client)
+    channel_id = _live(
+        client,
+        "Header id",
+        "hid",
+        credential_id,
+        event_id={"from": "header", "key": "X-Event-Id"},
+        response={"mode": "immediate", "body": {"kind": "static", "text": "from-header"}},
+    )
+    first = client.post(
+        "/hooks/hid",
+        json={},
+        headers={"X-Hook-Token": _SECRET, "X-Event-Id": "evt-h"},
+    )
+    assert first.status_code == 200, first.text
+    again = client.post(
+        "/hooks/hid",
+        json={"changed": True},
+        headers={"X-Hook-Token": _SECRET, "x-event-id": "evt-h"},
+    )
+    assert again.status_code == 200, again.text
+    assert again.text == "from-header"
+    assert _runs(client, channel_id)["total"] == 1
+
+
+def test_a_second_respond_does_not_replace_the_replay(client: TestClient) -> None:
+    credential_id = _token(client)
+    again = {
+        "id": "nd_again",
+        "ref": "again",
+        "type": "action.respond",
+        "name": "Again",
+        "position": {"x": 480, "y": 0},
+        "config": {"status": "202", "content_type": "text/plain", "body": '"second"'},
+        "on_error": "stop",
+        "retry": None,
+    }
+    channel_id = _publish(
+        client,
+        "First wins",
+        _graph(
+            _node(
+                credential_id,
+                "first-wins",
+                event_id={"from": "body", "key": "id"},
+                response={"mode": "respond_node", "wait_sec": 5},
+            ),
+            _respond(status="201", content_type="text/plain", body='"first"'),
+            again,
+            edges=[
+                _edge("ed_reply", "nd_hook", "nd_reply"),
+                _edge("ed_again", "nd_reply", "nd_again"),
+            ],
+        ),
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    first = client.post("/hooks/first-wins", json={"id": "evt-r"}, headers=headers)
+    assert first.status_code == 201, first.text
+    assert first.text == "first"
+    replay = client.post("/hooks/first-wins", json={"id": "evt-r"}, headers=headers)
+    assert replay.status_code == 201, replay.text
+    assert replay.text == "first"
+    assert _runs(client, channel_id)["total"] == 1
+    assert _rejections(client, channel_id)["total"] == 0
+    assert _rejections(client, channel_id)["hit_count"] == 1
+    job_id = _only_job(client, channel_id)
+    assert _outputs_for(client, channel_id, job_id, "nd_again") == [
+        {
+            "status": 202,
+            "headers": {"Content-Type": "text/plain"},
+            "body": "second",
+            "delivered": False,
+        }
+    ]
+
+
+def test_respond_after_fallback_becomes_the_replay_and_fallback_is_not_stored(
+    client: TestClient,
+) -> None:
+    credential_id = _token(client)
+    channel_id = _publish(
+        client,
+        "After fallback",
+        _graph(
+            _node(
+                credential_id,
+                "after-fallback",
+                event_id={"from": "body", "key": "id"},
+                response={
+                    "mode": "respond_node",
+                    "wait_sec": 1,
+                    "fallback": {"status": 503, "body": "fallback-text"},
+                },
+            ),
+            _pause_node(wait_sec=2),
+            _respond(status="200", content_type="text/plain", body='"from-respond"'),
+            edges=[
+                _edge("ed_delay", "nd_hook", "nd_delay"),
+                _edge("ed_reply", "nd_delay", "nd_reply"),
+            ],
+        ),
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    first = client.post(
+        "/hooks/after-fallback", json={"id": "evt-f"}, headers=headers
+    )
+    assert first.status_code == 503, first.text
+    assert first.text == "fallback-text"
+    assert first.headers["content-type"].split(";")[0] == "text/plain"
+    job_id = _only_job(client, channel_id)
+    answered = _outputs_for(client, channel_id, job_id, "nd_reply")[0]
+    assert answered["delivered"] is False
+    assert answered["body"] == "from-respond"
+    replay = client.post(
+        "/hooks/after-fallback", json={"id": "evt-f"}, headers=headers
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.text == "from-respond"
+    assert replay.headers["content-type"].split(";")[0] == "text/plain"
+    assert _runs(client, channel_id)["total"] == 1
+    assert _rejections(client, channel_id)["total"] == 0
+    assert _rejections(client, channel_id)["hit_count"] == 1
+
+
+def test_repeat_while_the_run_is_in_flight_is_duplicate_not_a_second_run(
+    client: TestClient,
+) -> None:
+    credential_id = _token(client)
+    channel_id = _publish(
+        client,
+        "In flight",
+        _graph(
+            _node(
+                credential_id,
+                "inflight",
+                event_id={"from": "header", "key": "X-Event-Id"},
+                response={
+                    "mode": "respond_node",
+                    "wait_sec": 1,
+                    "fallback": {"status": 503, "body": "fallback-text"},
+                },
+            ),
+            _pause_node(wait_sec=4),
+            _respond(status="200", content_type="text/plain", body='"from-respond"'),
+            edges=[
+                _edge("ed_delay", "nd_hook", "nd_delay"),
+                _edge("ed_reply", "nd_delay", "nd_reply"),
+            ],
+        ),
+    )
+    headers = {"X-Hook-Token": _SECRET, "X-Event-Id": "evt-live"}
+    thread, box = _call_in_thread(
+        lambda: TestClient(app).post("/hooks/inflight", json={}, headers=headers)
+    )
+    try:
+        _wait_running(client, channel_id)
+        time.sleep(1.3)
+        repeat = client.post("/hooks/inflight", json={"later": True}, headers=headers)
+        body = assert_problem(repeat, status=503, code=CODE_HTTP_ERROR)
+        _no_details(body)
+        assert repeat.headers["retry-after"] == "5"
+        assert _runs(client, channel_id)["total"] == 1
+        page = _rejections(client, channel_id)
+        assert page["total"] == 1
+        assert page["items"][0]["reason"] == "duplicate_in_flight"
+        assert page["hit_count"] == 0
+        assert "later" in (page["items"][0]["body"] or "")
+    finally:
+        thread.join(timeout=20)
+    _raise_box(box)
+    first = box["response"]
+    assert first.status_code == 503, first.text
+    assert first.text == "fallback-text"
+    job_id = _only_job(client, channel_id)
+    assert _outputs_for(client, channel_id, job_id, "nd_reply")[0]["delivered"] is False
+    replay = client.post(
+        "/hooks/inflight",
+        json={},
+        headers={"X-Hook-Token": _SECRET, "x-event-id": "evt-live"},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.text == "from-respond"
+    assert _runs(client, channel_id)["total"] == 1
+    assert _rejections(client, channel_id)["hit_count"] == 1
+
+
+def test_a_run_that_never_responds_releases_the_event_id(client: TestClient) -> None:
+    credential_id = _token(client)
+    channel_id = _publish(
+        client,
+        "No reply",
+        _graph(
+            _node(
+                credential_id,
+                "no-reply",
+                event_id={"from": "body", "key": "id"},
+                response={
+                    "mode": "respond_node",
+                    "wait_sec": 1,
+                    "fallback": {"body": "fallback-text"},
+                },
+            ),
+            _stop_node(),
+            _respond(status="200", content_type="text/plain", body='"never"'),
+            edges=[
+                _edge("ed_stop", "nd_hook", "nd_stop"),
+                _edge("ed_reply", "nd_stop", "nd_reply"),
+            ],
+        ),
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    first = client.post("/hooks/no-reply", json={"id": "evt-n"}, headers=headers)
+    assert first.status_code == 503, first.text
+    assert first.text == "fallback-text"
+    assert _runs(client, channel_id)["total"] == 1
+    second = client.post("/hooks/no-reply", json={"id": "evt-n"}, headers=headers)
+    assert second.status_code == 503, second.text
+    assert second.text == "fallback-text"
+    assert _runs(client, channel_id)["total"] == 2
+    assert _rejections(client, channel_id)["total"] == 0
+    assert _rejections(client, channel_id)["hit_count"] == 0
+
+
+def test_in_flight_cap_returns_busy_and_ignores_other_trigger_kinds(
+    client: TestClient,
+) -> None:
+    credential_id = _token(client)
+    channel_id = _publish(
+        client,
+        "Capped",
+        _graph(
+            _node(
+                credential_id,
+                "capped",
+                max_in_flight=1,
+                event_id={"from": "body", "key": "id"},
+                response={
+                    "mode": "immediate",
+                    "content_type": "text/plain",
+                    "body": {"kind": "static", "text": "ok"},
+                },
+            ),
+            _pause_node(wait_sec=4),
+            edges=[_edge("ed_delay", "nd_hook", "nd_delay")],
+        ),
+    )
+    other_id = _live(
+        client,
+        "Other path",
+        "other-path",
+        credential_id,
+        max_in_flight=1,
+        response={
+            "mode": "immediate",
+            "content_type": "text/plain",
+            "body": {"kind": "static", "text": "other"},
+        },
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    thread, box = _call_in_thread(
+        lambda: TestClient(app).post(
+            "/hooks/capped", json={"id": "evt-1"}, headers=headers
+        )
+    )
+    try:
+        _wait_running(client, channel_id)
+        busy = client.post(
+            "/hooks/capped", json={"id": "evt-2"}, headers=headers
+        )
+        body = assert_problem(busy, status=503, code="CHANNEL_INBOUND_BUSY")
+        _no_details(body)
+        assert busy.headers["retry-after"] == "5"
+        assert busy.headers["content-type"].startswith("application/problem+json")
+        assert _runs(client, channel_id)["total"] == 1
+        page = _rejections(client, channel_id)
+        assert page["total"] == 1
+        assert page["items"][0]["reason"] == "busy"
+        assert page["hit_count"] == 0
+        other = client.post("/hooks/other-path", json={}, headers=headers)
+        assert other.status_code == 200, other.text
+        assert other.text == "other"
+        assert _runs(client, other_id)["total"] == 1
+    finally:
+        thread.join(timeout=20)
+    _raise_box(box)
+    assert box["response"].status_code == 200, box["response"].text
+    assert box["response"].text == "ok"
+    freed = client.post("/hooks/capped", json={"id": "evt-2"}, headers=headers)
+    assert freed.status_code == 200, freed.text
+    assert freed.text == "ok"
+    assert _runs(client, channel_id)["total"] == 2
+
+    user_thread, user_box = _call_in_thread(
+        lambda: _posted_run(channel_id)
+    )
+    try:
+        _wait_running(client, channel_id)
+        alongside = client.post("/hooks/capped", json={"beside": True}, headers=headers)
+        assert alongside.status_code == 200, alongside.text
+    finally:
+        user_thread.join(timeout=20)
+    _raise_box(user_box)
+    assert _rejections(client, channel_id)["total"] == 1
+
+
+def test_a_replay_is_served_before_the_in_flight_cap(client: TestClient) -> None:
+    credential_id = _token(client)
+    channel_id = _publish(
+        client,
+        "Replay first",
+        _graph(
+            _node(
+                credential_id,
+                "replay-first",
+                max_in_flight=1,
+                event_id={"from": "body", "key": "id"},
+                response={
+                    "mode": "immediate",
+                    "content_type": "text/plain",
+                    "body": {"kind": "echo", "from": "body", "key": "id"},
+                },
+            ),
+            _pause_node(wait_sec=4),
+            edges=[_edge("ed_delay", "nd_hook", "nd_delay")],
+        ),
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    first = client.post("/hooks/replay-first", json={"id": "evt-a"}, headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.text == "evt-a"
+    thread, box = _call_in_thread(
+        lambda: TestClient(app).post(
+            "/hooks/replay-first", json={"id": "evt-b"}, headers=headers
+        )
+    )
+    try:
+        _wait_running(client, channel_id)
+        replay = client.post(
+            "/hooks/replay-first", json={"id": "evt-a"}, headers=headers
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.text == "evt-a"
+        assert _runs(client, channel_id)["total"] == 2
+        assert _rejections(client, channel_id)["hit_count"] == 1
+        assert _rejections(client, channel_id)["total"] == 0
+    finally:
+        thread.join(timeout=20)
+    _raise_box(box)
+
+
+def test_discarding_a_run_keeps_the_answered_dedup_record(client: TestClient) -> None:
+    credential_id = _token(client)
+    graph = _graph(
+        _node(
+            credential_id,
+            "kept-answer",
+            event_id={"from": "body", "key": "id"},
+            response={
+                "mode": "immediate",
+                "content_type": "text/plain",
+                "body": {"kind": "static", "text": "kept"},
+            },
+        )
+    )
+    graph["settings"]["keep_succeeded_runs"] = False
+    channel_id = _publish(client, "Kept answer", graph)
+    headers = {"X-Hook-Token": _SECRET}
+    first = client.post("/hooks/kept-answer", json={"id": "evt-k"}, headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.text == "kept"
+    assert _runs(client, channel_id)["total"] == 0
+    replay = client.post("/hooks/kept-answer", json={"id": "evt-k"}, headers=headers)
+    assert replay.status_code == 200, replay.text
+    assert replay.text == "kept"
+    assert _runs(client, channel_id)["total"] == 0
+    assert _rejections(client, channel_id)["hit_count"] == 1
+    assert _rejections(client, channel_id)["total"] == 0
+
+
+def test_expired_dedup_records_are_purged_without_clearing_the_hit_count(
+    client: TestClient,
+) -> None:
+    from backend.worker.schedules import get_schedule_store
+
+    row = get_schedule_store().get_by_key("channel_inbound_dedup_retention")
+    assert row is not None
+    assert row.hidden is True
+    assert row.store_only is True
+    assert row.locked is True
+    assert row.undeletable is True
+    assert row.enabled is True
+    assert row.interval_seconds == 3600
+    assert row.task_name == "backend.channel.tasks.purge_inbound_dedup"
+
+    credential_id = _token(client)
+    channel_id = _live(
+        client,
+        "Window",
+        "window",
+        credential_id,
+        event_id={"from": "body", "key": "id"},
+        dedup_window_sec=60,
+        response={
+            "mode": "immediate",
+            "content_type": "text/plain",
+            "body": {"kind": "static", "text": "windowed"},
+        },
+    )
+    headers = {"X-Hook-Token": _SECRET}
+    clock = FixedClock(_WHEN)
+    set_clock(clock)
+    try:
+        first = client.post("/hooks/window", json={"id": "evt-w"}, headers=headers)
+        assert first.status_code == 200, first.text
+        clock.advance(timedelta(seconds=59))
+        replay = client.post("/hooks/window", json={"id": "evt-w"}, headers=headers)
+        assert replay.status_code == 200, replay.text
+        assert replay.text == "windowed"
+        assert _runs(client, channel_id)["total"] == 1
+        clock.advance(timedelta(seconds=2))
+        from backend.channel.tasks import purge_inbound_dedup
+
+        deleted = purge_inbound_dedup()
+        renewed = client.post("/hooks/window", json={"id": "evt-w"}, headers=headers)
+    finally:
+        reset_clock()
+    assert deleted == {"deleted": 1}
+    assert renewed.status_code == 200, renewed.text
+    assert _runs(client, channel_id)["total"] == 2
+    assert _rejections(client, channel_id)["hit_count"] == 1
+    assert _rejections(client, channel_id)["total"] == 0
+
+
+def _pause_node(*, wait_sec: int) -> dict:
+    return {
+        "id": "nd_delay",
+        "ref": "delay",
+        "type": "transform.code",
+        "name": "Delay",
+        "position": {"x": 160, "y": 0},
+        "config": {"code": "raise RuntimeError('pause')", "timeout_sec": 30},
+        "on_error": "continue",
+        "retry": {"max_tries": 2, "wait_sec": wait_sec},
+    }
+
+
+def _stop_node() -> dict:
+    return {
+        "id": "nd_stop",
+        "ref": "stop",
+        "type": "transform.code",
+        "name": "Stop",
+        "position": {"x": 160, "y": 0},
+        "config": {"code": "raise RuntimeError('stop')", "timeout_sec": 30},
+        "on_error": "stop",
+        "retry": None,
+    }
+
+
+def _call_in_thread(call: Callable[[], object]) -> tuple[threading.Thread, dict]:
+    box: dict = {}
+
+    def run() -> None:
+        try:
+            box["response"] = call()
+        except Exception as exc:  # noqa: BLE001
+            box["error"] = exc
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread, box
+
+
+def _raise_box(box: dict) -> None:
+    if "error" in box:
+        raise box["error"]
+
+
+def _wait_running(client: TestClient, channel_id: str) -> None:
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        items = _runs(client, channel_id)["items"]
+        if any(item["status"] == "running" for item in items):
+            return
+        time.sleep(0.05)
+    raise AssertionError("inbound run did not stay in flight")
+
+
+def _posted_run(channel_id: str) -> object:
+    other = TestClient(app)
+    _login(other, "admin", "secret")
+    return other.post(f"/channels/{channel_id}/runs", json={"target": "published"})
 
 
 def _trigger_output(client: TestClient, channel_id: str, job_id: str) -> dict:

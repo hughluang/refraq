@@ -12,6 +12,7 @@ from starlette.responses import Response
 from backend.admin.deps import require_permission
 from backend.admin.user_store import UserRecord
 from backend.channel.errors import ChannelNotFound
+from backend.channel.inbound_dedup import get_inbound_dedup_store
 from backend.channel.inbound_http import receive_inbound
 from backend.channel.inbound_rejections import get_inbound_rejection_store
 from backend.channel.store import get_channel_store
@@ -45,6 +46,7 @@ class InboundRejectionListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+    hit_count: int
 
 
 @router.api_route("/hooks/{hook_path}", methods=_METHODS)
@@ -85,4 +87,5 @@ def http_list_inbound_rejections(
         "total": total,
         "limit": page.limit,
         "offset": page.offset,
+        "hit_count": get_inbound_dedup_store().hit_count(channel_id),
     }
