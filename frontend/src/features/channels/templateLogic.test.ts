@@ -353,6 +353,74 @@ describe("upstreamOutputs", () => {
     expect(doneOptions).not.toContain("self.walk.output.results");
   });
 
+  it("offers last after an Until done and drills sample keys under it", () => {
+    const untilDone = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        index: { type: "integer" },
+        count: { type: "integer" },
+        last: { type: ["object", "null"] },
+      },
+    };
+    const nodes = [
+      { id: "trigger", ref: "run_manually", name: "Run" },
+      { id: "loop", ref: "walk", name: "Walk" },
+      { id: "body", ref: "step", name: "Step", parent: "loop" },
+      { id: "after", ref: "after", name: "After" },
+    ];
+    const edges = [
+      { source: "trigger", target: "loop", sourcePort: "main", targetPort: "main" },
+      { source: "loop", target: "body", sourcePort: "each", targetPort: "main" },
+      { source: "loop", target: "after", sourcePort: "done", targetPort: "main" },
+    ];
+    const schemas = new Map<string, SchemaObject | null>([["loop:done", untilDone]]);
+    const doneText = "{{ self.walk.output.";
+    const lastText = "{{ self.walk.output.last.";
+    const nested = "{{ self.walk.output.last.extract.";
+    const withSample = upstreamOutputs(
+      "after",
+      nodes,
+      edges,
+      schemas,
+      new Map([["loop", { index: 1, count: 2, last: { extract: { count: 1 } } }]]),
+    );
+    expect(templateCompletions(doneText, doneText.length, false, scopeOf(withSample))?.options).toEqual([
+      "self.walk.output.index",
+      "self.walk.output.count",
+      "self.walk.output.last",
+    ]);
+    expect(templateCompletions(lastText, lastText.length, false, scopeOf(withSample))?.options).toEqual([
+      "self.walk.output.last.extract",
+    ]);
+    expect(templateCompletions(nested, nested.length, false, scopeOf(withSample))?.options).toEqual([
+      "self.walk.output.last.extract.count",
+    ]);
+
+    const withoutSample = upstreamOutputs("after", nodes, edges, schemas);
+    expect(templateCompletions(doneText, doneText.length, false, scopeOf(withoutSample))?.options).toEqual([
+      "self.walk.output.index",
+      "self.walk.output.count",
+      "self.walk.output.last",
+    ]);
+    expect(templateCompletions(lastText, lastText.length, false, scopeOf(withoutSample))).toBeNull();
+
+    const emptyLast = upstreamOutputs(
+      "after",
+      nodes,
+      edges,
+      schemas,
+      new Map([["loop", { index: 0, count: 1, last: {} }]]),
+    );
+    expect(templateCompletions(doneText, doneText.length, false, scopeOf(emptyLast))?.options).toContain(
+      "self.walk.output.last",
+    );
+    expect(templateCompletions(doneText, doneText.length, false, scopeOf(emptyLast))?.options).not.toContain(
+      "self.walk.output.iterations",
+    );
+    expect(templateCompletions(lastText, lastText.length, false, scopeOf(emptyLast))).toBeNull();
+  });
+
   it("offers direct children when the declaration has round templates, and not for an empty or null declaration", () => {
     const declarations = new Map<string, { round_templates: string[] } | null>([
       ["lab.hold", { round_templates: ["until"] }],

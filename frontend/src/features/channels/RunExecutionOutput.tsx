@@ -97,6 +97,7 @@ export function RunExecutionOutput({
   graph = null,
   stepItem = null,
   iterations = false,
+  last = false,
   metricsOnly = false,
   selectedRound = null,
   onSelectRound,
@@ -125,6 +126,8 @@ export function RunExecutionOutput({
   stepItem?: string | null;
   /** For output read from `done`: `iterations` is one row per round. */
   iterations?: boolean;
+  /** Until output read from `done`: `last` is one round row. */
+  last?: boolean;
   /** Batch Read output read from `done`: metric badges, not the round table. */
   metricsOnly?: boolean;
   selectedRound?: number | null;
@@ -160,6 +163,7 @@ export function RunExecutionOutput({
       graph={graph}
       stepItem={stepItem}
       iterations={iterations}
+      last={last}
       metricsOnly={metricsOnly}
       selectedRound={selectedRound}
       onSelectRound={onSelectRound}
@@ -192,6 +196,7 @@ type BodyProps = {
   graph: Graph | null;
   stepItem: string | null;
   iterations: boolean;
+  last: boolean;
   metricsOnly: boolean;
   selectedRound: number | null;
   onSelectRound?: (round: number) => void;
@@ -226,9 +231,10 @@ function OutputBody(props: BodyProps) {
 }
 
 function ViewSwitch(props: BodyProps) {
-  const { view, value, stepItem, iterations } = props;
+  const { view, value, stepItem, iterations, last } = props;
   if (stepItem) return <StepView {...props} itemKey={stepItem} />;
   if (iterations) return <IterationsView {...props} />;
+  if (last) return <LastRoundView {...props} />;
   if (props.metricsOnly) {
     return <MetricBadges keys={view?.metrics ?? []} value={value} onPick={props.onPick} />;
   }
@@ -357,10 +363,13 @@ function RowsTable({
   previewOnly,
   rowProperties,
   onPick,
+  objectPath,
 }: BodyProps & {
   listKey: string;
   path: PathSegment[];
   embedded: readonly unknown[];
+  /** One object at `path`. Picks omit the row index. `heading` and `label` are the leading column. */
+  objectPath?: { heading: string; label: string };
 }) {
   const t = useTranslate();
   const [page, setPage] = useState(1);
@@ -371,6 +380,7 @@ function RowsTable({
   useLoadFailureNotice(failure, "channels.run.rowsFailed", retry);
   const knownTotal = totals[listKey];
   const total = remote?.total ?? knownTotal ?? embedded.length;
+  const oneObject = objectPath != null;
 
   useEffect(() => {
     setPage(1);
@@ -379,7 +389,7 @@ function RowsTable({
   }, [channelId, jobId, seq, listKey]);
 
   useEffect(() => {
-    if (previewOnly || seq == null || (page === 1 && (knownTotal != null || !truncated))) {
+    if (oneObject || previewOnly || seq == null || (page === 1 && (knownTotal != null || !truncated))) {
       setFailure(null);
       return;
     }
@@ -408,13 +418,13 @@ function RowsTable({
     return () => {
       cancelled = true;
     };
-  }, [previewOnly, seq, page, knownTotal, truncated, channelId, jobId, listKey, attempt]);
+  }, [oneObject, previewOnly, seq, page, knownTotal, truncated, channelId, jobId, listKey, attempt]);
 
   const shown = page === 1 ? embedded.slice(0, ROW_PAGE) : remote?.page === page ? remote.items : [];
   const offset = (page - 1) * ROW_PAGE;
   const columns = rowColumnKeys(rowProperties, shown);
   const scalar = columns.length === 0;
-  const columnCount = Math.max(1, scalar ? 1 : columns.length);
+  const columnCount = Math.max(1, scalar ? 1 : columns.length) + (oneObject ? 1 : 0);
   const pageCount =
     previewOnly || seq == null ? 1 : Math.max(1, pageCountOf(total, ROW_PAGE));
   const unloaded = failure != null && shown.length === 0;
@@ -426,6 +436,7 @@ function RowsTable({
       <Table>
         <Table.Thead>
           <Table.Tr>
+            {objectPath ? <Table.Th>{objectPath.heading}</Table.Th> : null}
             {(scalar ? [t("channels.run.column.value")] : columns).map((column) => (
               <Table.Th key={column}>
                 <button type="button" className="channel-view-pick" onClick={() => onPick?.(path)}>
@@ -443,12 +454,13 @@ function RowsTable({
             const absolute = offset + index;
             return (
               <Table.Tr key={absolute}>
+                {objectPath ? <Table.Td>{objectPath.label}</Table.Td> : null}
                 {scalar ? (
                   <Table.Td>
                     <button
                       type="button"
                       className="channel-view-pick"
-                      onClick={() => onPick?.([...path, absolute])}
+                      onClick={() => onPick?.(objectPath ? path : [...path, absolute])}
                     >
                       {scalarText(row)}
                     </button>
@@ -459,7 +471,7 @@ function RowsTable({
                       <button
                         type="button"
                         className="channel-view-pick"
-                        onClick={() => onPick?.([...path, absolute, column])}
+                        onClick={() => onPick?.(objectPath ? [...path, column] : [...path, absolute, column])}
                       >
                         {scalarText(isRecord(row) ? row[column] : undefined)}
                       </button>
@@ -629,6 +641,26 @@ function IterationsView(props: BodyProps) {
         path={["iterations"]}
         embedded={rows}
         rowProperties={[]}
+      />
+    </Stack>
+  );
+}
+
+function LastRoundView(props: BodyProps) {
+  const t = useTranslate();
+  const record = isRecord(props.value) ? props.value : null;
+  const last = record && isRecord(record.last) ? record.last : null;
+  if (!last) return null;
+  return (
+    <Stack gap={4}>
+      <MetricBadges keys={props.view?.metrics ?? []} value={props.value} onPick={props.onPick} />
+      <RowsTable
+        {...props}
+        listKey="last"
+        path={["last"]}
+        embedded={[last]}
+        rowProperties={[]}
+        objectPath={{ heading: t("channels.view.metric.index"), label: scalarText(record?.index) }}
       />
     </Stack>
   );
@@ -941,6 +973,7 @@ function BatchExpansion({
       graph={null}
       stepItem={null}
       iterations={false}
+      last={false}
       metricsOnly={false}
       selectedRound={null}
       batchChildId={null}

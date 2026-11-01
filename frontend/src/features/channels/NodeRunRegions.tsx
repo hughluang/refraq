@@ -595,6 +595,7 @@ function UpstreamEntry({
         rowProperties={rowProperties(ports, entry.node_id, view)}
         stepItem={level ? (view?.item ?? null) : null}
         iterations={isForIterations(entry)}
+        last={isUntilLast(entry)}
         metricsOnly={isBatchDone(entry)}
       />
     ) : null;
@@ -793,10 +794,21 @@ function isBatchDone(entry: NodeSampleUpstream): boolean {
 function isForIterations(entry: NodeSampleUpstream): boolean {
   return (
     entry.source === "execution" &&
-    (entry.type_id === "volume.for" || entry.type_id === "volume.until") &&
-    typeof entry.value === "object" &&
-    entry.value !== null &&
-    !Array.isArray(entry.value) &&
-    Array.isArray((entry.value as { iterations?: unknown }).iterations)
+    entry.type_id === "volume.for" &&
+    isPlainRecord(entry.value) &&
+    Array.isArray(entry.value.iterations)
   );
+}
+
+function isUntilLast(entry: NodeSampleUpstream): boolean {
+  return (
+    entry.source === "execution" &&
+    entry.type_id === "volume.until" &&
+    isPlainRecord(entry.value) &&
+    isPlainRecord(entry.value.last)
+  );
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -64,6 +64,7 @@ const LABELS: Record<string, string> = {
   "channels.run.batchRowCount": "{{count}} rows",
   "channels.view.metric.count": "Count",
   "channels.view.metric.index": "Index",
+  "channels.run.column.value": "Value",
   "channels.view.nested": "Nested",
   "channels.editor.status.succeeded": "Succeeded",
   "problems.CHANNEL_NODE_FAILED": "Node failed",
@@ -958,7 +959,7 @@ describe("node run regions", () => {
     );
   });
 
-  it("shows Until iterations in the same per-round table as For", () => {
+  it("shows an Until done output as one last row labelled with the stored index", () => {
     mount(
       createElement(UpstreamRegion, {
         channelId: "chn_1",
@@ -983,7 +984,7 @@ describe("node run regions", () => {
               value: {
                 count: 2,
                 index: 1,
-                iterations: [{ read: { code: "S-01" } }, { read: { code: "S-02" } }],
+                last: { read: { code: "S-02" }, write: { inserted: 1 } },
               },
               totals: {},
             }),
@@ -991,10 +992,175 @@ describe("node run regions", () => {
         }),
       }),
     );
-    expect(screen.getByRole("columnheader", { name: "read" })).toBeTruthy();
-    expect(screen.getByText("Showing 2 / 2")).toBeTruthy();
-    expect(screen.getByRole("button", { name: '{"code":"S-01"}' })).toBeTruthy();
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+      "Index",
+      "read",
+      "write",
+    ]);
+    expect(screen.getAllByRole("row")).toHaveLength(2);
+    const row = screen.getAllByRole("row")[1];
+    if (!(row instanceof HTMLElement)) throw new Error("missing last row");
+    expect(within(row).getByRole("cell", { name: "1" })).toBeTruthy();
+    expect(within(row).queryByRole("cell", { name: "2" })).toBeNull();
     expect(screen.getByRole("button", { name: '{"code":"S-02"}' })).toBeTruthy();
+    expect(screen.getByRole("button", { name: '{"inserted":1}' })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: '{"code":"S-01"}' })).toBeNull();
+  });
+
+  it("picks a last body ref without inserting a numeric index", () => {
+    const onPick = vi.fn();
+    mount(
+      createElement(UpstreamRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        hasUpstream: true,
+        detail: detail("succeeded"),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        roundOf: () => 0,
+        onPick,
+        sample: sample({
+          upstream: [
+            upstream({
+              node_id: "hold",
+              ref: "hold",
+              name: "Hold",
+              type_id: "volume.until",
+              referenced: true,
+              source: "execution",
+              seq: 4,
+              value: {
+                count: 2,
+                index: 1,
+                last: { read: { code: "S-02" }, write: { inserted: 1 } },
+              },
+              totals: {},
+            }),
+          ],
+        }),
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "read" }));
+    fireEvent.click(screen.getByRole("button", { name: '{"code":"S-02"}' }));
+    expect(onPick).toHaveBeenCalledWith(["last"]);
+    expect(onPick).toHaveBeenCalledWith(["last", "read"]);
+    expect(onPick.mock.calls.some((call) => call[0].some((segment) => typeof segment === "number"))).toBe(
+      false,
+    );
+  });
+
+  it("shows an empty last object as one row with the value column", () => {
+    const onPick = vi.fn();
+    mount(
+      createElement(UpstreamRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        hasUpstream: true,
+        detail: detail("succeeded"),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        roundOf: () => 0,
+        onPick,
+        sample: sample({
+          upstream: [
+            upstream({
+              node_id: "hold",
+              ref: "hold",
+              name: "Hold",
+              type_id: "volume.until",
+              referenced: true,
+              source: "execution",
+              seq: 4,
+              value: { count: 1, index: 0, last: {} },
+              totals: {},
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+      "Index",
+      "Value",
+    ]);
+    expect(screen.getAllByRole("row")).toHaveLength(2);
+    const row = screen.getAllByRole("row")[1];
+    if (!(row instanceof HTMLElement)) throw new Error("missing last row");
+    expect(within(row).getByRole("cell", { name: "0" })).toBeTruthy();
+    expect(within(row).queryByRole("cell", { name: "1" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Value" }));
+    fireEvent.click(screen.getByRole("button", { name: "{}" }));
+    expect(onPick).toHaveBeenCalledTimes(2);
+    expect(onPick).toHaveBeenNthCalledWith(1, ["last"]);
+    expect(onPick).toHaveBeenNthCalledWith(2, ["last"]);
+  });
+
+  it("keeps an Until node's own result on the round table", async () => {
+    mount(
+      createElement(ResultRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        nodeId: "hold",
+        nodeType: "volume.until",
+        nodes: [],
+        detail: detail("succeeded"),
+        sample: sample({
+          node: {
+            ...sample().node,
+            seq: 4,
+            output: { index: 1, count: 2, last: { read: { code: "S-02" } } },
+          },
+        }),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        graph: null,
+        selectedRound: null,
+        onRound: vi.fn(),
+        onRoundsTotal: vi.fn(),
+      }),
+    );
+    await waitFor(() =>
+      expect(listRounds).toHaveBeenCalledWith("chn_1", "job_1", 4, { limit: 50, offset: 0 }),
+    );
+    expect(screen.queryByRole("columnheader", { name: "read" })).toBeNull();
+  });
+
+  it("keeps an Until round step on the index value", () => {
+    mount(
+      createElement(UpstreamRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        hasUpstream: true,
+        detail: detail("succeeded"),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        roundOf: () => 0,
+        sample: sample({
+          upstream: [
+            upstream({
+              node_id: "hold",
+              ref: "hold",
+              name: "Hold",
+              type_id: "volume.until",
+              referenced: true,
+              source: "round_step",
+              seq: null,
+              value: { index: 0, last: { read: { code: "S-02" } } },
+              totals: {},
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(screen.queryByRole("columnheader", { name: "read" })).toBeNull();
+    expect(screen.getByText("0")).toBeTruthy();
   });
 });
 
