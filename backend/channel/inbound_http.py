@@ -6,6 +6,8 @@ import base64
 import hashlib
 import hmac
 import json
+import threading
+import time
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
@@ -22,6 +24,10 @@ from backend.channel.errors import (
 )
 from backend.channel.inbound_credentials import get_inbound_credential_store
 from backend.channel.inbound_paths import InboundPathRecord, get_inbound_path_store
+from backend.channel.inbound_response import (
+    InboundResponseStore,
+    get_inbound_response_store,
+)
 from backend.channel.inbound_rejections import (
     InboundRejectionRecord,
     get_inbound_rejection_store,
@@ -43,6 +49,7 @@ _MAX_BODY = 1024 * 1024
 _KEEP_BODY = 16 * 1024
 _TIMESTAMP_WINDOW_SEC = 300
 _REJECTION_HEADER_NAMES = frozenset({"authorization", "cookie"})
+_SLOT_MARGIN_SEC = 120
 
 
 class _Body:
@@ -110,10 +117,7 @@ async def receive_inbound(request: Request, hook_path: str) -> Response:
             _kept(body.raw),
         )
         raise ChannelInboundInputInvalid(errors)
-    response_config = config.get("response")
-    if not isinstance(response_config, dict) or response_config.get("mode") != "immediate":
-        return _unavailable()
-    answer = _immediate_response(response_config, query, parsed)
+    response_config = config["response"]
     received_at = format_instant(now)
     job, _run = mint_inbound_run(
         channel_id=channel.id,
@@ -130,8 +134,11 @@ async def receive_inbound(request: Request, hook_path: str) -> Response:
             "received_at": received_at,
         },
     )
-    dispatch(job.id)
-    return answer
+    if response_config.get("mode") == "immediate":
+        answer = _immediate_response(response_config, query, parsed)
+        dispatch(job.id)
+        return answer
+    return _respond_node_response(job.id, response_config)
 
 
 def _not_found() -> Response:
@@ -150,11 +157,73 @@ def _too_large() -> Response:
     return problem_response(status=413, code=CODE_HTTP_ERROR, detail="Payload Too Large")
 
 
-def _unavailable() -> Response:
-    return problem_response(
-        status=503,
-        code=CODE_HTTP_ERROR,
-        detail="Service Unavailable",
+def _respond_node_response(job_id: str, config: Mapping[str, Any]) -> Response:
+    wait_sec = config.get("wait_sec", 5)
+    store = get_inbound_response_store()
+    store.open(job_id, ttl_sec=wait_sec + _SLOT_MARGIN_SEC)
+    deadline = time.monotonic() + wait_sec
+    cancel = threading.Event()
+    threading.Thread(
+        target=_close_slot_at,
+        args=(store, job_id, deadline, cancel),
+        daemon=True,
+    ).start()
+    dispatch(job_id)
+    payload = _read_until(store, job_id, deadline)
+    cancel.set()
+    if payload is None:
+        store.close(job_id)
+        payload = store.read(job_id)
+    if payload is None:
+        return _fallback_response(config)
+    return _http_from_respond(payload)
+
+
+def _close_slot_at(
+    store: InboundResponseStore,
+    job_id: str,
+    deadline: float,
+    cancel: threading.Event,
+) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining > 0 and cancel.wait(remaining):
+        return
+    store.close(job_id)
+
+
+def _read_until(
+    store: InboundResponseStore, job_id: str, deadline: float
+) -> dict[str, Any] | None:
+    payload = store.read(job_id)
+    if payload is not None:
+        return payload
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    return store.wait(job_id, remaining)
+
+
+def _http_from_respond(payload: Mapping[str, Any]) -> Response:
+    return Response(
+        content=_encoded_body(payload["body"]),
+        status_code=payload["status"],
+        headers=payload["headers"],
+    )
+
+
+def _encoded_body(body: Any) -> str:
+    if isinstance(body, str):
+        return body
+    return json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+
+
+def _fallback_response(config: Mapping[str, Any]) -> Response:
+    raw = config.get("fallback")
+    fallback = raw if isinstance(raw, dict) else {}
+    return Response(
+        content=fallback.get("body", ""),
+        status_code=fallback.get("status", 503),
+        media_type="text/plain",
     )
 
 

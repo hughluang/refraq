@@ -198,6 +198,113 @@ def _runs(client: TestClient, channel_id: str) -> dict:
     return response.json()
 
 
+def _edge(edge_id: str, source: str, target: str, *, source_port: str = "main") -> dict:
+    return {
+        "id": edge_id,
+        "source": {"node_id": source, "port": source_port},
+        "target": {"node_id": target, "port": "main"},
+    }
+
+
+def _respond(**config: object) -> dict:
+    body = {"status": "200"}
+    body.update(config)
+    return {
+        "id": "nd_reply",
+        "ref": "reply",
+        "type": "action.respond",
+        "name": "Respond",
+        "position": {"x": 240, "y": 0},
+        "config": body,
+        "on_error": "stop",
+        "retry": None,
+    }
+
+
+def _after() -> dict:
+    return {
+        "id": "nd_after",
+        "ref": "after",
+        "type": "transform.set_fields",
+        "name": "After",
+        "position": {"x": 480, "y": 0},
+        "config": {"fields": [{"name": "done", "value": "true"}]},
+        "on_error": "stop",
+        "retry": None,
+    }
+
+
+def _late_graph(credential_id: str, path: str, fallback: dict) -> dict:
+    return _graph(
+        _node(
+            credential_id,
+            path,
+            response={
+                "mode": "respond_node",
+                "wait_sec": 1,
+                "fallback": fallback,
+            },
+        ),
+        {
+            "id": "nd_delay",
+            "ref": "delay",
+            "type": "transform.code",
+            "name": "Delay",
+            "position": {"x": 160, "y": 0},
+            "config": {"code": "raise RuntimeError('pause')", "timeout_sec": 30},
+            "on_error": "continue",
+            "retry": {"max_tries": 2, "wait_sec": 2},
+        },
+        _respond(status="200", content_type="text/plain", body='"late"'),
+        _after(),
+        edges=[
+            _edge("ed_delay", "nd_hook", "nd_delay"),
+            _edge("ed_reply", "nd_delay", "nd_reply"),
+            _edge("ed_after", "nd_reply", "nd_after"),
+        ],
+    )
+
+
+def _respond_graph(credential_id: str, path: str, **config: object) -> dict:
+    return _graph(
+        _node(credential_id, path, response={"mode": "respond_node"}),
+        _respond(**config),
+        edges=[_edge("ed_reply", "nd_hook", "nd_reply")],
+    )
+
+
+def _hook(client: TestClient, path: str):
+    return client.post(
+        f"/hooks/{path}",
+        json={},
+        headers={"X-Hook-Token": _SECRET},
+    )
+
+
+def _only_job(client: TestClient, channel_id: str) -> str:
+    page = _runs(client, channel_id)
+    assert page["total"] == 1
+    return page["items"][0]["job_id"]
+
+
+def _outputs_for(
+    client: TestClient, channel_id: str, job_id: str, node_id: str
+) -> list:
+    listed = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions",
+        params={"node_id": node_id},
+    )
+    assert listed.status_code == 200, listed.text
+    values = []
+    for item in listed.json()["items"]:
+        output = client.get(
+            f"/channels/{channel_id}/runs/{job_id}/executions/{item['seq']}/output"
+        )
+        assert output.status_code == 200, output.text
+        values.append(output.json()["value"])
+    return values
+
+
 def _no_details(body: dict) -> None:
     assert "details" not in body
 
@@ -725,25 +832,8 @@ def test_rejection_list_requires_channel_read(client: TestClient) -> None:
     assert anon.status_code == 200
 
 
-def test_respond_node_is_not_answered_with_an_immediate_body(
-    client: TestClient,
-) -> None:
+def test_respond_node_answers_with_the_first_respond(client: TestClient) -> None:
     credential_id = _token(client)
-    reply = {
-        "id": "nd_reply",
-        "ref": "reply",
-        "type": "action.respond",
-        "name": "Respond",
-        "position": {"x": 240, "y": 0},
-        "config": {"status": "200", "body": '"from-respond"'},
-        "on_error": "stop",
-        "retry": None,
-    }
-    edge = {
-        "id": "ed_reply",
-        "source": {"node_id": "nd_hook", "port": "main"},
-        "target": {"node_id": "nd_reply", "port": "main"},
-    }
     channel_id = _publish(
         client,
         "Wait",
@@ -757,8 +847,17 @@ def test_respond_node_is_not_answered_with_an_immediate_body(
                     "fallback": {"status": 503, "body": "fallback-text"},
                 },
             ),
-            reply,
-            edges=[edge],
+            _respond(
+                status="201",
+                content_type="text/plain",
+                headers={"X-Trace": "abc"},
+                body='"from-respond"',
+            ),
+            _after(),
+            edges=[
+                _edge("ed_reply", "nd_hook", "nd_reply"),
+                _edge("ed_after", "nd_reply", "nd_after"),
+            ],
         ),
     )
     response = client.post(
@@ -766,13 +865,243 @@ def test_respond_node_is_not_answered_with_an_immediate_body(
         json={"n": 1},
         headers={"X-Hook-Token": _SECRET},
     )
-    assert response.status_code != 200
-    assert "fallback-text" not in response.text
-    assert "from-respond" not in response.text
-    assert response.headers["content-type"].startswith("application/problem+json")
-    assert _runs(client, channel_id)["total"] == 0
+    assert response.status_code == 201, response.text
+    assert response.text == "from-respond"
+    assert response.headers["content-type"].split(";")[0] == "text/plain"
+    assert response.headers["x-trace"] == "abc"
     assert _rejections(client, channel_id)["total"] == 0
-    assert response.json()["code"] != "CHANNEL_INBOUND_BUSY"
+    job_id = _only_job(client, channel_id)
+    detail = client.get(f"/channels/{channel_id}/runs/{job_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["run"]["status"] == "succeeded"
+    assert _outputs_for(client, channel_id, job_id, "nd_reply") == [
+        {
+            "status": 201,
+            "headers": {"X-Trace": "abc", "Content-Type": "text/plain"},
+            "body": "from-respond",
+            "delivered": True,
+        }
+    ]
+    assert _outputs_for(client, channel_id, job_id, "nd_after") == [{"done": True}]
+
+
+def test_respond_sends_a_string_as_text_and_other_json_as_json(
+    client: TestClient,
+) -> None:
+    credential_id = _token(client)
+    _publish(
+        client,
+        "String body",
+        _respond_graph(
+            credential_id,
+            "string-body",
+            status="200",
+            content_type="application/json",
+            body='"hello"',
+        ),
+    )
+    text = _hook(client, "string-body")
+    assert text.status_code == 200, text.text
+    assert text.text == "hello"
+    assert text.headers["content-type"].split(";")[0] == "application/json"
+
+    _publish(
+        client,
+        "Object body",
+        _respond_graph(
+            credential_id,
+            "object-body",
+            status="200",
+            content_type="text/plain",
+            body='{"n":1}',
+        ),
+    )
+    obj = _hook(client, "object-body")
+    assert obj.status_code == 200, obj.text
+    assert obj.text == '{"n":1}'
+    assert obj.headers["content-type"].split(";")[0] == "text/plain"
+
+    _publish(
+        client,
+        "False body",
+        _respond_graph(
+            credential_id,
+            "false-body",
+            status="200",
+            content_type="application/json",
+            body="false",
+        ),
+    )
+    false_body = _hook(client, "false-body")
+    assert false_body.status_code == 200, false_body.text
+    assert false_body.text == "false"
+
+    _publish(
+        client,
+        "Null body",
+        _respond_graph(
+            credential_id,
+            "null-body",
+            status="200",
+            content_type="application/json",
+            body="null",
+        ),
+    )
+    null_body = _hook(client, "null-body")
+    assert null_body.status_code == 200, null_body.text
+    assert null_body.text == "null"
+
+    _publish(
+        client,
+        "Array body",
+        _respond_graph(
+            credential_id,
+            "array-body",
+            status="200",
+            content_type="application/json",
+            body="[1,true]",
+        ),
+    )
+    array_body = _hook(client, "array-body")
+    assert array_body.status_code == 200, array_body.text
+    assert array_body.text == "[1,true]"
+
+
+def test_a_later_respond_inside_a_for_does_not_change_the_response(
+    client: TestClient,
+) -> None:
+    credential_id = _token(client)
+    again = {
+        "id": "nd_again",
+        "ref": "again",
+        "type": "action.respond",
+        "name": "Again",
+        "position": {"x": 480, "y": 80},
+        "config": {
+            "status": "202",
+            "content_type": "text/plain",
+            "body": '"second"',
+        },
+        "on_error": "stop",
+        "retry": None,
+        "parent": "nd_walk",
+    }
+    channel_id = _publish(
+        client,
+        "Twice",
+        _graph(
+            _node(
+                credential_id,
+                "twice",
+                response={"mode": "respond_node", "wait_sec": 5},
+            ),
+            _respond(
+                status="201",
+                content_type="text/plain",
+                headers={"X-Trace": "one"},
+                body='"first"',
+            ),
+            {
+                "id": "nd_walk",
+                "ref": "walk",
+                "type": "volume.for",
+                "name": "Walk",
+                "position": {"x": 360, "y": 80},
+                "config": {"items": "[1, 2]"},
+                "on_error": "stop",
+                "retry": None,
+            },
+            again,
+            _after(),
+            edges=[
+                _edge("ed_reply", "nd_hook", "nd_reply"),
+                _edge("ed_walk", "nd_reply", "nd_walk"),
+                _edge("ed_each", "nd_walk", "nd_again", source_port="each"),
+                _edge("ed_done", "nd_walk", "nd_after", source_port="done"),
+            ],
+        ),
+    )
+    response = _hook(client, "twice")
+    assert response.status_code == 201, response.text
+    assert response.text == "first"
+    assert response.headers["x-trace"] == "one"
+    job_id = _only_job(client, channel_id)
+    assert _outputs_for(client, channel_id, job_id, "nd_reply") == [
+        {
+            "status": 201,
+            "headers": {"X-Trace": "one", "Content-Type": "text/plain"},
+            "body": "first",
+            "delivered": True,
+        }
+    ]
+    assert _outputs_for(client, channel_id, job_id, "nd_again") == [
+        {
+            "status": 202,
+            "headers": {"Content-Type": "text/plain"},
+            "body": "second",
+            "delivered": False,
+        },
+        {
+            "status": 202,
+            "headers": {"Content-Type": "text/plain"},
+            "body": "second",
+            "delivered": False,
+        },
+    ]
+    assert _outputs_for(client, channel_id, job_id, "nd_after") == [{"done": True}]
+
+
+def test_a_respond_after_the_wait_returns_the_fallback(
+    client: TestClient,
+) -> None:
+    credential_id = _token(client)
+    channel_id = _publish(
+        client,
+        "Late",
+        _late_graph(credential_id, "late", {"body": "fallback-text"}),
+    )
+    response = client.post(
+        "/hooks/late",
+        json={},
+        headers={"X-Hook-Token": _SECRET},
+    )
+    assert response.status_code == 503, response.text
+    assert response.text == "fallback-text"
+    assert response.headers["content-type"].split(";")[0] == "text/plain"
+    assert "late" not in response.text
+    assert _rejections(client, channel_id)["total"] == 0
+    job_id = _only_job(client, channel_id)
+    detail = client.get(f"/channels/{channel_id}/runs/{job_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["run"]["status"] == "succeeded"
+    assert _outputs_for(client, channel_id, job_id, "nd_reply") == [
+        {
+            "status": 200,
+            "headers": {"Content-Type": "text/plain"},
+            "body": "late",
+            "delivered": False,
+        }
+    ]
+    assert _outputs_for(client, channel_id, job_id, "nd_after") == [{"done": True}]
+
+    chosen_id = _publish(
+        client,
+        "Late status",
+        _late_graph(
+            credential_id,
+            "late-status",
+            {"status": 429, "body": "retry-later"},
+        ),
+    )
+    chosen = client.post(
+        "/hooks/late-status",
+        json={},
+        headers={"X-Hook-Token": _SECRET},
+    )
+    assert chosen.status_code == 429, chosen.text
+    assert chosen.text == "retry-later"
+    chosen_job = _only_job(client, chosen_id)
+    assert _outputs_for(client, chosen_id, chosen_job, "nd_reply")[0]["delivered"] is False
 
 
 def test_rejection_retention_parameter_and_purge(client: TestClient) -> None:

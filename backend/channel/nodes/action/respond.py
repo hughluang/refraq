@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
+from backend.channel.inbound_response import get_inbound_response_store
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
@@ -87,13 +88,17 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         return failure
     sent = {key: value for key, value in headers.items() if key.lower() != "content-type"}
     sent["Content-Type"] = content_type
+    delivered = get_inbound_response_store().claim(
+        hooks.run_id,
+        {"status": status_code, "headers": sent, "body": body},
+    )
     return NodeResult(
         status="succeeded",
         output={
             "status": status_code,
             "headers": sent,
             "body": body,
-            "delivered": False,
+            "delivered": delivered,
         },
     )
 
