@@ -93,7 +93,9 @@ import {
   type FlowNodeData,
   type FlowNoteShape,
 } from "@/features/channels/graphValidation";
+import { publishedInboundPath } from "@/features/channels/inboundPath";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
+import { respondNodeOffered } from "@/features/channels/paletteOffer";
 import { familyTint, nodeTypeIcon } from "@/features/channels/nodeVisual";
 import { MOTION_MS } from "@/theme/tokens";
 import { listExecutions } from "@/features/channels/api";
@@ -459,6 +461,8 @@ type Props = {
   onRun?: (nodeId: string) => void;
   /** Set on the editor canvas. */
   channelId?: string;
+  /** Published graph. The inbound panel copies its hook path, not the draft path. */
+  publishedGraph?: Graph | null;
   /** Selects this node once when the canvas opens. */
   focusNodeId?: string | null;
 };
@@ -486,6 +490,7 @@ function ChannelCanvasBody({
   onRun = () => {},
   channelId,
   focusNodeId = null,
+  publishedGraph = null,
 }: Props) {
   const t = useTranslate();
   const showInstant = useShowInstant();
@@ -936,7 +941,13 @@ function ChannelCanvasBody({
         spec.type,
         ref,
         name,
-        defaultConfig(spec.config_schema as SchemaObject),
+        spec.type === "trigger.inbound"
+          ? {
+              path: "",
+              credential_id: "",
+              response: { mode: "immediate", body: { kind: "static", text: "" } },
+            }
+          : defaultConfig(spec.config_schema as SchemaObject),
         spec.trigger,
         spec.container,
       ),
@@ -1737,7 +1748,18 @@ function ChannelCanvasBody({
   const hasTrigger = nodes.some((node) => isChannelNode(node) && node.data.trigger);
   const pickerTypes = (): NodeTypeSpec[] => {
     if (!picker) return [];
-    const visible = catalog.filter((item) => !hasTrigger || !item.trigger);
+    const respondOffered = respondNodeOffered(
+      nodes.flatMap((node) =>
+        isChannelNode(node)
+          ? [{ type: node.data.nodeType, trigger: node.data.trigger, config: node.data.config }]
+          : [],
+      ),
+    );
+    const visible = catalog.filter((item) => {
+      if (hasTrigger && item.trigger) return false;
+      if (item.type === "action.respond" && !respondOffered) return false;
+      return true;
+    });
     const place = picker.place;
     if (place.mode === "after-port") {
       const reachable = new Set(
@@ -2474,6 +2496,7 @@ function ChannelCanvasBody({
                   runTime={
                     sessionRun?.run.started_at ? showInstant(sessionRun.run.started_at) : null
                   }
+                  publishedHookPath={publishedInboundPath(publishedGraph, selected.id)}
                   onTemplateCaret={mutable ? onTemplateCaret : undefined}
                   phase={phases.get(selected.id) ?? null}
                   sampleBar={

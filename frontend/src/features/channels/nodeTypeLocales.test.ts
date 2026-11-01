@@ -218,6 +218,107 @@ describe("channel node type locales", () => {
     }
   });
 
+  it("names Inbound, Respond, their fields, and the keeping boundary in both languages", () => {
+    const enMessages = en as Record<string, string>;
+    const zhMessages = zh as Record<string, string>;
+    const keys = [
+      "channelNodeTypes.trigger.inbound.label",
+      "channelNodeTypes.trigger.inbound.summary",
+      "channelNodeTypes.action.respond.label",
+      "channelNodeTypes.action.respond.summary",
+      "channels.config.fields.trigger.inbound.path",
+      "channels.config.fields.trigger.inbound.path.description",
+      "channels.config.fields.trigger.inbound.allow_get",
+      "channels.config.fields.trigger.inbound.allow_get.description",
+      "channels.config.fields.trigger.inbound.credential_id",
+      "channels.config.fields.trigger.inbound.credential_id.description",
+      "channels.config.fields.trigger.inbound.input",
+      "channels.config.fields.trigger.inbound.input.description",
+      "channels.config.fields.trigger.inbound.name",
+      "channels.config.fields.trigger.inbound.input.type",
+      "channels.config.fields.trigger.inbound.input.required",
+      "channels.config.fields.trigger.inbound.event_id.from",
+      "channels.config.fields.trigger.inbound.event_id.key",
+      "channels.config.fields.trigger.inbound.dedup_window_sec",
+      "channels.config.fields.trigger.inbound.dedup_window_sec.description",
+      "channels.config.fields.trigger.inbound.max_in_flight",
+      "channels.config.fields.trigger.inbound.max_in_flight.description",
+      "channels.config.fields.trigger.inbound.response",
+      "channels.config.fields.trigger.inbound.response.mode",
+      "channels.config.fields.trigger.inbound.response.status",
+      "channels.config.fields.trigger.inbound.response.content_type",
+      "channels.config.fields.trigger.inbound.response.headers",
+      "channels.config.fields.trigger.inbound.response.body.kind",
+      "channels.config.fields.trigger.inbound.response.body.text",
+      "channels.config.fields.trigger.inbound.response.body.from",
+      "channels.config.fields.trigger.inbound.response.body.key",
+      "channels.config.fields.trigger.inbound.response.wait_sec",
+      "channels.config.fields.trigger.inbound.response.fallback.status",
+      "channels.config.fields.trigger.inbound.response.fallback.body",
+      "channels.config.fields.trigger.inbound.sample_request",
+      "channels.config.fields.trigger.inbound.sample_request.method",
+      "channels.config.fields.trigger.inbound.sample_request.headers",
+      "channels.config.fields.trigger.inbound.sample_request.query",
+      "channels.config.fields.trigger.inbound.sample_request.body",
+      "channels.config.fields.trigger.inbound.value",
+      "channels.config.fields.trigger.inbound.public_url",
+      "channels.config.fields.trigger.inbound.copy_url",
+      "channels.config.options.inbound_mode.immediate",
+      "channels.config.options.inbound_mode.respond_node",
+      "channels.config.options.inbound_kind.static",
+      "channels.config.options.inbound_kind.echo",
+      "channels.config.options.inbound_from.header",
+      "channels.config.options.inbound_from.query",
+      "channels.config.options.inbound_from.body",
+      "channels.config.options.inbound_type.string",
+      "channels.config.options.inbound_type.integer",
+      "channels.config.options.inbound_type.number",
+      "channels.config.options.inbound_type.boolean",
+      "channels.config.options.inbound_type.object",
+      "channels.config.options.inbound_type.array",
+      "channels.config.fields.action.respond.status",
+      "channels.config.fields.action.respond.status.description",
+      "channels.config.fields.action.respond.content_type",
+      "channels.config.fields.action.respond.content_type.description",
+      "channels.config.fields.action.respond.headers",
+      "channels.config.fields.action.respond.headers.description",
+      "channels.config.fields.action.respond.body",
+      "channels.config.fields.action.respond.body.description",
+      "channels.config.fields.action.respond.name",
+      "channels.config.fields.action.respond.value",
+      "channels.settings.keepSucceededRuns",
+      "channels.settings.keepSucceededRunsHint",
+      "channels.settings.keepFailedRuns",
+      "channels.settings.keepFailedRunsHint",
+      "channels.settings.keepTestRuns",
+      "channels.settings.keepTestRunsHint",
+      "channels.settings.inboundKeepingBoundary",
+    ];
+    for (const key of keys) {
+      expect(enMessages[key], key).toBeTruthy();
+      expect(zhMessages[key], key).toBeTruthy();
+      expect(zhMessages[key], key).not.toBe(enMessages[key]);
+    }
+    expect(enMessages["channelNodeTypes.trigger.inbound.label"]).toBe("Inbound");
+    expect(enMessages["channelNodeTypes.trigger.inbound.summary"]).toBe(
+      "Starts a run when a third party calls the published path.",
+    );
+    expect(enMessages["channelNodeTypes.action.respond.label"]).toBe("Respond");
+    expect(enMessages["channelNodeTypes.action.respond.summary"]).toBe(
+      "Builds the HTTP response for an Inbound Trigger.",
+    );
+    expect(enMessages["channels.settings.inboundKeepingBoundary"]).toBe(
+      "Accepted requests then leave no record.",
+    );
+    expect(zhMessages["channelNodeTypes.trigger.inbound.label"]).toBe(
+      "\u5165\u7ad9\u89e6\u53d1",
+    );
+    expect(zhMessages["channelNodeTypes.action.respond.label"]).toBe("\u5e94\u7b54");
+    expect(zhMessages["channels.settings.inboundKeepingBoundary"]).toBe(
+      "\u5df2\u63a5\u53d7\u7684\u8bf7\u6c42\u6b64\u540e\u4e0d\u7559\u4e0b\u8bb0\u5f55\u3002",
+    );
+  });
+
   it("keeps template insert and recorded-value copy in both languages", () => {
     const keys = [
       "channels.template.focusRequired",

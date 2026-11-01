@@ -18,6 +18,8 @@ import { RegisteredSourceField } from "@/features/channels/RegisteredSourceField
 import { WebhookField } from "@/features/webhooks/WebhookField";
 import { EmailAccountField } from "@/features/email-accounts/EmailAccountField";
 import { HttpAccountField } from "@/features/http-accounts/HttpAccountField";
+import { InboundTriggerFields } from "@/features/channels/InboundTriggerFields";
+import { MapEditor } from "@/features/channels/MapEditor";
 import { ScheduledCadenceFields } from "@/features/channels/ScheduledCadenceFields";
 import { SqlSourceField } from "@/features/channels/SqlSourceField";
 import {
@@ -83,6 +85,8 @@ type Props = {
   onTemplateCaret?: (caret: TemplateCaret | null) => void;
   /** Canvas run phase. Null hides the header badge. */
   phase?: string | null;
+  /** Published hook path for this trigger node. Null hides the live URL. */
+  publishedHookPath?: string | null;
   /** Shared sample bar above the three columns. */
   sampleBar?: ReactNode;
   upstream: ReactNode;
@@ -162,6 +166,7 @@ export function NodeConfigPanel({
   runTime = null,
   onTemplateCaret,
   phase = null,
+  publishedHookPath = null,
   sampleBar = null,
   upstream,
   result,
@@ -176,7 +181,7 @@ export function NodeConfigPanel({
   const configEditable = editable && !configLocked;
   const typeLabel = spec ? nodeTypeLabel(t, spec) : data.nodeType;
   const summary = spec ? nodeTypeSummary(t, spec) : "";
-  const fields = (schema ? fieldsFromSchema(schema) : []).filter((field) => {
+  const fields = (schema && data.nodeType !== "trigger.inbound" ? fieldsFromSchema(schema) : []).filter((field) => {
     if (
       data.nodeType === "trigger.scheduled" &&
       ["cron", "interval_seconds", "start_at"].includes(field.key)
@@ -340,6 +345,14 @@ export function NodeConfigPanel({
               {t("channels.node.permissionReadOnly", { permission })}
             </Text>
           ) : null}
+          {data.nodeType === "trigger.inbound" ? (
+            <InboundTriggerFields
+              config={data.config}
+              editable={configEditable}
+              publishedHookPath={publishedHookPath}
+              onChange={(config) => update({ config })}
+            />
+          ) : null}
           {data.nodeType === "trigger.scheduled" ? (
             <ScheduledCadenceFields
               config={data.config}
@@ -437,6 +450,47 @@ export function NodeConfigPanel({
       </div>
     </FieldDisclosureContext.Provider>
     </FieldRuntimeContext.Provider>
+  );
+}
+
+function TemplateMapValue({
+  fieldKey,
+  rowName,
+  value,
+  valueSchema,
+  editable,
+  templateScope,
+  label,
+  description,
+  onChange,
+}: {
+  fieldKey: string;
+  rowName: string;
+  value: string;
+  valueSchema: SchemaObject | { from: "entity_attribute" };
+  editable: boolean;
+  templateScope: SelfScope;
+  label: string;
+  description: string;
+  onChange: (next: string) => void;
+}) {
+  const binding = useTemplateBinding([fieldKey, rowName], value);
+  return (
+    <TemplateField
+      label={label}
+      description={description}
+      valueSchema={"from" in valueSchema ? null : valueSchema}
+      value={value}
+      editable={editable}
+      scope={templateScope}
+      runPreview={binding.runPreview}
+      recorded={binding.recorded}
+      edited={binding.edited}
+      caretKey={binding.caretKey}
+      onCaret={binding.onCaret}
+      onCaretGone={binding.onCaretGone}
+      onChange={onChange}
+    />
   );
 }
 
@@ -687,6 +741,31 @@ function ConfigField({
         openSignal={openSignal}
         bare={bare}
         onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "templateMap") {
+    return (
+      <MapEditor
+        label={caption}
+        editable={editable}
+        value={value}
+        nameLabel={fieldCaption(t, nodeType, "name")}
+        valueLabel={fieldCaption(t, nodeType, "value")}
+        onChange={onChange}
+        renderValue={(row, onValue) => (
+          <TemplateMapValue
+            fieldKey={field.key}
+            rowName={row.name}
+            value={row.value}
+            valueSchema={field.valueSchema}
+            editable={editable}
+            templateScope={templateScope}
+            label={fieldCaption(t, nodeType, "value")}
+            description={fieldDescription(t, nodeType, field.key, field.description)}
+            onChange={onValue}
+          />
+        )}
       />
     );
   }

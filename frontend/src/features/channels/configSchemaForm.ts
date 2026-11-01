@@ -2,7 +2,7 @@ export type SchemaObject = {
   type?: string | string[];
   properties?: Record<string, SchemaObject>;
   required?: string[];
-  additionalProperties?: boolean;
+  additionalProperties?: boolean | SchemaObject;
   items?: SchemaObject;
   enum?: string[];
   const?: string;
@@ -64,6 +64,13 @@ export type FieldSpec = (
       required: boolean;
       valueSchema: SchemaObject | { from: "entity_attribute" };
       description: string;
+    }
+  | {
+      kind: "templateMap";
+      key: string;
+      required: boolean;
+      description: string;
+      valueSchema: SchemaObject | { from: "entity_attribute" };
     }
 ) & { when?: FieldWhen };
 
@@ -186,6 +193,16 @@ function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSp
   }
   if (typeName === "array") {
     return arrayField(key, schema, required);
+  }
+  const extra = schema.additionalProperties;
+  if (extra && typeof extra === "object" && extra["x-refraq-template"] && schema.properties == null) {
+    return {
+      kind: "templateMap",
+      key,
+      required,
+      description: schema.description ?? "",
+      valueSchema: extra["x-refraq-template"],
+    };
   }
   if (schema.contentMediaType === "text/x-python" && (typeName === "string" || typeName === null)) {
     return { kind: "python", key, required, description: schema.description ?? "" };
@@ -324,5 +341,7 @@ function defaultValue(field: FieldSpec): unknown {
       return "";
     case "integer":
       return null;
+    case "templateMap":
+      return {};
   }
 }

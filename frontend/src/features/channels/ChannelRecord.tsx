@@ -71,6 +71,7 @@ import {
   type DraftValidation,
 } from "@/features/channels/api";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
+import { RunKeepingFields } from "@/features/channels/RunKeepingFields";
 import {
   ChannelTagsControl,
   type ChannelTagsControlHandle,
@@ -284,13 +285,43 @@ function ChannelExisting({
   });
   const [errorChannels, setErrorChannels] = useState<{ value: string; label: string }[]>([]);
   const [errorChannelsFailed, setErrorChannelsFailed] = useState(false);
+  const [publishedGraph, setPublishedGraph] = useState<Graph | null>(null);
+  const publishedNumber = channel?.latest_version?.number ?? null;
+  useEffect(() => {
+    if (publishedNumber == null) {
+      setPublishedGraph(null);
+      return;
+    }
+    let cancelled = false;
+    void getVersion(channelId, publishedNumber)
+      .then((body) => {
+        if (!cancelled) setPublishedGraph(body.version.graph ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPublishedGraph(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [channelId, publishedNumber]);
   const detailsForm = useConsoleForm<{
     description: string;
     timeout: number | string;
     retryLimit: number | string;
     errorChannelId: string | null;
+    keepSucceededRuns: boolean;
+    keepFailedRuns: boolean;
+    keepTestRuns: boolean;
   }>({
-    initialValues: { description: "", timeout: "", retryLimit: "", errorChannelId: null },
+    initialValues: {
+      description: "",
+      timeout: "",
+      retryLimit: "",
+      errorChannelId: null,
+      keepSucceededRuns: true,
+      keepFailedRuns: true,
+      keepTestRuns: true,
+    },
   });
   const formRef = useRef(form);
   formRef.current = form;
@@ -763,12 +794,16 @@ function ChannelExisting({
         setErrorChannelsFailed(true);
       });
   };
+  const inboundTrigger = graph.nodes.some((node) => node.type === "trigger.inbound");
   const openDescription = () => {
     detailsForm.setValues({
       description: form.values.description,
       timeout: graph.settings.run_timeout_sec ?? "",
       retryLimit: graph.settings.run_retry_limit ?? "",
       errorChannelId: graph.settings.error_channel_id,
+      keepSucceededRuns: graph.settings.keep_succeeded_runs !== false,
+      keepFailedRuns: graph.settings.keep_failed_runs !== false,
+      keepTestRuns: graph.settings.keep_test_runs !== false,
     });
     detailsForm.markSaved();
     setDescriptionOpen(true);
@@ -783,6 +818,9 @@ function ChannelExisting({
     timeout: number | string;
     retryLimit: number | string;
     errorChannelId: string | null;
+    keepSucceededRuns: boolean;
+    keepFailedRuns: boolean;
+    keepTestRuns: boolean;
   }) => {
     form.setFieldValue("description", values.description.trim().slice(0, DESCRIPTION_MAX));
     const next = runTimeoutSec(values.timeout);
@@ -796,6 +834,9 @@ function ChannelExisting({
               run_timeout_sec: next,
               run_retry_limit: retryLimit,
               error_channel_id: values.errorChannelId,
+              keep_succeeded_runs: values.keepSucceededRuns,
+              keep_failed_runs: values.keepFailedRuns,
+              keep_test_runs: values.keepTestRuns,
             },
           }
         : current,
@@ -1104,6 +1145,7 @@ function ChannelExisting({
           sessionRun={sessionRun}
           templatePreview={templatePreview}
           onRun={openRun}
+          publishedGraph={publishedGraph}
         />
       </FillColumn>
       <Modal
@@ -1206,6 +1248,24 @@ function ChannelExisting({
               clearable
               onChange={(next) => detailsForm.setFieldValue("errorChannelId", next)}
             />
+            <RunKeepingFields
+              keepSucceededRuns={detailsForm.values.keepSucceededRuns}
+              keepFailedRuns={detailsForm.values.keepFailedRuns}
+              keepTestRuns={detailsForm.values.keepTestRuns}
+              inboundTrigger={inboundTrigger}
+              editable
+              onChange={(patch) => {
+                if (patch.keepSucceededRuns !== undefined) {
+                  detailsForm.setFieldValue("keepSucceededRuns", patch.keepSucceededRuns);
+                }
+                if (patch.keepFailedRuns !== undefined) {
+                  detailsForm.setFieldValue("keepFailedRuns", patch.keepFailedRuns);
+                }
+                if (patch.keepTestRuns !== undefined) {
+                  detailsForm.setFieldValue("keepTestRuns", patch.keepTestRuns);
+                }
+              }}
+            />
             {tagSettings}
           </Stack>
         </FormDialog>
@@ -1248,6 +1308,13 @@ function ChannelExisting({
               error={
                 errorChannelsFailed ? t("channels.settings.errorChannelLoadFailed") : undefined
               }
+            />
+            <RunKeepingFields
+              keepSucceededRuns={graph.settings.keep_succeeded_runs !== false}
+              keepFailedRuns={graph.settings.keep_failed_runs !== false}
+              keepTestRuns={graph.settings.keep_test_runs !== false}
+              inboundTrigger={inboundTrigger}
+              editable={false}
             />
             {tagSettings}
             <Group justify="flex-end">

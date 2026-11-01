@@ -32,6 +32,10 @@ export type GraphSettings = {
   run_timeout_sec: number | null;
   run_retry_limit?: number | null;
   error_channel_id: string | null;
+  /** Absent means keep. A published run uses the version's values. */
+  keep_succeeded_runs?: boolean;
+  keep_failed_runs?: boolean;
+  keep_test_runs?: boolean;
 };
 
 export type Graph = {
