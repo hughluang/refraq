@@ -204,7 +204,7 @@ describe("authProvider.check optimistic", () => {
 
   it("probeLoginSession is active after a successful /auth/me and never navigates", async () => {
     vi.mocked(api.apiClient).mockResolvedValue({ user: sampleUser });
-    await expect(auth.probeLoginSession()).resolves.toBe("active");
+    await expect(auth.probeLoginSession()).resolves.toEqual({ status: "active" });
     expect(session.getCurrentUser()?.account).toBe("alice");
     expect(window.location.assign).not.toHaveBeenCalled();
   });
@@ -215,22 +215,36 @@ describe("authProvider.check optimistic", () => {
     vi.mocked(api.apiClient).mockRejectedValue(
       new api.ApiError(401, "AUTH_UNAUTHENTICATED", "gone"),
     );
-    await expect(auth.probeLoginSession()).resolves.toBe("anonymous");
+    await expect(auth.probeLoginSession()).resolves.toEqual({ status: "anonymous" });
     expect(session.isSignedOutLocally()).toBe(true);
     expect(session.getCurrentUser()).toBeNull();
     expect(session.useSessionStore.getState().identityError).toBeNull();
     expect(window.location.assign).not.toHaveBeenCalled();
   });
 
-  it("probeLoginSession is load_error on non-401, sets identityError, and never navigates", async () => {
+  it("probeLoginSession is load_error on non-401, keeps the error, and never navigates", async () => {
     window.location.pathname = "/login";
-    vi.mocked(api.apiClient).mockRejectedValue(
-      new api.ApiError(500, "INTERNAL", "me unavailable"),
-    );
-    await expect(auth.probeLoginSession()).resolves.toBe("load_error");
+    const failure = new api.ApiError(500, "INTERNAL", "me unavailable");
+    vi.mocked(api.apiClient).mockRejectedValue(failure);
+    await expect(auth.probeLoginSession()).resolves.toEqual({
+      status: "load_error",
+      error: failure,
+    });
     expect(session.useSessionStore.getState().identityError).toBe("me unavailable");
     expect(session.arePermissionsReady()).toBe(false);
     expect(session.isSignedOutLocally()).toBe(false);
     expect(window.location.assign).not.toHaveBeenCalled();
+  });
+
+  it("signIn stores the user and rethrows the original failure", async () => {
+    vi.mocked(api.apiClient).mockResolvedValueOnce({ user: sampleUser });
+    await auth.signIn({ account: "alice", password: "secret" });
+    expect(session.getCurrentUser()?.account).toBe("alice");
+
+    const failure = new api.ApiError(500, "INTERNAL", "biztest-login-500");
+    vi.mocked(api.apiClient).mockRejectedValueOnce(failure);
+    await expect(auth.signIn({ account: "alice", password: "nope" })).rejects.toBe(failure);
+    expect(session.getCurrentUser()).toBeNull();
+    expect(session.isSignedOutLocally()).toBe(true);
   });
 });

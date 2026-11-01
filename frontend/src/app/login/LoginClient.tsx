@@ -14,7 +14,8 @@ import {
 import { PasswordInput } from "@/components/form/PasswordInput";
 import { TextField } from "@/components/form/TextField";
 import { BrandMark } from "@/components/display/BrandMark";
-import { useLogin, useTranslate } from "@refinedev/core";
+import { ProblemDetails } from "@/components/feedback/ProblemDetails";
+import { useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
@@ -24,6 +25,7 @@ import { useBranding } from "@/features/branding/BrandingProvider";
 import { resolveFromPath } from "@/lib/return-path";
 import {
   probeLoginSession,
+  signIn,
   type LoginSessionProbe,
 } from "@/providers/auth-provider";
 import { presentConsoleNotification } from "@/providers/notification-provider";
@@ -33,12 +35,10 @@ import type { PublicAuthProvider } from "@/features/identity-providers/types";
 function LoginForm() {
   const t = useTranslate();
   const searchParams = useSearchParams();
-  const { mutate: login, isPending } = useLogin<{
-    account: string;
-    password: string;
-  }>();
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
+  const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
   const [providers, setProviders] = useState<PublicAuthProvider[]>([]);
 
   const loadProviders = useCallback(() => {
@@ -62,23 +62,20 @@ function LoginForm() {
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    login(
-      { account, password },
-      {
-        onSuccess: (result) => {
-          if (!result.success) {
-            presentConsoleNotification({
-              type: "error",
-              title: passwordFailureTitle(result.error, t),
-            });
-            return;
-          }
-          // Hard navigation avoids Refine soft go() + App Router replace/refresh
-          // races that leave the client stuck after a successful login.
-          window.location.assign(resolveFromPath(searchParams.get("from")));
-        },
-      },
-    );
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    void signIn({ account, password })
+      .then(() => {
+        // Hard navigation avoids Refine soft go() + App Router replace/refresh
+        // races that leave the client stuck after a successful login.
+        window.location.assign(resolveFromPath(searchParams.get("from")));
+      })
+      .catch((error: unknown) => {
+        presentLoginFailure(t, error);
+        pendingRef.current = false;
+        setPending(false);
+      });
   }
 
   return (
@@ -103,7 +100,7 @@ function LoginForm() {
           required
           autoComplete="current-password"
         />
-        <Button type="submit" loading={isPending} fullWidth>
+        <Button type="submit" loading={pending} fullWidth>
           {t("auth.login.submit")}
         </Button>
         {providers.length ? (
@@ -152,31 +149,54 @@ function LoginFallback() {
   );
 }
 
-const PASSWORD_FAILURE_KEYS = [
-  "auth.login.error.invalidCredentials",
-  "auth.login.error.network",
-  "auth.login.error.consoleAccess",
-  "auth.login.error.disabled",
-] as const;
+type Translate = (key: string) => string;
 
-function passwordFailureTitle(error: unknown, t: (key: string) => string): string {
-  const fallback = t("auth.login.error.invalidCredentials");
-  const message = loginFailureText(error, fallback);
-  const allowed = new Set(PASSWORD_FAILURE_KEYS.map((key) => t(key)));
-  return allowed.has(message) ? message : fallback;
+function loginDetailLabels(t: Translate) {
+  return {
+    summary: t("form.error.details"),
+    requestId: t("common.requestId"),
+    copy: t("form.error.copy"),
+    copied: t("common.copy.success"),
+    copyFailed: t("common.copy.failed"),
+  };
 }
 
-function loginFailureText(error: unknown, fallback: string): string {
-  if (
-    error
-    && typeof error === "object"
-    && "message" in error
-    && typeof error.message === "string"
-    && error.message
-  ) {
-    return error.message;
+/** Known login sentences stay the main line. Detail and request id sit in the disclosure. */
+function presentLoginSentence(t: Translate, title: string, error: ApiError) {
+  const detail = error.detail.trim() ? error.detail : null;
+  const requestId = error.requestId?.trim() ? error.requestId : null;
+  const disclosure =
+    detail || requestId ? (
+      <ProblemDetails detail={detail} requestId={requestId} labels={loginDetailLabels(t)} />
+    ) : null;
+  presentConsoleNotification({
+    type: "error",
+    title,
+    message: disclosure ?? "",
+  });
+}
+
+function presentLoginFailure(t: Translate, error: unknown) {
+  if (!(error instanceof ApiError)) {
+    presentConsoleNotification({
+      type: "error",
+      title: t("auth.login.error.network"),
+    });
+    return;
   }
-  return fallback;
+  if (error.status === 401) {
+    presentLoginSentence(t, t("auth.login.error.invalidCredentials"), error);
+    return;
+  }
+  if (error.status === 403) {
+    const title =
+      error.code === "AUTH_CONSOLE_ACCESS_REQUIRED"
+        ? t("auth.login.error.consoleAccess")
+        : t("auth.login.error.disabled");
+    presentLoginSentence(t, title, error);
+    return;
+  }
+  presentProblemNotification(t, error);
 }
 
 type LoginGateView = "probing" | "form";
@@ -201,14 +221,14 @@ function applyLoginProbe(
   result: LoginSessionProbe,
   fromPath: string,
   setView: (view: "form") => void,
-  onLoadError: () => void,
+  onLoadError: (error: unknown) => void,
 ) {
-  if (result === "active") {
+  if (result.status === "active") {
     window.location.assign(fromPath);
     return;
   }
   setView("form");
-  if (result === "load_error") onLoadError();
+  if (result.status === "load_error") onLoadError(result.error);
 }
 
 function LoginGate() {
@@ -224,10 +244,15 @@ function LoginGate() {
   tRef.current = t;
 
   const reportProbe = useCallback((result: LoginSessionProbe) => {
-    applyLoginProbe(result, fromPathRef.current, setView, () => {
-      presentLoadFailure(tRef.current, () => {
+    applyLoginProbe(result, fromPathRef.current, setView, (error) => {
+      const retry = () => {
         void probeLoginSession().then(reportProbe);
-      });
+      };
+      if (error instanceof ApiError) {
+        presentProblemNotification(tRef.current, error, { onRetry: retry });
+        return;
+      }
+      presentLoadFailure(tRef.current, retry);
     });
   }, []);
 

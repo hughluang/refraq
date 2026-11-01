@@ -2,14 +2,14 @@
 
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
 import { ConsoleNotifications } from "@/providers/notification-provider";
 
-const login = vi.hoisted(() => vi.fn());
+const signIn = vi.hoisted(() => vi.fn());
 const probe = vi.hoisted(() => vi.fn());
 const api = vi.hoisted(() => vi.fn());
 const search = vi.hoisted(() => ({ params: new URLSearchParams() }));
@@ -45,12 +45,12 @@ vi.mock("@refinedev/core", () => {
     "form.error.copy",
   ]);
   const translate = (key: string, options?: { defaultValue?: string }) => {
+    if (key === "problems.CHANNEL_NOT_FOUND") return "Data Channel was not found";
     if (known.has(key)) return key;
     return options?.defaultValue ?? key;
   };
   return {
     useTranslate: () => translate,
-    useLogin: () => ({ mutate: login, isPending: false }),
   };
 });
 
@@ -69,6 +69,7 @@ vi.mock("@/features/branding/BrandingProvider", () => ({
 
 vi.mock("@/providers/auth-provider", () => ({
   probeLoginSession: (...args: unknown[]) => probe(...args),
+  signIn: (...args: unknown[]) => signIn(...args),
 }));
 
 vi.mock("@/providers/session-store", () => ({
@@ -150,13 +151,14 @@ function notice(type: "warning" | "error", title: string): HTMLElement {
 describe("login card failures", () => {
   beforeEach(() => {
     stubDomApis();
-    login.mockReset();
+    signIn.mockReset();
     probe.mockReset();
     api.mockReset();
     search.params = new URLSearchParams();
     session.identityError = null;
     api.mockResolvedValue({ items: [] });
-    probe.mockResolvedValue("anonymous");
+    signIn.mockResolvedValue(undefined);
+    probe.mockResolvedValue({ status: "anonymous" });
     resetNotifications();
   });
 
@@ -167,10 +169,10 @@ describe("login card failures", () => {
 
   it("shows a password failure as one error notification and keeps the card free of an alert", async () => {
     const { default: LoginPage } = await import("@/app/login/LoginClient");
-    let settle: (value: "anonymous") => void = () => {};
+    let settle: (value: { status: "anonymous" }) => void = () => {};
     probe.mockImplementation(
       () =>
-        new Promise<"anonymous">((resolve) => {
+        new Promise<{ status: "anonymous" }>((resolve) => {
           settle = resolve;
         }),
     );
@@ -179,54 +181,42 @@ describe("login card failures", () => {
     expect(screen.getByLabelText("common.loading").getAttribute("aria-busy")).toBe("true");
     expect(screen.queryByRole("button", { name: "auth.login.submit" })).toBeNull();
 
-    settle("anonymous");
+    settle({ status: "anonymous" });
     const submit = await screen.findByRole("button", { name: "auth.login.submit" });
+    signIn.mockRejectedValue(
+      new ApiError(401, "AUTH_INVALID_CREDENTIALS", "Raw English detail", "req-login-401"),
+    );
     fireEvent.submit(submit.closest("form") as HTMLFormElement);
-    const options = login.mock.calls[0]?.[1] as {
-      onSuccess: (result: {
-        success: boolean;
-        error: { message: string; detail?: string };
-      }) => void;
-    };
-    act(() => {
-      options.onSuccess({
-        success: false,
-        error: {
-          message: "auth.login.error.invalidCredentials",
-          detail: "Raw English detail",
-        },
-      });
-    });
 
-    const alert = notice("error", "auth.login.error.invalidCredentials");
-    expect(alert.textContent).not.toContain("Raw English detail");
+    const alert = await waitFor(() => notice("error", "auth.login.error.invalidCredentials"));
+    expect(screen.getByText("Raw English detail").closest("details")).toBe(alert.querySelector("details"));
+    expect(screen.getByText("common.requestId: req-login-401").closest("details")).toBeTruthy();
     expect(loginCard().textContent).not.toContain("auth.login.error.invalidCredentials");
+    expect(loginCard().textContent).not.toContain("Raw English detail");
     expect(screen.getByRole("button", { name: "auth.login.submit" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "common.retry" })).toBeNull();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
     await waitFor(() => {
       expect(screen.queryByLabelText("common.loading")).toBeNull();
     });
   });
 
-  it("uses the localized invalid-credentials title when the password failure message is raw", async () => {
+  it("presents a non-credential login failure as the problem sentence, not a bad password", async () => {
     const { default: LoginPage } = await import("@/app/login/LoginClient");
     render(shell(createElement(LoginPage)));
     const submit = await screen.findByRole("button", { name: "auth.login.submit" });
+    signIn.mockRejectedValue(
+      new ApiError(500, "NO_SUCH_CODE", "biztest-login-500", "req-login-500"),
+    );
     fireEvent.submit(submit.closest("form") as HTMLFormElement);
-    const options = login.mock.calls[0]?.[1] as {
-      onSuccess: (result: { success: boolean; error: { message: string } }) => void;
-    };
-    act(() => {
-      options.onSuccess({
-        success: false,
-        error: { message: "Raw English detail" },
-      });
-    });
 
-    notice("error", "auth.login.error.invalidCredentials");
-    expect(screen.queryByText("Raw English detail")).toBeNull();
-    expect(loginCard().textContent).not.toContain("Raw English detail");
-    expect(loginCard().textContent).not.toContain("auth.login.error.invalidCredentials");
+    const alert = await waitFor(() => notice("error", "problems.unknown"));
+    expect(screen.getByText("biztest-login-500").closest("details")).toBe(alert.querySelector("details"));
+    expect(screen.getByText("common.requestId: req-login-500").closest("details")).toBeTruthy();
+    expect(alert.textContent).not.toContain("auth.login.error.invalidCredentials");
+    expect(screen.queryByText("auth.login.title")).toBeNull();
+    expect(loginCard().textContent).not.toContain("biztest-login-500");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 
   it("shows a waiting admission as one warning notification", async () => {
@@ -267,16 +257,20 @@ describe("login card failures", () => {
     expect(loginCard().textContent).not.toContain("AUTH_NOT_A_REAL_CODE");
   });
 
-  it("shows an identity probe failure as one error notification and retries the probe", async () => {
-    session.identityError = "Raw English detail";
-    probe.mockResolvedValue("load_error");
+  it("shows an identity probe failure as one problem notification and retries the probe", async () => {
+    probe.mockResolvedValue({
+      status: "load_error",
+      error: new ApiError(500, "CHANNEL_NOT_FOUND", "biztest-probe", "req_biztest_probe"),
+    });
     const { default: LoginPage } = await import("@/app/login/LoginClient");
     render(shell(createElement(LoginPage)));
 
     const submit = await screen.findByRole("button", { name: "auth.login.submit" });
-    const alert = notice("error", "common.error.loadFailed");
-    expect(screen.queryByText("Raw English detail")).toBeNull();
-    expect(loginCard().textContent).not.toContain("common.error.loadFailed");
+    const alert = await waitFor(() => notice("error", "Data Channel was not found"));
+    expect(screen.getByText("biztest-probe").closest("details")).toBe(alert.querySelector("details"));
+    expect(screen.getByText("common.requestId: req_biztest_probe").closest("details")).toBeTruthy();
+    expect(loginCard().textContent).not.toContain("Data Channel was not found");
+    expect(loginCard().textContent).not.toContain("biztest-probe");
     expect(loginCard().contains(submit)).toBe(true);
     const retry = screen.getByRole("button", { name: "common.retry" });
     expect(alert.contains(retry)).toBe(true);
@@ -286,6 +280,18 @@ describe("login card failures", () => {
     await waitFor(() => {
       expect(probe).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("shows a non-API identity probe failure as the load failure with retry", async () => {
+    probe.mockResolvedValue({ status: "load_error", error: new Error("socket hang up") });
+    const { default: LoginPage } = await import("@/app/login/LoginClient");
+    render(shell(createElement(LoginPage)));
+
+    await screen.findByRole("button", { name: "auth.login.submit" });
+    const alert = await waitFor(() => notice("error", "common.error.loadFailed"));
+    expect(screen.queryByText("socket hang up")).toBeNull();
+    expect(alert.contains(screen.getByRole("button", { name: "common.retry" }))).toBe(true);
+    expect(loginCard().textContent).not.toContain("common.error.loadFailed");
   });
 
   it("shows a provider list failure as one error notification and retries the load", async () => {

@@ -90,22 +90,44 @@ export async function reloadIdentity(): Promise<void> {
 }
 
 /** Outcome of a one-shot `/auth/me` probe on the public login page. */
-export type LoginSessionProbe = "active" | "anonymous" | "load_error";
+export type LoginSessionProbe =
+  | { status: "active" }
+  | { status: "anonymous" }
+  | { status: "load_error"; error: unknown };
 
 /**
  * Login-page Session probe; never hard-navigates.
  * 401 clears the display summary; non-401 is a load-error, not anonymity.
+ * A load-error keeps the original failure so the page can present it.
  */
 export async function probeLoginSession(): Promise<LoginSessionProbe> {
   try {
     await fetchMe();
-    return "active";
+    return { status: "active" };
   } catch (error: unknown) {
     handleMeFailure(error);
     if (isApiError(error) && error.status === 401) {
-      return "anonymous";
+      return { status: "anonymous" };
     }
-    return "load_error";
+    return { status: "load_error", error };
+  }
+}
+
+/**
+ * Password sign-in for the login page.
+ * Throws the original failure after clearing the client session.
+ */
+export async function signIn(params: LoginParams): Promise<void> {
+  try {
+    const data = await apiClient<{ user: CurrentUser }>("/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    useSessionStore.getState().setUser(data.user);
+  } catch (error) {
+    clearClientSession();
+    throw error;
   }
 }
 
@@ -154,17 +176,11 @@ function unauthenticatedCheckResponse() {
 export const authProvider: RefineAuth = {
   async login(params: LoginParams): Promise<AuthActionResponse> {
     try {
-      const data = await apiClient<{ user: CurrentUser }>("/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(params),
-      });
-      useSessionStore.getState().setUser(data.user);
+      await signIn(params);
       // Omit redirectTo so Refine useLogin does not soft-navigate; LoginClient
       // performs a hard navigation after success.
       return { success: true };
     } catch (error) {
-      clearClientSession();
       return {
         success: false,
         error: loginFailureError(error),
