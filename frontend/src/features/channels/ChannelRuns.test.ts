@@ -328,6 +328,56 @@ describe("ChannelRuns load feedback", () => {
     expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
   });
 
+  it("shows an inbound run's kind and path and leaves other trigger labels unchanged", async () => {
+    api.listRuns.mockResolvedValue(
+      page([
+        {
+          ...run("succeeded"),
+          job_id: "job_in",
+          trigger_kind: "inbound",
+          trigger_ref: "payments/callback",
+        },
+        {
+          ...run("succeeded"),
+          job_id: "job_user",
+          trigger_kind: "user",
+          trigger_ref: "user_1",
+          trigger_actor_name: "Ada",
+        },
+        {
+          ...run("succeeded"),
+          job_id: "job_sched",
+          trigger_kind: "schedule",
+          trigger_ref: "sched_1",
+          trigger_schedule_name: "Nightly",
+        },
+        {
+          ...run("succeeded"),
+          job_id: "job_retry",
+          trigger_kind: "retry",
+          trigger_ref: "job_source",
+        },
+        {
+          ...run("failed"),
+          job_id: "job_error",
+          trigger_kind: "error",
+          trigger_ref: "job_source",
+        },
+      ]),
+    );
+    renderRuns();
+
+    await advance(0);
+    expect(screen.getByText("channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
+    expect(screen.queryByText("user_1")).toBeNull();
+    expect(screen.queryByText("Ada")).toBeNull();
+    expect(screen.queryByText("sched_1")).toBeNull();
+    expect(screen.queryByText("Nightly")).toBeNull();
+    expect(screen.queryByText("retry")).toBeNull();
+    expect(screen.queryByText("error")).toBeNull();
+    expect(screen.queryByText("job_source")).toBeNull();
+  });
+
   it("announces a later status in the polite live region", async () => {
     api.listRuns
       .mockResolvedValueOnce(page([run("running")]))

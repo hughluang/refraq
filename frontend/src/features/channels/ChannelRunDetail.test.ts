@@ -343,6 +343,30 @@ describe("ChannelRunDetail load feedback", () => {
     expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
   });
 
+  it("shows an inbound run's kind and path", async () => {
+    api.getRun.mockResolvedValue({
+      ...detail("succeeded"),
+      run: {
+        ...run("succeeded"),
+        trigger_kind: "inbound",
+        trigger_ref: "payments/callback",
+      },
+    });
+    renderDetail();
+
+    await advance(0);
+    expect(screen.getByText("channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
+  });
+
+  it("leaves a user run without an inbound label", async () => {
+    api.getRun.mockResolvedValue(detail("succeeded"));
+    renderDetail();
+
+    await advance(0);
+    expect(screen.queryByText(/channels\.runs\.trigger\.inbound/)).toBeNull();
+    expect(screen.queryByText("user")).toBeNull();
+  });
+
   it("announces a later status in the polite live region", async () => {
     api.getRun.mockResolvedValueOnce(detail("running")).mockResolvedValue(detail("succeeded"));
     renderDetail();

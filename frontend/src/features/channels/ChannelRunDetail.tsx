@@ -14,6 +14,7 @@ import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { getRun, listNodeTypes, rerunRun } from "@/features/channels/api";
 import { RunExecutionBrowser } from "@/features/channels/RunExecutionBrowser";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { inboundRunLabel } from "@/features/channels/ChannelRuns";
 import { formatFailedNode, formatRunSubject, nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
@@ -140,6 +141,7 @@ export function ChannelRunDetail({
     );
   }
   const subject = formatRunSubject(detail.run, t);
+  const inbound = inboundRunLabel(detail.run, t);
   const runError = formatRunError(t, detail.run.error_code, detail.run.error_message);
   const explanation =
     runError.detail && runError.detail !== runError.label ? runError.detail : null;
@@ -159,6 +161,7 @@ export function ChannelRunDetail({
     <Stack gap="sm" style={{ height: "100%", minHeight: 0 }}>
       <LiveStatusAnnouncer text={t(presentJobStatus(detail.run.status).labelKey)} />
       <Stack gap={4}>
+        {inbound ? <Text size="sm">{inbound}</Text> : null}
         {detail.run.ignore_checkpoints || detail.run.stopped_node_id ? (
           <Text>
             {detail.run.ignore_checkpoints ? (

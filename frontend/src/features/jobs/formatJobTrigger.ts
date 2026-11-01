@@ -1,6 +1,6 @@
 import type { Job } from "@/features/jobs/types";
 
-const KNOWN_TRIGGER_KINDS = new Set(["user", "schedule", "mcp", "system"]);
+const KNOWN_TRIGGER_KINDS = new Set(["user", "schedule", "mcp", "system", "inbound"]);
 
 /** Truncate ``user_<suffix>`` refs for compact operator display. */
 export function shortTriggerRef(ref: string): string {

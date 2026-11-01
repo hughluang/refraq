@@ -15,12 +15,24 @@ import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { listRuns } from "@/features/channels/api";
 import { formatRunError } from "@/features/channels/problemLabel";
 import { isTerminalRun } from "@/features/channels/runSession";
+import type { ChannelRun } from "@/features/channels/types";
 import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
 import { isSessionExpiredError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
+
+/** Inbound runs name their kind and path. Other kinds keep the row they have today. */
+export function inboundRunLabel(
+  run: Pick<ChannelRun, "trigger_kind" | "trigger_ref">,
+  t: (key: string) => string,
+): string | null {
+  if (run.trigger_kind !== "inbound") return null;
+  const kind = t("channels.runs.trigger.inbound");
+  const path = run.trigger_ref?.trim() ?? "";
+  return path ? `${kind} · ${path}` : kind;
+}
 
 export function ChannelRuns({ channelId }: { channelId: string }) {
   const t = useTranslate();
@@ -112,6 +124,7 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
           const presentation = presentJobStatus(run.status);
           const error = formatRunError(t, run.error_code, run.error_message);
           const hasError = Boolean(run.error_code || run.error_message);
+          const inbound = inboundRunLabel(run, t);
           const href = `/console/channels/${channelId}/runs/${run.job_id}`;
           return (
             <Table.Tr key={run.job_id}>
@@ -127,6 +140,11 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
                   <Anchor component={ConsoleLink} href={href} size="sm">
                     <Instant value={run.started_at ?? run.created_at} />
                   </Anchor>
+                  {inbound ? (
+                    <Text span size="xs" c="dimmed">
+                      {inbound}
+                    </Text>
+                  ) : null}
                   {run.ignore_checkpoints ? (
                     <Text span size="xs" c="dimmed">
                       {t("channels.runs.ignoreCheckpoints")}

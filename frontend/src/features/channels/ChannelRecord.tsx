@@ -41,7 +41,7 @@ import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
-import { AdjustmentsIcon, ListIcon, VariableIcon, VersionsIcon } from "@/components/icons";
+import { AdjustmentsIcon, ErrorIcon, ListIcon, VariableIcon, VersionsIcon } from "@/components/icons";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextareaField } from "@/components/form/TextareaField";
@@ -78,6 +78,7 @@ import {
 } from "@/features/channels/ChannelTagsControl";
 import { isTerminalRun, recordedKey } from "@/features/channels/runSession";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
+import { ChannelRejections } from "@/features/channels/ChannelRejections";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
 import { ChannelVariables } from "@/features/channels/ChannelVariables";
 import { ChannelVersions } from "@/features/channels/ChannelVersions";
@@ -261,7 +262,9 @@ function ChannelExisting({
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [panel, setPanel] = useState<"versions" | "runs" | "variables" | null>(null);
+  const [panel, setPanel] = useState<"versions" | "runs" | "rejections" | "variables" | null>(
+    null,
+  );
   const [preview, setPreview] = useState<Confirmation | null>(null);
   const [publishJobId, setPublishJobId] = useState<string | null>(null);
   const [publishRevision, setPublishRevision] = useState(1);
@@ -763,7 +766,7 @@ function ChannelExisting({
   const versionLabel = channel.latest_version
     ? `v${channel.latest_version.number}`
     : t("channels.versions.unpublished");
-  const togglePanel = (next: "versions" | "runs" | "variables") => {
+  const togglePanel = (next: "versions" | "runs" | "rejections" | "variables") => {
     setPanel((current) => (current === next ? null : next));
   };
   const loadErrorChannels = () => {
@@ -795,6 +798,8 @@ function ChannelExisting({
       });
   };
   const inboundTrigger = graph.nodes.some((node) => node.type === "trigger.inbound");
+  const publishedInbound =
+    publishedGraph?.nodes.some((node) => node.type === "trigger.inbound") ?? false;
   const openDescription = () => {
     detailsForm.setValues({
       description: form.values.description,
@@ -935,6 +940,19 @@ function ChannelExisting({
             >
               {t("channels.tabs.runs")}
             </Button>
+            {inboundTrigger || publishedInbound ? (
+              <Button
+                variant="subtle"
+                size="compact-sm"
+                color="gray"
+                disabled={busy}
+                aria-expanded={panel === "rejections"}
+                leftSection={<ErrorIcon size={14} />}
+                onClick={() => togglePanel("rejections")}
+              >
+                {t("channels.tabs.rejections")}
+              </Button>
+            ) : null}
             <Button
               variant="subtle"
               size="compact-sm"
@@ -1422,6 +1440,20 @@ function ChannelExisting({
         title={t("channels.tabs.runs")}
       >
         {panel === "runs" ? <ChannelRuns channelId={channelId} /> : null}
+      </Drawer>
+      <Drawer
+        opened={panel === "rejections"}
+        onClose={() => setPanel(null)}
+        position="right"
+        size="xl"
+        withinPortal={false}
+        withOverlay={false}
+        lockScroll={false}
+        trapFocus={false}
+        zIndex={20}
+        title={t("channels.tabs.rejections")}
+      >
+        {panel === "rejections" ? <ChannelRejections channelId={channelId} /> : null}
       </Drawer>
       <Drawer
         opened={panel === "variables"}

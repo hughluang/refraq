@@ -4,6 +4,8 @@ import {
   formatJobTrigger,
   shortTriggerRef,
 } from "@/features/jobs/formatJobTrigger";
+import en from "@/locales/en-US/common.json";
+import zh from "@/locales/zh-CN/common.json";
 
 const t = (key: string) =>
   (
@@ -12,6 +14,7 @@ const t = (key: string) =>
       "jobs.trigger.schedule": "Schedule",
       "jobs.trigger.mcp": "MCP",
       "jobs.trigger.system": "System",
+      "jobs.trigger.inbound": "Inbound",
     } as Record<string, string>
   )[key] ?? key;
 
@@ -84,6 +87,64 @@ describe("formatJobTrigger", () => {
         t,
       ),
     ).toBe("Schedule · structure · mes-prod");
+  });
+
+  it("names an inbound job and its path", () => {
+    expect(
+      formatJobTrigger(
+        {
+          trigger_kind: "inbound",
+          trigger_ref: "payments/callback",
+          trigger_actor_name: null,
+          trigger_schedule_name: null,
+        },
+        t,
+      ),
+    ).toBe("Inbound · payments/callback");
+  });
+
+  it("names an inbound job when the path is absent", () => {
+    expect(
+      formatJobTrigger(
+        {
+          trigger_kind: "inbound",
+          trigger_ref: null,
+          trigger_actor_name: null,
+          trigger_schedule_name: null,
+        },
+        t,
+      ),
+    ).toBe("Inbound");
+  });
+
+  it("keeps the inbound label in English and Chinese", () => {
+    expect(en["jobs.trigger.inbound"]).toBe("Inbound");
+    expect(zh["jobs.trigger.inbound"]).toBe("\u5165\u7ad9");
+  });
+
+  it("leaves retry and error as the raw kind", () => {
+    expect(
+      formatJobTrigger(
+        {
+          trigger_kind: "retry",
+          trigger_ref: "job_source",
+          trigger_actor_name: null,
+          trigger_schedule_name: null,
+        },
+        t,
+      ),
+    ).toBe("retry · job_source");
+    expect(
+      formatJobTrigger(
+        {
+          trigger_kind: "error",
+          trigger_ref: null,
+          trigger_actor_name: null,
+          trigger_schedule_name: null,
+        },
+        t,
+      ),
+    ).toBe("error");
   });
 
   it("falls back to trigger_ref when schedule name is missing", () => {

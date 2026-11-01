@@ -222,6 +222,34 @@ export function listRuns(
   );
 }
 
+export type InboundRejection = {
+  id: string;
+  channel_id: string;
+  node_id: string;
+  path: string;
+  received_at: string;
+  reason: string;
+  method: string;
+  headers: Record<string, string>;
+  query: Record<string, string>;
+  body: string | null;
+};
+
+export type InboundRejectionPage = OffsetPage<InboundRejection> & {
+  hit_count: number;
+};
+
+export function listInboundRejections(
+  id: string,
+  params?: { limit?: number; offset?: number },
+  init?: { signal?: AbortSignal },
+) {
+  return apiClient<InboundRejectionPage>(
+    `/channels/${id}/inbound-rejections${querySuffix(params)}`,
+    init,
+  );
+}
+
 export function getRun(id: string, jobId: string, init?: { signal?: AbortSignal }) {
   return apiClient<ChannelRunDetail>(`/channels/${id}/runs/${jobId}`, init);
 }
