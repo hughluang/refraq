@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.core.errors import AppError
+from backend.core.errors import AppError, ProblemFieldError
 
 __all__ = [
     "ChannelDatasetUnavailable",
     "ChannelDraftConflict",
     "ChannelGraphInvalid",
     "ChannelInboundCredentialNotFound",
+    "ChannelInboundInactive",
+    "ChannelInboundInputInvalid",
     "ChannelInboundPathTaken",
+    "ChannelInboundUnauthenticated",
     "ChannelNotFound",
     "ChannelNotPublished",
     "ChannelRequestInvalid",
@@ -120,6 +123,33 @@ class ChannelInboundPathTaken(AppError):
 
     def _default_message(self) -> str:
         return "Inbound path is already published by another Data Channel"
+
+
+class ChannelInboundInactive(AppError):
+    code = "CHANNEL_INBOUND_INACTIVE"
+    http_status = 503
+
+    def _default_message(self) -> str:
+        return "Service Unavailable"
+
+
+class ChannelInboundUnauthenticated(AppError):
+    code = "CHANNEL_INBOUND_UNAUTHENTICATED"
+    http_status = 401
+
+    def _default_message(self) -> str:
+        return "Unauthorized"
+
+
+class ChannelInboundInputInvalid(AppError):
+    code = "CHANNEL_INBOUND_INPUT_INVALID"
+    http_status = 422
+
+    def __init__(self, details: list[ProblemFieldError]) -> None:
+        super().__init__(details=details)
+
+    def _default_message(self) -> str:
+        return "Request validation failed"
 
 
 class ChannelInboundCredentialNotFound(AppError):

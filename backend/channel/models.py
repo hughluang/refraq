@@ -161,6 +161,28 @@ class InboundCredentialRow(Base):
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
+class InboundRejectionRow(Base):
+    """One refused call to a published inbound path."""
+
+    __tablename__ = "channel_inbound_rejections"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("channels.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    node_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    path: Mapped[str] = mapped_column(String(64), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    method: Mapped[str] = mapped_column(String(16), nullable=False)
+    headers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    query: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ChannelVariableRow(Base):
     __tablename__ = "channel_variables"
 

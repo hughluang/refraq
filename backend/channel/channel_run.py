@@ -49,12 +49,18 @@ __all__ = [
     "execute_channel_run",
     "expression_context",
     "mint_followup_run",
+    "mint_inbound_run",
     "mint_on_demand_run",
     "mint_scheduled_run",
     "schedule_context",
     "schedule_key_for",
     "set_dispatcher",
+    "SYSTEM_TRIGGER_KINDS",
 ]
+
+
+# trigger_ref on these kinds is a path or schedule id, not a user id.
+SYSTEM_TRIGGER_KINDS = frozenset({"schedule", "retry", "error", "inbound"})
 
 
 @dataclass(frozen=True)
@@ -149,6 +155,43 @@ def mint_followup_run(
         draft_revision=None,
         graph=None,
         trigger_node_id=trigger_node,
+        ignore_checkpoints=False,
+        created_at=utc_now(),
+    )
+    get_run_store().insert_run(record)
+    return job, record
+
+
+def mint_inbound_run(
+    *,
+    channel_id: str,
+    channel_name: str,
+    path: str,
+    trigger_node_id: str,
+    request: dict[str, Any],
+) -> tuple[JobRecord, ChannelRunRecord]:
+    """Queue one published run for an accepted inbound call. The caller dispatches it."""
+    job = create_queued_job(
+        kind="channel_run",
+        input={
+            "channel_id": channel_id,
+            "target": "published",
+            "ignore_checkpoints": False,
+            "request": request,
+        },
+        trigger_kind="inbound",
+        trigger_ref=path,
+        summary=f"channel_run {channel_name}",
+        created_by=None,
+    )
+    record = _channel_run_record(
+        job_id=job.id,
+        channel_id=channel_id,
+        target="published",
+        version=None,
+        draft_revision=None,
+        graph=None,
+        trigger_node_id=trigger_node_id,
         ignore_checkpoints=False,
         created_at=utc_now(),
     )

@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from backend.admin.user_store import get_user_store
-from backend.channel.channel_run import dispatch, mint_followup_run, trigger_node_id
+from backend.channel.channel_run import (
+    SYSTEM_TRIGGER_KINDS,
+    dispatch,
+    mint_followup_run,
+    trigger_node_id,
+)
 from backend.channel.checkpoints import advance_from_run
 from backend.channel.dataset_registry import drop_datasets_for_jobs
 from backend.channel.run_store import get_run_store
@@ -275,7 +280,7 @@ def _error_target_problem(channel_id: str) -> str | None:
 
 
 def _triggered_by(job: JobRecord) -> dict[str, str]:
-    if job.trigger_kind in {"schedule", "retry", "error"} or not job.trigger_ref:
+    if job.trigger_kind in SYSTEM_TRIGGER_KINDS or not job.trigger_ref:
         return dict(_SYSTEM)
     user = get_user_store().get_by_id(job.trigger_ref)
     name = user.display_name if user is not None else job.trigger_ref

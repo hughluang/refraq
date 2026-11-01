@@ -15,6 +15,7 @@ from backend.channel.nodes.spec import (
     ReferenceResolver,
     object_schema,
 )
+from backend.jobs.store import get_job_store
 
 __all__ = ["NODE_TYPE"]
 
@@ -92,6 +93,16 @@ def _refine(
 
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    job = get_job_store().get(hooks.run_id)
+    if job is not None and job.trigger_kind == "inbound":
+        request = job.input["request"]
+        return NodeResult(
+            status="succeeded",
+            output=build_inbound_trigger_output(
+                request,
+                received_at=request["received_at"],
+            ),
+        )
     config = node.get("config") if isinstance(node.get("config"), Mapping) else {}
     sample = config.get("sample_request") if isinstance(config, Mapping) else None
     request = sample if isinstance(sample, Mapping) else None

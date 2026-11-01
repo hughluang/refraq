@@ -85,6 +85,7 @@ from backend.channel.routers.variables import router as channel_variables_router
 from backend.channel.routers.webhooks import router as webhooks_router
 from backend.channel.routers.email_accounts import router as email_accounts_router
 from backend.channel.routers.http_accounts import router as http_accounts_router
+from backend.channel.routers.hooks import router as inbound_hooks_router
 from backend.channel.routers.inbound_credentials import router as inbound_credentials_router
 from backend.channel.subject_displays import channel_subject_displays
 from backend.channel.write_targets import incompatible_writers
@@ -193,6 +194,7 @@ async def app_error_handler(_request: Request, exc: AppError) -> object:
         status=exc.http_status,
         code=exc.code,
         detail=exc.message,
+        details=exc.details or None,
         headers=exc.extra_headers(),
         extra=exc.extra_members(),
     )
@@ -269,6 +271,7 @@ app.include_router(webhooks_router)
 app.include_router(email_accounts_router)
 app.include_router(http_accounts_router)
 app.include_router(inbound_credentials_router)
+app.include_router(inbound_hooks_router)
 app.include_router(jobs_mechanism_router)
 app.include_router(schedules_mechanism_router)
 

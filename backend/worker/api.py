@@ -32,6 +32,9 @@ from backend.worker.errors import (
     ScheduleUndeletable,
 )
 from backend.channel.parameters import (
+    REJECTION_INTERVAL_SECONDS,
+    REJECTION_SCHEDULE_KEY,
+    REJECTION_TASK_NAME,
     RUN_RECORD_INTERVAL_SECONDS,
     RUN_RECORD_SCHEDULE_KEY,
     RUN_RECORD_TASK_NAME,
@@ -106,6 +109,7 @@ def ensure_system_schedules() -> None:
         _ensure_access_log_schedule(store, now)
         _ensure_change_log_schedule(store, now)
         _ensure_run_record_schedule(store, now)
+        _ensure_inbound_rejection_schedule(store, now)
         return
     if existing.interval_seconds != interval:
         store.upsert(
@@ -118,6 +122,7 @@ def ensure_system_schedules() -> None:
     _ensure_access_log_schedule(store, now)
     _ensure_change_log_schedule(store, now)
     _ensure_run_record_schedule(store, now)
+    _ensure_inbound_rejection_schedule(store, now)
 
 
 def _ensure_access_log_schedule(store: object, now: datetime) -> None:
@@ -195,6 +200,36 @@ def _ensure_run_record_schedule(store: object, now: datetime) -> None:
             cron=None,
             commitment_timezone=current_schedule_timezone(),
             task_name=RUN_RECORD_TASK_NAME,
+            args_json=[],
+            kwargs_json={},
+            hidden=True,
+            locked=True,
+            undeletable=True,
+            store_only=True,
+            owner_ref=None,
+            last_run_at=now,
+            next_run_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _ensure_inbound_rejection_schedule(store: object, now: datetime) -> None:
+    schedule_store = store
+    existing = schedule_store.get_by_key(REJECTION_SCHEDULE_KEY)
+    if existing is not None:
+        return
+    schedule_store.upsert(
+        ScheduledTaskRecord(
+            id=f"sched_{uuid.uuid4().hex[:12]}",
+            key=REJECTION_SCHEDULE_KEY,
+            name="Purge inbound rejections",
+            enabled=True,
+            interval_seconds=REJECTION_INTERVAL_SECONDS,
+            cron=None,
+            commitment_timezone=current_schedule_timezone(),
+            task_name=REJECTION_TASK_NAME,
             args_json=[],
             kwargs_json={},
             hidden=True,

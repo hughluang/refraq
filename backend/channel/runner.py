@@ -6,7 +6,12 @@ import time
 from typing import Any
 
 from backend.admin.user_store import get_user_store
-from backend.channel.channel_run import execute_channel_run, expression_context, trigger_node_id
+from backend.channel.channel_run import (
+    SYSTEM_TRIGGER_KINDS,
+    execute_channel_run,
+    expression_context,
+    trigger_node_id,
+)
 from backend.channel.dataset_registry import seal_dataset_expiry
 from backend.channel.recovery import settle_failure, settle_success
 from backend.channel.run_store import get_run_store, note_killed_run
@@ -183,7 +188,7 @@ def _note_error_source(job: Any, message: str) -> None:
 
 
 def _actor(job: Any) -> dict[str, str]:
-    if job.trigger_kind in {"schedule", "retry", "error"}:
+    if job.trigger_kind in SYSTEM_TRIGGER_KINDS:
         return {"id": "usr_system", "name": "System"}
     ref = job.trigger_ref or "usr_system"
     user = get_user_store().get_by_id(ref) if job.trigger_ref else None

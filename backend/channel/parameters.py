@@ -6,6 +6,9 @@ from backend.admin.system_parameters import IntConstraint, ParameterSpec, resolv
 
 __all__ = [
     "CHANNEL_PARAMETER_SPECS",
+    "REJECTION_INTERVAL_SECONDS",
+    "REJECTION_SCHEDULE_KEY",
+    "REJECTION_TASK_NAME",
     "RUN_RECORD_INTERVAL_SECONDS",
     "RUN_RECORD_SCHEDULE_KEY",
     "RUN_RECORD_TASK_NAME",
@@ -14,12 +17,18 @@ __all__ = [
     "channel_dataset_success_retention_hours",
     "channel_http_response_max_bytes",
     "channel_run_record_retention_days",
+    "inbound_rejection_retention_days",
 ]
 
 # Hidden system Scheduled Task. Hourly, in code, not a System Parameter.
 RUN_RECORD_SCHEDULE_KEY = "channel_run_record_retention"
 RUN_RECORD_TASK_NAME = "backend.channel.tasks.purge_run_records"
 RUN_RECORD_INTERVAL_SECONDS = 3600
+
+# Hidden system Scheduled Task. Hourly, in code, not a System Parameter.
+REJECTION_SCHEDULE_KEY = "channel_inbound_rejection_retention"
+REJECTION_TASK_NAME = "backend.channel.tasks.purge_inbound_rejections"
+REJECTION_INTERVAL_SECONDS = 3600
 
 CHANNEL_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
     ParameterSpec(
@@ -67,6 +76,17 @@ CHANNEL_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
         help_key="settings.parameter.channel_http_response_max_bytes.help",
     ),
     ParameterSpec(
+        key="inbound_rejection_retention_days",
+        constraint=IntConstraint(minimum=1, maximum=3650),
+        seed=7,
+        owner="channel",
+        group="data_channel",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.inbound_rejection_retention_days.apply",
+        label_key="settings.parameter.inbound_rejection_retention_days.label",
+        help_key="settings.parameter.inbound_rejection_retention_days.help",
+    ),
+    ParameterSpec(
         key="channel_dataset_max_total_gb",
         constraint=IntConstraint(minimum=1, maximum=100000),
         seed=100,
@@ -98,3 +118,7 @@ def channel_http_response_max_bytes() -> int:
 
 def channel_dataset_max_total_gb() -> int:
     return resolve_int("channel_dataset_max_total_gb").value
+
+
+def inbound_rejection_retention_days() -> int:
+    return resolve_int("inbound_rejection_retention_days").value

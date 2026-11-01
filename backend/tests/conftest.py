@@ -49,6 +49,7 @@ from backend.entity.locks import reset_entity_table_locks_for_tests
 from backend.entity.store import reset_entity_store
 from backend.channel.checkpoints import reset_checkpoint_store
 from backend.channel.inbound_paths import reset_inbound_path_store
+from backend.channel.inbound_rejections import reset_inbound_rejection_store
 from backend.channel.store import reset_channel_store
 from backend.channel import variables as channel_variables
 from backend.entity.table_port import reset_entity_table_port
@@ -102,6 +103,7 @@ def _reset_foundation_singletons() -> None:
     reset_channel_store()
     reset_checkpoint_store()
     reset_inbound_path_store()
+    reset_inbound_rejection_store()
     reset_variable_store()
     reset_access_store()
     reset_signing_ring()
@@ -140,6 +142,7 @@ def _reset_foundation_singletons() -> None:
     reset_channel_store()
     reset_checkpoint_store()
     reset_inbound_path_store()
+    reset_inbound_rejection_store()
     reset_variable_store()
     reset_access_store()
     reset_dictionary_store()

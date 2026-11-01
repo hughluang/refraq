@@ -36,9 +36,15 @@ class AppError(Exception):
     http_status: int = 400
     retry_after_sec: int | None = None
 
-    def __init__(self, message: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        details: list[ProblemFieldError] | None = None,
+    ) -> None:
         super().__init__(message or self.code)
         self.message = message or self._default_message()
+        self.details = list(details) if details else []
 
     def _default_message(self) -> str:
         return self.code

@@ -14,10 +14,14 @@ from backend.channel.dataset_registry import (
     seal_dataset_expiry,
     seal_unsealed_terminal_datasets,
 )
+from backend.channel.inbound_rejections import get_inbound_rejection_store
 from backend.channel.parameters import (
+    REJECTION_SCHEDULE_KEY,
+    REJECTION_TASK_NAME,
     RUN_RECORD_SCHEDULE_KEY,
     RUN_RECORD_TASK_NAME,
     channel_run_record_retention_days,
+    inbound_rejection_retention_days,
 )
 from backend.channel.run_store import get_run_store, note_killed_run
 from backend.core.time import utc_now
@@ -74,3 +78,17 @@ def purge_run_records() -> dict[str, int]:
     if record is not None:
         consume_due_tick(record.id)
     return {"deleted": purge_expired_run_records()}
+
+
+def purge_expired_inbound_rejections() -> int:
+    """Delete inbound rejections older than the retention parameter."""
+    cutoff = utc_now() - timedelta(days=inbound_rejection_retention_days())
+    return get_inbound_rejection_store().delete_received_before(cutoff)
+
+
+@shared_task(name=REJECTION_TASK_NAME)
+def purge_inbound_rejections() -> dict[str, int]:
+    record = get_schedule_store().get_by_key(REJECTION_SCHEDULE_KEY)
+    if record is not None:
+        consume_due_tick(record.id)
+    return {"deleted": purge_expired_inbound_rejections()}
