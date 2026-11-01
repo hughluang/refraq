@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.iteration_volume import append_round
 from backend.channel.item_limit import ITEM_LIMIT
 from backend.channel.nodes.spec import (
     MAIN_INPUT,
@@ -23,7 +22,6 @@ __all__ = ["NODE_TYPE"]
 _BOOL = {"type": "boolean"}
 _CAP_MESSAGE = "Until reached max_iterations before its condition became true."
 _CONFIG_MESSAGE = "max_iterations must be an integer from 1 through 100000"
-_VOLUME_MESSAGE = "Until iteration output exceeds 16 MiB."
 _ANY_OBJECT: dict[str, Any] = {"type": ["object", "null"]}
 _EACH: dict[str, Any] = {
     "type": "object",
@@ -37,11 +35,11 @@ _EACH: dict[str, Any] = {
 _DONE: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["index", "count", "iterations"],
+    "required": ["index", "count", "last"],
     "properties": {
         "index": {"type": "integer"},
         "count": {"type": "integer"},
-        "iterations": {"type": "array"},
+        "last": _ANY_OBJECT,
     },
 }
 
@@ -80,22 +78,20 @@ def _run(
             error_message=_CONFIG_MESSAGE,
         )
     previous: Any = None
-    collected: list[Any] = []
+    last: Any = {}
     for index in range(cap):
         outputs = body.run_round(
             {"previous": previous, "index": index},
             record={"index": index},
         )
-        failed = append_round(collected, outputs, message=_VOLUME_MESSAGE)
-        if failed is not None:
-            return failed
+        last = outputs
         value, error = body.evaluate_round_template("until", _BOOL)
         if error is not None:
             return error
         if value:
             return NodeResult(
                 status="succeeded",
-                output={"index": index, "count": index + 1, "iterations": collected},
+                output={"index": index, "count": index + 1, "last": last},
                 ports=frozenset({"done"}),
             )
         previous = outputs
@@ -103,7 +99,7 @@ def _run(
         status="failed",
         error_code="CHANNEL_UNTIL_MAX_ITERATIONS",
         error_message=_CAP_MESSAGE,
-        output={"index": cap - 1, "count": cap, "iterations": collected},
+        output={"index": cap - 1, "count": cap, "last": last},
     )
 
 
@@ -116,7 +112,9 @@ NODE_TYPE = NodeType(
         "The until template is a boolean evaluated after each round. "
         "True stops the container and the done output then runs. "
         "max_iterations is required and is a positive integer through 100000, with no default. "
-        "Each round exposes previous and index. The stored output is index, count, and iterations."
+        "Each round exposes previous and index. "
+        "The stored output is index, count, and last. "
+        "A total across rounds belongs in a Run Variable."
     ),
     trigger=False,
     inputs=(MAIN_INPUT,),
