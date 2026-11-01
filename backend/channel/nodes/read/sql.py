@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
+    ERROR_OUTPUT,
     MAIN_INPUT,
     MAIN_OUTPUT,
     EngineHooks,
@@ -121,7 +122,7 @@ NODE_TYPE = NodeType(
     ),
     trigger=False,
     inputs=(MAIN_INPUT,),
-    outputs=(MAIN_OUTPUT,),
+    outputs=(MAIN_OUTPUT, ERROR_OUTPUT),
     config_schema={
         "type": "object",
         "additionalProperties": False,
