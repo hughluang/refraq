@@ -22,12 +22,21 @@ __all__ = [
 ]
 
 
+def _flag(found: dict[str, Any], key: str) -> bool:
+    if key not in found:
+        return True
+    return found[key] is not False
+
+
 def _settings(raw: Any) -> dict[str, Any]:
     found = dict(raw) if isinstance(raw, dict) else {}
     return {
         "run_timeout_sec": found.get("run_timeout_sec"),
         "run_retry_limit": found.get("run_retry_limit"),
         "error_channel_id": found.get("error_channel_id"),
+        "keep_succeeded_runs": _flag(found, "keep_succeeded_runs"),
+        "keep_failed_runs": _flag(found, "keep_failed_runs"),
+        "keep_test_runs": _flag(found, "keep_test_runs"),
     }
 
 
@@ -93,8 +102,18 @@ def context_schema() -> dict[str, dict[str, Any]]:
                         "run_timeout_sec": {"type": ["integer", "null"]},
                         "run_retry_limit": {"type": ["integer", "null"]},
                         "error_channel_id": {"type": ["string", "null"]},
+                        "keep_succeeded_runs": {"type": "boolean"},
+                        "keep_failed_runs": {"type": "boolean"},
+                        "keep_test_runs": {"type": "boolean"},
                     },
-                    required=["run_timeout_sec", "run_retry_limit", "error_channel_id"],
+                    required=[
+                        "run_timeout_sec",
+                        "run_retry_limit",
+                        "error_channel_id",
+                        "keep_succeeded_runs",
+                        "keep_failed_runs",
+                        "keep_test_runs",
+                    ],
                 ),
             },
             required=["id", "name", "description", "active", "settings"],

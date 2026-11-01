@@ -7,6 +7,8 @@ from typing import Any
 from backend.admin.user_store import get_user_store
 from backend.channel.channel_run import dispatch, mint_followup_run, trigger_node_id
 from backend.channel.checkpoints import advance_from_run
+from backend.channel.dataset_registry import drop_datasets_for_jobs
+from backend.channel.run_store import get_run_store
 from backend.channel.store import get_channel_store
 from backend.core.time import format_instant, utc_now
 from backend.jobs.store import JobRecord, append_job_log, get_job_store
@@ -26,12 +28,13 @@ def settle_success(run: Any) -> None:
 
     Advance runs for a draft too: the run's writes and deliveries already happened.
     A run that stopped at one node does not advance. The checkpoint module applies
-    that rule.
+    that rule. Discarding, when a keeping setting asks for it, happens only after
+    that advance has returned.
     """
     advance_from_run(run)
-    if run.target != "published":
-        return
-    _write_streak(run.channel_id, 0)
+    if run.target == "published":
+        _write_streak(run.channel_id, 0)
+    _discard_job(getattr(run, "job_id", None))
 
 
 def settle_failure(
@@ -50,6 +53,7 @@ def settle_failure(
     if job.trigger_kind == "error":
         if run.target == "published":
             _bump_streak(run.channel_id)
+        _discard_job(job.id)
         return
     if (
         run.target == "published"
@@ -61,6 +65,84 @@ def settle_failure(
     if run.target == "published":
         _bump_streak(run.channel_id)
     _start_error_workflow(job, run, error_code, error_message, node_id)
+    _release_failed_chain(job)
+
+
+def _release_failed_chain(job: JobRecord) -> None:
+    """Drop failed Jobs in this retry chain whose own setting says not to keep.
+
+    Called only after no further retry will be minted and the error workflow
+    has returned. A succeeded ancestor is left in place. The error-workflow
+    Job is not in this chain.
+    """
+    doomed: list[str] = []
+    current: JobRecord | None = job
+    seen: set[str] = set()
+    while current is not None and current.id not in seen:
+        seen.add(current.id)
+        if current.status == "failed" and _discards(current):
+            doomed.append(current.id)
+        parent_id = (current.input or {}).get("retry_of_job_id")
+        if not isinstance(parent_id, str) or not parent_id:
+            break
+        parent = get_job_store().get(parent_id)
+        if parent is None or parent.status != "failed":
+            break
+        current = parent
+    if doomed:
+        _discard_jobs(doomed)
+
+
+def _discard_job(job_id: Any) -> None:
+    if not isinstance(job_id, str) or not job_id:
+        return
+    job = get_job_store().get(job_id)
+    if job is None or not _discards(job):
+        return
+    _discard_jobs([job.id])
+
+
+def _discard_jobs(job_ids: list[str]) -> None:
+    drop_datasets_for_jobs(job_ids)
+    runs = get_run_store()
+    jobs = get_job_store()
+    for job_id in job_ids:
+        runs.delete_run(job_id)
+        jobs.delete(job_id)
+
+
+def _discards(job: JobRecord) -> bool:
+    """Whether this terminal Job's keeping setting says to drop it.
+
+    Cancelled runs are always kept. An on-demand run that is not a rerun
+    follows ``keep_test_runs`` for either outcome. Anything else follows the
+    outcome setting. A missing key means keep.
+    """
+    if job.status == "cancelled":
+        return False
+    run = get_run_store().get_run(job.id)
+    if run is None or not isinstance(run.graph, dict):
+        return False
+    settings = run.graph.get("settings")
+    if _is_on_demand_test(job):
+        return not _keep(settings, "keep_test_runs")
+    if job.status == "succeeded":
+        return not _keep(settings, "keep_succeeded_runs")
+    if job.status == "failed":
+        return not _keep(settings, "keep_failed_runs")
+    return False
+
+
+def _is_on_demand_test(job: JobRecord) -> bool:
+    if job.trigger_kind != "user":
+        return False
+    return (job.input or {}).get("pin_version") is not True
+
+
+def _keep(settings: Any, key: str) -> bool:
+    if not isinstance(settings, dict) or key not in settings:
+        return True
+    return settings[key] is not False
 
 
 def _limit(run: Any) -> int:

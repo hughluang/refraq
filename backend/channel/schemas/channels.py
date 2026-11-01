@@ -112,6 +112,9 @@ class GraphSettingsIn(BaseModel):
     run_timeout_sec: int | None = None
     run_retry_limit: int | None = None
     error_channel_id: str | None = None
+    keep_succeeded_runs: bool = True
+    keep_failed_runs: bool = True
+    keep_test_runs: bool = True
 
     @field_validator("run_timeout_sec")
     @classmethod

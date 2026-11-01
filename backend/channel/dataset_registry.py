@@ -523,6 +523,11 @@ def drop_datasets_for_due_runs(cutoff: datetime) -> None:
     _drop_registered(get_run_store().job_ids_due(cutoff))
 
 
+def drop_datasets_for_jobs(job_ids: Sequence[str]) -> None:
+    """Drop physical tables for runs the keeper is about to delete."""
+    _drop_registered(job_ids)
+
+
 def _drop_registered(job_ids: Sequence[str]) -> None:
     for record in get_dataset_store().list_for_jobs(job_ids):
         if record.status not in _CAPACITY_STATUSES:

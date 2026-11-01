@@ -95,6 +95,11 @@ class MemoryJobStore:
         with self._lock:
             return self._by_id.get(job_id)
 
+    def delete(self, job_id: str) -> None:
+        """Remove one Job row. Callers that still need the run delete that first."""
+        with self._lock:
+            self._by_id.pop(job_id, None)
+
     def save(self, record: JobRecord) -> JobRecord:
         with self._lock:
             self._by_id[record.id] = record
@@ -289,6 +294,13 @@ class SqlJobStore:
         with session_scope() as owned:
             row = owned.get(JobRow, job_id)
             return _row_to_job(row) if row else None
+
+    def delete(self, job_id: str) -> None:
+        """Remove one Job row. Not an HTTP delete."""
+        with session_scope() as session:
+            row = session.get(JobRow, job_id)
+            if row is not None:
+                session.delete(row)
 
     def save(self, record: JobRecord) -> JobRecord:
         with session_scope() as session:

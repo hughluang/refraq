@@ -319,7 +319,14 @@ def test_on_demand_run_persists_draft_and_published_records_and_dispatches_once(
             }
         ],
         "edges": [],
-        "settings": {"run_timeout_sec": None, "error_channel_id": None},
+        "settings": {
+            "run_timeout_sec": None,
+            "run_retry_limit": None,
+            "error_channel_id": None,
+            "keep_succeeded_runs": True,
+            "keep_failed_runs": True,
+            "keep_test_runs": True,
+        },
     }
     published_detail = client.get(
         f"/channels/{channel_id}/runs/{published_body['job_id']}"
@@ -425,7 +432,14 @@ def test_run_contexts_agree_for_equivalent_inputs() -> None:
         "name": "Orders",
         "description": "Nightly orders",
         "active": True,
-        "settings": {"run_timeout_sec": 30, "error_channel_id": None},
+        "settings": {
+            "run_timeout_sec": 30,
+            "run_retry_limit": None,
+            "error_channel_id": None,
+            "keep_succeeded_runs": True,
+            "keep_failed_runs": True,
+            "keep_test_runs": True,
+        },
     }
     assert run_ctx["platform"] == second_ctx["platform"]
     assert run_ctx["platform"]["now"] == "2026-10-16T05:43:07Z"

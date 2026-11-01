@@ -404,6 +404,11 @@ class MemoryRunStore:
             if _run_is_due(created_at, job_id, cutoff, jobs)
         ]
 
+    def delete_run(self, job_id: str) -> None:
+        """Delete one run. Executions and rounds go with it. The Job stays."""
+        with self._lock:
+            self._forget_locked({job_id})
+
     def delete_expired_terminal_runs(self, cutoff: datetime) -> int:
         """Delete runs created before ``cutoff`` whose Job is terminal.
 
@@ -417,20 +422,20 @@ class MemoryRunStore:
                 for record in self._runs.values()
                 if _run_is_due(record.created_at, record.job_id, cutoff, jobs)
             ]
-            for job_id in doomed:
-                del self._runs[job_id]
-            doomed_ids = set(doomed)
-            drop = [
-                key for key, item in self._execs.items() if item.job_id in doomed_ids
-            ]
-            for key in drop:
-                del self._execs[key]
-            drop_rounds = [
-                key for key, item in self._rounds.items() if item.job_id in doomed_ids
-            ]
-            for key in drop_rounds:
-                del self._rounds[key]
+            self._forget_locked(set(doomed))
             return len(doomed)
+
+    def _forget_locked(self, job_ids: set[str]) -> None:
+        for job_id in job_ids:
+            self._runs.pop(job_id, None)
+        drop = [key for key, item in self._execs.items() if item.job_id in job_ids]
+        for key in drop:
+            del self._execs[key]
+        drop_rounds = [
+            key for key, item in self._rounds.items() if item.job_id in job_ids
+        ]
+        for key in drop_rounds:
+            del self._rounds[key]
 
 
 class SqlRunStore:
@@ -739,6 +744,14 @@ class SqlRunStore:
                 params,
             ).scalars()
             return [str(job_id) for job_id in rows]
+
+    def delete_run(self, job_id: str) -> None:
+        """Delete one run. Executions and rounds cascade. The Job stays."""
+        with session_scope() as session:
+            session.execute(
+                text("DELETE FROM channel_runs WHERE job_id = :job_id"),
+                {"job_id": job_id},
+            )
 
     def delete_expired_terminal_runs(self, cutoff: datetime) -> int:
         """Delete runs created before ``cutoff`` whose Job is terminal.

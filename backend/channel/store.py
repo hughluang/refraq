@@ -39,6 +39,9 @@ def empty_graph() -> dict[str, Any]:
             "run_timeout_sec": None,
             "run_retry_limit": None,
             "error_channel_id": None,
+            "keep_succeeded_runs": True,
+            "keep_failed_runs": True,
+            "keep_test_runs": True,
         },
     }
 

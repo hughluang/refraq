@@ -157,7 +157,7 @@ def http_start_run(
     actor: UserRecord = Depends(require_permission("channel:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> Any:
-    job, _queued = start_run(
+    job, queued = start_run(
         channel_id=channel_id,
         target=body.target,
         ignore_checkpoints=body.ignore_checkpoints,
@@ -165,11 +165,11 @@ def http_start_run(
         actor=actor,
         actor_token_id=actor_token_id,
     )
-    job = get_job_store().get(job.id)
+    fresh = get_job_store().get(job.id)
     stored = get_run_store().get_run(job.id)
-    if stored is None:
-        raise ChannelRunNotFound()
-    return {"run": _present(job, stored)}
+    if fresh is None or stored is None:
+        return {"run": _present(job, queued)}
+    return {"run": _present(fresh, stored)}
 
 
 @router.post(
@@ -183,7 +183,7 @@ def http_rerun(
     actor: UserRecord = Depends(require_permission("channel:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> Any:
-    job, _record = rerun_failed(
+    job, record = rerun_failed(
         channel_id=channel_id,
         job_id=job_id,
         actor=actor,
@@ -192,7 +192,7 @@ def http_rerun(
     stored = get_run_store().get_run(job.id)
     current = get_job_store().get(job.id)
     if stored is None or current is None:
-        raise ChannelRunNotFound()
+        return {"run": _present(job, record)}
     return {"run": _present(current, stored)}
 
 
