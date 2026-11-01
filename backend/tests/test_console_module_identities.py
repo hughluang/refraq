@@ -48,6 +48,7 @@ EXPECTED_ICONS = {
     "webhooks": "webhook",
     "email-accounts": "mail",
     "http-accounts": "world",
+    "inbound-credentials": "lock",
     "model-services": "brain",
     "account": "user-circle",
 }
@@ -438,6 +439,24 @@ EXPECTED_IDENTITIES = {
             "edit": "http_account:write",
             "delete": "http_account:write",
             "show": "http_account:read",
+            "sample": None,
+        },
+    },
+    "inbound-credentials": {
+        "label_key": "inboundCredentials.title",
+        "routes": {
+            "list": "/console/inbound-credentials",
+            "create": "/console/inbound-credentials/new",
+            "edit": "/console/inbound-credentials/:id/edit",
+            "show": "/console/inbound-credentials/:id",
+            "aliases": [],
+        },
+        "actions": {
+            "list": "inbound_credential:read",
+            "create": "inbound_credential:write",
+            "edit": "inbound_credential:write",
+            "delete": "inbound_credential:write",
+            "show": "inbound_credential:read",
             "sample": None,
         },
     },

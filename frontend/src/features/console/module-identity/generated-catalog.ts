@@ -454,6 +454,26 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "inbound-credentials",
+    "label_key": "inboundCredentials.title",
+    "icon": "lock",
+    "routes": {
+      "list": "/console/inbound-credentials",
+      "create": "/console/inbound-credentials/new",
+      "edit": "/console/inbound-credentials/:id/edit",
+      "show": "/console/inbound-credentials/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "inbound_credential:read",
+      "create": "inbound_credential:write",
+      "edit": "inbound_credential:write",
+      "delete": "inbound_credential:write",
+      "show": "inbound_credential:read",
+      "sample": null
+    }
+  },
+  {
     "id": "model-services",
     "label_key": "modelServices.title",
     "icon": "brain",

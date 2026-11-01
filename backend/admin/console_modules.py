@@ -466,6 +466,28 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=27,
     ),
     ConsoleModuleSeed(
+        id="inbound-credentials",
+        group_id="settings",
+        group_label_key="layout.navGroup.settings",
+        label_key="inboundCredentials.title",
+        icon="lock",
+        routes=ModuleRoutes(
+            list="/console/inbound-credentials",
+            create="/console/inbound-credentials/new",
+            show="/console/inbound-credentials/:id",
+            edit="/console/inbound-credentials/:id/edit",
+        ),
+        actions=ModuleActions(
+            list="inbound_credential:read",
+            create="inbound_credential:write",
+            show="inbound_credential:read",
+            edit="inbound_credential:write",
+            delete="inbound_credential:write",
+        ),
+        group_order=30,
+        module_order=28,
+    ),
+    ConsoleModuleSeed(
         id="model-services",
         group_id="settings",
         group_label_key="layout.navGroup.settings",

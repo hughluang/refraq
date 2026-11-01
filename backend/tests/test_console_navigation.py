@@ -131,6 +131,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "webhooks",
         "email-accounts",
         "http-accounts",
+        "inbound-credentials",
         "model-services",
     ]
     assert groups["settings"]["modules"][0]["label_key"] == "settings.title"

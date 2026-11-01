@@ -445,6 +445,7 @@ For the login/permission slice, each concern should land here:
 - Email Account Console: `frontend/src/features/email-accounts/`
 - HTTP Account API: `backend/channel/routers/` and `backend/channel/` HTTP Account store
 - HTTP Account Console: `frontend/src/features/http-accounts/`
+- Inbound Credential Console: `frontend/src/features/inbound-credentials/`
 - Site Branding framework consumption and theme bridge: `frontend/src/providers/`; server-rendered public branding fetch: `frontend/src/features/branding/server.ts`
 
 ## 7. Metadata / Operations Console Ownership

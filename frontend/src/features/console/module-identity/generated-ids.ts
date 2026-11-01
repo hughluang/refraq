@@ -23,6 +23,7 @@ export const ModuleId = {
   webhooks: "webhooks",
   emailAccounts: "email-accounts",
   httpAccounts: "http-accounts",
+  inboundCredentials: "inbound-credentials",
   modelServices: "model-services",
   account: "account",
 } as const;

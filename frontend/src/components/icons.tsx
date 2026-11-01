@@ -49,6 +49,7 @@ import {
   IconLayoutRows,
   IconList,
   IconListCheck,
+  IconLock,
   IconMoon,
   IconNote,
   IconPalette,
@@ -186,6 +187,7 @@ const MODULE_ICONS: Record<string, ReturnType<typeof withDefaults>> = {
   webhook: withDefaults(IconWebhook),
   mail: withDefaults(IconMail),
   world: withDefaults(IconWorld),
+  lock: withDefaults(IconLock),
   brain: withDefaults(IconBrain),
   "user-circle": withDefaults(IconUserCircle),
 };
