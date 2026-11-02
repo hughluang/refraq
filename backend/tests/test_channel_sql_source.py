@@ -352,9 +352,15 @@ class _DriverResult:
     rowcount = 0
 
 
+class _DriverCallTimeout:
+    call_timeout = 0
+
+
 class _DriverConn:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
+        self.connection = self
+        self.driver_connection = _DriverCallTimeout()
 
     def __enter__(self) -> _DriverConn:
         return self

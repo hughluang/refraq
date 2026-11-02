@@ -69,9 +69,12 @@ class OracleConnector:
         max_rows: int,
         timeout_sec: int,
     ) -> QueryResult:
-        eng = self._engine(endpoint, timeout_sec=timeout_sec)
+        eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
+                conn.connection.driver_connection.call_timeout = max(
+                    1, int(timeout_sec) * 1000
+                )
                 result = conn.execute(text(sql))
                 cursor = getattr(result, "cursor", None)
                 info = _oracle_query_columns(cursor) if cursor is not None else None
@@ -90,9 +93,12 @@ class OracleConnector:
         timeout_sec: int,
         params: Sequence[Any] | None = None,
     ):
-        eng = self._engine(endpoint, timeout_sec=timeout_sec)
+        eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
+                conn.connection.driver_connection.call_timeout = max(
+                    1, int(timeout_sec) * 1000
+                )
                 result = exec_author_sql(conn, sql, params)
                 return finish_statement(conn, result, max_rows=max_rows)
         except Exception as exc:  # noqa: BLE001
@@ -187,7 +193,7 @@ class OracleConnector:
         finally:
             eng.dispose()
 
-    def _engine(self, endpoint: SourceEndpoint, *, timeout_sec: int | None = None):
+    def _engine(self, endpoint: SourceEndpoint):
         mode = endpoint.ssl_mode or "disable"
         if mode != "disable" or endpoint.ssl_root_cert or endpoint.ssl_client_cert or endpoint.ssl_client_key:
             raise ConnectorError(
@@ -215,11 +221,7 @@ class OracleConnector:
             f"oracle+oracledb://{user}:{password}"
             f"@{endpoint.host}:{endpoint.port}/?service_name={service}"
         )
-        connect_args: dict[str, object] = {}
-        if timeout_sec is not None:
-            # oracledb: call_timeout in milliseconds (JDBC setQueryTimeout analogue).
-            connect_args["call_timeout"] = max(1, int(timeout_sec) * 1000)
-        return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
+        return create_engine(url, pool_pre_ping=True)
 
 
 # DbType.name is ``DB_TYPE_NUMBER``. The native string uses the Oracle type

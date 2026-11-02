@@ -220,7 +220,7 @@ def test_oracle_stream_is_read_only_and_prefetches(monkeypatch) -> None:
 
     raw = _OracleRaw()
     engine = _Engine(raw)  # type: ignore[arg-type]
-    monkeypatch.setattr(OracleConnector, "_engine", lambda self, endpoint, timeout_sec=None: engine)
+    monkeypatch.setattr(OracleConnector, "_engine", lambda self, endpoint: engine)
     monkeypatch.setattr("time.monotonic", lambda: 10.0)
     endpoint = SourceEndpoint(
         engine="oracle",
@@ -251,6 +251,118 @@ def test_oracle_stream_is_read_only_and_prefetches(monkeypatch) -> None:
     assert raw.fetches == [2, 2, 2]
     assert raw.call_timeouts[0] == 2500
     assert "ISOLATION" not in " ".join(raw.statements).upper()
+
+
+def test_oracle_oneshot_sets_call_timeout_on_the_open_connection(monkeypatch) -> None:
+    from backend.metadata.connectors.oracle import OracleConnector
+
+    created: list[dict[str, object]] = []
+
+    class _QueryResult:
+        def keys(self) -> list[str]:
+            return ["ok"]
+
+        def __iter__(self):
+            return iter([(1,)])
+
+        @property
+        def cursor(self) -> None:
+            return None
+
+    class _StatementResult:
+        returns_rows = False
+        rowcount = 1
+
+    class _Conn:
+        def __init__(self, raw: _OracleRaw) -> None:
+            self.connection = self
+            self.driver_connection = raw
+            self.raw = raw
+            self.bound: list[tuple[str, object]] = []
+
+        def __enter__(self) -> "_Conn":
+            return self
+
+        def __exit__(self, *_args: object) -> bool:
+            return False
+
+        def execute(self, statement: object) -> _QueryResult:
+            assert self.raw.call_timeouts == [5000]
+            self.bound.append((str(getattr(statement, "text", statement)), None))
+            return _QueryResult()
+
+        def exec_driver_sql(self, sql: str, *args: object) -> _StatementResult:
+            assert self.raw.call_timeouts == [5000]
+            self.bound.append((sql, args))
+            return _StatementResult()
+
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+    class _BuiltEngine:
+        def __init__(self) -> None:
+            self.conn = _Conn(_OracleRaw())
+            self.disposed = False
+
+        def connect(self) -> _Conn:
+            return self.conn
+
+        def dispose(self) -> None:
+            self.disposed = True
+
+    engines: list[_BuiltEngine] = []
+
+    def fake_create_engine(url: str, **kwargs: object) -> _BuiltEngine:
+        del url
+        created.append(kwargs)
+        engine = _BuiltEngine()
+        engines.append(engine)
+        return engine
+
+    monkeypatch.setattr(
+        "backend.metadata.connectors.oracle.create_engine", fake_create_engine
+    )
+    endpoint = SourceEndpoint(
+        engine="oracle",
+        host="db.example",
+        port=1521,
+        username="reader",
+        password="secret",
+        database_name="app",
+        schema_filter="APP",
+        ssl_mode="disable",
+    )
+    connector = OracleConnector()
+    page = connector.run_readonly(
+        endpoint,
+        "SELECT 1 AS ok FROM dual",
+        max_rows=1,
+        timeout_sec=5,
+    )
+    assert page.columns == ["ok"]
+    assert page.rows == [[1]]
+    assert engines[0].conn.bound == [("SELECT 1 AS ok FROM dual", None)]
+    assert engines[0].disposed is True
+
+    statement = connector.run_statement(
+        endpoint,
+        "INSERT INTO t (a) VALUES (:1)",
+        max_rows=1,
+        timeout_sec=5,
+        params=("A",),
+    )
+    assert statement.rowcount == 1
+    assert engines[1].conn.bound == [
+        ("INSERT INTO t (a) VALUES (:1)", (("A",),))
+    ]
+    assert engines[1].disposed is True
+    assert created
+    for kwargs in created:
+        assert kwargs.get("pool_pre_ping") is True
+        assert "call_timeout" not in kwargs.get("connect_args", {})
 
 
 class _MssqlTimeout:
