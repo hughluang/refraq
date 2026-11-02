@@ -298,3 +298,28 @@ class StructureDiffRow(Base):
     changes: Mapped[list] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
+
+class SourceMembershipRow(Base):
+    """One subject at one level on one Source, or on every Source (target ``*``).
+
+    ``target`` is a Source id or the every-Source sentinel. It is not a foreign key.
+    """
+
+    __tablename__ = "source_memberships"
+    __table_args__ = (
+        UniqueConstraint(
+            "subject_type",
+            "subject_id",
+            "target",
+            name="uq_source_memberships_subject_target",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subject_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    level: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+

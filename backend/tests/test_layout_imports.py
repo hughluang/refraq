@@ -61,6 +61,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
     "metadata": frozenset(
         {
             "metadata.errors",
+            "metadata.source_access",
             "metadata.source_jobs",
             "metadata.catalog_embed_jobs",
             "metadata.source_schedules",

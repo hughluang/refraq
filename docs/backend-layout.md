@@ -113,6 +113,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.metadata.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
+| `backend.metadata.source_access` | Source Membership persistence and resolution of effective level, effective permissions on one Source, and the Source ids where a User holds a Permission. Not the membership HTTP surface |
 | `backend.metadata.source_jobs` | Domain minting of structure and join-detection **Jobs** via **Scheduled Task** (due / run-now); Beat Celery entries (`fire_scheduled_structure`, `fire_scheduled_join_detection`). Does not enforce **Kind execution lock** at mint — that is Job execution |
 | `backend.metadata.catalog_embed_jobs` | Site embed schedule seed / run-now, active-job probe, index cleanup, latest-job view bound into admin; Job runner |
 | `backend.metadata.source_schedules` | Metadata facade onto platform schedules: operator projection (`public_schedule`: work_kind + target), opaque `owner_ref` register/withdraw, per-kind product-default seed on Source create / mutating Source update. Closed work kinds: `structure`, `join_detection`. Not schedule ownership by Source |

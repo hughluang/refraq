@@ -119,6 +119,7 @@ Must not contain:
 Responsibilities:
 
 - Source domain models and services (embedded reachability for database kinds); `sources.access` interprets Connector Spec (validate / seal / project / endpoint)
+- Source Access (`source_access/`): Source Membership persistence and the only resolution of a User's effective level on a Source, the effective Permission set on that Source, and the Source ids where the User holds a Permission
 - Connector adapters (PostgreSQL, MSSQL, Oracle) consume `SourceEndpoint`; outbound invocation shell in `connectors/runtime` binds an already-interpreted endpoint
 - Domain facade for structure and join-detection **Jobs** minted via **Scheduled Task** (run-now / Beat) and Source-scoped schedule **facade** (`POST/GET /sources/{id}/schedules`, `owner_ref` withdraw). Does not own the Scheduled Task table
 - Source work Job execution shell in `source_job_runner` (`run_source_work_job`: claim, kind check, **Kind execution lock** with memory / Postgres adapters, Source lookup and usability). `source_jobs` mints; kind bodies live in `structure_jobs/service` (`run_structure_job`: collect → Normalized Type → structure refresh) and `join_detection_jobs/` (parse stored DDL → resolve column endpoints → insert missing joins)
