@@ -54,7 +54,10 @@ from backend.admin.routers.tokens import router as tokens_router
 from backend.admin.routers.users import router as users_router
 from backend.admin.federation.router import router as federation_router
 from backend.admin.subjects import bind_dictionary_codes
-from backend.admin.subjects.router import router as subjects_router
+from backend.admin.subjects.router import (
+    bind_user_source_access,
+    router as subjects_router,
+)
 from backend.jobs.api import bind_schedule_name_store
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
 from backend.metadata.catalog_embed_jobs import CatalogEmbedJobs
@@ -64,6 +67,10 @@ from backend.metadata.routers.mcp import router as metadata_mcp_router
 from backend.metadata.routers.catalog import router as metadata_catalog_router
 from backend.metadata.routers.query import router as metadata_query_router
 from backend.metadata.routers.schedules import router as metadata_schedules_router
+from backend.metadata.routers.source_memberships import (
+    explained_sources_for_user,
+    router as source_memberships_router,
+)
 from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
@@ -102,6 +109,8 @@ bind_schedule_name_store(get_schedule_store)
 bind_catalog_embed_jobs(CatalogEmbedJobs())
 # Composition injects Dictionary codes so admin never imports entity.
 bind_dictionary_codes(DictionaryActiveCodes())
+# Composition injects Source Access so admin never imports metadata.
+bind_user_source_access(explained_sources_for_user)
 
 
 class _ChannelWriteTargets:
@@ -253,6 +262,7 @@ app.include_router(model_services_router)
 app.include_router(tokens_router)
 app.include_router(audit_router)
 app.include_router(sources_router)
+app.include_router(source_memberships_router)
 app.include_router(metadata_catalog_router)
 app.include_router(type_mappings_router)
 app.include_router(metadata_schedules_router)

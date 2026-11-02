@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
@@ -26,6 +27,7 @@ from backend.admin.subjects.schemas import (
     UserGroupResponse,
     UserGroupsReplaceIn,
     UserGroupsResponse,
+    UserSourceAccessResponse,
     UserSubjectValuesResponse,
 )
 from backend.admin.subjects.store import SubjectStore, get_subject_store
@@ -36,6 +38,22 @@ from backend.core.pagination import PageParams, page_params
 router = APIRouter(tags=["subjects"])
 
 _READ = require_permission("users:read")
+_SourceAccessRead = Callable[[str], list[dict[str, Any]]]
+_source_access_read: _SourceAccessRead | None = None
+
+
+def bind_user_source_access(reader: _SourceAccessRead) -> None:
+    """Composition supplies the Source Access read. This package does not import metadata."""
+    global _source_access_read
+    _source_access_read = reader
+
+
+def _read_user_source_access(user_id: str) -> list[dict[str, Any]]:
+    if _source_access_read is None:
+        raise RuntimeError("user source access reader is not bound")
+    return _source_access_read(user_id)
+
+
 _WRITE = require_permission("users:write")
 _PAGE = page_params(default_limit=50, max_limit=200)
 
@@ -248,6 +266,17 @@ def put_user_groups(
         user_id, body.group_ids, actor_user_id=caller.id, actor_token_id=actor_token_id
     )
     return UserGroupsResponse(groups=_groups_out(store, groups))
+
+
+@router.get(
+    "/users/{user_id}/source-access", response_model=UserSourceAccessResponse
+)
+def get_user_source_access(
+    user_id: str,
+    _caller: UserRecord = Depends(_READ),
+) -> UserSourceAccessResponse:
+    service.require_user(user_id)
+    return UserSourceAccessResponse(items=_read_user_source_access(user_id))
 
 
 @router.get(

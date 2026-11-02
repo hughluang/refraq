@@ -104,3 +104,20 @@ class SubjectValuesResponse(BaseModel):
 class UserSubjectValuesResponse(BaseModel):
     values: SubjectValues
     effective: SubjectValues
+
+
+class SourceAccessContributionOut(BaseModel):
+    kind: str
+    subject_name: str
+
+
+class UserSourceAccessItem(BaseModel):
+    source_id: str
+    key: str
+    name: str
+    level: str
+    contributions: list[SourceAccessContributionOut]
+
+
+class UserSourceAccessResponse(BaseModel):
+    items: list[UserSourceAccessItem]
