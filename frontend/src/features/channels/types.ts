@@ -67,10 +67,19 @@ export type Channel = {
   updated_at: string;
 };
 
+/** Response-only Source label. An inaccessible marker has neither key nor name. */
+export type SourceDisplay = {
+  source_id: string;
+  key?: string;
+  name?: string;
+  inaccessible?: boolean;
+};
+
 export type ChannelDraft = {
   draft_revision: number;
   draft_updated_at: string;
   graph: Graph;
+  source_displays?: SourceDisplay[];
 };
 
 export type ChannelRun = {
@@ -172,6 +181,7 @@ export type ChannelVersion = {
   channel_id: string;
   number: number;
   graph?: Graph;
+  source_displays?: SourceDisplay[];
   published_at: string;
   published_by_user_id: string;
   published_by_name: string | null;

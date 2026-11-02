@@ -904,12 +904,15 @@ def _guarded_graph(
     }
 
 
-def _writer_client(account: str) -> TestClient:
+def _writer_client(
+    account: str, permissions: list[str] | None = None
+) -> TestClient:
     role = create_role(
         get_role_store(),
         key=f"role_{account}",
         name=account,
-        permissions=["console:access", "channel:read", "channel:write"],
+        permissions=permissions
+        or ["console:access", "channel:read", "channel:write"],
     )
     get_user_store().create_user(
         account=account,
@@ -1029,6 +1032,497 @@ def test_guarded_node_save_and_publish_permissions(
         assert all(
             node["id"] != "nd_guard" for node in deleted.json()["graph"]["nodes"]
         )
+    finally:
+        writer.__exit__(None, None, None)
+
+
+def _registered_source(client: TestClient, *, key: str, name: str) -> dict:
+    created = client.post(
+        "/sources",
+        json={
+            "key": key,
+            "name": name,
+            "kind": "database",
+            "engine": "postgresql",
+            "access": {
+                "host": "127.0.0.1",
+                "port": 5432,
+                "username": "u",
+                "password": "super-secret-password",
+                "ssl_mode": "require",
+                "database": "MES",
+                "schema": "public",
+                "extra": {},
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["source"]
+
+
+def _sql_source_config(source_id: str, sql: str = "SELECT 1") -> dict:
+    return {"source": {"kind": "source", "source_id": source_id}, "sql": sql}
+
+
+def test_source_access_sql_node_requires_maintainer(client: TestClient) -> None:
+    from backend.metadata.source_access import change_level, create_membership
+
+    source = _registered_source(client, key="wh-secret", name="Warehouse secret")
+    writer = _writer_client("sql_author")
+    user = get_user_store().get_by_account("sql_author")
+    assert user is not None
+    try:
+        created = client.post(
+            "/channels", json={"name": "SQL access", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        entity_graph = _guarded_graph(
+            "read.sql", {"source": {"kind": "entity"}, "sql": "SELECT 1"}
+        )
+        entity_saved = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": entity_graph},
+        )
+        assert entity_saved.status_code == 200, entity_saved.text
+
+        graph = _guarded_graph("read.sql", _sql_source_config(source["id"]))
+        refused = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 2, "graph": graph},
+        )
+        body = assert_problem(refused, status=403, code="AUTH_FORBIDDEN")
+        assert body["detail"] == "Node 'Guarded node' requires maintainer on the Source"
+        assert source["key"] not in body["detail"]
+        assert source["name"] not in body["detail"]
+        assert "sources:write" not in body["detail"]
+        assert "query:run" not in body["detail"]
+
+        membership = create_membership(
+            subject_type="user",
+            subject_id=user.id,
+            target=source["id"],
+            level="viewer",
+        )
+        viewer = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 2, "graph": graph},
+        )
+        assert_problem(viewer, status=403, code="AUTH_FORBIDDEN")
+        change_level(membership.id, "steward")
+        steward = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 2, "graph": graph},
+        )
+        assert_problem(steward, status=403, code="AUTH_FORBIDDEN")
+        change_level(membership.id, "maintainer")
+        allowed = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 2, "graph": graph},
+        )
+        assert allowed.status_code == 200, allowed.text
+        stored = allowed.json()["graph"]["nodes"]
+        guard = next(node for node in stored if node["id"] == "nd_guard")
+        assert guard["config"]["source"]["source_id"] == source["id"]
+    finally:
+        writer.__exit__(None, None, None)
+
+
+@pytest.mark.parametrize("type_id", ["read.sql", "volume.dataset_query"])
+def test_source_access_changed_source_node_requires_maintainer(
+    client: TestClient, type_id: str
+) -> None:
+    from backend.metadata.source_access import create_membership
+
+    source = _registered_source(client, key=f"key-{type_id}", name=f"Name {type_id}")
+    writer = _writer_client("chg_" + type_id.replace(".", "_"))
+    user = get_user_store().get_by_account("chg_" + type_id.replace(".", "_"))
+    assert user is not None
+    try:
+        created = client.post(
+            "/channels", json={"name": type_id, "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        graph = _guarded_graph(type_id, _sql_source_config(source["id"]))
+        saved = client.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": graph},
+        )
+        assert saved.status_code == 200, saved.text
+
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        renamed = current["graph"]
+        trigger = next(node for node in renamed["nodes"] if node["id"] == "nd_trigger")
+        trigger["name"] = "Start"
+        trigger["position"] = {"x": 12, "y": 4}
+        kept = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": renamed},
+        )
+        assert kept.status_code == 200, kept.text
+
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        changed = current["graph"]
+        guard = next(node for node in changed["nodes"] if node["id"] == "nd_guard")
+        guard["config"] = _sql_source_config(source["id"], "SELECT 2")
+        modified = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": changed},
+        )
+        body = assert_problem(modified, status=403, code="AUTH_FORBIDDEN")
+        assert body["detail"] == "Node 'Guarded node' requires maintainer on the Source"
+
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        bumped = current["graph"]
+        guard = next(node for node in bumped["nodes"] if node["id"] == "nd_guard")
+        guard["type_version"] = 2
+        versioned = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": bumped},
+        )
+        assert_problem(versioned, status=403, code="AUTH_FORBIDDEN")
+
+        other = "volume.dataset_query" if type_id == "read.sql" else "read.sql"
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        retyped = current["graph"]
+        guard = next(node for node in retyped["nodes"] if node["id"] == "nd_guard")
+        guard["type"] = other
+        switched = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": retyped},
+        )
+        assert_problem(switched, status=403, code="AUTH_FORBIDDEN")
+
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        removed = current["graph"]
+        removed["nodes"] = [
+            node for node in removed["nodes"] if node["id"] != "nd_guard"
+        ]
+        removed["edges"] = []
+        deleted = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": removed},
+        )
+        assert deleted.status_code == 200, deleted.text
+
+        create_membership(
+            subject_type="user",
+            subject_id=user.id,
+            target=source["id"],
+            level="maintainer",
+        )
+        again = _guarded_graph(type_id, _sql_source_config(source["id"]))
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        restored = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": again},
+        )
+        assert restored.status_code == 200, restored.text
+    finally:
+        writer.__exit__(None, None, None)
+
+
+def test_source_access_live_query_requires_viewer_not_query_run(
+    client: TestClient,
+) -> None:
+    from backend.metadata.source_access import create_membership
+
+    source = _registered_source(client, key="live-key", name="Live name")
+    permissions = [
+        "console:access",
+        "channel:read",
+        "channel:write",
+        "channel:source_query",
+    ]
+    writer = _writer_client("live_author", permissions)
+    user = get_user_store().get_by_account("live_author")
+    assert user is not None
+    assert "query:run" not in permissions
+    try:
+        created = client.post(
+            "/channels", json={"name": "Live query", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        graph = _guarded_graph(
+            "read.source_query",
+            {"source_id": source["id"], "sql": "SELECT 1"},
+        )
+        refused = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": graph},
+        )
+        body = assert_problem(refused, status=403, code="AUTH_FORBIDDEN")
+        assert body["detail"] == "Node 'Guarded node' requires viewer on the Source"
+        assert "query:run" not in body["detail"]
+        assert source["key"] not in body["detail"]
+        assert source["name"] not in body["detail"]
+
+        create_membership(
+            subject_type="user",
+            subject_id=user.id,
+            target=source["id"],
+            level="viewer",
+        )
+        allowed = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": graph},
+        )
+        assert allowed.status_code == 200, allowed.text
+    finally:
+        writer.__exit__(None, None, None)
+
+
+def test_source_access_publish_checks_every_referenced_source(
+    client: TestClient,
+) -> None:
+    source = _registered_source(client, key="pub-key", name="Publish name")
+    writer = _writer_client("publisher")
+    try:
+        created = client.post(
+            "/channels", json={"name": "Publish access", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        graph = _guarded_graph("read.sql", _sql_source_config(source["id"]))
+        graph["nodes"].append(
+            {
+                "id": "nd_entity",
+                "ref": "entity_sql",
+                "type": "read.sql",
+                "name": "Entity SQL",
+                "position": {"x": 480, "y": 0},
+                "config": {"source": {"kind": "entity"}, "sql": "SELECT 1"},
+                "on_error": "stop",
+                "retry": None,
+            }
+        )
+        graph["edges"].append(
+            {
+                "id": "ed_entity",
+                "source": {"node_id": "nd_guard", "port": "main"},
+                "target": {"node_id": "nd_entity", "port": "main"},
+            }
+        )
+        saved = client.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": graph},
+        )
+        assert saved.status_code == 200, saved.text
+        revision = saved.json()["draft_revision"]
+        refused = writer.post(
+            f"/channels/{channel_id}/publish",
+            json={"draft_revision": revision},
+        )
+        body = assert_problem(refused, status=403, code="AUTH_FORBIDDEN")
+        assert body["detail"] == "Node 'Guarded node' requires maintainer on the Source"
+        assert "Entity SQL" not in body["detail"]
+        published = client.post(
+            f"/channels/{channel_id}/publish",
+            json={"draft_revision": revision},
+        )
+        assert published.status_code == 201, published.text
+    finally:
+        writer.__exit__(None, None, None)
+
+
+def test_source_access_reads_hide_inaccessible_source(client: TestClient) -> None:
+    from backend.metadata.source_access import create_membership
+
+    source = _registered_source(client, key="hidden-key", name="Hidden name")
+    other = _registered_source(client, key="shown-key", name="Shown name")
+    reader = _writer_client("channel_reader")
+    user = get_user_store().get_by_account("channel_reader")
+    assert user is not None
+    create_membership(
+        subject_type="user",
+        subject_id=user.id,
+        target=other["id"],
+        level="viewer",
+    )
+    try:
+        created = client.post(
+            "/channels", json={"name": "Hidden source", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        graph = _guarded_graph("read.sql", _sql_source_config(source["id"]))
+        graph["nodes"].append(
+            {
+                "id": "nd_live",
+                "ref": "live_read",
+                "type": "read.source_query",
+                "name": "Live",
+                "position": {"x": 480, "y": 0},
+                "config": {"source_id": other["id"], "sql": "SELECT 1"},
+                "on_error": "stop",
+                "retry": None,
+            }
+        )
+        graph["edges"].append(
+            {
+                "id": "ed_live",
+                "source": {"node_id": "nd_guard", "port": "main"},
+                "target": {"node_id": "nd_live", "port": "main"},
+            }
+        )
+        saved = client.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": graph},
+        )
+        assert saved.status_code == 200, saved.text
+        admin_draft = saved.json()
+        admin_hidden = next(
+            item
+            for item in admin_draft["source_displays"]
+            if item["source_id"] == source["id"]
+        )
+        assert admin_hidden["key"] == source["key"]
+        assert admin_hidden["name"] == source["name"]
+        assert "inaccessible" not in admin_hidden
+
+        opened = reader.get(f"/channels/{channel_id}/draft")
+        assert opened.status_code == 200, opened.text
+        body = opened.json()
+        guard = next(node for node in body["graph"]["nodes"] if node["id"] == "nd_guard")
+        assert guard["config"]["source"]["source_id"] == source["id"]
+        assert "inaccessible" not in str(body["graph"])
+        hidden = next(
+            item
+            for item in body["source_displays"]
+            if item["source_id"] == source["id"]
+        )
+        shown = next(
+            item for item in body["source_displays"] if item["source_id"] == other["id"]
+        )
+        assert hidden == {"source_id": source["id"], "inaccessible": True}
+        assert source["key"] not in hidden
+        assert source["name"] not in hidden
+        assert shown == {
+            "source_id": other["id"],
+            "key": other["key"],
+            "name": other["name"],
+        }
+        assert "inaccessible" not in shown
+
+        current = body
+        renamed = current["graph"]
+        trigger = next(node for node in renamed["nodes"] if node["id"] == "nd_trigger")
+        trigger["name"] = "Start"
+        kept = reader.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": renamed},
+        )
+        assert kept.status_code == 200, kept.text
+        kept_guard = next(
+            node for node in kept.json()["graph"]["nodes"] if node["id"] == "nd_guard"
+        )
+        assert kept_guard["config"]["source"]["source_id"] == source["id"]
+        stored = get_channel_store().get(channel_id)
+        assert stored is not None
+        stored_guard = next(
+            node for node in stored.draft_graph["nodes"] if node["id"] == "nd_guard"
+        )
+        assert stored_guard["config"]["source"]["source_id"] == source["id"]
+        assert "inaccessible" not in str(stored.draft_graph)
+
+        published = client.post(
+            f"/channels/{channel_id}/publish",
+            json={"draft_revision": kept.json()["draft_revision"]},
+        )
+        assert published.status_code == 201, published.text
+        number = published.json()["version"]["number"]
+        version = reader.get(f"/channels/{channel_id}/versions/{number}")
+        assert version.status_code == 200, version.text
+        version_body = version.json()["version"]
+        version_guard = next(
+            node
+            for node in version_body["graph"]["nodes"]
+            if node["id"] == "nd_guard"
+        )
+        assert version_guard["config"]["source"]["source_id"] == source["id"]
+        marker = next(
+            item
+            for item in version_body["source_displays"]
+            if item["source_id"] == source["id"]
+        )
+        visible = next(
+            item
+            for item in version_body["source_displays"]
+            if item["source_id"] == other["id"]
+        )
+        assert marker == {"source_id": source["id"], "inaccessible": True}
+        assert source["key"] not in marker
+        assert source["name"] not in marker
+        assert visible["key"] == other["key"]
+        assert visible["name"] == other["name"]
+    finally:
+        reader.__exit__(None, None, None)
+
+
+def test_source_access_run_stays_on_system_identity(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.admin.user_store import ensure_system_user
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
+    from backend.metadata.query.service import QueryOutcome
+
+    source = _registered_source(client, key="run-key", name="Run name")
+    writer = _writer_client("runner")
+    actors: list[str | None] = []
+
+    def _query(**kwargs):
+        actors.append(kwargs.get("actor_user_id"))
+        return QueryOutcome(
+            columns=["n"],
+            declarations=[],
+            rows=[[1]],
+            truncated=False,
+            duration_ms=1,
+        )
+
+    monkeypatch.setattr(
+        "backend.channel.nodes.read.source_query.run_controlled_query",
+        _query,
+    )
+    try:
+        created = client.post(
+            "/channels", json={"name": "System run", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        graph = _guarded_graph(
+            "read.source_query",
+            {"source_id": source["id"], "sql": "SELECT 1"},
+        )
+        saved = client.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": graph},
+        )
+        assert saved.status_code == 200, saved.text
+        published = client.post(
+            f"/channels/{channel_id}/publish",
+            json={"draft_revision": saved.json()["draft_revision"]},
+        )
+        assert published.status_code == 201, published.text
+        previous = set_dispatcher(run_job)
+        try:
+            started = writer.post(
+                f"/channels/{channel_id}/runs",
+                json={"target": "published"},
+            )
+        finally:
+            set_dispatcher(previous)
+        assert started.status_code == 202, started.text
+        job_id = started.json()["run"]["job_id"]
+        detail = client.get(f"/channels/{channel_id}/runs/{job_id}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["run"]["status"] == "succeeded"
+        system = ensure_system_user(get_user_store())
+        assert actors == [system.id]
+        assert system.id != get_user_store().get_by_account("runner").id
     finally:
         writer.__exit__(None, None, None)
 

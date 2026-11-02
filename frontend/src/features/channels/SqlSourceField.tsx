@@ -4,7 +4,11 @@ import { useTranslate } from "@refinedev/core";
 
 import { SelectField } from "@/components/form/SelectField";
 import type { FieldNote } from "@/components/form/fieldNotes";
-import { useSourceOptions } from "@/features/channels/RegisteredSourceField";
+import {
+  sourceSelectData,
+  useSourceDisplay,
+  useSourceOptions,
+} from "@/features/channels/RegisteredSourceField";
 
 const ENTITY = "entity";
 
@@ -30,15 +34,18 @@ export function SqlSourceField({
   onChange: (value: SourceValue) => void;
 }) {
   const t = useTranslate();
-  const { options: sources, loadFailed } = useSourceOptions();
-  const options = [{ value: ENTITY, label: t("channels.config.sqlSource.entity") }, ...sources];
-
+  const { options: sources, loadFailed, loaded } = useSourceOptions();
   const selected = selectedValue(value);
-  const data = options.some((option) => option.value === selected)
-    ? options
-    : selected
-      ? [...options, { value: selected, label: selected }]
-      : options;
+  const sourceId = selected !== null && selected !== ENTITY ? selected : null;
+  const display = useSourceDisplay(sourceId);
+  const listed = sourceSelectData(
+    sources,
+    sourceId,
+    display,
+    t("channels.config.source.inaccessible"),
+    loaded,
+  );
+  const data = [{ value: ENTITY, label: t("channels.config.sqlSource.entity") }, ...listed];
 
   return (
     <SelectField

@@ -71,6 +71,7 @@ import {
   type DraftValidation,
 } from "@/features/channels/api";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
+import { SourceDisplaysProvider } from "@/features/channels/RegisteredSourceField";
 import { RunKeepingFields } from "@/features/channels/RunKeepingFields";
 import {
   ChannelTagsControl,
@@ -82,7 +83,13 @@ import { ChannelRejections } from "@/features/channels/ChannelRejections";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
 import { ChannelVariables } from "@/features/channels/ChannelVariables";
 import { ChannelVersions } from "@/features/channels/ChannelVersions";
-import type { ExpressionContext, Graph, GraphProblem, RefinedPort } from "@/features/channels/types";
+import type {
+  ExpressionContext,
+  Graph,
+  GraphProblem,
+  RefinedPort,
+  SourceDisplay,
+} from "@/features/channels/types";
 import {
   graphWithoutUnsetIntegers,
   validationContentKey,
@@ -253,6 +260,7 @@ function ChannelExisting({
   });
   const [channel, setChannel] = useState<Channel | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
+  const [sourceDisplays, setSourceDisplays] = useState<SourceDisplay[]>([]);
   const [baseline, setBaseline] = useState("");
   const [revision, setRevision] = useState(1);
   const [catalog, setCatalog] = useState<NodeTypeSpec[]>([]);
@@ -369,12 +377,14 @@ function ChannelExisting({
         if (!channelBody.channel || !draft.graph) {
           setChannel(null);
           setGraph(null);
+          setSourceDisplays([]);
           return;
         }
         loadedChannelRef.current = channelId;
         arrivalRef.current = true;
         setChannel(channelBody.channel);
         setGraph(graphWithoutUnsetIntegers(draft.graph, types.items));
+        setSourceDisplays(draft.source_displays ?? []);
         setDraftEpoch((epoch) => epoch + 1);
         setBaseline(JSON.stringify(draft.graph));
         setRevision(draft.draft_revision);
@@ -614,6 +624,7 @@ function ChannelExisting({
       nextGraph = graphWithoutUnsetIntegers(saved.graph, catalog);
       setRevision(saved.draft_revision);
       setGraph(nextGraph);
+      setSourceDisplays(saved.source_displays ?? []);
       setBaseline(JSON.stringify(nextGraph));
       setAdoptToken((token) => token + 1);
     }
@@ -1148,23 +1159,25 @@ function ChannelExisting({
             <JobStatusBadge status={runLive.data.run.status} freshness={runFreshness} />
           ) : null}
         </Group>
-        <ChannelCanvas
-          key={draftEpoch}
-          channelId={channelId}
-          graph={graph}
-          catalog={catalog}
-          appearance={writable ? "edit" : "browse"}
-          mutable={draftEditable}
-          adoptToken={adoptToken}
-          problems={problems}
-          ports={ports}
-          context={expressionContext}
-          onChange={setGraph}
-          sessionRun={sessionRun}
-          templatePreview={templatePreview}
-          onRun={openRun}
-          publishedGraph={publishedGraph}
-        />
+        <SourceDisplaysProvider displays={sourceDisplays}>
+          <ChannelCanvas
+            key={draftEpoch}
+            channelId={channelId}
+            graph={graph}
+            catalog={catalog}
+            appearance={writable ? "edit" : "browse"}
+            mutable={draftEditable}
+            adoptToken={adoptToken}
+            problems={problems}
+            ports={ports}
+            context={expressionContext}
+            onChange={setGraph}
+            sessionRun={sessionRun}
+            templatePreview={templatePreview}
+            onRun={openRun}
+            publishedGraph={publishedGraph}
+          />
+        </SourceDisplaysProvider>
       </FillColumn>
       <Modal
         opened={runRequest != null}

@@ -65,6 +65,7 @@ from backend.channel.service import (
     replace_channel_tags,
     set_channel_active,
     publish_channel,
+    referenced_source_displays,
     save_draft,
     validate_draft,
 )
@@ -106,11 +107,12 @@ def _channel_out(
     )
 
 
-def _draft_out(record: ChannelRecord) -> DraftResponse:
+def _draft_out(record: ChannelRecord, user_id: str) -> DraftResponse:
     return DraftResponse(
         draft_revision=record.draft_revision,
         draft_updated_at=record.draft_updated_at,
         graph=record.draft_graph,
+        source_displays=referenced_source_displays(user_id, record.draft_graph),
     )
 
 
@@ -126,7 +128,9 @@ def _version_summary(
     )
 
 
-def _version_out(record: ChannelVersionRecord, names: dict[str, str]) -> VersionOut:
+def _version_out(
+    record: ChannelVersionRecord, names: dict[str, str], user_id: str
+) -> VersionOut:
     summary = _version_summary(record, names)
     return VersionOut(
         channel_id=summary.channel_id,
@@ -135,6 +139,7 @@ def _version_out(record: ChannelVersionRecord, names: dict[str, str]) -> Version
         published_by_user_id=summary.published_by_user_id,
         published_by_name=summary.published_by_name,
         graph=record.graph,
+        source_displays=referenced_source_displays(user_id, record.graph),
     )
 
 
@@ -363,8 +368,7 @@ def http_get_draft(
     channel_id: str,
     user: UserRecord = Depends(require_permission("channel:read")),
 ) -> DraftResponse:
-    del user
-    return _draft_out(get_draft(channel_id))
+    return _draft_out(get_draft(channel_id), user.id)
 
 
 @router.put("/channels/{channel_id}/draft", response_model=DraftResponse)
@@ -383,7 +387,7 @@ def http_put_draft(
         actor_token_id=actor_token_id,
         permissions=resolve_user_permissions(user, roles),
     )
-    return _draft_out(saved)
+    return _draft_out(saved, user.id)
 
 
 @router.post("/channels/{channel_id}/draft/validate", response_model=ValidateResponse)
@@ -456,7 +460,7 @@ def http_publish(
     )
     names = display_names({version.published_by_user_id})
     return PublishResponse(
-        version=_version_out(version, names),
+        version=_version_out(version, names, user.id),
         confirmation=ConfirmationOut.model_validate(confirmation),
     )
 
@@ -484,7 +488,6 @@ def http_get_version(
     number: int,
     user: UserRecord = Depends(require_permission("channel:read")),
 ) -> VersionResponse:
-    del user
     record = get_version(channel_id, number)
     names = display_names({record.published_by_user_id})
-    return VersionResponse(version=_version_out(record, names))
+    return VersionResponse(version=_version_out(record, names, user.id))

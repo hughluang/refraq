@@ -2449,5 +2449,6 @@
   "tags.bulk.wroteNothing": "已勾选的行都没有改。",
   "tags.bulk.nameSeparator": "、",
   "tags.bulk.refused": "{{lead}}{{unchanged}}",
-  "tags.bulk.refusedNamed": "{{lead}}：{{names}}。{{unchanged}}"
+  "tags.bulk.refusedNamed": "{{lead}}：{{names}}。{{unchanged}}",
+  "channels.config.source.inaccessible": "无法访问的数据源"
 }

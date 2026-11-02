@@ -28,6 +28,7 @@ __all__ = [
     "SourceStreamColumn",
     "execute_source_statement",
     "source_exists",
+    "source_identity",
     "stream_source_statement",
 ]
 
@@ -60,6 +61,14 @@ class SourceStatementRejected(Exception):
 
 def source_exists(source_id: str) -> bool:
     return get_source_store().get_source(source_id) is not None
+
+
+def source_identity(source_id: str) -> tuple[str, str] | None:
+    """Registered Source key and name. None when the id is not registered."""
+    record = get_source_store().get_source(source_id)
+    if record is None:
+        return None
+    return record.key, record.name
 
 
 def _source_for_statement(source_id: str, sql: str):

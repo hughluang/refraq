@@ -331,12 +331,34 @@ class ChannelListResponse(OffsetPage[ChannelOut]):
     pass
 
 
+class SourceDisplayOut(BaseModel):
+    """Presentation of one referenced Source. Omitted from the stored graph."""
+
+    source_id: str
+    key: str | None = None
+    name: str | None = None
+    inaccessible: bool = False
+
+    @model_serializer(mode="wrap")
+    def _present(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        document = handler(self)
+        if document.get("inaccessible"):
+            return {"source_id": document["source_id"], "inaccessible": True}
+        presented = {"source_id": document["source_id"]}
+        if document.get("key") is not None:
+            presented["key"] = document["key"]
+        if document.get("name") is not None:
+            presented["name"] = document["name"]
+        return presented
+
+
 class DraftResponse(BaseModel):
     """Stored draft. ``graph`` is the stored document, not re-checked as ``GraphIn``."""
 
     draft_revision: int
     draft_updated_at: Instant
     graph: dict[str, Any]
+    source_displays: list[SourceDisplayOut] = Field(default_factory=list)
 
 
 class ProblemOut(BaseModel):
@@ -392,6 +414,7 @@ class VersionOut(VersionSummaryOut):
     """Stored version. ``graph`` is the stored document, not re-checked as ``GraphIn``."""
 
     graph: dict[str, Any]
+    source_displays: list[SourceDisplayOut] = Field(default_factory=list)
 
 
 class VersionResponse(BaseModel):

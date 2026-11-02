@@ -2449,5 +2449,6 @@
   "tags.bulk.wroteNothing": "None of the checked rows were changed.",
   "tags.bulk.nameSeparator": ", ",
   "tags.bulk.refused": "{{lead}} {{unchanged}}",
-  "tags.bulk.refusedNamed": "{{lead}} {{names}}. {{unchanged}}"
+  "tags.bulk.refusedNamed": "{{lead}} {{names}}. {{unchanged}}",
+  "channels.config.source.inaccessible": "Inaccessible Source"
 }

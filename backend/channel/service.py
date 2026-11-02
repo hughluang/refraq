@@ -44,6 +44,8 @@ from backend.channel.store import (
 from backend.channel.variables import get_variable_store
 from backend.core.time import format_instant, utc_now
 from backend.jobs.store import get_job_store
+from backend.metadata.source_access import ACCESS_LEVELS, effective_level
+from backend.metadata.source_statements import source_identity
 from backend.tags.api import (
     KIND_CHANNEL,
     BulkAssignment,
@@ -71,6 +73,7 @@ __all__ = [
     "replace_channel_tags",
     "set_channel_active",
     "publish_channel",
+    "referenced_source_displays",
     "save_draft",
     "validate_draft",
 ]
@@ -387,6 +390,7 @@ def save_draft(
     if current.draft_revision != base_revision:
         raise ChannelDraftConflict()
     require_draft_permissions(current.draft_graph, graph, permissions)
+    _require_draft_source_levels(current.draft_graph, graph, actor_user_id)
     saved = get_channel_store().replace_draft(
         channel_id,
         base_revision=base_revision,
@@ -425,6 +429,7 @@ def publish_channel(
     if record.draft_revision != draft_revision:
         raise ChannelDraftConflict()
     _require_publish_permissions(record.draft_graph, permissions)
+    _require_publish_source_levels(record.draft_graph, actor_user_id)
     problems = validate(record.draft_graph, ChannelReferenceResolver(channel_id))
     errors = [problem for problem in problems if problem.severity == "error"]
     if errors:
@@ -548,6 +553,95 @@ def _require_publish_permissions(
         if spec is None or not spec.permission:
             continue
         _require_permission_for(node, spec.permission, held)
+
+
+_SOURCE_LEVELS = {
+    "read.sql": "maintainer",
+    "volume.dataset_query": "maintainer",
+    "read.source_query": "viewer",
+}
+
+
+def _level_meets(held: str | None, required: str) -> bool:
+    if held is None or held not in ACCESS_LEVELS or required not in ACCESS_LEVELS:
+        return False
+    return ACCESS_LEVELS.index(held) >= ACCESS_LEVELS.index(required)
+
+
+def _referenced_source(node: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Source id and required level for a node that references a Source."""
+    type_id = str(node.get("type") or "")
+    required = _SOURCE_LEVELS.get(type_id)
+    if required is None:
+        return None
+    config = _node_config(node)
+    if type_id == "read.source_query":
+        source_id = config.get("source_id")
+    else:
+        source = config.get("source")
+        if not isinstance(source, dict) or source.get("kind") != "source":
+            return None
+        source_id = source.get("source_id")
+    if not isinstance(source_id, str) or not source_id:
+        return None
+    return source_id, required
+
+
+def _require_source_level(node: Mapping[str, Any], user_id: str) -> None:
+    referenced = _referenced_source(node)
+    if referenced is None:
+        return
+    source_id, required = referenced
+    if _level_meets(effective_level(user_id, source_id), required):
+        return
+    raise AuthForbidden(
+        f"Node '{_node_label(node)}' requires {required} on the Source"
+    )
+
+
+def _require_draft_source_levels(
+    stored: Mapping[str, Any],
+    submitted: Mapping[str, Any],
+    user_id: str,
+) -> None:
+    previous = {str(node.get("id")): node for node in _graph_nodes(stored)}
+    for node in _graph_nodes(submitted):
+        if not _guarded_changed(previous.get(str(node.get("id"))), node):
+            continue
+        _require_source_level(node, user_id)
+
+
+def _require_publish_source_levels(graph: Mapping[str, Any], user_id: str) -> None:
+    for node in _graph_nodes(graph):
+        _require_source_level(node, user_id)
+
+
+def referenced_source_displays(
+    user_id: str, graph: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Response-only displays. The stored graph is not modified."""
+    displays: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for node in _graph_nodes(graph):
+        referenced = _referenced_source(node)
+        if referenced is None:
+            continue
+        source_id = referenced[0]
+        if source_id in seen:
+            continue
+        seen.add(source_id)
+        displays.append(_source_display(user_id, source_id))
+    return displays
+
+
+def _source_display(user_id: str, source_id: str) -> dict[str, Any]:
+    if effective_level(user_id, source_id) is None:
+        return {"source_id": source_id, "inaccessible": True}
+    identity = source_identity(source_id)
+    if identity is None:
+        return {"source_id": source_id}
+    key, name = identity
+    return {"source_id": source_id, "key": key, "name": name}
 
 
 def _require(channel_id: str) -> ChannelRecord:
