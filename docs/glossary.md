@@ -208,10 +208,10 @@ The User resolved from the active Session or User PAT for the current request.
 
 ### Role
 
-A named, configurable access bundle assigned to at most one Role per User (nullable).
-Roles bind a subset of the fixed Permission catalog. A Role may also be the subject of an **Access Grant**.
+A site-wide capability bundle assigned to at most one Role per User through `users.role_id` (nullable).
+Roles bind a subset of the fixed Permission catalog. A Role does not by itself open a **Source**. A Role may also be the subject of an **Access Grant** and of a **Source Membership**.
 Seeded roles include locked `super_admin` and editable `operator`.
-Avoid calling it a job title or department.
+Avoid calling it a job title, a department, or a per-Source Role. Avoid Authorization Scope as the name for Source access.
 
 ### System Role
 
@@ -325,7 +325,22 @@ Avoid treating the group as a synonym for **Job**.
 A registered data origin whose catalog refraq owns. Slice A covers live databases (for example U9 or MES); later kinds may include static imports such as CSV.
 Has a stable key, display name, `kind`, and kind-specific catalog scope (for database: engine-dialect keys inside `access` such as `database`/`schema` or `service_name`/`owner`); not a login directory.
 For `kind=database`, the Source also carries `engine` and a per-engine validated `access` document (secrets and scope inside; whole document encrypted at rest). Non-database kinds may omit those fields.
+Who may open a Source is **Source Membership** at a **Source Access Level**, intersected with the caller's **Role**.
 Avoid calling it Identity Source or Client. Avoid assuming every Source is an enterprise application. Avoid treating reachability as a separate reusable entity. Avoid fixed top-level `database_name` / `schema_filter` beside `access`.
+
+### Source Membership
+
+A binding of one subject (`user`, `role`, or `group`) to one target (one **Source**, or every Source) at one **Source Access Level**. One subject has at most one membership per target. The row lives in the metadata database. A missing subject grants nothing and is still listed as missing.
+The effective level on a Source is the highest match among the User, the User's **Role**, and each **User Group** the User belongs to, on that Source or on every Source. Effective permissions are the Role's permissions intersected with that level's keys.
+`sources:access_manage` creates, changes, and deletes memberships. A `maintainer` on that Source may list them. `super_admin` is `maintainer` on every Source by identity and has no stored row.
+Avoid Grant, Authorization Scope, or Visibility Set as the name. Avoid a second Role. Avoid access below the Source. Avoid a maintainer adding or changing members.
+
+### Source Access Level
+
+The closed ladder `viewer` < `steward` < `maintainer` attached to a **Source Membership**.
+`viewer` allows `sources:read`, `metadata:read`, `catalog:sample`, and `query:run`. `steward` adds `metadata:write`. `maintainer` adds `sources:write` and `jobs:run`.
+No membership means no level, and a route for that Source answers with the resource's not-found code. A level that does not allow the needed key is forbidden, except Job get, logs, and cancel, and schedule GET, which use the resource not-found code when the caller cannot `jobs:run` on the stamp. The level never adds a key the **Role** lacks. `sources:access_manage` is not a level.
+Avoid Authorization Scope, object-level ACL, or a per-Catalog-Object level as the name.
 
 ### Structure Diff
 

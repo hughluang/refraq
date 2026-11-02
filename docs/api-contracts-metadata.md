@@ -18,9 +18,12 @@ Slice / permission availability:
 | Joins R/W | C + Depth | read `metadata:read`; write `metadata:write` |
 | Search / join path | Depth | `metadata:read` |
 | Controlled query | D | `query:run` |
-| Catalog Sample | Harden | `catalog:sample` |
+| Catalog Sample | Harden | `catalog:sample` on the object's Source |
+| Type Mapping | — | Role `metadata:read` / `metadata:write` only. The list is global |
 
-All Source and catalog responses include `locator_key` (ADR 0012). HTTP path parameters remain surrogate ids.
+All Source and catalog responses include `locator_key`. HTTP path parameters remain surrogate ids.
+
+A route that names one Source, or a child that resolves to one Source, checks that key on that Source after the Role check (`docs/business-metadata.md` §6.1). No level uses that resource's existing not-found code. A level without the key is `403` `AUTH_FORBIDDEN`. The Role dependency still returns `403` when the Role lacks the key, including for an unknown id.
 
 ## 2. Catalog Object Shape
 
@@ -106,6 +109,8 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 
 **Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 100, max 500. `total` is the filtered set. Order: `schema_name`, `name`, `object_type`.
 
+`GET /sources/{id}/objects`: no level, or an unknown Source, is `404` `SOURCE_NOT_FOUND`. A level without `metadata:read` is `403` `AUTH_FORBIDDEN`. `GET /objects/{id}`, DDL, semantics-changes, object semantics write, and batch column semantics (`PATCH /objects/{id}/columns/semantics`) use `404` `CATALOG_OBJECT_NOT_FOUND` when the caller has no level on the object's Source. `PATCH /columns/{id}/semantics` uses `404` `CATALOG_COLUMN_NOT_FOUND` when that column's Source is hidden. Join read uses the object's not-found code. `POST /joins` and `POST /joins:batch` use `404` `CATALOG_COLUMN_NOT_FOUND` when an endpoint Source is hidden. `PATCH`, reject, restore, and delete of a join use `404` `CATALOG_JOIN_NOT_FOUND` when an endpoint Source is hidden. A level without `metadata:write` on a write is `403` `AUTH_FORBIDDEN`.
+
 List `q` is optional. When set, it matches a literal case-insensitive substring of `schema_name`, `name`, or `business_name` (not `locator_key`, not `business_description`). `include_absent` defaults true (tombstones stay in **Current catalog**). `business_semantics_ready` is optional `true` | `false`; omit means no readiness filter.
 
 ## 3.1 Structure Diff
@@ -114,8 +119,8 @@ A **Structure Diff** belongs to a **Source** and was produced by one successful 
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/sources/{id}/structure-diffs` | `metadata:read` | List Diffs for this Source (newest first; **Offset Page**) |
-| `GET` | `/structure-diffs/{id}` | `metadata:read` | Diff detail including full `changes` |
+| `GET` | `/sources/{id}/structure-diffs` | `metadata:read` on that Source | List Diffs for this Source (newest first; **Offset Page**). No level is `404` `SOURCE_NOT_FOUND` |
+| `GET` | `/structure-diffs/{id}` | `metadata:read` on the Diff's Source | Diff detail including full `changes`. No level is `404` `STRUCTURE_DIFF_NOT_FOUND` |
 
 **Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 50, max 200. Order: `created_at DESC`, `id DESC`. List item includes `id`, `source_id`, `job_id`, `class`, `counts`, `created_at` (not full `changes`). Detail adds `changes`: arrays of `{ "change", "locator_key" }` plus `from`/`to` when the change is type, PK, or nullable.
 
@@ -159,14 +164,14 @@ Validation:
 
 `semantic_type` is free text in this phase (ADR 0016); there is no `SEMANTIC_TYPE_INVALID` reject and no derived `semantic_gaps`.
 
-## 4.1 Type Mapping Endpoints (ADR 0024)
+## 4.1 Type Mapping Endpoints
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/type-mappings` | `metadata:read` | List mappings (`q`, `engine`, `origin`; **Offset Page**, `limit` default 100, max 500) |
 | `PATCH` | `/type-mappings/{id}` | `metadata:write` | Set `normalized_type` on a non-seed row |
 
-No POST or DELETE. **Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Order: `engine`, `native_type`, `id`. Mapping shape: `{ "id", "engine", "native_type", "normalized_type", "origin", "created_at", "updated_at" }`. `origin` is `product` \| `job` \| `user`.
+No POST or DELETE. These routes are global: the Role key is enough, and a Source the caller cannot open does not hide a row. **Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Order: `engine`, `native_type`, `id`. Mapping shape: `{ "id", "engine", "native_type", "normalized_type", "origin", "created_at", "updated_at" }`. `origin` is `product` \| `job` \| `user`.
 
 PATCH body: `{ "normalized_type": "<one of 12 buckets>" }` — any closed Normalized Type except `unknown`. Product seeds assign exact numeric natives (`numeric`, `decimal`, `money`, SQL Server `smallmoney`, Oracle `number`) to `decimal`; approximate natives stay `number`. Product seed (`origin=product`) → `TYPE_MAPPING_SEED_IMMUTABLE`. Target `unknown` → `TYPE_MAPPING_UNKNOWN_FORBIDDEN`. Missing id → `TYPE_MAPPING_NOT_FOUND`. Successful PATCH writes a **Management Audit Event** (`resource_type=type_mapping`, `action=type_mapping.patch`).
 
@@ -228,7 +233,7 @@ Batch response: `{ "created_count": 1, "already_known_count": 0, "rejected_count
 Path query params: `start` (object or column id or locator_key), optional `target`, optional `q` (question text; ranks objects already reachable from `start` within `max_hops`), `max_hops` (1–5, default 1; at most that many hops in every mode), `top_targets` (default 3). `target` and `q` may be combined; an explicit `target` still walks that pair and does not rank.
 
 Path response: `{ "paths_found": N, "paths": […], "direct_joins": […], "reason": null | "…", "rank_mode": null | "vector" | "lexical" }`.
-`rank_mode` is set when `q` is present and `target` is omitted (vector complete state or lexical process state on the reachable set) and `null` otherwise. A serving-time embed or neighbor failure is the same Problem Code as Catalog Search. `reason` may be set when no usable path is returned (e.g. `TARGET_UNREACHABLE` when the reachable set is empty or the rank window is empty). A start that cannot expand is `JOIN_PATH_UNAVAILABLE` (including when `q` is set). `direct_joins` is filled when start is a column and `max_hops=1`, including the `q` mode. `q` candidates are constructed from the reachable set; `JOIN_CROSS_SOURCE` applies only to an explicit `target` on another Source.
+`rank_mode` is set when `q` is present and `target` is omitted (vector complete state or lexical process state on the reachable set) and `null` otherwise. A serving-time embed or neighbor failure is the same Problem Code as Catalog Search. `reason` may be set when no usable path is returned (e.g. `TARGET_UNREACHABLE` when the reachable set is empty or the rank window is empty). A start that cannot expand is `JOIN_PATH_UNAVAILABLE` (including when `q` is set). `direct_joins` is filled when start is a column and `max_hops=1`, including the `q` mode. `q` candidates are constructed from the reachable set inside the start Source's graph. An explicit `target` the caller has no level on is `404` `CATALOG_OBJECT_NOT_FOUND` before path lookup, not `JOIN_CROSS_SOURCE`. A level without `metadata:read` is `403` `AUTH_FORBIDDEN`. `JOIN_CROSS_SOURCE` applies to an explicit `target` on another Source the caller can read.
 
 Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edges → `JOIN_CROSS_SOURCE`. Self-loop → `JOIN_INVALID`. Duplicate create on an asserted pair → `JOIN_ALREADY_DEFINED` (message includes join id). Single `POST /joins` create or `PATCH` amend on a rejected pair → `JOIN_REJECTED` (batch reports via `rejected_count` instead). Reject of an already-rejected row → `JOIN_ALREADY_REJECTED`. Restore of an asserted row → `JOIN_NOT_REJECTED`. `DELETE` of an automatic edge (`created_by_user_id` null) → `JOIN_DELETE_AUTOMATIC` (including when the row is also rejected; automatic is checked first). `DELETE` of a rejected human-created row → `JOIN_REJECTED`. Create is `201`.
 
@@ -241,13 +246,15 @@ Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edge
 
 Query params: `q` (**required**, non-empty after strip for both objects and columns), `source_id`, `object_type`, `limit` (default 20, max 100), `offset`. Missing, empty, or whitespace-only `q` is `400 CATALOG_SEARCH_QUERY_REQUIRED` (domain-owned; HTTP does not emit `422 REQUEST_INVALID` for emptiness). MCP `search_objects` / `search_columns` use the same code in the tool-error envelope.
 
+Both ranking paths receive only Sources on which the caller holds `metadata:read`. An empty set is an empty page and is not treated as every Source. A `source_id` the caller cannot read is `200` with empty `items` and the page's `rank_mode`. It is not a not-found error. An MCP search that passes a `source_locator_key` the caller cannot open is `SOURCE_NOT_FOUND` in the tool-error envelope before the page is built.
+
 **Top-K Read** response: `{ "items": […], "limit": L, "offset": O, "rank_mode": "vector" | "lexical", "truncated": B }`. No `total`. `rank_mode` names the path that produced this page: `vector` when an embedding **Model Service** is in use, the purpose is not closed, and ready is true; `lexical` when those bits are off (process state). The two values do not mean "this request fell back". Complete-state ranking is neighbor order (`k` store rows). Process-state ranking is the portable lexical ladder (ADR 0041): exact locator/name → prefix → name substring → business name/description substring, then a locator/`id` tiebreaker (`COLLATE "C"`). `source_id` and `object_type` bind both paths. `limit` / `offset` slice the declared window; `truncated` is true when the window has rows beyond this slice. An `offset` past the window is `200` with empty `items`. An empty neighbor list is a successful empty vector page. If the query embedding call fails or exceeds the model API timeout, the request is `CATALOG_SEARCH_EMBED_FAILED` (`503`). Neighbor-score failure other than platform time is `CATALOG_SEARCH_NEIGHBOR_FAILED` (`503`) (`refraq_catalog_search_vector_errors_total{reason=embed_failed|no_vectors|neighbor_failed}`). Semantic neighbors come from the store (`k` rows), not a process-local full scan. HTTP and MCP share this rank. Per-Source list `q` is not this ranking.
 
 Process-wide overload: `PLATFORM_CAPACITY_EXCEEDED` (`503` + `Retry-After`) when in-flight HTTP work is at the cap, the platform pool is exhausted, or the platform database refuses a new connection (ADR 0040). A platform short read canceled by `statement_timeout` is `PLATFORM_TIMEOUT` (`504`, no `Retry-After`), not `QUERY_TIMEOUT` and not a lexical page when vector Search was on.
 
 ### `GET /objects/{id}/semantics-changes`
 
-Permission: `metadata:read`. **Offset Page** of **Semantics Change** events for that Catalog Object (object-level and column-level patches), newest first: `{ "items", "total", "limit", "offset" }`. `limit` default **50**, max **200**.
+Permission: `metadata:read` on the object's Source. No level is `404` `CATALOG_OBJECT_NOT_FOUND`. A level without the key is `403` `AUTH_FORBIDDEN`. **Offset Page** of **Semantics Change** events for that Catalog Object (object-level and column-level patches), newest first: `{ "items", "total", "limit", "offset" }`. `limit` default **50**, max **200**.
 
 Item: `{ "id", "object_id", "column_id", "field_name", "old_value", "new_value", "semantic_source", "actor_user_id", "created_at" }`. `column_id` is null for object-level fields. Last write still wins; this list does not restore.
 
@@ -255,7 +262,7 @@ Item: `{ "id", "object_id", "column_id", "field_name", "old_value", "new_value",
 
 ### `POST /sources/{id}/query`
 
-Permission: `query:run`.
+Permission: `query:run` on that Source. No level is `404` `SOURCE_NOT_FOUND`. A level without `query:run` is `403` `AUTH_FORBIDDEN`.
 
 Request:
 
@@ -298,7 +305,7 @@ Envelope notes: request `max_rows` defaults to **100** when omitted; values abov
 
 ### `POST /objects/{id}/sample`
 
-Permission: `catalog:sample`.
+Permission: `catalog:sample` on the object's Source. No level is `404` `CATALOG_OBJECT_NOT_FOUND`. A level without `catalog:sample` is `403` `AUTH_FORBIDDEN`.
 
 Request:
 
@@ -357,3 +364,9 @@ Audit: every attempt writes `action=catalog.sample` on `resource_type=catalog_ob
 **Mid-term (versioned, not v1):** may add single-table ops `gt` / `gte` / `lt` / `lte` / `in` / `is_not_null` and richer order UX. Never joins, aggregates, arbitrary SQL fragments, default `total_count`, or MCP sample tool.
 
 **Not this endpoint:** caller-submitted SQL remains `POST /sources/{id}/query` (`query:run`).
+
+## 9. Non-Goals
+
+- Access below one Catalog Object, column, or row
+- Filtering **Type Mapping** by Source
+- A Source Mirror read on this surface

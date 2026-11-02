@@ -12,19 +12,10 @@ Related boundaries:
 - **User PAT** rules live in `docs/business-user-tokens.md`.
 - Platform **Job**: `docs/business-jobs.md`. Platform **Scheduled Task**: `docs/business-scheduled-tasks.md`.
 - Console shell and module registration contract: `docs/business-management-console.md`.
-- Terminology: `docs/glossary.md` and root `CONTEXT.md`.
-- Source / catalog identity: `docs/adr/0007-source-owns-catalog-identity.md`.
-- Source-embedded access: `docs/adr/0010-source-owns-access.md`.
-- Encrypted access blob + Connector Spec: `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`.
-- Catalog scope inside access: `docs/adr/0021-catalog-scope-in-access.md`.
-- Locator addressing: `docs/adr/0012-locator-addressing.md`.
-- Semantics provenance: `docs/adr/0013-semantics-provenance-and-protected-sources.md` (field protection deferred: `docs/adr/0014-defer-semantic-field-protection.md`).
-- Semantics field admission criteria and field-set pruning: `docs/adr/0015-semantic-field-admission.md`.
-- Type Mapping as Normalized Type authority: `docs/adr/0024-normalized-type-mapping.md`.
-- Job shape: `docs/adr/0008-job-generic-input.md`.
+- Terminology: `docs/glossary.md`.
 - This phase does **not** define Business Entity, Data Product catalog, Serving delivery, or Access Contract marketplace workflows.
 
-These rules are the working source of truth unless superseded by a later ADR or business document.
+These rules are the working source of truth for this document.
 
 ## 2. Problem And Decision
 
@@ -193,9 +184,10 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 
 | Permission | Meaning |
 | --- | --- |
-| `sources:read` | List/view Sources (projected `access`, Connector Spec) |
+| `sources:read` | List and view Sources the caller can open (projected `access`, Connector Spec). `GET /sources` also admits `sources:access_manage` for identity rows |
 | `sources:write` | Create/update/disable Sources; hard-delete disabled Sources; replace full `access`; fetch full access for edit; run Source reachability tests; creating a database Source, or a mutating update of one with a missing product-default schedule kind, also inserts the matching product-default **Scheduled Task** |
-| `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, joins, and **Type Mapping** |
+| `sources:access_manage` | Manage **Source Membership**s and **Source Access Level**s. Not a level. Not implied by `sources:read`, `sources:write`, or `metadata:*`. Not seeded onto `operator`. A Role that effectively holds it cannot be an Identity Provider default Role |
+| `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, and joins on Sources the caller can read, and read global **Type Mapping** |
 | `metadata:write` | Write semantics and join edges; PATCH non-seed **Type Mapping** |
 | `query:run` | Execute controlled read-only SQL against a Source |
 | `catalog:sample` | Run Catalog Sample (structured live peek) on a Catalog Object |
@@ -205,11 +197,40 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 
 Rules:
 
-- Structure facades (`POST/GET /sources/{id}/schedules`, `POST /schedules/{id}/run`, `GET /schedules/{id}/jobs`) require `jobs:run`, defined in `docs/business-jobs.md` (not a Metadata-owned permission).
-- Seeded `super_admin` receives the full current catalog **by identity**; Foundation Upgrade ensures the System Role row exists but does not grant access by rewriting a stored permission list.
-- Seeded `operator` does **not** receive `sources:write`, `metadata:write`, `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, or `audit:read` by default.
-- No object-level ACL in this phase.
-- Nav visibility for modules uses each module’s `list` action Permission (same Console Module contract as Foundation).
+- Structure facades (`POST/GET /sources/{id}/schedules`, `POST /schedules/{id}/run`, `GET /schedules/{id}/jobs`) require `jobs:run`, defined in `docs/business-jobs.md` (not a Metadata-owned permission), and `jobs:run` on that Source (§6.1).
+- Seeded `super_admin` receives the full current catalog **by identity**; Foundation Upgrade ensures the System Role row exists but does not grant access by rewriting a stored permission list. `super_admin` is `maintainer` on every Source by identity and has no stored **Source Membership**.
+- Seeded `operator` does **not** receive `sources:write`, `sources:access_manage`, `metadata:write`, `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, or `audit:read` by default.
+- Nav visibility for modules uses each module’s `list` action Permission (same Console Module contract as Foundation). Sources navigation requires `sources:read`. The console page gate also admits `sources:access_manage` on the Source list and show routes (§7).
+
+### 6.1 Source Access
+
+**Role** is the site-wide capability bundle: a User has at most one Role, stored as `users.role_id`. A **Source Membership** at a **Source Access Level** is instance access to one Source.
+
+A membership names one subject (`user`, `role`, or `group`), one target (one Source id, or every Source), and one level. One subject has at most one membership per target. The ladder is `viewer`, then `steward`, then `maintainer`.
+
+| Level | Allows |
+| --- | --- |
+| `viewer` | `sources:read`, `metadata:read`, `catalog:sample`, `query:run` |
+| `steward` | `viewer` plus `metadata:write` |
+| `maintainer` | `steward` plus `sources:write`, `jobs:run` |
+
+The effective level is the highest match among the User, the User's Role, and each User Group the User belongs to, on that Source or on every Source. No match means no level. Effective permissions on that Source are the Role's effective permissions intersected with the level's keys. The level never adds a key the Role lacks. A membership whose subject no longer exists grants nothing. The next request sees a membership change, a group change, or a Role change. `sources:access_manage` does not grant a level and does not skip an instance check.
+
+The Role check on a route stays first. A missing Role key is forbidden even when the id is unknown. The instance check runs after the row is known to exist. No level uses that resource's existing not-found code. A level that does not include the needed key is `403` `AUTH_FORBIDDEN`, except the Job and schedule reads in the next paragraph.
+
+`POST /sources` and draft `POST /sources/test` require only the Role key `sources:write`. `GET /sources/access-schema/{engine}` requires only the Role key `sources:read`. A successful create writes a `user` membership for the creator at `maintainer` in the same transaction as the Source and its seed schedules, and writes `source_membership.create` for that User. Hard-delete of a Source deletes memberships whose target is that Source and leaves every-Source memberships.
+
+`GET /sources` returns Sources on which the caller holds `sources:read`, and every Source for a holder of `sources:access_manage`. A row with no level is an identity projection: `id`, `key`, `name`, `kind`, `engine`, `status`. It omits `access` and the non-secret access projection. An empty visible set is an empty page.
+
+Catalog reads and writes, **Structure Diff**, **Controlled Query**, **Catalog Sample**, Catalog Search, and the Source schedule facade use the same check on the Source those records resolve to. Catalog Search ranks only over Sources where the caller holds `metadata:read`, in both ranking paths. An empty visible set is an empty page before any scan. HTTP Catalog Search of a `source_id` the caller cannot read is an empty page. An explicit **Join Path** target the caller cannot read is the unknown-object code, and an open-ended path stays inside the start Source's graph.
+
+Operations Job and schedule lists include a Source-bound row when the caller holds `jobs:run` on that row's Source. A row with no Source stamp keeps the Role rule. The stamp is opaque, is not a Source foreign key, and is distinct from `owner_ref`. Get, logs, and cancel of a stamped Job are `404` `JOB_NOT_FOUND` when the stamp is outside the caller's `jobs:run` set, including when the caller has a level that does not include `jobs:run`. `GET` of a stamped schedule the caller cannot `jobs:run` is that schedule's not-found code, including when a level is held without that key. Update, delete, and run-now when the caller has a level and lacks `jobs:run` are `403` `AUTH_FORBIDDEN`.
+
+**Type Mapping** stays global: `metadata:read` and `metadata:write` on the Role, with no Source check. The audit list is not filtered by Source. There is no Source Mirror list. MCP `search_sources` returns Sources where the caller holds `sources:read` and does not add identity rows for `sources:access_manage`. A `channel:read` holder can still read channel run records from a Source they cannot open (`docs/business-data-channel.md` §11).
+
+The membership migration inserts one every-Source `maintainer` membership for each Role, other than `super_admin`, whose stored permissions at that migration include `sources:read` or `metadata:read`. A Role created afterwards receives no membership from that migration or from Foundation Upgrade. Identity Provider auto-provisioning creates no membership.
+
+HTTP shapes and codes: `docs/api-contracts-sources.md`, `docs/api-contracts-metadata.md`, `docs/api-contracts-metadata-mcp.md`, `docs/api-contracts-jobs.md`, `docs/api-contracts-schedules.md`.
 
 ## 7. Console Modules (`metadata` Group)
 
@@ -219,24 +240,28 @@ Initial modules (ids stable):
 
 | Module id | Purpose | list permission |
 | --- | --- | --- |
-| `sources` | Source registration, reachability, structure Jobs, and **Structure Diff** browse (`/console/sources/:id/structure-diffs`) | `sources:read` |
+| `sources` | Source registration, reachability, members, and **Structure Diff** on the record | `sources:read` |
 | `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, Catalog Sample, joins, and DDL | `metadata:read` |
 | `type-mappings` | Global **Type Mapping** list; PATCH non-seed target only (no create/delete) → `metadata:write` | `metadata:read` |
 
-The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10, ADR 0015), structure facts (PK/FK/indexes/comments), **Catalog Sample** when the actor has `catalog:sample`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
+The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10), structure facts (PK/FK/indexes/comments), **Catalog Sample** when the actor has `catalog:sample` on that Source, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with `metadata:read` on that Source can open detail without needing `metadata:write`.
 
-**Structure Diff** browse lives under Source routes (`/console/sources/:id/structure-diffs`); viewing requires `metadata:read`. It is not a new sidebar module. Classification is read on **Structure Diff**, not on Job list/detail chrome.
+Source routes are create `/console/sources/new`, show `/console/sources/:id`, and edit `/console/sources/:id/edit`. Show and edit are a record form (`docs/ui-console-record-form.md`). Tabs on the record are `record` (default, no query) and `diffs`. The diffs list URL `/console/sources/:id/structure-diffs` redirects to show `?tab=diffs`. `/console/sources/:id/structure-diffs/:diffId` stays a show alias. The structure-diff HTTP API still requires `metadata:read` on that Source, so a show actor whose Role lacks `metadata:read` can open the diffs tab and still be refused by the API. Every level includes `metadata:read`; the refusal is the Role intersection. Delete stays on the list row and on the record header. The header delete control is enabled only when status is `disabled`. Schedules are not a tab.
 
-Sources keep a **related schedules** workbench at `/console/sources/:id/schedules` (toolbar create plus the same row actions as Operations `schedules`; `jobs:run`; not a sidebar module and not `sources.show`). Global Job observe and domain **Scheduled Task** lists live under **Operations** (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`), not this group.
+**Structure Diff** is not a new sidebar module. Classification is read on **Structure Diff**, not on Job list/detail chrome.
+
+Sources keep a **related schedules** workbench at `/console/sources/:id/schedules` (toolbar create plus the same row actions as Operations `schedules`; `jobs:run` on that Source; not a sidebar module and not `sources.show`). Global Job observe and domain **Scheduled Task** lists live under **Operations** (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`), not this group.
+
+The Source record has a Members tab. `sources:access_manage` can edit it. A `maintainer` on that Source sees it read-only. The level control is `viewer`, `steward`, or `maintainer` and is not a Role selector. The Source list page header has an every-Source membership action for `sources:access_manage`. The User record shows that User's effective Source access read-only (`users:read`). Navigation still requires `sources:read`. The page gate admits `sources:access_manage` on the list and on show, including the structure-diff aliases. Create, edit, and delete stay `sources:write`. An identity row stays in display mode so an edit does not submit an empty access document. An empty Source list with no active search or engine filter states that a fresh site leaves Sources to `super_admin` until an administrator assigns a membership or someone registers a Source.
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` and **Account Center** (`docs/business-account.md`) — module `tokens` is identity-only and not a sidebar entry.
 
 ## 8. Access Blob Storage
 
-- The whole Source `access` JSON document (including passwords and other `x-secret` fields) is stored encrypted in Postgres using an application master key from environment (`REFRAQ_SECRETS_MASTER_KEY`) — see ADR 0011.
+- The whole Source `access` JSON document (including passwords and other `x-secret` fields) is stored encrypted in Postgres using an application master key from environment (`REFRAQ_SECRETS_MASTER_KEY`).
 - Decryption occurs in worker/API paths that open a live endpoint, and on write-scoped edit fetch.
 - List/get return projected access (secrets stripped) plus `has_access` / `access_updated_at`.
-- External Vault/KMS is out of scope for this phase (see `docs/adr/0005-app-encrypted-connection-secrets.md`).
+- External Vault/KMS is out of scope for this phase.
 
 ## 9. Structure Job Runtime (database)
 
@@ -403,7 +428,7 @@ is no elected primary axis at object level.
   Object-level fields that elect one "primary" column out of several of the same kind, and free
   text read only by humans or agents, do not qualify.
 - `semantic_source` records the **last write** provenance. Field-level protection against MCP
-  overwrite is **deferred** (`docs/adr/0014-defer-semantic-field-protection.md`); Console and MCP
+  overwrite is deferred; Console and MCP
   both write submitted non-empty fields (HTTP may also clear via present-null).
 - MCP column writes are **batch** per object (see MCP contract); batch reports
   `skipped_columns` for `invalid_column_name` (missing/blank names) or no-op payloads.
@@ -454,11 +479,12 @@ Rules:
   Query-text mode ranks columns of the reachable set (ADR 0043 / 0044); the path
   envelope includes `rank_mode` (`vector` | `lexical`) when `q` / `query_text`
   is set and no explicit target is present, and `null` otherwise. A serving-time embed or neighbor failure is the
-  same Problem Code as Catalog Search. `JOIN_CROSS_SOURCE` applies only to an
-  explicit target on another Source.
+  same Problem Code as Catalog Search. An explicit target the caller has no level on is the unknown-object code (§6.1). `JOIN_CROSS_SOURCE` applies only to an
+  explicit target on another Source the caller can read. An open-ended path stays inside the start Source's graph.
 
 ## 10.5 Catalog search
 
+- Ranking runs over Sources on which the caller holds `metadata:read` (§6.1). Both the lexical path and the vector neighbor query receive that set. An empty set is an empty page before a scan. A `source_id` the caller cannot read is an empty page.
 - Cross-Source object and column search by **non-empty** query text (locator, name, schema,
   business_name, business_description) with optional `source_id` / `object_type` filters and
   `limit`/`offset`. Empty, omitted, or whitespace-only query is rejected for both object
@@ -517,13 +543,13 @@ Console, MCP, Catalog Sample, and a Data Channel live Source query use this guar
 - Reject: DDL, DML, multi-statement batches, row locking (`FOR UPDATE`), dangerous functions (for example `pg_sleep`, `xp_cmdshell`), and anything the platform cannot classify as read-only.
 - L4 uses a dialect-aware SQL AST (sqlglot) keyed by Source `engine` (`postgresql` / `mssql` / `oracle`); parse failures and unclassified statements fail closed.
 - Enforce timeout and maximum row count.
-- Execute through the Source's embedded reachability; audit every attempt (statement summary or hash, User, Source, outcome).
+- Execute through the Source's embedded reachability; audit every attempt (statement summary or hash, User, Source, outcome). The caller needs `query:run` on that Source (§6.1). No level is `SOURCE_NOT_FOUND`. A level without `query:run` is `403` `AUTH_FORBIDDEN`.
 - Prefer a database user that is itself read-only as defense in depth; platform guards remain mandatory.
 
 ## 11.1 Catalog Sample
 
 - **Catalog Sample** is for tabular Catalog Objects (`table`, `view`, `materialized_view`). `procedure` and `function` are rejected (`SAMPLE_OBJECT_TYPE_UNSUPPORTED`).
-- Permission: `catalog:sample` (distinct from `query:run`). Seeded `operator` does **not** receive it by default.
+- Permission: `catalog:sample` on the object's Source (distinct from `query:run`). No level is `CATALOG_OBJECT_NOT_FOUND`. A level without `catalog:sample` is `403` `AUTH_FORBIDDEN`. Seeded `operator` does **not** receive the Role key by default.
 - HTTP: `POST /objects/{id}/sample`. MCP does **not** expose a sample tool; agents use `run_sql` for ad-hoc peek.
 - v1 filter ops: `eq`, `neq`, `contains`, `is_null` (AND of filter list). Pagination: `offset` + `limit` with hard cap `offset + limit ≤` the `query_max_rows` **System Parameter** (seed **1000**, range 100–10000); response echoes `offset` / `limit` and `has_more` (heuristic); no default `total_count` / `COUNT(*)`. `order_by` is optional; without it, pagination order is unstable. Platform timeout is `query_timeout_sec` (seed **30**, range 5–3600).
 - Optional `include_sql` returns the compiled statement for transparency; default responses omit SQL.
@@ -531,13 +557,13 @@ Console, MCP, Catalog Sample, and a Data Channel live Source query use this guar
 
 ## 12. MCP
 
-- MCP tools are a first-class product surface backed by the same domain services and Permissions as HTTP APIs.
+- MCP tools are a first-class product surface backed by the same domain services and Permissions as HTTP APIs. They use the PAT User's **Source Access** (§6.1). `search_sources` lists Sources where that User holds `sources:read` and does not add identity rows for `sources:access_manage`. A locator on a Source the caller cannot open uses the same not-found code as an unknown locator.
 - Metadata MCP is the agent **inquiry and living-registry** face (catalog, admitted semantics, joins, controlled query). Server `instructions` and scene `prompts` are product surface. It is not a system-operations face: Job and Scheduled Task observe/mutate stay Console / HTTP.
 - `get_object` is the aggregate read (columns + DDL + object semantics). Cheaper projections `get_object_semantics`, `get_object_columns`, and `get_object_ddl` are admitted (ADR 0036). HTTP object detail stays one page.
 - Last-write-wins on semantics (ADR 0014). Each applied object or column semantics write appends **Semantics Change** (old/new values) visible on the Catalog Object (ADR 0038). Agents cannot clear via MCP; HTTP present-null still clears and still appends.
 - The product port is Console-origin `/mcp` (independent MCP process). HTTP MCP authenticates a **User PAT** in the `Authorization` header only. Session is not an MCP caller.
 - Account Center and Agent `tools/list` show the same Permission-cropped catalog. `GET /mcp/catalog` is the HTTP read of that tool list.
-- Contract detail: `docs/api-contracts-metadata-mcp.md`. Topology: `docs/architecture.md`, `docs/env.md`. Workplace and split reads: `docs/adr/0036-mcp-workplace-and-split-reads.md`.
+- Contract detail: `docs/api-contracts-metadata-mcp.md`. Topology: `docs/architecture.md`, `docs/env.md`.
 
 ## 13. Management Audit
 
@@ -551,8 +577,9 @@ Persist management-plane events for at least:
 - Controlled query execution
 - Catalog Sample execution (`catalog.sample`)
 - Scheduled Task create / patch / delete / run (`schedule.create` / `schedule.patch` / `schedule.delete` / `schedule.run`; no secrets)
+- Source Membership create / level change / delete (`source_membership.create` / `source_membership.update` / `source_membership.delete`; resource type `source_membership`). Detail holds `subject` (`type`, `id`), `target`, `old_level`, and `new_level`. `old_level` is null on create. `new_level` is null on delete. A failed create (duplicate, unknown subject, unknown level) writes no event. Source create writes the creator's `maintainer` membership event for the same User as `source.create`
 
-Each event: actor User id, timestamp, resource type/id, action, result (`success` / `failure`), optional detail payload without secrets.
+Each event: actor User id, timestamp, resource type/id, action, result (`success` / `failure`), optional detail payload without secrets. The audit list is not filtered by Source. A caller with `audit:read` can read a Source event for a Source they cannot open.
 A mutating Source update that inserts a missing product-default schedule kind writes `schedule.create` for the same User as `source.update`. Source create writes `source.create` and `schedule.create` for each seed, attributed to the same User. Automatic lineage writes (FK sync and `sql_lineage` persist) produce no per-edge Management Audit Event; HTTP/MCP join writes still do.
 Full platform audit of every login/Settings/Users path is out of scope for this phase (Foundation login paths may remain hook-ready only).
 
@@ -576,7 +603,11 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Access request and contract approval workflows
 - Client / machine-token management APIs
 - Console P1: scope switcher implementation, global search implementation, theme workshops, notification center
-- Object-level ACL
+- Access below the Source (per Catalog Object, schema, column, or row) and data masking on Controlled Query or Catalog Sample
+- Filtering the audit list by Source
+- A Source Mirror list or Read Mirror nodes
+- Per-Source **Type Mapping**
+- Filtering channel run records by Source access (`docs/business-data-channel.md` §11)
 - Write SQL / unrestricted SQL consoles
 - Migrating or dual-reading legacy `dbmeta` datasets
 - Pre-creating empty domain packages before implementation code arrives
@@ -591,21 +622,6 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 
 ## 16. References
 
-- `docs/adr/0007-source-owns-catalog-identity.md`
-- `docs/adr/0008-job-generic-input.md`
-- `docs/adr/0025-clock-first-structure-jobs.md`
-- `docs/adr/0026-seed-structure-schedule-on-source-create.md`
-- `docs/adr/0010-source-owns-access.md`
-- `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`
-- `docs/adr/0021-catalog-scope-in-access.md`
-- `docs/adr/0012-locator-addressing.md`
-- `docs/adr/0013-semantics-provenance-and-protected-sources.md`
-- `docs/adr/0014-defer-semantic-field-protection.md`
-- `docs/adr/0015-semantic-field-admission.md`
-- `docs/adr/0036-mcp-workplace-and-split-reads.md`
-- `docs/adr/0043-catalog-search-vector-complete-state.md`
-- `docs/adr/0038-semantics-change-ledger.md`
-- `docs/adr/0024-normalized-type-mapping.md`
 - `docs/business-user-tokens.md`
 - `docs/business-jobs.md`
 - `docs/business-scheduled-tasks.md`
@@ -617,6 +633,3 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - `docs/api-contracts-tokens.md`
 - `docs/api-contracts-audit.md`
 - `docs/api-contracts-metadata-mcp.md`
-- `docs/adr/0004-redis-queue-for-ingestion.md`
-- `docs/adr/0006-celery-platform-async-runtime.md`
-- `docs/adr/0005-app-encrypted-connection-secrets.md`

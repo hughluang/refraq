@@ -4,7 +4,7 @@
 
 Contracts for operator management of domain **Scheduled Task** definitions (the schedule layer) and firing them.
 
-Business rules: `docs/business-scheduled-tasks.md` (platform Scheduled Task), `docs/business-metadata.md` §4.2 (Metadata structure **facade** onto schedules — not schedule ownership by Source), and `docs/business-data-channel.md` §7.2 (Data Channel publish sync), root `CONTEXT.md`, `docs/adr/0026-seed-structure-schedule-on-source-create.md`, `docs/adr/0027-running-time-limit-on-schedule.md`.
+Business rules: `docs/business-scheduled-tasks.md` (platform Scheduled Task), `docs/business-metadata.md` §4.2 (Metadata structure facade onto schedules — not schedule ownership by Source) and §6.1 (Source access), and `docs/business-data-channel.md` §7.2 (Data Channel publish sync).
 Auth: Session or User PAT. Permission: `jobs:run`.
 Instants: [`docs/conventions-time.md`](conventions-time.md) (UTC `Z` on the wire).
 HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
@@ -94,7 +94,7 @@ Rules:
 | --- | --- | --- | --- |
 | `POST` | `/sources/{id}/schedules` | `jobs:run` | Insert a Source-targeted schedule (`work_kind=structure` or `join_detection`) |
 | `GET` | `/sources/{id}/schedules` | `jobs:run` | List schedules whose target is this Source (both work kinds; **Offset Page**) |
-| `GET` | `/schedules` | `jobs:run` | Platform list (default excludes `hidden`; tests may pass `?hidden=true`; **Offset Page**) |
+| `GET` | `/schedules` | `jobs:run` | Platform list (default excludes `hidden`; tests may pass `?hidden=true`; **Offset Page**), filtered by Source access stamp |
 | `POST` | `/schedules/cron-preview` | `jobs:run` | Next 5 cron fires from now (not before an optional `start_at`). Read-only; no row write and no audit |
 | `GET` | `/schedules/{id}` | `jobs:run` | Get by id (hidden rows visible for debug) |
 | `PATCH` | `/schedules/{id}` | `jobs:run` | Partial update: `enabled`, cadence, `start_at`, `name`, `running_timeout_sec` |
@@ -103,6 +103,12 @@ Rules:
 | `GET` | `/schedules/{id}/jobs` | `jobs:run` | Jobs this schedule minted — see `docs/api-contracts-jobs.md` |
 
 There is no `PUT/GET/DELETE /sources/{id}/schedule` (singular replace).
+
+A Source-bound Scheduled Task carries an opaque access stamp. It is not a response field, not a Source foreign key, and distinct from `owner_ref`. A null stamp keeps the Role rule (`jobs:run` on the route). `GET /schedules` and the Source facade list include a stamped row when the caller holds `jobs:run` on that Source, and include null-stamp rows. The page and `total` count that set.
+
+`GET /schedules/{id}` and `GET /schedules/{id}/jobs` of a stamped row the caller cannot `jobs:run` are `404` `SCHEDULE_NOT_FOUND`, whether the caller has no level or has a level without the key. `PATCH`, `DELETE`, and `POST /schedules/{id}/run` of a stamped row with no level are `404` `SCHEDULE_NOT_FOUND`. The same three with a level and without `jobs:run` are `403` `AUTH_FORBIDDEN`.
+
+`POST /sources/{id}/schedules` and `GET /sources/{id}/schedules` require Role `jobs:run` first. No level on that Source is `404` `SOURCE_NOT_FOUND`. A level without `jobs:run` is `403` `AUTH_FORBIDDEN`. `POST /schedules/cron-preview` stays the Role key only.
 
 ### `POST /sources/{id}/schedules` body
 
@@ -186,7 +192,8 @@ Same **Offset Page** envelope, including `cron_timezone`, defaults, max, and ord
 
 | code | When |
 | --- | --- |
-| `SCHEDULE_NOT_FOUND` | No Scheduled Task for this id |
+| `SCHEDULE_NOT_FOUND` | No Scheduled Task for this id, or a stamped row the caller cannot `jobs:run` on GET. PATCH, DELETE, and run-now use this code when the caller has no level |
+| `AUTH_FORBIDDEN` | Role lacks `jobs:run`, or PATCH, DELETE, and run-now of a stamped row where the caller has a level and lacks `jobs:run`. The Source facade uses this code when the caller has a level and lacks `jobs:run` |
 | `SCHEDULE_SYSTEM_IMMUTABLE` | PATCH or run-now of a locked row |
 | `SCHEDULE_UNDELETABLE` | DELETE of an undeletable row |
 | `SCHEDULE_CADENCE_INVALID` | Neither or both cadence fields; invalid cron (out-of-range value, step less than 1, reversed `a-b`, non-numeric); no fire within 8 years; day-of-month and day-of-week both restricted; non-positive interval; interval above 252460800 seconds; blank or whitespace cron on preview |
@@ -194,7 +201,7 @@ Same **Offset Page** envelope, including `cron_timezone`, defaults, max, and ord
 | `SCHEDULE_START_AT_INVALID` | Present `start_at` is more than 252460800 seconds after now |
 | `SCHEDULE_KIND_INVALID` | POST `kind` is not in the closed catalog |
 | `JOB_INPUT_INVALID` | A Source-targeted schedule requires a database Source with access |
-| `SOURCE_NOT_FOUND` | Facade path Source missing. Source delete withdraws Source-targeted schedules by `owner_ref` so orphans should not remain. |
+| `SOURCE_NOT_FOUND` | Facade path Source missing, or present and the caller has no level. Source delete withdraws Source-targeted schedules by `owner_ref` so orphans should not remain. |
 | `REQUEST_INVALID` | Unknown fields on `POST /sources/{id}/schedules`, `PATCH /schedules/{id}`, or `POST /schedules/cron-preview` |
 
 `JOB_ALREADY_ACTIVE` and `JOB_SOURCE_DISABLED` are Job execution / domain errors, not schedule mint HTTP codes. `channel_run` Jobs take no execution lock and never end with `JOB_ALREADY_ACTIVE`.

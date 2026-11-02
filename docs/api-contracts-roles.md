@@ -63,6 +63,7 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "branding:write", "description": "Change and reset site branding and assets" },
     { "key": "sources:read", "description": "List and view Sources (non-secret fields)" },
     { "key": "sources:write", "description": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests; creating a database Source also inserts the product-default structure Scheduled Task" },
+    { "key": "sources:access_manage", "description": "Manage Source memberships and Source access levels" },
     { "key": "metadata:read", "description": "Browse catalog objects, semantics, and joins" },
     { "key": "metadata:write", "description": "Write semantics and join edges" },
     { "key": "jobs:run", "description": "Enqueue and manage Jobs; manage domain Scheduled Tasks" },
@@ -99,7 +100,7 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
 }
 ```
 
-Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`. Platform **Job** / **Scheduled Task** permission `jobs:run`: `docs/business-jobs.md`. Entity keys: `docs/business-entity.md` §6. Entity Data API keys: `docs/api-contracts-entity-data.md`. Entity access control: `docs/business-entity-access.md` §18.
+`sources:access_manage` is a granting Permission. It is not implied by `sources:read`, `sources:write`, or `metadata:*`, it is not seeded onto `operator`, and a Role that effectively holds it cannot be an Identity Provider default Role. It is not a **Source Access Level**. Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`. Platform **Job** / **Scheduled Task** permission `jobs:run`: `docs/business-jobs.md`. Entity keys: `docs/business-entity.md` §6. Entity Data API keys: `docs/api-contracts-entity-data.md`. Entity access control: `docs/business-entity-access.md` §18.
 
 ## 4. `GET /roles`
 
@@ -267,8 +268,9 @@ Empty body.
 
 `404 ROLE_NOT_FOUND`
 
-## 9. Non-Goals for this slice
+## 9. Non-Goals
 
 - Free-form permission strings outside the catalog
 - Multi-role assignment to a User
 - Hierarchical / inherited roles
+- A Grant that binds a Role to one Source. Source instance access is **Source Membership** (`docs/business-metadata.md` §6)

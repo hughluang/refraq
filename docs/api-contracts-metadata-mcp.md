@@ -8,7 +8,7 @@ The product port is MCP revision **2026-07-28 Streamable HTTP** at the Console-o
 
 `GET /mcp/catalog` on the API process (Session or PAT) is the Account Center read of the same cropped tool list.
 
-Business rules: `docs/business-metadata.md`. Locator addressing: `docs/adr/0012-locator-addressing.md`.
+Business rules: `docs/business-metadata.md` §6.1 and §12.
 
 Legacy external `dbmeta` tool names are **reference only**; refraq owns normative names below. Tool arguments that identify Sources, objects, or columns use **locator keys** (not surrogate ids). Clients that still require a 2025-era `initialize` / `Mcp-Session-Id` handshake are out of scope.
 
@@ -22,6 +22,9 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 - Mutations write management audit events
 - No tool returns Source plaintext secrets or PAT secrets
 - Locator formats: `src/{engine|kind}/{source_key}`, `obj/…/{schema}/{object_type}/{name}`, `col/…/column/{column_name}`
+- Tools use the PAT User. A locator on a Source the caller has no level on uses the same not-found code as an unknown locator (`SOURCE_NOT_FOUND`, `CATALOG_OBJECT_NOT_FOUND`, `CATALOG_COLUMN_NOT_FOUND`, or `CATALOG_JOIN_NOT_FOUND` for that tool). A level without the tool's key is `AUTH_FORBIDDEN`. `search_sources` requires Role `sources:read` and returns Sources where the caller holds `sources:read`, using the projected Source shape. It does not add identity rows for `sources:access_manage`. `search_objects` and `search_columns` rank only over Sources where the caller holds `metadata:read`. An explicit `source_locator_key` the caller cannot open is `SOURCE_NOT_FOUND` before the page is built. HTTP Catalog Search of an invisible `source_id` is an empty page (`docs/api-contracts-metadata.md` §6)
+- Semantics and join writes need a level that allows `metadata:write` (`steward` or `maintainer`) and Role `metadata:write`. `run_sql` needs `viewer` and Role `query:run`. `enrich_semantics` returns the locator header and its static body when the caller cannot read the object. Any other preload failure still includes the exception text in that prompt
+- Open-ended join paths stay inside the start Source's graph. The tool calls the visibility check before lookup
 - Catalog column payloads omit `normalized_type`. There is no Type Mapping tool. Agents use native `data_type` (ADR 0024).
 - **Instants** in tool JSON match HTTP: outbound UTC `Z` via `format_instant`. Actor **Display Timezone** is not applied to MCP Instant strings (Console-only formatting). Agents may read `display_timezone` from Current User / Account profile and format locally if needed.
 - Admission for new tools (ADR 0036): Metadata MCP is the agent inquiry and living-registry face. Do not add (1) operations, Job, or Scheduled Task observe/mutate tools, (2) a read-only tool the agent cannot start from locators already on this face, (3) a second aggregate that only renames `get_object`, (4) tools that write ADR 0015-removed fields, or (5) Business Entity tools. Entity SQL over MCP is a planned, separate surface with its own host and contract; it is not part of the Metadata MCP. Cheaper projections of `get_object` are admitted.
@@ -31,7 +34,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 
 | Tool | Permission | Purpose |
 | --- | --- | --- |
-| `search_sources` | `sources:read` | Search/list Sources (`query_text`, `limit` default **50** max **200**, `offset`) |
+| `search_sources` | `sources:read` | Search/list Sources the caller can `sources:read` (`query_text`, `limit` default **50** max **200**, `offset`). No identity rows for `sources:access_manage` |
 | `get_source` | `sources:read` | Source detail by `source_locator_key` (projected `access`) |
 | `list_objects` | `metadata:read` | Catalog Objects under a Source locator (`q`, `object_type`, `business_semantics_ready`, `limit`, `offset`) |
 | `get_object` | `metadata:read` | Aggregate: object + columns + DDL + object semantics by `object_locator_key` (columns omit `normalized_type`; **no** `foreign_keys` / `indexes` — structure graph is HTTP detail or join tools) |
@@ -121,8 +124,11 @@ Success `200`:
 
 `public_path` is the Console-origin path the operator copies. The browser builds `{origin}{public_path}`. An empty `tools` array is valid.
 
-## 9. Out Of Scope Tools
+## 9. Non-Goals
 
+- Identity rows on `search_sources` for `sources:access_manage` (HTTP `GET /sources` is the surface that adds them)
+- A PAT `scopes` value that narrows Source access
+- A Type Mapping tool, or a Source Mirror tool
 - Arbitrary shell / file tools
 - Client credential management
 - Data Product catalog tools

@@ -124,7 +124,7 @@ Frontend navigation around the session boundary:
 
 ## 7. Role Model
 
-Role is a first-class entity. Each User may hold **at most one** Role (`role_id` nullable). The Role is the User's only source of **Permission**s.
+Role is a first-class entity. Each User may hold **at most one** Role (`users.role_id`, nullable). The Role is the User's only source of **Permission** keys. What that User can do on one **Source** is those keys intersected with the **Source Access Level** from **Source Membership** (`docs/business-metadata.md` §6). The level never adds a key.
 
 A User may also belong to any number of **User Group**s and carry **Subject Attribute** values. Groups and attributes carry no Permission; they exist so **Access Grant**s and row rules on Business Entity data can name populations and facts that do not match a Role (`docs/business-entity-access.md` §2). They are managed under `users:read` / `users:write`.
 
@@ -169,6 +169,7 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `settings:write`
 - `branding:read` / `branding:write`
 - `sources:read` / `sources:write`
+- `sources:access_manage`
 - `metadata:read` / `metadata:write`
 - `jobs:run`
 - `query:run`
@@ -195,8 +196,8 @@ Rules:
 - Frontend checks are UX only; backend remains authoritative
 - Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/sample/token/audit, and no `entity:*` by default). `entity:drop_table`, `entity:data_read`, and `entity:data_write` are not seeded onto `operator`. `entity:drop_table` is not implied by `entity:write`. `entity:data_read` / `entity:data_write` are not implied by `entity:read` / `entity:write` (or the reverse).
 - `identity_providers:read` lists configured providers and the protocol spec; `identity_providers:write` creates, updates, tests, enables, disables, and deletes them. Neither permission grants Role or User permissions.
-- Entity permission meanings: `docs/business-entity.md` §6; Entity Data API: `docs/api-contracts-entity-data.md`; Entity access control: `docs/business-entity-access.md` §18. `entity:access_manage` is not seeded onto `operator` and is not implied by `entity:write`. `entity:data_read` / `entity:data_write` are master switches: Entity data is reached only through **Access Grant**s, and no Permission, including those of `super_admin`, bypasses them.
-- An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, `identity_providers:write`, or `entity:access_manage`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default.
+- Entity permission meanings: `docs/business-entity.md` §6; Entity Data API: `docs/api-contracts-entity-data.md`; Entity access control: `docs/business-entity-access.md` §18. `entity:access_manage` and `sources:access_manage` are granting Permissions. `entity:access_manage` is not seeded onto `operator` and is not implied by `entity:write`. `sources:access_manage` is not seeded onto `operator` and is not implied by `sources:read`, `sources:write`, or `metadata:*`. `entity:data_read` / `entity:data_write` are master switches: Entity data is reached only through **Access Grant**s, and no Permission, including those of `super_admin`, bypasses them.
+- An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, `identity_providers:write`, `entity:access_manage`, or `sources:access_manage`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default. Auto-provisioning writes `users.role_id` and writes no **Source Membership**.
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
 - Data Channel permission meanings: `docs/business-data-channel.md` §11. `channel:code_write` and `channel:source_query` are not implied by `channel:write`. `webhook:read` and `webhook:write`, `email_account:read` and `email_account:write`, `http_account:read` and `http_account:write`, and `inbound_credential:read` and `inbound_credential:write`, are not implied by `channel:write` and are not seeded onto `operator`
 - Tag permission meanings: `docs/business-tags.md` §5. `tag:read` and `tag:write` are not implied by `entity:read`, `entity:write`, `channel:read`, or `channel:write`, and are not seeded onto `operator`

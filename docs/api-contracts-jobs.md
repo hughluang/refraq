@@ -103,13 +103,15 @@ Rules:
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/jobs` | `jobs:run` | Platform list all Jobs (`status`, `kind`, **Offset Page**) |
+| `GET` | `/jobs` | `jobs:run` | Platform list (`status`, `kind`, **Offset Page**), filtered by Source access stamp |
 | `GET` | `/jobs/{id}` | `jobs:run` | Get Job by id |
 | `GET` | `/jobs/{id}/logs` | `jobs:run` | Get Job `log_body` (`{ job_id, body, updated_at }`) |
 | `POST` | `/jobs/{id}/cancel` | `jobs:run`, or `channel:write` when `kind` is `channel_run` | Cancel if not terminal. A running Job is killed by its worker supervisor. A queued Job is revoked without `terminate` |
 | `GET` | `/schedules/{id}/jobs` | `jobs:run` | Jobs this schedule minted (`trigger_kind=schedule` and `trigger_ref=id`; **Offset Page**) |
 
 Structure and join-detection minting is `POST /schedules/{id}/run` (`docs/api-contracts-schedules.md`). There is no `POST /sources/{id}/jobs` and no `GET /sources/{id}/jobs`.
+
+A Source-bound Job carries an opaque access stamp. The stamp is not a response field, not a Source foreign key, and distinct from `owner_ref`. `GET /jobs` includes a stamped Job when the caller holds `jobs:run` on that Source, and includes every Job whose stamp is null. The page and `total` count that set. An empty Source set still returns null-stamp Jobs. `GET /jobs/{id}`, `GET /jobs/{id}/logs`, and `POST /jobs/{id}/cancel` answer `404` `JOB_NOT_FOUND` when the stamp is outside that set, the same as a missing id. A null stamp keeps the Role rule, including `channel:write` cancel of a `channel_run` Job. `GET /schedules/{id}/jobs` uses the schedule's visibility (`docs/api-contracts-schedules.md`) and then lists that schedule's Jobs.
 
 ### `GET /jobs`
 
@@ -132,6 +134,7 @@ Returns `{ "job_id", "body", "updated_at" }` where `body` is the full multiline 
 | `JOB_SOURCE_DISABLED` | Structure or join-detection Job found the Source not usable when executing |
 | `JOB_SECRET_MISSING` | No usable Source secret when required (structure collect, or join-detection same-catalog defense) |
 | `JOB_INPUT_INVALID` | Kind/input failed domain validation (including missing Source `engine`/`access`) |
+| `JOB_NOT_FOUND` | Unknown id, or a Source stamp outside the caller's `jobs:run` set, on get, logs, and cancel |
 | `JOB_NOT_CANCELLABLE` | Job already terminal |
 | `JOB_ALREADY_ACTIVE` | Runner could not take the **Kind execution lock** (`structure:{source_id}`, `join_detection:{source_id}`, or per-Entity `entity_table:{entity_id}`). Not a schedule mint / HTTP conflict. A contested site-wide `catalog_embed` lock ends that Job `succeeded` with `outcome=skipped` instead |
 | `JOB_WORKER_LOST` | Occupancy stale; worker gone |

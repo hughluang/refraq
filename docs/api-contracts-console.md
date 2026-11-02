@@ -202,7 +202,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `401` | No valid authentication (Session or User PAT) |
 | `403` | Authenticated but lacking `console:access` |
 
-## 5. Seed Catalog (this slice)
+## 5. Seed Catalog
 
 | Module id | Group | `icon` | `routes.list` | `actions.list` (nav) | Other routes / actions |
 | --- | --- | --- | --- | --- | --- |
@@ -214,7 +214,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `identity-providers` | `admin` | `plug` | `/console/identity-providers` | `identity_providers:read` | create/edit/delete/test → `identity_providers:write` |
 | `tokens` | `admin` (identity only; **not** in navigation) | `key` | `null` (UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
 | `account` | `workbench` (identity only; **not** in navigation) | `user-circle` | `null` | `console:access` | show `/console/account` → `console:access`; see `docs/business-account.md` |
-| `sources` | `metadata` | `database` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write`; show `/console/sources/:id/structure-diffs` → `metadata:read`; alias show `/console/sources/:id/structure-diffs/:diffId` |
+| `sources` | `metadata` | `database` | `/console/sources` | `sources:read` | create `/console/sources/new`, edit `/console/sources/:id/edit`, and delete → `sources:write`; show `/console/sources/:id` → `sources:read`; diffs are a tab on show (`record` default, `?tab=diffs`); aliases `/console/sources/:id/structure-diffs` and `/console/sources/:id/structure-diffs/:diffId` reuse show |
 | `catalog` | `metadata` | `table` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; sample → `catalog:sample` (no route); show route `/console/catalog/:id` |
 | `type-mappings` | `metadata` | `arrows-exchange` | `/console/type-mappings` | `metadata:read` | edit → `metadata:write` (no create/delete) |
 | `entities` | `entity` | `box` | `/console/entities` | `entity:read` | create/edit/delete → `entity:write`; create `/console/entities/new`; edit `/console/entities/:id/edit`; show `/console/entities/:id` → `entity:read` |
@@ -231,3 +231,9 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `email-accounts` | `settings` | `email-account` | `/console/email-accounts` | `email_account:read` | create/edit/delete/test → `email_account:write`; create `/console/email-accounts/new`; edit `/console/email-accounts/:id/edit`; show `/console/email-accounts/:id` → `email_account:read` |
 | `http-accounts` | `settings` | `world` | `/console/http-accounts` | `http_account:read` | create/edit/delete → `http_account:write`; create `/console/http-accounts/new`; edit `/console/http-accounts/:id/edit`; show `/console/http-accounts/:id` → `http_account:read` |
 | `inbound-credentials` | `settings` | `lock` | `/console/inbound-credentials` | `inbound_credential:read` | create/edit/delete → `inbound_credential:write`; create `/console/inbound-credentials/new`; edit `/console/inbound-credentials/:id/edit`; show `/console/inbound-credentials/:id` → `inbound_credential:read` |
+
+`sources` navigation uses `actions.list` `sources:read`. `GET /console/navigation` omits Sources when the Role lacks that key. The console page gate for the Source list and show routes, including the structure-diff aliases of show, also admits `sources:access_manage`. Create, edit, and delete stay `sources:write`. The structure-diff HTTP API still requires `metadata:read` on that Source (`docs/api-contracts-metadata.md` §3.1).
+
+## 6. Non-Goals
+
+- A navigation permission other than `actions.list`. Sources stays `sources:read` in the seed; the page-gate exception above is not a second seed key.

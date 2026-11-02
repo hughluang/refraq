@@ -2,9 +2,9 @@
 
 ## 1. Scope
 
-This document defines the **Data Channel** product domain: a user-orchestrated, versioned data workflow that reads from **Entity Table**s, **Source Mirror**s, **Change Log**s, and **Source**s, reshapes items, and writes rows into one or more Entity Tables. It defines the definition and its versions, the activation switch, the graph and its node families, write semantics and the match key, **Checkpoint**s, **Channel Run** semantics, triggers and the role of the **Scheduled Task**, **Global Variable**s, **Channel Variable**s, **Run Variable**s, the unattended-first principle, authorization, and audit.
+This document defines the **Data Channel** product domain: a user-orchestrated, versioned data workflow that reads from **Entity Table**s, entity **Change Log**s, and **Source**s, reshapes items, and writes rows into one or more Entity Tables. It defines the definition and its versions, the activation switch, the graph and its node families, write semantics and the match key, **Checkpoint**s, **Channel Run** semantics, triggers and the role of the **Scheduled Task**, **Global Variable**s, **Channel Variable**s, **Run Variable**s, the unattended-first principle, authorization, and audit.
 
-It states the boundary rules of **Source Mirror**s and mirror **Change Log**s that workflows rely on (§9), the entity Change Log a write observes (§5.1), the **Webhook** resource an `action.webhook` node calls (§4.3), the **Email Account** an `action.email` node uses (§4.3), the **HTTP Account** an `action.http` node may reference (§4.3), and the **Inbound Credential** an **Inbound Trigger** names (§4.3). It does not define the HTTP shapes (`docs/api-contracts-data-channel.md`, `docs/api-contracts-webhooks.md`, `docs/api-contracts-email-accounts.md`, `docs/api-contracts-http-accounts.md`, `docs/api-contracts-inbound-credentials.md`), the CDC deployment, the mirror state machine and structure change policy in detail, or the Console canvas layout. Those are outside this document.
+It states that **Source Mirror**s are not in the product (§9), the entity Change Log a write observes (§5.1), the **Webhook** resource an `action.webhook` node calls (§4.3), the **Email Account** an `action.email` node uses (§4.3), the **HTTP Account** an `action.http` node may reference (§4.3), and the **Inbound Credential** an **Inbound Trigger** names (§4.3). It does not define the HTTP shapes (`docs/api-contracts-data-channel.md`, `docs/api-contracts-webhooks.md`, `docs/api-contracts-email-accounts.md`, `docs/api-contracts-http-accounts.md`, `docs/api-contracts-inbound-credentials.md`) or the Console canvas layout.
 
 Related boundaries:
 
@@ -91,7 +91,7 @@ Publish validates the current draft, then creates the next Channel Version from 
 
 | Section | Content |
 | --- | --- |
-| Mirrors to open | **Source Mirror**s that the version reads and that are not open yet; publish opens them |
+| Mirrors to open | Always empty. The product has no **Source Mirror** to open |
 | Runs to cancel | Running **Channel Run**s of this channel that execute an older version (§6.5) |
 | Missing run timeout | Present when the graph settings carry no run timeout |
 
@@ -100,7 +100,7 @@ The confirmation list is advisory; publish does not require any section to be em
 1. stores the new immutable version;
 2. reconciles the version's Scheduled nodes with **Scheduled Task** rows (§7.2), and reconciles the Inbound Trigger path (§7.1);
 3. requests cancel of this channel's running Channel Runs that execute an older version (§6.5);
-4. requests opening of the mirrors listed in the confirmation list.
+4. leaves `mirrors_to_open` empty. There is no Source Mirror to open.
 
 Publish does not change the activation switch (§3.6).
 
@@ -178,7 +178,7 @@ Port names are lower snake case. `main` is the primary input or output port. It 
 | Family | Node types | Role |
 | --- | --- | --- |
 | Trigger | Manual, Scheduled, Error, Platform event, Changes arrived, Inbound | Starts a run (§7) |
-| Read | SQL, live Source query, Read Mirror, Read Changes | Run a SQL statement, read a Source through **Controlled Query**, or read mirror and change rows |
+| Read | SQL, live Source query, Read Changes | Run a SQL statement, read a Source through **Controlled Query**, or read entity change rows. There is no Read Mirror node |
 | Transform | Set fields, If, Filter, Merge, Deduplicate, Code | Reshape, route, or drop items |
 | Volume | For, Until, Dataset Query, Materialize, Changes Dataset, Batch Read | Iterate a list, repeat a body until a condition, and move a large result by a **Dataset Reference** |
 | State | Variable get, set, delete, set-if-absent, compare-and-set | A site value, a channel value, or a value for this run (§8) |
@@ -215,14 +215,14 @@ Each type whose success output this section defines declares an **Output View**.
 | `action.http` | `record` | — | — | `[]` |
 | `action.respond` | `record` | — | — | `[]` |
 
-If stores `{value}`. An HTTP request stores `{status_code, headers, body}`. For stores `{current, index, count, iterations}`; `current`, `index`, and `iterations` are the payload. Until stores `{index, count, last}`; `index` and `last` are the payload, and `previous` is not stored. Batch Read stores `{count, total, batch_size}`. A container's per-round step is a **Container Round** (§6.9), not this view. Read Mirror and the platform-event and change-arrival triggers are outside the output shapes defined here.
+If stores `{value}`. An HTTP request stores `{status_code, headers, body}`. For stores `{current, index, count, iterations}`; `current`, `index`, and `iterations` are the payload. Until stores `{index, count, last}`; `index` and `last` are the payload, and `previous` is not stored. Batch Read stores `{count, total, batch_size}`. A container's per-round step is a **Container Round** (§6.9), not this view. There is no Read Mirror node. The platform-event and change-arrival triggers are outside the output shapes defined here.
 
 Family rules:
 
-- **Read Mirror** reads a **Source Mirror** of any **Catalog Object**. Its output shape is outside this document.
+- There is no Read Mirror node and no mirror Read Changes node. **Read Changes** (`read.changes`) is the entity **Change Log** read, not a mirror read.
 - **Read Changes** (`read.changes`) reads one Business Entity **Change Log** and owns a **Checkpoint** (§6.1). **Changes Dataset** is the node for more than one page in a run. Configuration is `entity_id` (required), `limit` (1 to 100000, default 1000), `shape` (`entries` or `net`, default `entries`), and `sources` (an optional subset of `user`, `channel_run`, and `unattributed`; absent or empty means every source). `limit` counts log entries scanned, not rows returned. An entry the source filter hides still counts toward the cursor. A successful execution returns `{entries, count, has_more, last_sequence}`. `count` is the length of `entries`. `has_more` is true when more entries remain below the bound. `last_sequence` is the sequence of the last scanned entry, or null when the scan is empty. In `entries` shape each item is `{sequence, operation, occurred_at, source, subject, physical_table, row_id, business_key, before, after}`. `before` and `after` are that physical table's version attributes decoded as JSON. A null `source` is unattributed. In `net` shape this execution folds by `(physical_table, Business Key)` when that version has a Business Key, otherwise by `(physical_table, row_id)`. An insert followed by a delete is dropped. An insert followed by any other operation is an insert whose `after` is the last value. A first operation other than insert and a last operation of delete is a delete whose `before` is the first value. Every other pair is an update whose `before` is the first value and whose `after` is the last. A net item also carries `first_sequence` and `last_sequence`, and the `operation`, `occurred_at`, `source`, `subject`, `physical_table`, `row_id`, and `business_key` of the last event. Output order is first-seen order. An entity that does not resolve fails the node with `CHANNEL_NODE_FAILED` and the message `Entity does not resolve`.
-- **SQL** runs one statement on a required source: the entity database, or one registered **Source**. Its ports are the input `main` and the outputs `main` and `error`. After rendering, the platform parses that text for the source engine and does not send it when it is empty, unreadable, or more than one statement (`CHANNEL_SQL_NOT_ONE_STATEMENT`). Save accepts a draft without it; validate and publish report `CHANNEL_NODE_CONFIG_INVALID` and do not fill in the entity database. The statement text is a template: each `{{ }}` result is spliced as text, and the author quotes values. Optional `params` is a list of template fields. Each result is one JSON scalar or null and is passed to the driver as a bound value. It is not spliced into the statement. When `params` is absent, the statement runs with no bound values. When it is present, the author writes the engine's positional placeholder: `%s` for PostgreSQL, including the entity database, and for MSSQL, and `:1`, `:2`, and so on for Oracle. The platform does not rewrite the statement to insert those placeholders. A count the database rejects fails the node with the database message. Publish does not inspect the placeholders. On the entity database the session `search_path` is `entity_data` only, so an unqualified name resolves to a physical table or stem view in that schema, and the statement runs as `refraq_entity_owner` on `ENTITY_DATABASE_URL`. The platform does not wrap the statement in a read-only transaction and does not reject it for naming another schema; the database returns that result. A registered **Source** uses that Source's connection and engine. The platform does not set `search_path` and does not apply **Controlled Query** guards. `channel:write` is enough to author the node. A node may set `statement_timeout_sec` from 1 to 3600; the default is 30. A successful execution returns `{rows, count, rowcount}`. When the statement returns a result set, `rows` holds the objects and `count` is the number of rows. When it returns none, `rows` is empty and `count` is 0. `rowcount` is the driver's affected-row count when the driver reports one, otherwise `null`. More than 100000 rows fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` and the message `Use Dataset Query, then Batch Read.` A database error fails the node and carries the database message. SQL does not produce a **Dataset Reference**. A lookup is SQL followed by Merge; there is no Read Entity node.
-- Each read node chooses what happens when an input mirror is not in sync: continue (default), skip this run (§6.4), or fail.
+- **SQL** runs one statement on a required source: the entity database, or one registered **Source**. Its ports are the input `main` and the outputs `main` and `error`. After rendering, the platform parses that text for the source engine and does not send it when it is empty, unreadable, or more than one statement (`CHANNEL_SQL_NOT_ONE_STATEMENT`). Save accepts a draft without it; validate and publish report `CHANNEL_NODE_CONFIG_INVALID` and do not fill in the entity database. The statement text is a template: each `{{ }}` result is spliced as text, and the author quotes values. Optional `params` is a list of template fields. Each result is one JSON scalar or null and is passed to the driver as a bound value. It is not spliced into the statement. When `params` is absent, the statement runs with no bound values. When it is present, the author writes the engine's positional placeholder: `%s` for PostgreSQL, including the entity database, and for MSSQL, and `:1`, `:2`, and so on for Oracle. The platform does not rewrite the statement to insert those placeholders. A count the database rejects fails the node with the database message. Publish does not inspect the placeholders. On the entity database the session `search_path` is `entity_data` only, so an unqualified name resolves to a physical table or stem view in that schema, and the statement runs as `refraq_entity_owner` on `ENTITY_DATABASE_URL`. The platform does not wrap the statement in a read-only transaction and does not reject it for naming another schema; the database returns that result. A registered **Source** uses that Source's connection and engine. The platform does not set `search_path` and does not apply **Controlled Query** guards. Authoring a registered Source on this node requires `maintainer` on that Source (§11). The entity-database source does not. Draft save still requires `channel:write`. A node may set `statement_timeout_sec` from 1 to 3600; the default is 30. A successful execution returns `{rows, count, rowcount}`. When the statement returns a result set, `rows` holds the objects and `count` is the number of rows. When it returns none, `rows` is empty and `count` is 0. `rowcount` is the driver's affected-row count when the driver reports one, otherwise `null`. More than 100000 rows fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` and the message `Use Dataset Query, then Batch Read.` A database error fails the node and carries the database message. SQL does not produce a **Dataset Reference**. A lookup is SQL followed by Merge; there is no Read Entity node.
+- There is no input-mirror sync choice. Read nodes in the product are `read.sql`, `read.source_query`, and `read.changes`.
 - Read, SQL, Dataset Query, Changes Dataset, and write nodes carry a statement timeout. SQL and other read nodes use an in-code default that a node may raise. `statement_timeout_sec` is the wall-clock limit of the whole import for Dataset Query, of the whole load for Changes Dataset, and of the whole write for Write Entity (§4.3, §5.1).
 - **Set fields** builds one object. Each entry names a key and a JSON template (`{{ self.read_suppliers.output.rows }}`). Keys are written in list order.
 - **If** evaluates one boolean template and makes either the `true` or the `false` output live. The other branch, and every node reached only through it, does not run. A node with a live incoming edge still runs.
@@ -328,7 +328,7 @@ The run stores each proposal on the run record. A proposal becomes the stored cu
 
 A stored cursor strictly behind the greatest deleted `(xact, seq)` fails the node with `CHANNEL_CHECKPOINT_INVALID`. No stored cursor is valid. Recording off, or no effective change-log record, fails the node with `CHANNEL_CHANGE_LOG_OFF`. The node configuration and output are §4.3.
 
-Schedule instants (`last_run_at`, `scheduled_for`) are never checkpoints. Read Mirror does not own a checkpoint.
+Schedule instants (`last_run_at`, `scheduled_for`) are never checkpoints. There is no Read Mirror node.
 
 ### 6.2 A Run Is One Job
 
@@ -357,7 +357,7 @@ Overlapping runs may write out of order: an older run can overwrite a newer valu
 | `failed` | A node failed with `on_error` `stop` after its tries were used, the run timeout elapsed, or the worker was lost; a node failure records `failed_node_id` |
 | `cancelled` | Cancel was requested, a newer version superseded the run, or §6.2 cancelled it |
 
-A run that read a mirror while it was not in sync is marked "input mirror not in sync".
+A run is not marked for an input mirror. There is no Read Mirror node.
 
 ### 6.5 Version Supersede
 
@@ -467,7 +467,7 @@ The Scheduled Task decides when a run starts. Each checkpoint-owning business no
 
 ### 7.4 Platform Clock Duties
 
-Data Channel's background duties run as hidden, `locked`, `undeletable`, `store_only` system Scheduled Tasks with in-code intervals, not System Parameters: event and change-arrival dispatch, Change Log cleanup, run data retention, **Inbound Rejection** retention, inbound deduplication expiry, mirror lag alert evaluation, CDC precondition re-check, Connect task restart with backoff, and resnapshot dispatch. Change Log cleanup in that list is a channel duty. It is not the entity change-log retention sweep. The per-Source snapshot window is a gate on resnapshot dispatch, not a Scheduled Task.
+Data Channel's background duties run as hidden, `locked`, `undeletable`, `store_only` system Scheduled Tasks with in-code intervals, not System Parameters: run data retention, **Inbound Rejection** retention, and inbound deduplication expiry.
 
 Run data retention is seeded. Its key is `channel_run_record_retention`, its name is `Purge channel run records`, its interval is one hour, and its task is `backend.channel.tasks.purge_run_records`. Each pass deletes a channel run record whose Job is terminal (`succeeded`, `failed`, or `cancelled`) and whose `created_at` is older than `channel_run_record_retention_days`, and with that record its node executions, its container rounds, and its datasets. The same pass deletes a dataset whose `expires_at` is set and due, and drops a dataset table that has no registry row. It does not purge a dataset whose `expires_at` is null. That pass leaves Jobs. The keeping settings in §6.9 may delete a `channel_run` Job. They do not change this pass.
 
@@ -504,13 +504,7 @@ The operations are get, set, delete, set-if-absent, and compare-and-set. There i
 
 ## 9. Source Mirrors And Change Logs
 
-Source Mirrors and their capture stack are an optional deployment. When it is absent, mirror features show as not enabled and Read Mirror and mirror Read Changes nodes cannot be published.
-
-- **Capture.** A DBA enables change data capture on the source offline; refraq only consumes it. A database **Source** may carry an encrypted capture credential, separate from its `access` document, and a snapshot window (a daily range in the **Schedule Timezone**, default any time). A precondition check per Source reports whether capture is enabled, retention is at least 7 days, and the required signal and flush objects exist. refraq manages one connector per Source.
-- **Mirror.** One shared, full-column **Source Mirror** per **Catalog Object**, in a dedicated schema of the entity database, physically named by mirror id. Columns keep source names when they are legal identifiers of at most 63 bytes and otherwise get ordinal names; types follow the **Normalized Type** plus native precision. A table without a primary key is mirrored only after key columns are declared for it.
-- **Opening.** Publish opens every mirror a version reads that is not open yet (§3.5). Mirrors are managed from one global list under Operations, not from Source pages. Disabling a mirror keeps its data and Change Log; deleting mirror data is refused while a published version reads it.
-- **Change Log.** The mirror applier writes the mirror row, its **Change Log** entry, and the consumer offset in one transaction. An entry is written only when values changed.
-- **Self-healing.** A gap, a breaking structure change (the mirror can no longer upsert or delete correctly by its original key), or a pause beyond retention triggers an automatic resnapshot. Resnapshots honour the Source's snapshot window, run one table at a time per Source, retry with backoff, and delete rows that vanished at the source by mark-and-sweep generations, logging those deletes. Non-breaking structure changes are applied by policy without manual DDL.
+The product has no Source Mirror list, no Read Mirror node, and no mirror Read Changes node, so none of those are filtered by Source access. Entity **Change Log** reads stay on `read.changes` and `volume.changes_dataset` (§4.3, §6.1).
 
 ## 10. Unattended First
 
@@ -519,27 +513,21 @@ Operation assumes no person is watching. Every state that would otherwise need a
 | State | Automatic policy |
 | --- | --- |
 | A run fails | Each checkpoint-owning node applies its configured recovery and advancement policy |
-| A cursor becomes invalid | One full read of the mirror as the new start (§6.1) |
-| An input mirror is not in sync | The read node's configured choice; continue by default |
+| A cursor becomes invalid | `read.changes` fails with `CHANNEL_CHECKPOINT_INVALID` when the stored cursor is behind deleted change-log entries (§6.1) |
 | A run hangs | The run timeout, when set (§6.6) |
 | Runs keep failing | Persistently failing flag in the Console; the channel stays active (§6.8). No Webhook is called, no mail is sent, and no HTTP request is sent |
-| A mirror has a gap, a breaking structure change, or a pause beyond retention | Automatic resnapshot |
-| A Connect task fails | Restart with backoff |
 
-Manual action is an optional override. Two situations require a person, and both fail the run:
+Manual action is an optional override. One situation requires a person and fails the run: a write node's mapping is incompatible with a newly published Entity head and the node's policy is `fail` (§5.4).
 
-1. A source-side CDC precondition is broken (for example capture disabled or retention below the required minimum).
-2. A write node's mapping is incompatible with a newly published Entity head and the node's policy is `fail` (§5.4).
-
-Neither situation calls a **Webhook**, sends mail, or sends an HTTP request. An author who wants a call, a message, or an HTTP request places an `action.webhook`, `action.email`, or `action.http` node where the graph still runs, or in the error workflow.
+That failure calls no **Webhook**, sends no mail, and sends no HTTP request. An author who wants a call, a message, or an HTTP request places an `action.webhook`, `action.email`, or `action.http` node where the graph still runs, or in the error workflow.
 
 ## 11. Authorization
 
-All keys are `platform`-scoped.
+Channel keys are **Role** keys. A node that names a registered **Source** also requires a **Source Access Level** on that Source. The level check uses the level only. It does not intersect the author's Role keys and does not require `query:run`. The node's own Permission still applies.
 
 | Permission | Grants |
 | --- | --- |
-| `channel:read` | Read channels, drafts, versions, run lists, and run records, including the execution list, container rounds of a container execution, and paging dataset rows of a run record; read **Channel Variable**s; read **Inbound Rejection**s; read **Source Mirror** data through read nodes and records |
+| `channel:read` | Read channels, drafts, versions, run lists, and run records, including the execution list, container rounds of a container execution, and paging dataset rows of a run record; read **Channel Variable**s; read **Inbound Rejection**s. Run records are not checked against Source access: a holder can read run data, including dataset rows, from a Source they cannot open |
 | `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; replace the channel's **Tag**s, including an inline Tag name; Template Preview and **Node Sample** against a run record; **Global Variable**, **Channel Variable**, and **Run Variable** writes, including a manual delete of a Global Variable or a Channel Variable; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job; reference an existing **Webhook** from an `action.webhook` node; reference an existing **Email Account** from an `action.email` node; reference an existing **HTTP Account** from an `action.http` node; author an **Inbound Trigger** and a **Respond** node, and name an existing **Inbound Credential** from that trigger. Naming a credential does not manage the catalog. Inline Tag creation does not require `tag:write` |
 | `channel:code_write` | Author a Code node. Required in addition to `channel:write` |
 | `channel:source_query` | Author a live Source query node. Required in addition to `channel:write`. Does not grant `query:run` |
@@ -551,11 +539,22 @@ All keys are `platform`-scoped.
 | `http_account:write` | Create, update, and delete **HTTP Account**s. Not implied by `channel:write`. The seeded `operator` Role does not receive `http_account:read` or `http_account:write` |
 | `inbound_credential:read` | List and read Inbound Credentials |
 | `inbound_credential:write` | Create, update, and delete Inbound Credentials. Not implied by `channel:write`. The seeded `operator` Role does not receive `inbound_credential:read` or `inbound_credential:write` |
-| `mirror:write` | Operate Source Mirrors (disable, delete data, resnapshot overrides) |
 
 Draft save compares the submitted graph with the stored draft. For a node whose type declares a permission: adding it (no stored node with that id, or the stored node had another type), or changing its `type`, `type_version`, or `config`, requires that permission. Otherwise the save is `403 AUTH_FORBIDDEN` and the detail names the node. An unchanged guarded node does not require the permission. Deleting one does not. Publish requires the caller to hold every permission declared by node types present in the draft, including nodes that did not change. Missing one is `403 AUTH_FORBIDDEN` and the detail names the node.
 
-Source Mirrors are not under **Entity Access Control**. A holder of `channel:read` can see all mirror data. Grant it knowingly.
+A node that references a registered Source requires this level on that Source:
+
+| Node | Required level |
+| --- | --- |
+| `read.sql` when `source.kind` is `source` | `maintainer` |
+| `volume.dataset_query` when `source.kind` is `source` | `maintainer` |
+| `read.source_query` | `viewer` |
+
+The entity-database source on `read.sql` and `volume.dataset_query` has no Source level check. `read.source_query` still requires `channel:source_query` in addition to `viewer`. There is no Read Mirror node, so no level is defined for one.
+
+Draft save applies the level to an added node or a node whose `type`, `type_version`, or `config` changed, using the Source named after the change. An unchanged node and a deleted node need no level check. Publish requires the level on every Source referenced by any node in the draft. Failure is `403 AUTH_FORBIDDEN`. The detail names the node and the required level (`Node '<label>' requires <level> on the Source`).
+
+Draft and published-version reads include `source_displays`. A Source the reader has a level on contributes `source_id`, `key`, and `name` when that Source is still registered. When the reader has a level and the Source row is gone, the display is `source_id` only. A Source with no level contributes `source_id` and `inaccessible: true`, and neither key nor name. A Channel Run still executes as the **System Identity**. Channel run records, execution output, and dataset rows stay on `channel:read` and are not filtered by Source. The run-detail canvas does not receive those draft displays. Until the Source list used by a field has loaded, a field with no display can show the Source id.
 
 Channel schedule rows are locked, so `jobs:run` only observes them.
 
@@ -596,7 +595,7 @@ While the channel's latest draft **Channel Run** has not ended `succeeded`, `fai
 
 ## 13. Management Audit
 
-Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Channel Variable manual delete, Webhook create, update, delete, and test, Email Account create, update, delete, and test, HTTP Account create, update, and delete, **Inbound Credential** create, update, and delete, and every Source Mirror operation. An Inbound Credential change uses resource type `inbound_credential` and action `inbound_credential.create`, `inbound_credential.update`, or `inbound_credential.delete`. The detail holds `name`, `type`, and the non-secret `config`, and no secret (`docs/api-contracts-inbound-credentials.md`). An HTTP Account change uses resource type `http_account` and action `http_account.create`, `http_account.update`, or `http_account.delete`. The detail holds the name, the auth type, the basic username when set, the header names, the query names, and the allowed origins, and no secret value. A node execution does not write one. A Channel Variable manual delete uses resource type `channel_owned_variable`, resource id `{channel_id}/{name}`, and action `channel.owned_variable_delete`. A committed **Tag**-set change writes one event with resource type `channel`, action `tags.replace`, and the resulting Tag ids. An inline Tag create also writes the Tag create event. A replacement that does not change the set writes neither. A Tag change does not write a draft-save event. Each event records actor, **Instant**, resource, action, and result.
+Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Channel Variable manual delete, Webhook create, update, delete, and test, Email Account create, update, delete, and test, HTTP Account create, update, and delete, **Inbound Credential** create, update, and delete. There is no Source Mirror operation to audit. An Inbound Credential change uses resource type `inbound_credential` and action `inbound_credential.create`, `inbound_credential.update`, or `inbound_credential.delete`. The detail holds `name`, `type`, and the non-secret `config`, and no secret (`docs/api-contracts-inbound-credentials.md`). An HTTP Account change uses resource type `http_account` and action `http_account.create`, `http_account.update`, or `http_account.delete`. The detail holds the name, the auth type, the basic username when set, the header names, the query names, and the allowed origins, and no secret value. A node execution does not write one. A Channel Variable manual delete uses resource type `channel_owned_variable`, resource id `{channel_id}/{name}`, and action `channel.owned_variable_delete`. A committed **Tag**-set change writes one event with resource type `channel`, action `tags.replace`, and the resulting Tag ids. An inline Tag create also writes the Tag create event. A replacement that does not change the set writes neither. A Tag change does not write a draft-save event. Each event records actor, **Instant**, resource, action, and result.
 
 ## 14. Non-Goals
 
