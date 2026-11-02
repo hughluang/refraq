@@ -24,6 +24,7 @@ import {
   groupChanges,
 } from "@/features/sources/structure-diffs/groupChanges";
 import type { StructureDiff } from "@/features/sources/types";
+import { sourceDiffsPath } from "@/features/sources/sourceRecordTab";
 import { useSourceName } from "@/features/sources/structure-diffs/useSourceName";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 
@@ -127,7 +128,7 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
         <Group gap="xs">
           <Button
             component={ConsoleLink}
-            href={`/console/sources/${sourceId}/structure-diffs`}
+            href={sourceDiffsPath(sourceId)}
             variant="default"
             size="sm"
           >

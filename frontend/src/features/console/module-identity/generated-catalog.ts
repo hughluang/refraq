@@ -149,10 +149,14 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     "icon": "database",
     "routes": {
       "list": "/console/sources",
-      "create": null,
-      "edit": null,
-      "show": "/console/sources/:id/structure-diffs",
+      "create": "/console/sources/new",
+      "edit": "/console/sources/:id/edit",
+      "show": "/console/sources/:id",
       "aliases": [
+        {
+          "path": "/console/sources/:id/structure-diffs",
+          "action": "show"
+        },
         {
           "path": "/console/sources/:id/structure-diffs/:diffId",
           "action": "show"
@@ -164,7 +168,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
       "create": "sources:write",
       "edit": "sources:write",
       "delete": "sources:write",
-      "show": "metadata:read",
+      "show": "sources:read",
       "sample": null
     }
   },

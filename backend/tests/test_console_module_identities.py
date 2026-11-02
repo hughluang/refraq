@@ -172,10 +172,14 @@ EXPECTED_IDENTITIES = {
         "label_key": "sources.title",
         "routes": {
             "list": "/console/sources",
-            "create": None,
-            "edit": None,
-            "show": "/console/sources/:id/structure-diffs",
+            "create": "/console/sources/new",
+            "edit": "/console/sources/:id/edit",
+            "show": "/console/sources/:id",
             "aliases": [
+                {
+                    "path": "/console/sources/:id/structure-diffs",
+                    "action": "show",
+                },
                 {
                     "path": "/console/sources/:id/structure-diffs/:diffId",
                     "action": "show",
@@ -187,7 +191,7 @@ EXPECTED_IDENTITIES = {
             "create": "sources:write",
             "edit": "sources:write",
             "delete": "sources:write",
-            "show": "metadata:read",
+            "show": "sources:read",
             "sample": None,
         },
     },

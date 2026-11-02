@@ -178,8 +178,14 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         icon="database",
         routes=ModuleRoutes(
             list="/console/sources",
-            show="/console/sources/:id/structure-diffs",
+            create="/console/sources/new",
+            show="/console/sources/:id",
+            edit="/console/sources/:id/edit",
             aliases=(
+                RouteAlias(
+                    path="/console/sources/:id/structure-diffs",
+                    action="show",
+                ),
                 RouteAlias(
                     path="/console/sources/:id/structure-diffs/:diffId",
                     action="show",
@@ -191,7 +197,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
             create="sources:write",
             edit="sources:write",
             delete="sources:write",
-            show="metadata:read",
+            show="sources:read",
         ),
         group_order=25,
         module_order=10,

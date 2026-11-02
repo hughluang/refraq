@@ -159,4 +159,29 @@ describe("StructureDiffDetail load", () => {
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
     expect(getStructureDiff).toHaveBeenCalledTimes(1);
   });
+
+  it("links back to the source record diffs tab", async () => {
+    getStructureDiff.mockResolvedValue({
+      structure_diff: {
+        id: "diff_1",
+        source_id: "src_1",
+        job_id: "job_1",
+        class: "unchanged",
+        counts: {},
+        created_at: "2026-09-10T04:00:00Z",
+        changes: [],
+      },
+    });
+    const { StructureDiffDetail } = await import(
+      "@/features/sources/structure-diffs/StructureDiffDetail"
+    );
+    render(
+      shell(
+        createElement(StructureDiffDetail, { sourceId: "src_1", diffId: "diff_1" }),
+      ),
+    );
+
+    const back = await screen.findByRole("link", { name: copy["structureDiffs.backToList"] });
+    expect(back.getAttribute("href")).toBe("/console/sources/src_1?tab=diffs");
+  });
 });

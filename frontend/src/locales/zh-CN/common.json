@@ -704,6 +704,7 @@
   "forbidden.requiredPermission": "需要权限：{{permission}}",
   "forbidden.back": "返回首页",
   "sources.title": "数据源",
+  "sources.tabs.record": "详情",
   "sources.description": "在同一处登记数据库 Source：目录范围与可达性（Connector Spec 驱动的 access 树，整包加密）。",
   "sources.create": "新建 Source",
   "sources.create.success": "Source 已创建",

@@ -1,10 +1,12 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { useParams } from "next/navigation";
+import { sourceDiffsPath } from "@/features/sources/sourceRecordTab";
 
-import { StructureDiffList } from "@/features/sources/structure-diffs/StructureDiffList";
-
-export default function SourceStructureDiffsPage() {
-  const params = useParams<{ id: string }>();
-  return <StructureDiffList sourceId={params.id} />;
+export default async function SourceStructureDiffsPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  redirect(sourceDiffsPath(id));
 }

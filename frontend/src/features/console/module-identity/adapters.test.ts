@@ -28,7 +28,9 @@ describe("toRefineResources", () => {
     expect(resources.find((item) => item.name === "sources")).toEqual({
       name: "sources",
       list: "/console/sources",
-      show: "/console/sources/:id/structure-diffs",
+      create: "/console/sources/new",
+      edit: "/console/sources/:id/edit",
+      show: "/console/sources/:id",
       meta: { label: "sources.title" },
     });
   });
@@ -54,10 +56,16 @@ describe("evaluateCan", () => {
     ).toEqual({ can: true });
   });
 
-  it("grants sources show with metadata:read", () => {
+  it("grants sources show with sources:read", () => {
+    expect(evaluateCan(CATALOG, ["sources:read"], "sources", "show")).toEqual({
+      can: true,
+    });
+  });
+
+  it("denies sources show when only metadata:read is present", () => {
     expect(
       evaluateCan(CATALOG, ["metadata:read"], "sources", "show"),
-    ).toEqual({ can: true });
+    ).toEqual({ can: false, reason: "sources:read" });
   });
 
   it("grants schedules show with jobs:run", () => {
@@ -157,6 +165,18 @@ describe("matchPath", () => {
     expect(matchPath("/console/sources", CATALOG)).toEqual({
       resource: "sources",
       action: "list",
+    });
+    expect(matchPath("/console/sources/new", CATALOG)).toEqual({
+      resource: "sources",
+      action: "create",
+    });
+    expect(matchPath("/console/sources/src_1", CATALOG)).toEqual({
+      resource: "sources",
+      action: "show",
+    });
+    expect(matchPath("/console/sources/src_1/edit", CATALOG)).toEqual({
+      resource: "sources",
+      action: "edit",
     });
     expect(matchPath("/console/catalog", CATALOG)).toEqual({
       resource: "catalog",

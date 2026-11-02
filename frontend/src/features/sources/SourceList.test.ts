@@ -1,29 +1,26 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { notifications, notificationsStore } from "@mantine/notifications";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError } from "@/lib/api";
 import en from "@/locales/en-US/common.json";
-import { ConsoleNotifications } from "@/providers/notification-provider";
 
 const copy = en as Record<string, string>;
 const listSources = vi.hoisted(() => vi.fn());
-const getAccessSchema = vi.hoisted(() => vi.fn());
-const createSource = vi.hoisted(() => vi.fn());
+const push = vi.hoisted(() => vi.fn());
 
 vi.mock("@/features/sources/api/sources", () => ({
   listSources: (...args: unknown[]) => listSources(...args),
-  getAccessSchema: (...args: unknown[]) => getAccessSchema(...args),
-  createSource: (...args: unknown[]) => createSource(...args),
+  getAccessSchema: vi.fn(),
+  createSource: vi.fn(),
   deleteSource: vi.fn(),
   getSourceAccess: vi.fn(),
   patchSource: vi.fn(),
   testSource: vi.fn(),
   testSourceDraft: vi.fn(),
+  getSource: vi.fn(),
 }));
 
 vi.mock("@/features/branding/BrandingProvider", () => ({
@@ -32,7 +29,7 @@ vi.mock("@/features/branding/BrandingProvider", () => ({
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/console/sources",
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ push, replace: vi.fn(), refresh: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -80,95 +77,69 @@ function stubDomApis() {
   }
 }
 
-function resetNotifications() {
-  const state = notificationsStore.getState();
-  for (const item of [...state.notifications, ...state.queue]) {
-    notifications.hide(item.id);
-  }
-  notifications.clean();
-}
-
 function shell(node: ReactNode) {
-  return createElement(
-    MantineProvider,
-    { env: "test" },
-    createElement(ConsoleNotifications),
-    node,
-  );
+  return createElement(MantineProvider, { env: "test" }, node);
 }
 
-function emptyPage() {
-  return { items: [], total: 0, limit: 100, offset: 0 };
+function page(items: unknown[]) {
+  return { items, total: items.length, limit: 100, offset: 0 };
 }
 
-function rejection(details: { field: string; message: string }[]) {
-  return new ApiError(422, "REQUEST_INVALID", "Request validation failed", "req-source", {}, details);
-}
-
-async function openAndSave() {
-  fireEvent.click(screen.getAllByRole("button", { name: copy["sources.create"] })[0]);
-  const dialog = await screen.findByRole("dialog", { name: copy["sources.create"] });
-  fireEvent.change(within(dialog).getByLabelText(/^Key/), { target: { value: "ledger" } });
-  fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: "Ledger" } });
-  fireEvent.click(within(dialog).getByRole("button", { name: copy["common.save"] }));
-}
+const LEDGER = {
+  id: "src_1",
+  key: "ledger",
+  locator_key: "ledger",
+  name: "Ledger",
+  kind: "database",
+  status: "active",
+  description: null,
+  engine: "postgresql",
+  access: { host: "db.internal", database: "ledger" },
+  has_access: true,
+  access_updated_at: null,
+};
 
 async function renderList() {
   const { SourceList } = await import("@/features/sources/SourceList");
   render(shell(createElement(SourceList)));
 }
 
-describe("SourceList save", () => {
+describe("SourceList", () => {
   beforeEach(() => {
     stubDomApis();
     listSources.mockReset();
-    listSources.mockResolvedValue(emptyPage());
-    getAccessSchema.mockReset();
-    getAccessSchema.mockResolvedValue({
-      engine: "postgresql",
-      schema: { type: "object", properties: {} },
-    });
-    createSource.mockReset();
-    resetNotifications();
+    push.mockReset();
   });
 
   afterEach(() => {
     cleanup();
-    resetNotifications();
   });
 
-  it("marks the mapped field, notifies once, and keeps the dialog free of an alert", async () => {
-    createSource.mockRejectedValue(
-      rejection([
-        { field: "name", message: "Name is taken" },
-        { field: "retired", message: "Unknown field" },
-      ]),
-    );
+  it("opens create on the record route and does not author in a dialog", async () => {
+    listSources.mockResolvedValue(page([]));
     await renderList();
-    await openAndSave();
 
-    expect(await screen.findAllByRole("alert")).toHaveLength(1);
-    const dialog = screen.getByRole("dialog", { name: copy["sources.create"] });
-    expect(dialog.querySelector("[role='alert']")).toBeNull();
-    expect((await screen.findAllByText("Name is taken")).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByText(copy["form.error.details"]));
-    const disclosure = screen.getByText(copy["form.error.details"]).closest("details");
-    expect(disclosure?.textContent).toContain("retired: Unknown field");
-    expect(disclosure?.textContent).not.toContain("Name is taken");
-    expect(dialog.textContent).not.toContain("Unknown field");
-    expect(dialog.textContent).not.toContain("Request validation failed");
+    const create = await screen.findAllByRole("link", { name: copy["sources.create"] });
+    expect(create.length).toBeGreaterThan(0);
+    for (const link of create) {
+      expect(link.getAttribute("href")).toBe("/console/sources/new");
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("marks every mapped field and sends no notification when the 422 is fully mapped", async () => {
-    createSource.mockRejectedValue(rejection([{ field: "name", message: "Name is taken" }]));
+  it("opens a row on the record and sends diffs to that record's tab", async () => {
+    listSources.mockResolvedValue(page([LEDGER]));
     await renderList();
-    await openAndSave();
 
-    expect((await screen.findAllByText("Name is taken")).length).toBeGreaterThan(0);
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(
-      screen.getByRole("dialog", { name: copy["sources.create"] }).querySelector("[role='alert']"),
-    ).toBeNull();
-    expect(screen.queryByText(copy["form.error.details"])).toBeNull();
+    const name = await screen.findByRole("link", { name: "Ledger" });
+    expect(name.getAttribute("href")).toBe("/console/sources/src_1");
+    expect(name.getAttribute("href")).not.toContain("structure-diffs");
+
+    fireEvent.click(screen.getByRole("button", { name: copy["structureDiffs.open"] }));
+    expect(push).toHaveBeenCalledWith("/console/sources/src_1?tab=diffs");
+
+    fireEvent.click(screen.getByRole("button", { name: copy["schedules.related.open"] }));
+    expect(push).toHaveBeenCalledWith("/console/sources/src_1/schedules");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

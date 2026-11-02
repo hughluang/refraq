@@ -1,75 +1,31 @@
 "use client";
 
-import { Button, Modal, Stack, Table } from "@mantine/core";
-import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
-import { FormDialog } from "@/components/form/FormDialog";
-import { useConsoleForm } from "@/components/form/useConsoleForm";
-import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useCallback, useState } from "react";
+import { Table } from "@mantine/core";
+import { useCan, useTranslate } from "@refinedev/core";
+import { useCallback } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
-import { StatusBadge } from "@/components/display/StatusBadge";
-import { presentSourceStatus } from "@/components/display/statusTone";
-import { SelectField } from "@/components/form/SelectField";
-import { TextareaField } from "@/components/form/TextareaField";
-import { TextField } from "@/components/form/TextField";
 import { ListTable } from "@/components/display/ListTable";
 import { ListToolbar } from "@/components/display/ListToolbar";
 import { RecordReference } from "@/components/display/RecordReference";
 import { RowActions } from "@/components/display/RowActions";
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
-import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentSourceStatus } from "@/components/display/statusTone";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { deleteSource, listSources } from "@/features/sources/api/sources";
+import { engineLabel, selectedEngine, SOURCE_ENGINES } from "@/features/sources/engineLabel";
 import {
-  createSource,
-  deleteSource,
-  getAccessSchema,
-  getSourceAccess,
-  listSources,
-  patchSource,
-  testSource,
-  testSourceDraft,
-} from "@/features/sources/api/sources";
-import { engineLabel } from "@/features/sources/engineLabel";
-import { SpecTree, defaultsFromSchema } from "@/features/sources/SpecTree";
-import type {
-  ConnectorSpec,
-  Engine,
-  Source,
-  SourceAccess,
-} from "@/features/sources/types";
-import { useConfirmAction } from "@/hooks/useConfirmAction";
+  sourceDiffsPath,
+  sourceEditPath,
+} from "@/features/sources/sourceRecordTab";
+import type { Source } from "@/features/sources/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
-import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
-
-type IdentityForm = {
-  key: string;
-  name: string;
-  description: string;
-  status: "active" | "disabled";
-  engine: Engine | "";
-};
-
-const ENGINES = ["postgresql", "mssql", "oracle"] as const;
-
-function selectedEngine(value: string): Engine | undefined {
-  return ENGINES.find((engine) => engine === value);
-}
-
-function emptyIdentity(engine: Engine = "postgresql"): IdentityForm {
-  return {
-    key: "",
-    name: "",
-    description: "",
-    status: "active",
-    engine,
-  };
-}
 
 function scopeLabel(source: Source): string {
   const access = source.access;
@@ -84,11 +40,10 @@ function scopeLabel(source: Source): string {
 export function SourceList() {
   const t = useTranslate();
   const { push } = useConsoleNavigation();
-  const engineOptions = ENGINES.map((value) => ({
+  const engineOptions = SOURCE_ENGINES.map((value) => ({
     value,
     label: engineLabel(t, value),
   }));
-  const { open } = useNotification();
   const { data: canWrite } = useCan({
     resource: ModuleId.sources,
     action: ModuleAction.create,
@@ -97,27 +52,15 @@ export function SourceList() {
     resource: ModuleId.jobs,
     action: ModuleAction.list,
   });
-  const { data: canReadDiffs } = useCan({
+  const { data: canShow } = useCan({
     resource: ModuleId.sources,
     action: ModuleAction.show,
   });
-
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<Source | null>(null);
-  const [testing, setTesting] = useState(false);
-  const [schema, setSchema] = useState<ConnectorSpec | null>(null);
-  const [access, setAccess] = useState<SourceAccess>({});
-
-  const engineConfirm = useConfirmAction<Engine>();
   const query = useListQuery({
     filters: [{ key: "engine", type: "select", defaultValue: "" }],
   });
   const engine = query.select("engine");
-
-  const showActions = Boolean(
-    canWrite?.can || canRunJobs?.can || canReadDiffs?.can,
-  );
-
+  const showActions = Boolean(canWrite?.can || canRunJobs?.can || canShow?.can);
   const fetchPage = useCallback(
     (page: PageQuery) =>
       listSources({
@@ -135,195 +78,8 @@ export function SourceList() {
     page: query.page,
     onPageChange: query.setPage,
   });
-  const { items, reload } = list;
-
-  const form = useConsoleForm<IdentityForm>({
-    initialValues: emptyIdentity(),
-    validate: {
-      key: (v) =>
-        editing ? null : v.trim() ? null : t("sources.validation.required"),
-      name: (v) => (v.trim() ? null : t("sources.validation.required")),
-      engine: (v) => (v ? null : t("sources.validation.required")),
-    },
-  });
-
-  const loadSchemaAndDefaults = async (engine: Engine) => {
-    const res = await getAccessSchema(engine);
-    setSchema(res.schema);
-    return defaultsFromSchema(res.schema);
-  };
-
-  const openCreate = async () => {
-    setEditing(null);
-    form.setValues(emptyIdentity("postgresql"));
-    form.markSaved();
-    form.clearErrors();
-    try {
-      const defaults = await loadSchemaAndDefaults("postgresql");
-      setAccess(defaults);
-      setModalOpen(true);
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    }
-  };
-
-  const openEdit = async (source: Source) => {
-    const engine =
-      source.engine === "postgresql" ||
-      source.engine === "mssql" ||
-      source.engine === "oracle"
-        ? source.engine
-        : "postgresql";
-    setEditing(source);
-    form.setValues({
-      key: source.key,
-      name: source.name,
-      description: source.description ?? "",
-      status: source.status === "disabled" ? "disabled" : "active",
-      engine,
-    });
-    form.markSaved();
-    form.clearErrors();
-    try {
-      const defaults = await loadSchemaAndDefaults(engine);
-      try {
-        const full = await getSourceAccess(source.id);
-        setAccess(full.access);
-      } catch (err) {
-        // Missing/corrupt blob: open with schema defaults + projected non-secrets
-        setAccess({ ...defaults, ...(source.access ?? {}) });
-        open?.({
-          type: "error",
-          message:
-            problemMessage(t, err, t("sources.access.reenterHint")),
-        });
-      }
-      setModalOpen(true);
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    }
-  };
-
-  const applyEngine = async (next: Engine) => {
-    form.setFieldValue("engine", next);
-    setAccess(await loadSchemaAndDefaults(next));
-  };
-
-  const confirmEngineChange = (next: Engine | null) => {
-    if (!next) {
-      form.setFieldValue("engine", "");
-      return;
-    }
-    const current = form.values.engine;
-    if (current === next) return;
-    if (!current) {
-      void applyEngine(next);
-      return;
-    }
-    engineConfirm.open(next);
-  };
-
-  const runProbe = async () => {
-    const values = form.values;
-    if (!values.engine) {
-      form.setFieldError("engine", t("sources.validation.required"));
-      return;
-    }
-    if (!String(access.password ?? "").trim()) {
-      open?.({
-        type: "error",
-        message: t("sources.validation.secretForTest"),
-      });
-      return;
-    }
-    setTesting(true);
-    try {
-      const result = editing
-        ? await testSource(editing.id, {
-            engine: values.engine,
-            access,
-          })
-        : await testSourceDraft({
-            engine: values.engine,
-            access,
-          });
-      if (result.ok) {
-        open?.({ type: "success", message: t("sources.test.success") });
-      } else {
-        open?.({
-          type: "error",
-          message: result.message || t("sources.test.failed"),
-        });
-      }
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const closeModal = () => {
-    setModalOpen(false);
-    form.reset();
-  };
-
-  const saveSource = async (values: IdentityForm) => {
-    if (!values.engine) return;
-    try {
-      if (editing) {
-        const updated = await patchSource(editing.id, {
-          name: values.name.trim(),
-          description: values.description.trim() || null,
-          status: values.status,
-          engine: values.engine,
-          access,
-        });
-        open?.({
-          type: "success",
-          message: t("sources.update.success"),
-        });
-        if (updated.schedules && updated.schedules.length > 0) {
-          open?.({
-            type: "success",
-            message: t("schedules.seededOnSourceUpdate"),
-          });
-        }
-      } else {
-        await createSource({
-          key: values.key.trim(),
-          name: values.name.trim(),
-          kind: "database",
-          description: values.description.trim() || null,
-          engine: values.engine,
-          access,
-        });
-        open?.({
-          type: "success",
-          message: t("sources.create.success"),
-        });
-      }
-      form.markSaved();
-      setModalOpen(false);
-      await reload();
-    } catch (err) {
-      presentSaveFailure(t, err, form.applyApiError);
-    }
-  };
-
   const createAction = (
-    <CreateListAction
-      resource={ModuleId.sources}
-      onClick={() => void openCreate()}
-    >
+    <CreateListAction resource={ModuleId.sources} href="/console/sources/new">
       {t("sources.create")}
     </CreateListAction>
   );
@@ -362,30 +118,22 @@ export function SourceList() {
             <Table.Th>{t("sources.fields.database")}</Table.Th>
             <Table.Th>{t("sources.fields.status")}</Table.Th>
             <Table.Th>{t("sources.fields.hasAccess")}</Table.Th>
-            {showActions ? (
-              <Table.Th>{t("sources.fields.actions")}</Table.Th>
-            ) : null}
+            {showActions ? <Table.Th>{t("sources.fields.actions")}</Table.Th> : null}
           </Table.Tr>
         }
       >
-        {items.map((source) => (
+        {list.items.map((source) => (
           <Table.Tr key={source.id}>
             <Table.Td>
               <RecordReference
                 name={source.name}
                 recordKey={source.key}
-                href={
-                  canReadDiffs?.can
-                    ? `/console/sources/${source.id}/structure-diffs`
-                    : undefined
-                }
+                href={canShow?.can ? `/console/sources/${source.id}` : undefined}
               />
             </Table.Td>
             <Table.Td>{source.engine ? engineLabel(t, source.engine) : "—"}</Table.Td>
             <Table.Td>
-              {typeof source.access?.host === "string"
-                ? source.access.host
-                : "—"}
+              {typeof source.access?.host === "string" ? source.access.host : "—"}
             </Table.Td>
             <Table.Td>{scopeLabel(source)}</Table.Td>
             <Table.Td>
@@ -407,25 +155,23 @@ export function SourceList() {
                     {
                       key: "diffs",
                       label: t("structureDiffs.open"),
-                      hidden: !canReadDiffs?.can,
+                      hidden: !canShow?.can,
                       safety: "immediate",
-                      onClick: () =>
-                        push(`/console/sources/${source.id}/structure-diffs`),
+                      onClick: () => push(sourceDiffsPath(source.id)),
                     },
                     {
                       key: "schedules",
                       label: t("schedules.related.open"),
                       hidden: !canRunJobs?.can,
                       safety: "immediate",
-                      onClick: () =>
-                        push(`/console/sources/${source.id}/schedules`),
+                      onClick: () => push(`/console/sources/${source.id}/schedules`),
                     },
                     {
                       key: "edit",
                       label: t("sources.edit"),
                       hidden: !canWrite?.can,
                       safety: "immediate",
-                      onClick: () => void openEdit(source),
+                      onClick: () => push(sourceEditPath(source.id)),
                     },
                     {
                       key: "delete",
@@ -445,7 +191,7 @@ export function SourceList() {
                         confirmColor: "red",
                         outcome: t("sources.delete.success"),
                         execute: () => deleteSource(source.id),
-                        onSuccess: () => reload(),
+                        onSuccess: () => list.reload(),
                       },
                     },
                   ]}
@@ -455,99 +201,6 @@ export function SourceList() {
           </Table.Tr>
         ))}
       </ListTable>
-
-      <FormDialog
-        opened={modalOpen}
-        onClose={closeModal}
-        title={editing ? t("sources.edit") : t("sources.create")}
-        size="lg"
-        dirty={form.dirty}
-        submitting={form.submitting}
-        submitLabel={t("common.save")}
-        onSubmit={() => void form.submit(saveSource)}
-        leading={
-          <Button
-            type="button"
-            variant="default"
-            loading={testing}
-            disabled={form.submitting}
-            onClick={() => void runProbe()}
-          >
-            {t("sources.test")}
-          </Button>
-        }
-      >
-        <Stack gap="sm">
-          {!editing ? (
-            <TextField
-              label={t("sources.fields.key")}
-              required
-              editable
-              {...form.fieldProps("key")}
-            />
-          ) : null}
-          <TextField
-            label={t("sources.fields.name")}
-            required
-            editable
-            {...form.fieldProps("name")}
-          />
-          <TextareaField
-            label={t("sources.fields.description")}
-            autosize
-            minRows={2}
-            editable
-            {...form.fieldProps("description")}
-          />
-          {editing ? (
-            <SelectField
-              label={t("sources.fields.status")}
-              editable
-              data={[
-                { value: "active", label: t("sources.status.active") },
-                { value: "disabled", label: t("sources.status.disabled") },
-              ]}
-              {...form.fieldProps("status")}
-            />
-          ) : null}
-          <SelectField
-            label={t("sources.fields.engine")}
-            data={engineOptions}
-            required
-            editable
-            placeholder={t("sources.validation.required")}
-            {...form.fieldProps("engine")}
-            value={form.values.engine || null}
-            onChange={(value) =>
-              confirmEngineChange((value as Engine | null) ?? null)
-            }
-          />
-          <SpecTree
-            schema={schema}
-            value={access}
-            onChange={setAccess}
-            editable
-          />
-        </Stack>
-      </FormDialog>
-
-      <Modal.Stack>
-        <ConfirmActionModal
-          stackId="engine-switch"
-          opened={engineConfirm.opened}
-          onClose={engineConfirm.close}
-          title={t("sources.engineSwitch.title")}
-          body={t("sources.engineSwitch.body")}
-          confirmLabel={t("sources.engineSwitch.confirm")}
-          size="sm"
-          onConfirm={() => {
-            const next = engineConfirm.pending;
-            engineConfirm.close();
-            if (next) void applyEngine(next);
-          }}
-        />
-
-      </Modal.Stack>
     </PageChrome>
   );
 }

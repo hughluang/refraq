@@ -704,6 +704,7 @@
   "forbidden.requiredPermission": "Required permission: {{permission}}",
   "forbidden.back": "Back to home",
   "sources.title": "Sources",
+  "sources.tabs.record": "Details",
   "sources.description": "Register database Sources with catalog scope and SpecTree-driven access (whole-document encryption) in one place.",
   "sources.create": "New Source",
   "sources.create.success": "Source created",
