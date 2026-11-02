@@ -1216,9 +1216,6 @@ function ChannelExisting({
           keepMounted
         >
           <Stack gap="sm">
-            <Text size="sm" c="dimmed">
-              {t("channels.description.hint")}
-            </Text>
             <Textarea
               label={t("channels.fields.description")}
               placeholder={t("channels.description.optional")}

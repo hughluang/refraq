@@ -96,6 +96,50 @@ describe("saved filter problem codes", () => {
   });
 });
 
+const INBOUND_PUBLISH_CODES = [
+  "CHANNEL_INBOUND_PATH_TAKEN",
+  "CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND",
+] as const;
+
+const INBOUND_PUBLISH_DETAIL: Record<
+  (typeof INBOUND_PUBLISH_CODES)[number],
+  { status: number; detail: string }
+> = {
+  CHANNEL_INBOUND_PATH_TAKEN: {
+    status: 409,
+    detail: "Inbound path is already published by another Data Channel",
+  },
+  CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND: {
+    status: 422,
+    detail: "Inbound Credential was not found",
+  },
+};
+
+describe("inbound publish problem codes", () => {
+  it.each([
+    ["en-US", en],
+    ["zh-CN", zh],
+  ] as const)("%s states the refusal and does not ask for a retry", (_locale, catalog) => {
+    const translate = (key: string) => catalog[key as keyof typeof catalog] ?? key;
+    for (const code of INBOUND_PUBLISH_CODES) {
+      const key = `problems.${code}`;
+      const copy = translate(key);
+      const { status, detail } = INBOUND_PUBLISH_DETAIL[code];
+      expect(copy).not.toBe(key);
+      expect(copy).not.toBe(translate("problems.unknown"));
+      expect(copy.toLowerCase()).not.toContain("retry");
+      expect(copy.toLowerCase()).not.toContain("try again");
+      const message = problemMessage(
+        translate,
+        new ApiError(status, code, detail, "req-1"),
+        "failed",
+      );
+      expect(message).toBe(copy);
+      expect(message).not.toBe(detail);
+    }
+  });
+});
+
 const TAG_IN_USE_DETAIL = "Tag is still assigned";
 
 function catalogTranslate(catalog: Record<string, string>) {
