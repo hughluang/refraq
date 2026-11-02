@@ -17,15 +17,18 @@ export type ConnectorSpec = {
 export type Source = {
   id: string;
   key: string;
-  locator_key: string;
+  /** Omitted on an identity row. The route handle stays `id`. */
+  locator_key?: string;
   name: string;
   kind: string;
   status: string;
-  description: string | null;
+  /** Omitted on an identity row. */
+  description?: string | null;
   engine: string | null;
-  access: SourceAccess | null;
-  has_access: boolean;
-  access_updated_at: string | null;
+  /** Omitted when the caller has no level. Do not treat absence as an empty document. */
+  access?: SourceAccess | null;
+  has_access?: boolean;
+  access_updated_at?: string | null;
 };
 
 export type ObjectCategory =

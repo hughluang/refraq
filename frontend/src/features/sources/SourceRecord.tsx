@@ -1,8 +1,8 @@
 "use client";
 
 import { Box, Button, Modal, Stack, Tooltip } from "@mantine/core";
-import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCan, useNotification, usePermissions, useTranslate } from "@refinedev/core";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
@@ -19,18 +19,32 @@ import { suppressLeaveGuard } from "@/components/navigation/leaveGuard";
 import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
+  changeSourceMembership,
+  createSourceMembership,
+  deleteSourceMembership,
+  listSourceMemberships,
+} from "@/features/sources/api/memberships";
+import {
   createSource,
   deleteSource,
   getAccessSchema,
   getSource,
   getSourceAccess,
+  listSources,
   patchSource,
   testSource,
   testSourceDraft,
 } from "@/features/sources/api/sources";
+import { MembershipCollection } from "@/features/sources/MembershipCollection";
+import {
+  SOURCE_ACCESS_MANAGE,
+  SOURCE_READ,
+  type MembershipWrite,
+} from "@/features/sources/membership";
 import { engineLabel, selectedEngine, SOURCE_ENGINES } from "@/features/sources/engineLabel";
 import {
   SOURCE_DIFFS_TAB,
+  SOURCE_MEMBERS_TAB,
   SOURCE_RECORD_TAB,
   sourceEditPath,
   sourceShowPath,
@@ -44,6 +58,7 @@ import type {
   SourceAccess,
 } from "@/features/sources/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
+import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
 const FORM_ID = "source-record-form";
@@ -250,20 +265,30 @@ function SourceExisting({
     resource: ModuleId.sources,
     action: ModuleAction.delete,
   });
-  const consoleTab = useConsoleTab([
-    { value: SOURCE_RECORD_TAB },
-    { value: SOURCE_DIFFS_TAB },
-  ]);
-  const tab = consoleTab.value;
+  const { data: permissions, isLoading: permissionsLoading } = usePermissions<string[]>({});
+  const held = permissions ?? [];
+  const canReadSources = held.includes(SOURCE_READ);
+  const canManageAccess = held.includes(SOURCE_ACCESS_MANAGE);
   const writeReady = mode !== "edit" || canWrite?.can === true;
   const [schema, setSchema] = useState<ConnectorSpec | null>(null);
   const [record, setRecord] = useState<Source | null>(null);
+  const [identityOnly, setIdentityOnly] = useState(false);
+  const [missing, setMissing] = useState(false);
+  const [membersAllowed, setMembersAllowed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [testing, setTesting] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const showMembers = canManageAccess || membersAllowed;
+  const tabItems = [
+    { value: SOURCE_RECORD_TAB },
+    ...(identityOnly ? [] : [{ value: SOURCE_DIFFS_TAB }]),
+    ...(showMembers ? [{ value: SOURCE_MEMBERS_TAB }] : []),
+  ];
+  const consoleTab = useConsoleTab(tabItems);
+  const tab = consoleTab.value;
   const engineConfirm = useConfirmAction<Engine>();
   const form = useConsoleForm<Values>({
     initialValues: EMPTY,
@@ -283,19 +308,55 @@ function SourceExisting({
   const load = useCallback(
     async (silent = false) => {
       if (mode === "edit" && !writeReady) return;
+      if (permissionsLoading || permissions == null) return;
       const translate = tRef.current;
       const notify = openRef.current;
       const currentForm = formRef.current;
       if (!silent) {
         setLoading(true);
         setLoadFailed(false);
+        setMissing(false);
       }
+      const showIdentity = (source: Source) => {
+        const engine = selectedEngine(source.engine ?? "") ?? "";
+        currentForm.setValues({
+          ...EMPTY,
+          key: source.key,
+          name: source.name,
+          status: source.status === "disabled" ? "disabled" : "active",
+          engine,
+        });
+        currentForm.markSaved();
+        setSchema(null);
+        setRecord({
+          id: source.id,
+          key: source.key,
+          name: source.name,
+          kind: source.kind,
+          status: source.status,
+          engine: source.engine,
+        });
+        setIdentityOnly(true);
+        setMissing(false);
+        setLoadFailed(false);
+        setMembersAllowed(true);
+      };
       try {
-        const body = await getSource(sourceId);
-        const source = body.source;
-        const engine = formEngine(source.engine);
+        const source = await loadVisibleSource(sourceId, canReadSources, canManageAccess);
+        if (source == null) {
+          setRecord(null);
+          setMissing(true);
+          setLoadFailed(false);
+          return;
+        }
+        if (source.identityOnly) {
+          showIdentity(source.source);
+          return;
+        }
+        const loaded = source.source;
+        const engine = formEngine(loaded.engine);
         const schemaRes = await getAccessSchema(engine);
-        let access: SourceAccess = { ...(source.access ?? {}) };
+        let access: SourceAccess = { ...(loaded.access ?? {}) };
         if (mode === "edit") {
           try {
             const full = await getSourceAccess(sourceId);
@@ -308,11 +369,15 @@ function SourceExisting({
             });
           }
         }
+        const allowMembers = await canListMembers(sourceId, canManageAccess);
         setSchema(schemaRes.schema);
-        currentForm.setValues(valuesFrom(source, access));
+        currentForm.setValues(valuesFrom(loaded, access));
         currentForm.markSaved();
-        setRecord(source);
+        setRecord(loaded);
+        setIdentityOnly(false);
+        setMissing(false);
         setLoadFailed(false);
+        setMembersAllowed(allowMembers);
       } catch (err) {
         if (!silent) setLoadFailed(true);
         presentProblemNotification(translate, err, { onRetry: () => void load(false) });
@@ -320,12 +385,23 @@ function SourceExisting({
         if (!silent) setLoading(false);
       }
     },
-    [mode, sourceId, writeReady],
+    [canManageAccess, canReadSources, mode, permissions, permissionsLoading, sourceId, writeReady],
   );
 
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  const memberClient = useMemo(
+    () => ({
+      list: () => listSourceMemberships(sourceId),
+      create: (body: MembershipWrite) => createSourceMembership(sourceId, body),
+      change: (membershipId: string, level: string) =>
+        changeSourceMembership(sourceId, membershipId, level),
+      remove: (membershipId: string) => deleteSourceMembership(sourceId, membershipId),
+    }),
+    [sourceId],
+  );
 
   useEffect(() => {
     if (mode === "edit" && canWrite?.can === false) {
@@ -341,13 +417,13 @@ function SourceExisting({
     return (
       <PageChrome
         title={t("sources.title")}
-        status={loadFailed ? "unloaded" : "loading"}
+        status={missing ? "notFound" : loadFailed ? "unloaded" : "loading"}
         onRetry={loadFailed ? () => void load(false) : undefined}
       />
     );
   }
 
-  const editable = mode === "edit";
+  const editable = mode === "edit" && !identityOnly;
   const save = async (values: Values) => {
     const engine = selectedEngine(values.engine);
     if (!engine) return;
@@ -377,6 +453,7 @@ function SourceExisting({
       schema={schema}
       mode={mode}
       editable={editable}
+      identityOnly={identityOnly}
       testing={testing}
       onEngineChange={(next) =>
         confirmEngine(
@@ -395,7 +472,12 @@ function SourceExisting({
     <PageTabs
       tabs={[
         { value: SOURCE_RECORD_TAB, label: t("sources.tabs.record"), panel: null },
-        { value: SOURCE_DIFFS_TAB, label: t("structureDiffs.title"), panel: null },
+        ...(identityOnly
+          ? []
+          : [{ value: SOURCE_DIFFS_TAB, label: t("structureDiffs.title"), panel: null }]),
+        ...(showMembers
+          ? [{ value: SOURCE_MEMBERS_TAB, label: t("sources.tabs.members"), panel: null }]
+          : []),
       ]}
       value={tab}
       onChange={consoleTab.setTab}
@@ -431,8 +513,8 @@ function SourceExisting({
                 </>
               }
               standard={recordStandard({
-                mode,
-                canWrite: Boolean(canWrite?.can),
+                mode: identityOnly ? "show" : mode,
+                canWrite: Boolean(canWrite?.can) && !identityOnly,
                 canDelete: Boolean(canDelete?.can),
                 deletable: record.status === "disabled",
                 submitting: form.submitting,
@@ -458,8 +540,11 @@ function SourceExisting({
               fields
             )}
           </div>
-          {tab === SOURCE_DIFFS_TAB ? (
+          {tab === SOURCE_DIFFS_TAB && !identityOnly ? (
             <StructureDiffList key={reloadKey} sourceId={sourceId} />
+          ) : null}
+          {tab === SOURCE_MEMBERS_TAB && showMembers ? (
+            <MembershipCollection client={memberClient} editable={canManageAccess} />
           ) : null}
           <EngineSwitchDialog
             confirm={engineConfirm}
@@ -578,6 +663,7 @@ function SourceFields({
   schema,
   mode,
   editable,
+  identityOnly = false,
   testing,
   onEngineChange,
   onTest,
@@ -586,6 +672,7 @@ function SourceFields({
   schema: ConnectorSpec | null;
   mode: "create" | "show" | "edit";
   editable: boolean;
+  identityOnly?: boolean;
   testing: boolean;
   onEngineChange: (next: Engine | null) => void;
   onTest: () => void;
@@ -613,13 +700,15 @@ function SourceFields({
         editable={editable}
         {...form.fieldProps("name")}
       />
-      <TextareaField
-        label={t("sources.fields.description")}
-        autosize
-        minRows={2}
-        editable={editable}
-        {...form.fieldProps("description")}
-      />
+      {identityOnly ? null : (
+        <TextareaField
+          label={t("sources.fields.description")}
+          autosize
+          minRows={2}
+          editable={editable}
+          {...form.fieldProps("description")}
+        />
+      )}
       {mode === "create" ? null : (
         <SelectField
           label={t("sources.fields.status")}
@@ -638,13 +727,15 @@ function SourceFields({
         value={form.values.engine || null}
         onChange={(value) => onEngineChange((value as Engine | null) ?? null)}
       />
-      <SpecTree
-        schema={schema}
-        value={form.values.access}
-        onChange={(next) => form.setFieldValue("access", next)}
-        editable={editable}
-      />
-      {editable ? (
+      {identityOnly ? null : (
+        <SpecTree
+          schema={schema}
+          value={form.values.access}
+          onChange={(next) => form.setFieldValue("access", next)}
+          editable={editable}
+        />
+      )}
+      {editable && !identityOnly ? (
         <Button
           type="button"
           variant="default"
@@ -686,6 +777,65 @@ function EngineSwitchDialog({
       />
     </Modal.Stack>
   );
+}
+
+type LoadedSource =
+  | { identityOnly: false; source: Source }
+  | { identityOnly: true; source: Source };
+
+async function loadVisibleSource(
+  sourceId: string,
+  canReadSources: boolean,
+  canManageAccess: boolean,
+): Promise<LoadedSource | null> {
+  if (canReadSources) {
+    try {
+      const body = await getSource(sourceId);
+      return { identityOnly: false, source: body.source };
+    } catch (err) {
+      if (!(canManageAccess && isAbsentOrForbidden(err))) throw err;
+      const listed = await findListedSource(sourceId);
+      if (listed) return { identityOnly: true, source: listed };
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+  if (canManageAccess) {
+    const listed = await findListedSource(sourceId);
+    return listed ? { identityOnly: true, source: listed } : null;
+  }
+  const body = await getSource(sourceId);
+  return { identityOnly: false, source: body.source };
+}
+
+function isAbsentOrForbidden(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 403 || err.status === 404);
+}
+
+async function canListMembers(sourceId: string, canManageAccess: boolean): Promise<boolean> {
+  if (canManageAccess) return true;
+  try {
+    await listSourceMemberships(sourceId);
+    return true;
+  } catch (err) {
+    if (isAbsentOrForbidden(err)) return false;
+    throw err;
+  }
+}
+
+async function findListedSource(sourceId: string): Promise<Source | null> {
+  const limit = 100;
+  let offset = 0;
+  let total = Number.POSITIVE_INFINITY;
+  while (offset < total) {
+    const page = await listSources({ limit, offset });
+    const found = page.items.find((item) => item.id === sourceId);
+    if (found) return found;
+    total = page.total;
+    if (page.items.length === 0) return null;
+    offset += page.items.length;
+  }
+  return null;
 }
 
 function confirmEngine(

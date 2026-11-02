@@ -1,8 +1,8 @@
 "use client";
 
-import { Table } from "@mantine/core";
-import { useCan, useTranslate } from "@refinedev/core";
-import { useCallback } from "react";
+import { Button, Table } from "@mantine/core";
+import { useCan, usePermissions, useTranslate } from "@refinedev/core";
+import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
@@ -16,6 +16,8 @@ import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigati
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { deleteSource, listSources } from "@/features/sources/api/sources";
 import { engineLabel, selectedEngine, SOURCE_ENGINES } from "@/features/sources/engineLabel";
+import { EverySourceAccess } from "@/features/sources/EverySourceAccess";
+import { SOURCE_ACCESS_MANAGE, SOURCE_READ } from "@/features/sources/membership";
 import {
   sourceDiffsPath,
   sourceEditPath,
@@ -27,7 +29,8 @@ import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
 
-function scopeLabel(source: Source): string {
+function scopeLabel(source: Source, revealAccess: boolean): string {
+  if (!revealAccess) return "—";
   const access = source.access;
   if (!access || typeof access !== "object") return "—";
   const database = access.database;
@@ -37,9 +40,24 @@ function scopeLabel(source: Source): string {
   return "—";
 }
 
+function hostLabel(source: Source, revealAccess: boolean): string {
+  if (!revealAccess) return "—";
+  return typeof source.access?.host === "string" ? source.access.host : "—";
+}
+
+function accessLabel(source: Source, revealAccess: boolean, yes: string, no: string): string {
+  if (!revealAccess || source.has_access == null) return "—";
+  return source.has_access ? yes : no;
+}
+
 export function SourceList() {
   const t = useTranslate();
   const { push } = useConsoleNavigation();
+  const { data: permissions } = usePermissions<string[]>({});
+  const held = permissions ?? [];
+  const canReadSources = held.includes(SOURCE_READ);
+  const canManageAccess = held.includes(SOURCE_ACCESS_MANAGE);
+  const [everyOpen, setEveryOpen] = useState(false);
   const engineOptions = SOURCE_ENGINES.map((value) => ({
     value,
     label: engineLabel(t, value),
@@ -83,12 +101,22 @@ export function SourceList() {
       {t("sources.create")}
     </CreateListAction>
   );
+  const everySource = canManageAccess ? (
+    <Button type="button" size="sm" variant="default" onClick={() => setEveryOpen(true)}>
+      {t("sources.membership.every")}
+    </Button>
+  ) : null;
 
   return (
     <PageChrome
       title={t("sources.title")}
       description={t("sources.description")}
-      actions={createAction}
+      actions={
+        <>
+          {everySource}
+          {createAction}
+        </>
+      }
       toolbar={
         <ListToolbar
           query={query}
@@ -106,7 +134,7 @@ export function SourceList() {
       <ListTable
         list={list}
         columnCount={showActions ? 7 : 6}
-        emptyMessage={t("sources.empty")}
+        emptyMessage={t("sources.empty.fresh")}
         emptyAction={createAction}
         noMatchMessage={t("sources.list.noMatch")}
         onClearFilters={query.clear}
@@ -132,10 +160,8 @@ export function SourceList() {
               />
             </Table.Td>
             <Table.Td>{source.engine ? engineLabel(t, source.engine) : "—"}</Table.Td>
-            <Table.Td>
-              {typeof source.access?.host === "string" ? source.access.host : "—"}
-            </Table.Td>
-            <Table.Td>{scopeLabel(source)}</Table.Td>
+            <Table.Td>{hostLabel(source, canReadSources)}</Table.Td>
+            <Table.Td>{scopeLabel(source, canReadSources)}</Table.Td>
             <Table.Td>
               <StatusBadge
                 tone={presentSourceStatus(source.status).tone}
@@ -143,9 +169,12 @@ export function SourceList() {
               />
             </Table.Td>
             <Table.Td>
-              {source.has_access
-                ? t("sources.fields.hasAccessYes")
-                : t("sources.fields.hasAccessNo")}
+              {accessLabel(
+                source,
+                canReadSources,
+                t("sources.fields.hasAccessYes"),
+                t("sources.fields.hasAccessNo"),
+              )}
             </Table.Td>
             {showActions ? (
               <Table.Td>
@@ -155,7 +184,7 @@ export function SourceList() {
                     {
                       key: "diffs",
                       label: t("structureDiffs.open"),
-                      hidden: !canShow?.can,
+                      hidden: !canReadSources || !canShow?.can,
                       safety: "immediate",
                       onClick: () => push(sourceDiffsPath(source.id)),
                     },
@@ -201,6 +230,7 @@ export function SourceList() {
           </Table.Tr>
         ))}
       </ListTable>
+      <EverySourceAccess opened={everyOpen} onClose={() => setEveryOpen(false)} />
     </PageChrome>
   );
 }

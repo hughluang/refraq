@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Group, Stack, Text, Title } from "@mantine/core";
+import { Button, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -12,8 +12,14 @@ import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
+  contributionPath,
+  membershipLevelLabel,
+  type UserSourceAccessItem,
+} from "@/features/sources/membership";
+import {
   getUser,
   getUserGroups,
+  getUserSourceAccess,
   getUserSubjectValues,
   listAllSubjectAttributes,
   putUserGroups,
@@ -43,6 +49,7 @@ export function UserShow({ userId }: Props) {
   const [definitions, setDefinitions] = useState<SubjectAttribute[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string[]>>({});
   const [effective, setEffective] = useState<SubjectValues>({});
+  const [sourceAccess, setSourceAccess] = useState<UserSourceAccessItem[]>([]);
   const [failure, setFailure] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -62,17 +69,19 @@ export function UserShow({ userId }: Props) {
     setLoading(true);
     setFailure(false);
     try {
-      const [loaded, membership, values, defs] = await Promise.all([
+      const [loaded, membership, values, defs, access] = await Promise.all([
         getUser(userId),
         getUserGroups(userId),
         getUserSubjectValues(userId),
         listAllSubjectAttributes(),
+        getUserSourceAccess(userId),
       ]);
       if (current !== generation.current) return;
       setUser(loaded.user);
       setGroupIds(membership.groups.map((group) => group.id));
       setDefinitions(defs);
       setEffective(values.effective);
+      setSourceAccess(access.items);
       const next: Record<string, string[]> = {};
       for (const item of defs) {
         next[item.key] = (values.values[item.key] ?? []).map(String);
@@ -217,6 +226,37 @@ export function UserShow({ userId }: Props) {
             label={t("subjectAttributes.values.effective")}
             value={formatSubjectValues(effective) || t("subjectAttributes.values.none")}
           />
+        </Stack>
+        <Stack gap="sm">
+          <Title order={4}>{t("sources.membership.userAccess")}</Title>
+          {sourceAccess.length === 0 ? (
+            <Text size="sm">{t("sources.membership.userAccess.empty")}</Text>
+          ) : (
+            <Table>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>{t("sources.membership.userAccess.source")}</Table.Th>
+                  <Table.Th>{t("sources.membership.level")}</Table.Th>
+                  <Table.Th>{t("sources.membership.userAccess.path")}</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {sourceAccess.map((item) => (
+                  <Table.Tr key={item.source_id}>
+                    <Table.Td>
+                      {item.name}
+                      <Text span c="dimmed" size="sm">
+                        {" "}
+                        {item.key}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>{membershipLevelLabel(t, item.level)}</Table.Td>
+                    <Table.Td>{contributionPath(t, item.contributions)}</Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          )}
         </Stack>
       </Stack>
     </PageChrome>

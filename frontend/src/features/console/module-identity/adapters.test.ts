@@ -68,6 +68,27 @@ describe("evaluateCan", () => {
     ).toEqual({ can: false, reason: "sources:read" });
   });
 
+  it("lets sources:access_manage open the source list and record without sources:read", () => {
+    expect(
+      evaluateCan(CATALOG, ["sources:access_manage"], "sources", "list"),
+    ).toEqual({ can: true });
+    expect(
+      evaluateCan(CATALOG, ["sources:access_manage"], "sources", "show"),
+    ).toEqual({ can: true });
+    expect(
+      evaluateCan(CATALOG, ["sources:access_manage"], "sources", "create"),
+    ).toEqual({ can: false, reason: "sources:write" });
+    expect(
+      evaluateCan(CATALOG, ["sources:access_manage"], "sources", "edit"),
+    ).toEqual({ can: false, reason: "sources:write" });
+    expect(
+      evaluateCan(CATALOG, ["sources:access_manage"], "sources", "delete"),
+    ).toEqual({ can: false, reason: "sources:write" });
+    expect(
+      evaluateCan(CATALOG, ["sources:access_manage"], "users", "list"),
+    ).toEqual({ can: false, reason: "users:read" });
+  });
+
   it("grants schedules show with jobs:run", () => {
     expect(
       evaluateCan(CATALOG, ["jobs:run"], "schedules", "show"),

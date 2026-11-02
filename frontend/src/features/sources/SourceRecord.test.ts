@@ -14,7 +14,16 @@ const copy = en as Record<string, string>;
 const search = vi.hoisted(() => ({ value: "" }));
 const replace = vi.hoisted(() => vi.fn());
 const gate = vi.hoisted(() => ({ canEdit: true, canDelete: true }));
+const permissions = vi.hoisted(() => ({
+  data: ["sources:read", "sources:write"] as string[],
+}));
 const getSource = vi.hoisted(() => vi.fn());
+const listSources = vi.hoisted(() => vi.fn());
+const listSourceMemberships = vi.hoisted(() => vi.fn());
+const createSourceMembership = vi.hoisted(() => vi.fn());
+const changeSourceMembership = vi.hoisted(() => vi.fn());
+const deleteSourceMembership = vi.hoisted(() => vi.fn());
+const userSearch = vi.hoisted(() => vi.fn());
 const getSourceAccess = vi.hoisted(() => vi.fn());
 const getAccessSchema = vi.hoisted(() => vi.fn());
 const createSource = vi.hoisted(() => vi.fn());
@@ -30,9 +39,32 @@ vi.mock("@/features/sources/api/sources", () => ({
   createSource: (...args: unknown[]) => createSource(...args),
   patchSource: (...args: unknown[]) => patchSource(...args),
   deleteSource: (...args: unknown[]) => deleteSource(...args),
-  listSources: vi.fn(),
+  listSources: (...args: unknown[]) => listSources(...args),
   testSource: vi.fn(),
   testSourceDraft: vi.fn(),
+}));
+
+vi.mock("@/features/sources/api/memberships", () => ({
+  listSourceMemberships: (...args: unknown[]) => listSourceMemberships(...args),
+  createSourceMembership: (...args: unknown[]) => createSourceMembership(...args),
+  changeSourceMembership: (...args: unknown[]) => changeSourceMembership(...args),
+  deleteSourceMembership: (...args: unknown[]) => deleteSourceMembership(...args),
+}));
+
+vi.mock("@/components/form/recordPickerAdapters", () => ({
+  userRecordAdapter: () => ({
+    search: (...args: unknown[]) => userSearch(...args),
+    resolve: async (ids: readonly string[]) =>
+      ids.filter(Boolean).map((id) => ({ id, name: "Ada", key: "ada" })),
+  }),
+  userGroupRecordAdapter: () => ({
+    search: async () => [],
+    resolve: async () => [],
+  }),
+  roleRecordAdapter: () => ({
+    search: async () => [],
+    resolve: async () => [],
+  }),
 }));
 
 vi.mock("@/features/sources/api/structure-diffs", () => ({
@@ -69,6 +101,7 @@ vi.mock("@refinedev/core", () => ({
   useCan: ({ action }: { action?: string }) => ({
     data: { can: action === "delete" ? gate.canDelete : gate.canEdit },
   }),
+  usePermissions: () => ({ data: permissions.data, isLoading: false }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
   CanAccess: ({ children }: { children?: ReactNode }) => children,
 }));
@@ -149,7 +182,16 @@ describe("SourceRecord", () => {
     gate.canDelete = true;
     replace.mockReset();
     notify.mockReset();
+    permissions.data = ["sources:read", "sources:write"];
     getSource.mockReset();
+    listSources.mockReset();
+    listSourceMemberships.mockReset();
+    createSourceMembership.mockReset();
+    changeSourceMembership.mockReset();
+    deleteSourceMembership.mockReset();
+    userSearch.mockReset();
+    listSourceMemberships.mockResolvedValue({ items: [] });
+    userSearch.mockResolvedValue([{ id: "usr_ada", name: "Ada", key: "ada" }]);
     getSourceAccess.mockReset();
     getAccessSchema.mockReset();
     createSource.mockReset();
@@ -340,5 +382,226 @@ describe("SourceRecord", () => {
       ).toBeTruthy();
     });
     expect(listStructureDiffs).toHaveBeenCalled();
+  });
+
+  it("shows members to a manager and writes a user at viewer", async () => {
+    permissions.data = ["sources:read", "sources:write", "sources:access_manage"];
+    listSourceMemberships.mockResolvedValue({
+      items: [
+        {
+          id: "mem_ada",
+          subject: { type: "user", id: "usr_ada", display_name: "Ada", missing: false },
+          target: "src_1",
+          level: "steward",
+          created_at: "2026-09-10T04:00:00Z",
+          updated_at: "2026-09-10T04:00:00Z",
+        },
+      ],
+    });
+    createSourceMembership.mockResolvedValue({ membership: { id: "mem_new" } });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    fireEvent.click(await screen.findByRole("tab", { name: copy["sources.tabs.members"] }));
+    expect(await screen.findByText("Ada")).toBeTruthy();
+    expect(screen.getByText(copy["sources.membership.level.steward"])).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: copy["sources.membership.add"] }));
+    const dialog = await screen.findByRole("dialog", { name: copy["sources.membership.add"] });
+    const level = within(dialog).getByRole("combobox", { name: copy["sources.membership.level"] });
+    fireEvent.mouseDown(level);
+    const levelList = screen.getAllByRole("listbox", { hidden: true }).find((list) =>
+      within(list).queryByRole("option", {
+        name: copy["sources.membership.level.viewer"],
+        hidden: true,
+      }),
+    );
+    expect(levelList).toBeTruthy();
+    expect(
+      within(levelList!).getAllByRole("option", { hidden: true }).map((option) => option.textContent),
+    ).toEqual([
+      copy["sources.membership.level.viewer"],
+      copy["sources.membership.level.steward"],
+      copy["sources.membership.level.maintainer"],
+    ]);
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Subject/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /Ada/, hidden: true }));
+    fireEvent.click(within(dialog).getByRole("button", { name: copy["sources.membership.add"] }));
+
+    await waitFor(() => expect(createSourceMembership).toHaveBeenCalled());
+    expect(createSourceMembership).toHaveBeenCalledWith("src_1", {
+      subject: { type: "user", id: "usr_ada" },
+      level: "viewer",
+    });
+  });
+
+  it("changes and deletes a membership through the source routes", async () => {
+    permissions.data = ["sources:access_manage", "sources:read"];
+    listSourceMemberships.mockResolvedValue({
+      items: [
+        {
+          id: "mem_ada",
+          subject: { type: "role", id: "role_1", display_name: "Analyst", missing: false },
+          target: "src_1",
+          level: "viewer",
+          created_at: "2026-09-10T04:00:00Z",
+          updated_at: "2026-09-10T04:00:00Z",
+        },
+      ],
+    });
+    changeSourceMembership.mockResolvedValue({ membership: { id: "mem_ada" } });
+    deleteSourceMembership.mockResolvedValue(undefined);
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+    fireEvent.click(await screen.findByRole("tab", { name: copy["sources.tabs.members"] }));
+    fireEvent.click(await screen.findByRole("button", { name: copy["sources.membership.change"] }));
+    const dialog = await screen.findByRole("dialog", { name: copy["sources.membership.change"] });
+    expect(within(dialog).getByText("Analyst")).toBeTruthy();
+    expect(within(dialog).queryByRole("combobox", { name: copy["sources.membership.subjectKind"] })).toBeNull();
+    fireEvent.mouseDown(within(dialog).getByRole("combobox", { name: copy["sources.membership.level"] }));
+    fireEvent.click(
+      screen.getByRole("option", { name: copy["sources.membership.level.steward"], hidden: true }),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: copy["sources.membership.change"] }));
+    await waitFor(() =>
+      expect(changeSourceMembership).toHaveBeenCalledWith("src_1", "mem_ada", "steward"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: copy["sources.membership.remove"] }));
+    const confirm = await screen.findByRole("dialog", { name: copy["sources.membership.removeTitle"] });
+    fireEvent.click(within(confirm).getByRole("button", { name: copy["sources.membership.remove"] }));
+    await waitFor(() => expect(deleteSourceMembership).toHaveBeenCalledWith("src_1", "mem_ada"));
+  });
+
+  it("lets a maintainer read members and hides write controls", async () => {
+    listSourceMemberships.mockResolvedValue({
+      items: [
+        {
+          id: "mem_ada",
+          subject: { type: "user", id: "usr_ada", display_name: "Ada", missing: false },
+          target: "src_1",
+          level: "viewer",
+          created_at: "2026-09-10T04:00:00Z",
+          updated_at: "2026-09-10T04:00:00Z",
+        },
+      ],
+    });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    fireEvent.click(await screen.findByRole("tab", { name: copy["sources.tabs.members"] }));
+    expect(await screen.findByText("Ada")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: copy["sources.membership.add"] })).toBeNull();
+    expect(screen.queryByRole("button", { name: copy["sources.membership.change"] })).toBeNull();
+    expect(screen.queryByRole("button", { name: copy["sources.membership.remove"] })).toBeNull();
+  });
+
+  it("labels a missing subject and offers only delete to a manager", async () => {
+    permissions.data = ["sources:access_manage", "sources:read"];
+    listSourceMemberships.mockResolvedValue({
+      items: [
+        {
+          id: "mem_gone",
+          subject: { type: "group", id: "grp_gone", display_name: null, missing: true },
+          target: "src_1",
+          level: "viewer",
+          created_at: "2026-09-10T04:00:00Z",
+          updated_at: "2026-09-10T04:00:00Z",
+        },
+      ],
+    });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+
+    fireEvent.click(await screen.findByRole("tab", { name: copy["sources.tabs.members"] }));
+    expect(await screen.findByText(copy["sources.membership.subjectMissing"])).toBeTruthy();
+    expect(screen.queryByRole("button", { name: copy["sources.membership.change"] })).toBeNull();
+    expect(screen.getByRole("button", { name: copy["sources.membership.remove"] })).toBeTruthy();
+  });
+
+  it("omits the members tab when the caller cannot list memberships", async () => {
+    listSourceMemberships.mockRejectedValue(
+      new ApiError(403, "AUTH_FORBIDDEN", "Membership list refused"),
+    );
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
+    await waitFor(() => expect(listSourceMemberships).toHaveBeenCalledWith("src_1"));
+    expect(screen.queryByRole("tab", { name: copy["sources.tabs.members"] })).toBeNull();
+    expect(screen.queryByRole("button", { name: copy["sources.membership.add"] })).toBeNull();
+  });
+
+  it("shows identity fields for access manage without opening the access document", async () => {
+    permissions.data = ["sources:access_manage"];
+    gate.canEdit = false;
+    listSources.mockResolvedValue({
+      items: [
+        {
+          id: "src_1",
+          key: "ledger",
+          name: "Ledger",
+          kind: "database",
+          engine: "postgresql",
+          status: "active",
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    expect(await screen.findByRole("tab", { name: copy["sources.tabs.members"] })).toBeTruthy();
+    expect(screen.getByText("ledger")).toBeTruthy();
+    expect(screen.getByText(copy["sources.engines.postgresql"])).toBeTruthy();
+    expect(screen.getByText(copy["sources.status.active"])).toBeTruthy();
+    expect(screen.queryByText(copy["sources.spec.section"])).toBeNull();
+    expect(screen.queryByRole("button", { name: copy["sources.test"] })).toBeNull();
+    expect(screen.queryByRole("tab", { name: copy["structureDiffs.title"] })).toBeNull();
+    expect(screen.queryByLabelText(copy["sources.fields.description"])).toBeNull();
+    expect(document.querySelector('a[href*="structure-diffs"]')).toBeNull();
+    expect(document.querySelector('a[href*="/console/catalog"]')).toBeNull();
+    expect(getSource).not.toHaveBeenCalled();
+    expect(getSourceAccess).not.toHaveBeenCalled();
+    expect(getAccessSchema).not.toHaveBeenCalled();
+  });
+
+  it("keeps an identity record in display mode on the edit route", async () => {
+    permissions.data = ["sources:access_manage", "sources:write"];
+    listSources.mockResolvedValue({
+      items: [
+        {
+          id: "src_1",
+          key: "ledger",
+          name: "Ledger",
+          kind: "database",
+          engine: "postgresql",
+          status: "active",
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+
+    expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: copy["common.save"] })).toBeNull();
+    expect(screen.queryByRole("link", { name: copy["sources.edit"] })).toBeNull();
+    expect(document.querySelector("form")).toBeNull();
+    expect(getSource).not.toHaveBeenCalled();
+    expect(getAccessSchema).not.toHaveBeenCalled();
+  });
+
+  it("does not describe a refused membership list as an empty tab", async () => {
+    let calls = 0;
+    listSourceMemberships.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve({ items: [] });
+      return Promise.reject(new ApiError(403, "AUTH_FORBIDDEN", "Membership list refused"));
+    });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    fireEvent.click(await screen.findByRole("tab", { name: copy["sources.tabs.members"] }));
+    expect(await screen.findByText(copy["problems.unknown"])).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Ledger" })).toBeTruthy();
+    expect(screen.queryByText(copy["sources.membership.empty"])).toBeNull();
+    expect(screen.queryByRole("button", { name: copy["status.unloaded"] })).toBeNull();
   });
 });

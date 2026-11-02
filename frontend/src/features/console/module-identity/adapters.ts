@@ -76,9 +76,30 @@ export function evaluateCan(
   const required = actionPermission(module, action);
   if (required == null) return { can: false, reason: "unsupported_action" };
 
+  // evaluateCan has no OR slot. Sources list and show are the only exception:
+  // sources:access_manage may open the Source list and a Source record (the
+  // Members tab) without sources:read. Structure-diff aliases reuse the show
+  // action, so this gate admits those paths too; the record hides them when
+  // the actor lacks sources:read. Create, edit, and delete stay sources:write.
+  // Every other module keeps a single catalog key.
+  if (allowsSourcePage(resource, action, required, permissions)) {
+    return { can: true };
+  }
+
   return permissions.includes(required)
     ? { can: true }
     : { can: false, reason: required };
+}
+
+function allowsSourcePage(
+  resource: string,
+  action: string,
+  required: string,
+  permissions: readonly string[],
+): boolean {
+  if (resource !== "sources" || required !== "sources:read") return false;
+  if (action !== "list" && action !== "show") return false;
+  return permissions.includes("sources:access_manage");
 }
 
 export function matchPath(

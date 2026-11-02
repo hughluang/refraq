@@ -11,6 +11,7 @@ import { ConsoleNotifications } from "@/providers/notification-provider";
 import {
   getUser,
   getUserGroups,
+  getUserSourceAccess,
   getUserSubjectValues,
   listAllSubjectAttributes,
 } from "@/features/subjects/api";
@@ -66,6 +67,7 @@ vi.mock("@/features/subjects/api", () => ({
   listAllSubjectAttributes: vi.fn(),
   putUserGroups: vi.fn(),
   putUserSubjectValues: vi.fn(),
+  getUserSourceAccess: vi.fn(),
 }));
 
 function stubDomApis() {
@@ -121,6 +123,7 @@ describe("User show load", () => {
     vi.mocked(getUserGroups).mockResolvedValue({ groups: [] });
     vi.mocked(getUserSubjectValues).mockResolvedValue({ values: {}, effective: {} });
     vi.mocked(listAllSubjectAttributes).mockResolvedValue([]);
+    vi.mocked(getUserSourceAccess).mockResolvedValue({ items: [] });
   });
 
   afterEach(() => {

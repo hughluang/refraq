@@ -1,5 +1,6 @@
 export const SOURCE_RECORD_TAB = "record";
 export const SOURCE_DIFFS_TAB = "diffs";
+export const SOURCE_MEMBERS_TAB = "members";
 
 function withTab(path: string, tab?: string | null): string {
   if (tab && tab !== SOURCE_RECORD_TAB) {

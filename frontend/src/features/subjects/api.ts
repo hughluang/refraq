@@ -1,3 +1,4 @@
+import type { UserSourceAccessItem } from "@/features/sources/membership";
 import type {
   SubjectAttribute,
   SubjectValues,
@@ -168,6 +169,10 @@ export function putUserGroups(userId: string, groupIds: string[]) {
 
 export function getUserSubjectValues(userId: string) {
   return apiClient<UserSubjectValues>(`/users/${userId}/subject-attributes`);
+}
+
+export function getUserSourceAccess(userId: string) {
+  return apiClient<{ items: UserSourceAccessItem[] }>(`/users/${userId}/source-access`);
 }
 
 export function putUserSubjectValues(userId: string, values: SubjectValues) {
