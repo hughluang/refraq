@@ -10,9 +10,13 @@ from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.channel.schedule_projection import project_channel_schedule
+from backend.jobs.api import predicate_for
+from backend.metadata.source_access import source_ids_for
 from backend.metadata.source_schedules import (
     public_schedule,
     recent_jobs_by_schedule,
+    require_stamped_schedule_mutable,
+    require_stamped_schedule_visible,
     schedule_label_for_record,
 )
 from backend.worker.api import (
@@ -45,12 +49,15 @@ def _schedule_response(record: ScheduledTaskRecord) -> ScheduleResponse:
 
 @router.get("/schedules", response_model=ScheduleListResponse)
 def list_platform_schedules(
-    _: UserRecord = Depends(require_permission("jobs:run")),
+    user: UserRecord = Depends(require_permission("jobs:run")),
     hidden: bool = Query(default=False),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> ScheduleListResponse:
     records, total = get_schedule_store().list(
-        include_hidden=hidden, limit=page.limit, offset=page.offset
+        include_hidden=hidden,
+        limit=page.limit,
+        offset=page.offset,
+        access_stamps=predicate_for(source_ids_for(user.id, "jobs:run")),
     )
     recent = recent_jobs_by_schedule([record.id for record in records])
     return ScheduleListResponse(
@@ -79,9 +86,11 @@ def preview_platform_cron(
 @router.get("/schedules/{schedule_id}", response_model=ScheduleResponse)
 def get_platform_schedule(
     schedule_id: str,
-    _: UserRecord = Depends(require_permission("jobs:run")),
+    user: UserRecord = Depends(require_permission("jobs:run")),
 ) -> ScheduleResponse:
-    return _schedule_response(get_schedule(schedule_id))
+    record = get_schedule(schedule_id)
+    require_stamped_schedule_visible(user.id, record)
+    return _schedule_response(record)
 
 
 @router.patch("/schedules/{schedule_id}", response_model=ScheduleResponse)
@@ -93,6 +102,7 @@ def patch_platform_schedule(
 ) -> ScheduleResponse:
     fields = payload.model_fields_set
     record = get_schedule(schedule_id)
+    require_stamped_schedule_mutable(user.id, record)
     updated = patch_schedule(
         schedule_id,
         enabled=payload.enabled,
@@ -124,6 +134,7 @@ def delete_platform_schedule(
     request: Request,
     user: UserRecord = Depends(require_permission("jobs:run")),
 ) -> Response:
+    require_stamped_schedule_mutable(user.id, get_schedule(schedule_id))
     delete_schedule(schedule_id)
     persist_audit_event(
         actor_user_id=user.id,

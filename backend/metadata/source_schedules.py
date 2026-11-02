@@ -17,6 +17,7 @@ from backend.metadata.errors import (
     ScheduleKindInvalid,
     SourceNotFound,
 )
+from backend.metadata.source_access import allows, effective_permissions
 from backend.metadata.sources.store import SourceRecord, get_source_store
 from backend.worker.api import (
     current_schedule_timezone,
@@ -28,7 +29,7 @@ from backend.worker.api import (
     validate_start_at,
     withdraw_schedules_by_owner_ref,
 )
-from backend.worker.errors import ScheduleSystemImmutable
+from backend.worker.errors import ScheduleNotFound, ScheduleSystemImmutable
 from backend.worker.schemas.schedules import (
     ScheduleOut,
     ScheduleRecentJobOut,
@@ -51,6 +52,9 @@ __all__ = [
     "public_schedules",
     "recent_jobs_by_schedule",
     "require_runnable_schedule",
+    "require_source_jobs_run",
+    "require_stamped_schedule_mutable",
+    "require_stamped_schedule_visible",
     "schedule_label_for_record",
     "seed_default_source_schedules",
     "source_owner_ref",
@@ -290,6 +294,7 @@ def _new_schedule_record(
         start_at=start_at,
         created_at=now,
         updated_at=now,
+        access_stamp=source.id,
     )
 
 
@@ -505,3 +510,31 @@ def require_runnable_schedule(schedule_id: str) -> ScheduledTaskRecord:
     if record.locked:
         raise ScheduleSystemImmutable()
     return record
+
+
+def require_source_jobs_run(user_id: str, source_id: str) -> None:
+    """Source-scoped schedule routes. No level is not-found; a weaker level is forbidden."""
+    if not allows(user_id, source_id, "jobs:run"):
+        raise SourceNotFound()
+
+
+def require_stamped_schedule_visible(
+    user_id: str, record: ScheduledTaskRecord
+) -> None:
+    """GET of one schedule. A null stamp keeps the Role rule."""
+    stamp = record.access_stamp
+    if stamp is None:
+        return
+    if "jobs:run" not in effective_permissions(user_id, stamp):
+        raise ScheduleNotFound()
+
+
+def require_stamped_schedule_mutable(
+    user_id: str, record: ScheduledTaskRecord
+) -> None:
+    """Update, enable, disable, delete, and run-now. A null stamp keeps the Role rule."""
+    stamp = record.access_stamp
+    if stamp is None:
+        return
+    if not allows(user_id, stamp, "jobs:run"):
+        raise ScheduleNotFound()

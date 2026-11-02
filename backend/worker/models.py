@@ -37,6 +37,9 @@ class ScheduledTaskRow(Base):
     undeletable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     store_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     owner_ref: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    access_stamp: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     last_run_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     next_run_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)

@@ -23,8 +23,11 @@ from backend.metadata.source_schedules import (
     list_jobs_for_schedule,
     list_source_schedules as list_source_schedule_rows,
     require_runnable_schedule,
+    require_source_jobs_run,
+    require_stamped_schedule_mutable,
+    require_stamped_schedule_visible,
 )
-from backend.worker.api import current_schedule_timezone
+from backend.worker.api import current_schedule_timezone, get_schedule
 from backend.worker.schemas.schedules import ScheduleListResponse, ScheduleResponse
 
 router = APIRouter(tags=["schedules-catalog"])
@@ -53,6 +56,7 @@ def create_source_schedule(
     request: Request,
     user: UserRecord = Depends(require_permission("jobs:run")),
 ) -> JSONResponse:
+    require_source_jobs_run(user.id, source_id)
     schedule = insert_source_schedule(
         source_id=source_id,
         kind=payload.kind,
@@ -74,9 +78,10 @@ def create_source_schedule(
 @router.get("/sources/{source_id}/schedules", response_model=ScheduleListResponse)
 def list_source_schedules(
     source_id: str,
-    _: UserRecord = Depends(require_permission("jobs:run")),
+    user: UserRecord = Depends(require_permission("jobs:run")),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> ScheduleListResponse:
+    require_source_jobs_run(user.id, source_id)
     items, total = list_source_schedule_rows(
         source_id, limit=page.limit, offset=page.offset
     )
@@ -100,6 +105,8 @@ def run_source_schedule(
     user: UserRecord = Depends(require_permission("jobs:run")),
     users: UserStore = Depends(get_user_store),
 ) -> JSONResponse:
+    record = get_schedule(schedule_id)
+    require_stamped_schedule_mutable(user.id, record)
     record = require_runnable_schedule(schedule_id)
     actor_token_id = get_actor_token_id(request)
     if is_catalog_embed_schedule(record):
@@ -129,9 +136,10 @@ def list_schedule_jobs(
     kind: str | None = None,
     status_filter: JobStatus | None = Query(default=None, alias="status"),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
-    _: UserRecord = Depends(require_permission("jobs:run")),
+    user: UserRecord = Depends(require_permission("jobs:run")),
     users: UserStore = Depends(get_user_store),
 ) -> JobListResponse:
+    require_stamped_schedule_visible(user.id, get_schedule(schedule_id))
     records, total = list_jobs_for_schedule(
         schedule_id,
         kind=kind,

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
@@ -15,6 +16,7 @@ from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.pagination import apply_offset_page, apply_sql_page
 from backend.core.time import utc_now
+from backend.jobs.store import opaque_stamp_clause, stamp_visible
 from backend.worker.models import ScheduledTaskRow
 
 
@@ -41,6 +43,7 @@ class ScheduledTaskRecord:
     start_at: datetime | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    access_stamp: str | None = None
 
 
 class ScheduleStore(Protocol):
@@ -65,6 +68,7 @@ class ScheduleStore(Protocol):
         session: Session | None = None,
         limit: int | None = None,
         offset: int = 0,
+        access_stamps: AbstractSet[str] | None = None,
     ) -> tuple[list[ScheduledTaskRecord], int]: ...
 
     def list_enabled(self) -> list[ScheduledTaskRecord]: ...
@@ -101,8 +105,15 @@ class MemoryScheduleStore:
     ) -> ScheduledTaskRecord:
         del session
         with self._lock:
-            self._by_key[record.key] = record
-            return record
+            existing = self._by_key.get(record.key)
+            if existing is None:
+                for item in self._by_key.values():
+                    if item.id == record.id:
+                        existing = item
+                        break
+            stored = _keep_stamp(record, existing)
+            self._by_key[stored.key] = stored
+            return stored
 
     def get_by_key(self, key: str) -> ScheduledTaskRecord | None:
         with self._lock:
@@ -129,12 +140,19 @@ class MemoryScheduleStore:
         session: Session | None = None,
         limit: int | None = None,
         offset: int = 0,
+        access_stamps: AbstractSet[str] | None = None,
     ) -> tuple[list[ScheduledTaskRecord], int]:
         del session
         with self._lock:
             items = list(self._by_key.values())
         if not include_hidden:
             items = [record for record in items if not record.hidden]
+        if access_stamps is not None:
+            items = [
+                record
+                for record in items
+                if stamp_visible(record.access_stamp, access_stamps)
+            ]
         items.sort(key=lambda record: (record.created_at, record.id), reverse=True)
         return apply_offset_page(items, limit=limit, offset=offset)
 
@@ -206,6 +224,7 @@ class MemoryScheduleStore:
                     start_at=record.start_at,
                     created_at=record.created_at,
                     updated_at=now,
+                    access_stamp=record.access_stamp,
                 )
                 self._by_key[key] = updated
                 return updated
@@ -229,7 +248,8 @@ class SqlScheduleStore:
             row = session.scalar(
                 select(ScheduledTaskRow).where(ScheduledTaskRow.key == record.key)
             )
-        if row is None:
+        creating = row is None
+        if creating:
             row = ScheduledTaskRow(id=record.id)
             session.add(row)
         row.key = record.key
@@ -248,6 +268,9 @@ class SqlScheduleStore:
         row.undeletable = record.undeletable
         row.store_only = record.store_only
         row.owner_ref = record.owner_ref
+        row.access_stamp = _keep_stamp(
+            record, None if creating else _row_to_schedule(row)
+        ).access_stamp
         row.last_run_at = record.last_run_at
         row.next_run_at = record.next_run_at
         row.created_at = record.created_at
@@ -298,14 +321,23 @@ class SqlScheduleStore:
         session: Session | None = None,
         limit: int | None = None,
         offset: int = 0,
+        access_stamps: AbstractSet[str] | None = None,
     ) -> tuple[list[ScheduledTaskRecord], int]:
         if session is not None:
             return self.list_on(
-                session, include_hidden=include_hidden, limit=limit, offset=offset
+                session,
+                include_hidden=include_hidden,
+                limit=limit,
+                offset=offset,
+                access_stamps=access_stamps,
             )
         with session_scope() as owned:
             return self.list_on(
-                owned, include_hidden=include_hidden, limit=limit, offset=offset
+                owned,
+                include_hidden=include_hidden,
+                limit=limit,
+                offset=offset,
+                access_stamps=access_stamps,
             )
 
     def list_on(
@@ -315,14 +347,23 @@ class SqlScheduleStore:
         include_hidden: bool = False,
         limit: int | None = None,
         offset: int = 0,
+        access_stamps: AbstractSet[str] | None = None,
     ) -> tuple[list[ScheduledTaskRecord], int]:
+        clauses = []
+        if not include_hidden:
+            clauses.append(ScheduledTaskRow.hidden.is_(False))
+        stamp_clause = opaque_stamp_clause(
+            ScheduledTaskRow.access_stamp, access_stamps
+        )
+        if stamp_clause is not None:
+            clauses.append(stamp_clause)
         count_stmt = select(func.count()).select_from(ScheduledTaskRow)
         stmt = select(ScheduledTaskRow).order_by(
             ScheduledTaskRow.created_at.desc(), ScheduledTaskRow.id.desc()
         )
-        if not include_hidden:
-            count_stmt = count_stmt.where(ScheduledTaskRow.hidden.is_(False))
-            stmt = stmt.where(ScheduledTaskRow.hidden.is_(False))
+        if clauses:
+            count_stmt = count_stmt.where(*clauses)
+            stmt = stmt.where(*clauses)
         total = int(session.scalar(count_stmt) or 0)
         stmt = apply_sql_page(stmt, limit=limit, offset=offset)
         return [_row_to_schedule(row) for row in session.scalars(stmt).all()], total
@@ -471,7 +512,24 @@ def _row_to_schedule(row: object) -> ScheduledTaskRecord:
         start_at=row.start_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        access_stamp=row.access_stamp,
     )
+
+
+def _keep_stamp(
+    record: ScheduledTaskRecord, existing: ScheduledTaskRecord | None
+) -> ScheduledTaskRecord:
+    """Keep a stored stamp when the incoming record does not carry one.
+
+    The stamp is not derived from kwargs or owner_ref.
+    """
+    if (
+        record.access_stamp is not None
+        or existing is None
+        or existing.access_stamp is None
+    ):
+        return record
+    return replace(record, access_stamp=existing.access_stamp)
 
 
 _memory_singleton: MemoryScheduleStore | None = None

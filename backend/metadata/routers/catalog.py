@@ -21,6 +21,16 @@ from backend.metadata.catalog import join_writes as catalog_joins
 from backend.metadata.catalog import semantics as catalog_semantics
 from backend.metadata.catalog import service as catalog_reads
 from backend.metadata.catalog import views as catalog_views
+from backend.metadata.catalog.refs import require_column, require_join, resolve_object_ref
+from backend.metadata.catalog.store import require_object
+from backend.metadata.errors import (
+    CatalogColumnNotFound,
+    CatalogJoinNotFound,
+    CatalogObjectNotFound,
+    SourceNotFound,
+)
+from backend.metadata.source_access import allows
+from backend.metadata.sources.service import require_source
 from backend.metadata.catalog.present import (
     ObjectPresentProfile,
     present_column,
@@ -61,6 +71,46 @@ from backend.metadata.schemas.query import SampleRequest, SampleResponse
 
 router = APIRouter(tags=["catalog"])
 
+
+def _require_listed_source(user_id: str, source_id: str, permission: str) -> None:
+    record = require_source(source_id)
+    if not allows(user_id, record.id, permission):
+        raise SourceNotFound()
+
+
+def _require_object_permission(user_id: str, object_ref: str, permission: str) -> None:
+    record = resolve_object_ref(object_ref)
+    if not allows(user_id, record.source_id, permission):
+        raise CatalogObjectNotFound()
+
+
+def _column_source_id(column_id: str) -> str:
+    column = require_column(column_id)
+    return require_object(column.object_id).source_id
+
+
+def _require_column_permission(
+    user_id: str,
+    column_ids: list[str],
+    permission: str,
+) -> None:
+    if not column_ids:
+        return
+    source_ids = [_column_source_id(column_id) for column_id in column_ids]
+    if not allows(user_id, source_ids[0], permission, *source_ids[1:]):
+        raise CatalogColumnNotFound()
+
+
+def _require_join_permission(user_id: str, join_id: str) -> None:
+    record = require_join(join_id)
+    source_ids = [
+        _column_source_id(record.from_column_id),
+        _column_source_id(record.to_column_id),
+    ]
+    if not allows(user_id, source_ids[0], "metadata:write", *source_ids[1:]):
+        raise CatalogJoinNotFound()
+
+
 def _column_out(view: catalog_views.ColumnView) -> CatalogColumnOut:
     return CatalogColumnOut.model_validate(
         present_column(view, include_normalized_type=True)
@@ -94,8 +144,9 @@ def list_objects(
     include_absent: bool = True,
     business_semantics_ready: bool | None = Query(default=None),
     page: PageParams = Depends(page_params(CATALOG_OBJECT_LIST)),
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectListResponse:
+    _require_listed_source(user.id, source_id, "metadata:read")
     items, total = catalog_reads.list_objects_for_source(
         source_id,
         q=q,
@@ -123,6 +174,7 @@ async def search_objects(
     def _run() -> object:
         return catalog_reads.search_objects(
             q or "",
+            visible_source_ids=catalog_reads.search_visible_source_ids(user.id),
             source_id=source_id,
             object_type=object_type,
             limit=page.limit,
@@ -151,6 +203,7 @@ async def search_columns(
     def _run() -> object:
         return catalog_reads.search_columns(
             q or "",
+            visible_source_ids=catalog_reads.search_visible_source_ids(user.id),
             source_id=source_id,
             object_type=object_type,
             limit=page.limit,
@@ -171,8 +224,9 @@ async def search_columns(
 @router.get("/objects/{object_id}", response_model=CatalogObjectResponse)
 def get_object(
     object_id: str,
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectResponse:
+    _require_object_permission(user.id, object_id, "metadata:read")
     return CatalogObjectResponse(
         object=_object_out(catalog_reads.get_object(object_id), detail=True)
     )
@@ -180,8 +234,9 @@ def get_object(
 @router.get("/objects/{object_id}/ddl", response_model=CatalogDdlResponse)
 def get_object_ddl(
     object_id: str,
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogDdlResponse:
+    _require_object_permission(user.id, object_id, "metadata:read")
     ddl = catalog_reads.get_object_ddl(object_id)
     return CatalogDdlResponse(id=ddl.id, ddl=ddl.ddl)
 
@@ -192,8 +247,9 @@ def get_object_ddl(
 def list_object_semantics_changes(
     object_id: str,
     page: PageParams = Depends(page_params(SEMANTICS_CHANGE_LIST)),
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> SemanticsChangeListResponse:
+    _require_object_permission(user.id, object_id, "metadata:read")
     items, total = catalog_reads.list_semantics_changes(
         object_id, limit=page.limit, offset=page.offset
     )
@@ -224,6 +280,8 @@ async def run_object_sample(
     request: Request,
     user: UserRecord = Depends(require_permission("catalog:sample")),
 ) -> SampleResponse:
+    _require_object_permission(user.id, object_id, "catalog:sample")
+
     def _run() -> query_service.SampleOutcome:
         return query_service.run_catalog_sample(
             object_id=object_id,
@@ -263,6 +321,7 @@ def patch_object_semantics(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> CatalogObjectResponse:
+    _require_object_permission(user.id, object_id, "metadata:write")
     data = payload.model_dump(exclude_unset=True)
     record = catalog_semantics.patch_object_semantics(
         object_id=object_id,
@@ -285,6 +344,7 @@ def patch_column_semantics(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> CatalogColumnResponse:
+    _require_column_permission(user.id, [column_id], "metadata:write")
     data = payload.model_dump(exclude_unset=True)
     record, _applied = catalog_semantics.patch_column_semantics(
         column_id=column_id,
@@ -305,6 +365,7 @@ def patch_columns_semantics_batch(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> CatalogColumnsSemanticsBatchResponse:
+    _require_object_permission(user.id, object_id, "metadata:write")
     result = catalog_semantics.set_column_semantics_batch(
         object_id=object_id,
         columns=[item.model_dump(exclude_unset=True) for item in payload.columns],
@@ -322,9 +383,10 @@ def patch_columns_semantics_batch(
 @router.get("/objects/{object_id}/joins", response_model=JoinListResponse)
 def list_object_joins(
     object_id: str,
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
     page: PageParams = Depends(page_params(JOIN_LIST)),
 ) -> JoinListResponse:
+    _require_object_permission(user.id, object_id, "metadata:read")
     items, total = catalog_joins.list_joins(
         object_id, limit=page.limit, offset=page.offset
     )
@@ -341,6 +403,11 @@ def create_join(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> JoinResponse:
+    _require_column_permission(
+        user.id,
+        [payload.from_column_id, payload.to_column_id],
+        "metadata:write",
+    )
     record = catalog_joins.create_join(
         from_column_id=payload.from_column_id,
         to_column_id=payload.to_column_id,
@@ -359,6 +426,12 @@ def create_joins_batch(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> JoinBatchResponse:
+    column_ids = [
+        column_id
+        for item in payload.joins
+        for column_id in (item.from_column_id, item.to_column_id)
+    ]
+    _require_column_permission(user.id, column_ids, "metadata:write")
     items, created, known, rejected = catalog_joins.upsert_joins_batch(
         joins=[j.model_dump() for j in payload.joins],
         actor_user_id=user.id,
@@ -381,6 +454,8 @@ async def get_join_path(
     top_targets: int = Query(default=3, ge=1, le=20),
     user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> JoinPathResponse:
+    catalog_reads.require_join_path_visible(user.id, start, target)
+
     def _run() -> object:
         return catalog_reads.lookup_join_paths(
             start,
@@ -427,6 +502,7 @@ def patch_join(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> JoinResponse:
+    _require_join_permission(user.id, join_id)
     record = catalog_joins.amend_join(
         join_id=join_id,
         evidence=payload.evidence,
@@ -443,6 +519,7 @@ def reject_join(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> JoinResponse:
+    _require_join_permission(user.id, join_id)
     record = catalog_joins.reject_join(
         join_id=join_id,
         actor_user_id=user.id,
@@ -456,6 +533,7 @@ def restore_join(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> JoinResponse:
+    _require_join_permission(user.id, join_id)
     record = catalog_joins.restore_join(
         join_id=join_id,
         actor_user_id=user.id,
@@ -469,6 +547,7 @@ def delete_join(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> Response:
+    _require_join_permission(user.id, join_id)
     catalog_joins.delete_join(
         join_id=join_id,
         actor_user_id=user.id,

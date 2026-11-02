@@ -24,6 +24,7 @@ from backend.core.time import utc_now  # noqa: E402
 from backend.jobs.store import reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata.catalog.embedding import cosine_similarity, set_embed_fn_for_tests  # noqa: E402
+from backend.metadata.catalog.index_embeddings import refresh_source_embeddings  # noqa: E402
 from backend.metadata.catalog.service import lookup_join_paths, search_objects  # noqa: E402
 from backend.metadata.errors import JoinPathUnavailable  # noqa: E402
 from backend.metadata.catalog.store import (  # noqa: E402
@@ -215,11 +216,12 @@ def test_hybrid_search_finds_semantic_only_hit() -> None:
         ],
         schema_scope=None,
     )
-    found = search_objects("buyer", limit=10, offset=0)
+    refresh_source_embeddings("src_1")
+    found = search_objects("buyer", visible_source_ids=None, limit=10, offset=0)
     assert found.rank_mode == "vector"
     assert any(o.id == "obj_cust" for o in found.items)
 
-    technical = search_objects("cust", limit=10, offset=0)
+    technical = search_objects("cust", visible_source_ids=None, limit=10, offset=0)
     assert technical.rank_mode == "vector"
     assert technical.items[0].id == "obj_wid"
     set_embed_fn_for_tests(None)
@@ -259,7 +261,7 @@ def test_hybrid_query_embed_failure_is_error() -> None:
 
     set_embed_fn_for_tests(boom)
     with pytest.raises(CatalogSearchEmbedFailed):
-        search_objects("cust_hdr", limit=10, offset=0)
+        search_objects("cust_hdr", visible_source_ids=None, limit=10, offset=0)
     set_embed_fn_for_tests(None)
 
 

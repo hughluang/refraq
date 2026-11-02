@@ -71,6 +71,7 @@ class CatalogReadStore(Protocol):
         query: str,
         *,
         source_id: str | None = None,
+        source_ids: frozenset[str] | None = None,
         object_type: str | None = None,
         include_absent: bool = True,
         limit: int = 50,
@@ -82,6 +83,7 @@ class CatalogReadStore(Protocol):
         query: str,
         *,
         source_id: str | None = None,
+        source_ids: frozenset[str] | None = None,
         object_type: str | None = None,
         include_absent: bool = True,
         object_ids: list[str] | None = None,
@@ -160,6 +162,7 @@ class CatalogSemanticsStore(Protocol):
         limit: int,
         generation: int,
         source_id: str | None = None,
+        source_ids: frozenset[str] | None = None,
         object_type: str | None = None,
         object_ids: list[str] | None = None,
     ) -> list[str]: ...

@@ -428,6 +428,7 @@ async def search_objects(
         def _run() -> object:
             return catalog_reads.search_objects(
                 query_text or "",
+                visible_source_ids=catalog_reads.search_visible_source_ids(user.id),
                 source_id=source_id,
                 object_type=object_type,
                 limit=lim,
@@ -472,6 +473,7 @@ async def search_columns(
         def _run() -> object:
             return catalog_reads.search_columns(
                 query_text or "",
+                visible_source_ids=catalog_reads.search_visible_source_ids(user.id),
                 source_id=source_id,
                 object_type=object_type,
                 limit=lim,

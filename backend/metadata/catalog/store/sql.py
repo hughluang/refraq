@@ -274,11 +274,14 @@ class SqlCatalogStore:
         query: str,
         *,
         source_id: str | None = None,
+        source_ids: frozenset[str] | None = None,
         object_type: str | None = None,
         include_absent: bool = True,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]:
+        if source_ids is not None and not source_ids:
+            return [], 0
         q = _search_query(query)
         if not q:
             return [], 0
@@ -286,6 +289,8 @@ class SqlCatalogStore:
         filters = [where]
         if source_id is not None:
             filters.append(CatalogObjectRow.source_id == source_id)
+        if source_ids is not None:
+            filters.append(CatalogObjectRow.source_id.in_(list(source_ids)))
         if object_type is not None:
             filters.append(CatalogObjectRow.object_type == object_type)
         if not include_absent:
@@ -325,12 +330,15 @@ class SqlCatalogStore:
         query: str,
         *,
         source_id: str | None = None,
+        source_ids: frozenset[str] | None = None,
         object_type: str | None = None,
         include_absent: bool = True,
         object_ids: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CatalogColumnRecord], int]:
+        if source_ids is not None and not source_ids:
+            return [], 0
         q = _search_query(query)
         if not q:
             return [], 0
@@ -340,6 +348,8 @@ class SqlCatalogStore:
         filters = [where]
         if source_id is not None:
             filters.append(CatalogObjectRow.source_id == source_id)
+        if source_ids is not None:
+            filters.append(CatalogObjectRow.source_id.in_(list(source_ids)))
         if object_type is not None:
             filters.append(CatalogObjectRow.object_type == object_type)
         if object_ids is not None:
@@ -945,12 +955,15 @@ class SqlCatalogStore:
         limit: int,
         generation: int,
         source_id: str | None = None,
+        source_ids: frozenset[str] | None = None,
         object_type: str | None = None,
         object_ids: list[str] | None = None,
     ) -> list[str]:
         if not query or limit < 1:
             return []
         if object_ids is not None and not object_ids:
+            return []
+        if source_ids is not None and not source_ids:
             return []
         vec = "[" + ",".join(repr(float(n)) for n in query) + "]"
         params: dict[str, object] = {
@@ -964,6 +977,9 @@ class SqlCatalogStore:
         if source_id is not None:
             extra.append("AND o.source_id = :source_id")
             params["source_id"] = source_id
+        if source_ids is not None:
+            extra.append("AND o.source_id IN :source_ids")
+            params["source_ids"] = list(source_ids)
         if object_type is not None:
             extra.append("AND o.object_type = :object_type")
             params["object_type"] = object_type
@@ -1012,8 +1028,13 @@ class SqlCatalogStore:
             LIMIT :k
             """
         )
+        expanding = []
         if object_ids is not None:
-            stmt = stmt.bindparams(bindparam("object_ids", expanding=True))
+            expanding.append(bindparam("object_ids", expanding=True))
+        if source_ids is not None:
+            expanding.append(bindparam("source_ids", expanding=True))
+        if expanding:
+            stmt = stmt.bindparams(*expanding)
         with session_scope() as session:
             rows = session.execute(stmt, params).all()
             return [str(row[0]) for row in rows]

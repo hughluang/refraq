@@ -27,6 +27,7 @@ from backend.jobs.store import reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata.catalog.embedding import (  # noqa: E402
     CatalogEmbeddingRecord,
+    current_generation,
     set_embed_fn_for_tests,
 )
 from backend.metadata.catalog.service import (  # noqa: E402
@@ -180,6 +181,37 @@ def _unit_embed(texts: list[str]) -> list[list[float]]:
     return [[1.0, 0.0] for _ in texts]
 
 
+def _index_unit(object_ids: list[str]) -> None:
+    """Store one unit vector per object and its id column at generation 0."""
+    now = utc_now()
+    store = get_catalog_store()
+    for object_id in object_ids:
+        store.upsert_embedding(
+            CatalogEmbeddingRecord(
+                id=f"emb_{object_id}",
+                kind="object",
+                target_id=object_id,
+                locator_key=f"loc/{object_id}",
+                content_hash="h",
+                embedding=[1.0, 0.0],
+                indexed_at=now,
+                generation=current_generation(),
+            )
+        )
+        store.upsert_embedding(
+            CatalogEmbeddingRecord(
+                id=f"emb_col_{object_id}",
+                kind="column",
+                target_id=f"col_{object_id}",
+                locator_key=f"loc/col/{object_id}",
+                content_hash="h",
+                embedding=[1.0, 0.0],
+                indexed_at=now,
+                generation=current_generation(),
+            )
+        )
+
+
 def test_hybrid_source_filter_excludes_foreign_objects() -> None:
     _reset()
     _source("src_1", "mes-a")
@@ -199,12 +231,25 @@ def test_hybrid_source_filter_excludes_foreign_objects() -> None:
         ],
         schema_scope=None,
     )
-    found = search_objects("zzz_nomatch", source_id="src_1", limit=20, offset=0)
+    _index_unit(["obj_local", "obj_foreign"])
+    found = search_objects(
+        "zzz_nomatch",
+        visible_source_ids=None,
+        source_id="src_1",
+        limit=20,
+        offset=0,
+    )
     assert found.rank_mode == "vector"
     assert not found.truncated
     assert [o.id for o in found.items] == ["obj_local"]
     assert all(o.source_id == "src_1" for o in found.items)
-    cols = search_columns("zzz_nomatch", source_id="src_1", limit=20, offset=0)
+    cols = search_columns(
+        "zzz_nomatch",
+        visible_source_ids=None,
+        source_id="src_1",
+        limit=20,
+        offset=0,
+    )
     assert cols.rank_mode == "vector"
     assert [c.id for c in cols.items] == ["col_obj_local"]
     set_embed_fn_for_tests(None)
@@ -235,7 +280,14 @@ def test_hybrid_object_type_filter_excludes_other_types() -> None:
         ],
         schema_scope=None,
     )
-    found = search_objects("zzz_nomatch", object_type="table", limit=20, offset=0)
+    _index_unit(["obj_tbl", "obj_view"])
+    found = search_objects(
+        "zzz_nomatch",
+        visible_source_ids=None,
+        object_type="table",
+        limit=20,
+        offset=0,
+    )
     assert found.rank_mode == "vector"
     assert [o.id for o in found.items] == ["obj_tbl"]
     assert all(o.object_type == "table" for o in found.items)
@@ -261,7 +313,9 @@ def test_empty_neighbors_is_empty_vector_page() -> None:
         schema_scope=None,
     )
     set_embed_fn_for_tests(_unit_embed)
-    found = search_objects("shared_token", limit=20, offset=0)
+    found = search_objects(
+        "shared_token", visible_source_ids=None, limit=20, offset=0
+    )
     assert found.rank_mode == "vector"
     assert found.items == []
     assert not found.truncated
@@ -285,6 +339,7 @@ def test_search_rank_mode_on_http_and_mcp(client: TestClient) -> None:
         ],
         schema_scope=None,
     )
+    _index_unit(["obj_cust"])
     http = client.get("/catalog/objects/search?q=buyer")
     assert http.status_code == 200
     body = http.json()
@@ -331,8 +386,8 @@ def test_same_query_embeds_twice() -> None:
         schema_scope=None,
     )
     before = seen.count("buyer")
-    search_objects("buyer", limit=10, offset=0)
-    search_objects("buyer", limit=5, offset=0)
+    search_objects("buyer", visible_source_ids=None, limit=10, offset=0)
+    search_objects("buyer", visible_source_ids=None, limit=5, offset=0)
     assert seen.count("buyer") == before + 2
     set_embed_fn_for_tests(None)
 
@@ -359,7 +414,7 @@ def test_embed_failure_is_error_not_lexical_page() -> None:
 
     set_embed_fn_for_tests(_boom)
     with pytest.raises(CatalogSearchEmbedFailed):
-        search_objects("cust_hdr", limit=10, offset=0)
+        search_objects("cust_hdr", visible_source_ids=None, limit=10, offset=0)
     set_embed_fn_for_tests(None)
 
 
@@ -482,7 +537,7 @@ def test_lexical_process_state_omits_total() -> None:
         ],
         schema_scope=None,
     )
-    found = search_objects("cust_hdr", limit=10, offset=0)
+    found = search_objects("cust_hdr", visible_source_ids=None, limit=10, offset=0)
     assert found.rank_mode == "lexical"
     assert [o.id for o in found.items] == ["obj_cust"]
     assert not hasattr(found, "total")
@@ -680,5 +735,208 @@ def test_join_path_query_recalls_reachable_over_closer_unrelated() -> None:
     )
     assert result.rank_mode == "vector"
     assert [p.target_object_id for p in result.paths] == ["obj_ord"]
+    set_embed_fn_for_tests(None)
+
+
+def test_lexical_visible_source_ids_rank_only_those_sources() -> None:
+    _reset()
+    _source("src_1", "mes-a")
+    _source("src_2", "mes-b")
+    apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="j1",
+        collected=[
+            _obj(
+                object_id="obj_local",
+                name="orders",
+                source_id="src_1",
+                source_key="mes-a",
+            )
+        ],
+        schema_scope=None,
+    )
+    apply_structure_snapshot(
+        source=require_source("src_2"),
+        job_id="j2",
+        collected=[
+            _obj(
+                object_id="obj_foreign",
+                name="orders_hidden",
+                source_id="src_2",
+                source_key="mes-b",
+            )
+        ],
+        schema_scope=None,
+    )
+    found = search_objects(
+        "orders",
+        visible_source_ids=frozenset({"src_1"}),
+        limit=20,
+        offset=0,
+    )
+    assert found.rank_mode == "lexical"
+    assert [item.id for item in found.items] == ["obj_local"]
+    columns = search_columns(
+        "id",
+        visible_source_ids=frozenset({"src_1"}),
+        limit=20,
+        offset=0,
+    )
+    assert [item.id for item in columns.items] == ["col_obj_local"]
+    hidden = search_objects(
+        "orders",
+        visible_source_ids=frozenset({"src_1"}),
+        source_id="src_2",
+        limit=20,
+        offset=0,
+    )
+    assert hidden.items == []
+    empty = search_objects(
+        "orders",
+        visible_source_ids=frozenset(),
+        limit=20,
+        offset=0,
+    )
+    assert empty.items == []
+    assert empty.rank_mode == "lexical"
+
+
+def test_vector_visible_source_ids_do_not_drop_visible_neighbors() -> None:
+    """Hidden neighbors must not consume the vector window."""
+    _reset()
+    _source("src_1", "mes-a")
+    _source("src_2", "mes-b")
+    visible = _obj(
+        object_id="obj_visible",
+        name="orders",
+        source_id="src_1",
+        source_key="mes-a",
+    )
+    hidden = [
+        _obj(
+            object_id=f"obj_hidden_{index:03d}",
+            name=f"orders_hidden_{index:03d}",
+            source_id="src_2",
+            source_key="mes-b",
+        )
+        for index in range(50)
+    ]
+    apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="j1",
+        collected=[visible],
+        schema_scope=None,
+    )
+    apply_structure_snapshot(
+        source=require_source("src_2"),
+        job_id="j2",
+        collected=hidden,
+        schema_scope=None,
+    )
+    now = utc_now()
+    store = get_catalog_store()
+    store.upsert_embedding(
+        CatalogEmbeddingRecord(
+            id="emb_visible",
+            kind="object",
+            target_id="obj_visible",
+            locator_key="loc/visible",
+            content_hash="h",
+            embedding=[0.6, 0.8],
+            indexed_at=now,
+            generation=0,
+        )
+    )
+    store.upsert_embedding(
+        CatalogEmbeddingRecord(
+            id="emb_col_visible",
+            kind="column",
+            target_id="col_obj_visible",
+            locator_key="loc/col-visible",
+            content_hash="h",
+            embedding=[0.6, 0.8],
+            indexed_at=now,
+            generation=0,
+        )
+    )
+    for index in range(50):
+        store.upsert_embedding(
+            CatalogEmbeddingRecord(
+                id=f"emb_hidden_{index:03d}",
+                kind="object",
+                target_id=f"obj_hidden_{index:03d}",
+                locator_key=f"loc/hidden/{index}",
+                content_hash="h",
+                embedding=[1.0, 0.0],
+                indexed_at=now,
+                generation=0,
+            )
+        )
+        store.upsert_embedding(
+            CatalogEmbeddingRecord(
+                id=f"emb_col_hidden_{index:03d}",
+                kind="column",
+                target_id=f"col_obj_hidden_{index:03d}",
+                locator_key=f"loc/col-hidden/{index}",
+                content_hash="h",
+                embedding=[1.0, 0.0],
+                indexed_at=now,
+                generation=0,
+            )
+        )
+
+    def _embed(texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0] for _ in texts]
+
+    set_embed_fn_for_tests(_embed)
+    found = search_objects(
+        "orders",
+        visible_source_ids=frozenset({"src_1"}),
+        limit=10,
+        offset=0,
+    )
+    assert found.rank_mode == "vector"
+    assert [item.id for item in found.items] == ["obj_visible"]
+    columns = search_columns(
+        "id",
+        visible_source_ids=frozenset({"src_1"}),
+        limit=10,
+        offset=0,
+    )
+    assert [item.id for item in columns.items] == ["col_obj_visible"]
+    set_embed_fn_for_tests(None)
+
+
+def test_empty_visible_source_ids_do_not_embed() -> None:
+    _reset()
+    _source("src_1", "mes-a")
+    apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="j1",
+        collected=[
+            _obj(
+                object_id="obj_local",
+                name="orders",
+                source_id="src_1",
+                source_key="mes-a",
+            )
+        ],
+        schema_scope=None,
+    )
+
+    def _boom(_texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("should not embed")
+
+    set_embed_fn_for_tests(_boom)
+    found = search_objects("orders", visible_source_ids=frozenset(), limit=10, offset=0)
+    assert found.items == []
+    assert found.rank_mode == "vector"
+    columns = search_columns(
+        "id",
+        visible_source_ids=frozenset(),
+        limit=10,
+        offset=0,
+    )
+    assert columns.items == []
     set_embed_fn_for_tests(None)
 

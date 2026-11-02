@@ -47,6 +47,18 @@ from backend.metadata.structure_diffs.store import (
 )
 
 
+def _source_allowed(
+    row_source_id: str,
+    source_id: str | None,
+    source_ids: frozenset[str] | None,
+) -> bool:
+    if source_id is not None and row_source_id != source_id:
+        return False
+    if source_ids is not None and row_source_id not in source_ids:
+        return False
+    return True
+
+
 class _MemoryStructureWrite:
     def __init__(self, store: MemoryCatalogStore, source_id: str) -> None:
         self._store = store
@@ -158,16 +170,19 @@ class MemoryCatalogStore:
         query: str,
         *,
         source_id: str | None = None,
+        source_ids: frozenset[str] | None = None,
         object_type: str | None = None,
         include_absent: bool = True,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]:
+        if source_ids is not None and not source_ids:
+            return [], 0
         with self._lock:
             candidates = [
                 obj
                 for obj in self._objects.values()
-                if (source_id is None or obj.source_id == source_id)
+                if _source_allowed(obj.source_id, source_id, source_ids)
                 and (object_type is None or obj.object_type == object_type)
                 and (include_absent or obj.is_present)
             ]
@@ -191,6 +206,7 @@ class MemoryCatalogStore:
         query: str,
         *,
         source_id: str | None = None,
+        source_ids: frozenset[str] | None = None,
         object_type: str | None = None,
         include_absent: bool = True,
         object_ids: list[str] | None = None,
@@ -199,11 +215,13 @@ class MemoryCatalogStore:
     ) -> tuple[list[CatalogColumnRecord], int]:
         if object_ids is not None and not object_ids:
             return [], 0
+        if source_ids is not None and not source_ids:
+            return [], 0
         allowed = set(object_ids) if object_ids is not None else None
         with self._lock:
             candidates: list[CatalogColumnRecord] = []
             for obj in self._objects.values():
-                if source_id is not None and obj.source_id != source_id:
+                if not _source_allowed(obj.source_id, source_id, source_ids):
                     continue
                 if object_type is not None and obj.object_type != object_type:
                     continue
@@ -704,6 +722,7 @@ class MemoryCatalogStore:
         limit: int,
         generation: int,
         source_id: str | None = None,
+        source_ids: frozenset[str] | None = None,
         object_type: str | None = None,
         object_ids: list[str] | None = None,
     ) -> list[str]:
@@ -711,10 +730,15 @@ class MemoryCatalogStore:
             return []
         if object_ids is not None and not object_ids:
             return []
+        if source_ids is not None and not source_ids:
+            return []
         scored: list[tuple[float, str]] = []
         allowed = set(object_ids) if object_ids is not None else None
         scoped = (
-            source_id is not None or object_type is not None or allowed is not None
+            source_id is not None
+            or source_ids is not None
+            or object_type is not None
+            or allowed is not None
         )
         with self._lock:
             rows = [r for (k, _tid), r in self._embeddings.items() if k == kind]
@@ -725,7 +749,7 @@ class MemoryCatalogStore:
                     obj = self._object_for_embedding(kind, rec.target_id)
                     if obj is None:
                         continue
-                    if source_id is not None and obj.source_id != source_id:
+                    if not _source_allowed(obj.source_id, source_id, source_ids):
                         continue
                     if object_type is not None and obj.object_type != object_type:
                         continue

@@ -167,9 +167,9 @@ def _table(
 def test_service_empty_search_raises() -> None:
     _seed_source()
     with pytest.raises(CatalogSearchQueryRequired):
-        catalog_service.search_objects("   ")
+        catalog_service.search_objects("   ", visible_source_ids=None)
     with pytest.raises(CatalogSearchQueryRequired):
-        catalog_service.search_columns("")
+        catalog_service.search_columns("", visible_source_ids=None)
 
 
 def test_mcp_empty_search_returns_query_required(client: TestClient) -> None:

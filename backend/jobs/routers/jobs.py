@@ -21,6 +21,7 @@ from backend.jobs.api import (
     get_schedule_name_store,
     present_jobs,
     revoke_queued_delivery,
+    stamp_predicate,
 )
 from backend.jobs.errors import JobNotCancellable, JobNotFound
 from backend.jobs.schemas.jobs import JobListResponse, JobLogsResponse, JobResponse
@@ -38,14 +39,18 @@ router = APIRouter(tags=["jobs"])
 
 @router.get("/jobs", response_model=JobListResponse)
 def list_jobs(
-    _: UserRecord = Depends(require_permission("jobs:run")),
+    user: UserRecord = Depends(require_permission("jobs:run")),
     users: UserStore = Depends(get_user_store),
     kind: str | None = Query(default=None),
     status: JobStatus | None = Query(default=None),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> JobListResponse:
     items, total = get_job_store().list(
-        kind=kind, status=status, limit=page.limit, offset=page.offset
+        kind=kind,
+        status=status,
+        limit=page.limit,
+        offset=page.offset,
+        access_stamps=stamp_predicate(user.id, "jobs:run"),
     )
     return JobListResponse(
         items=present_jobs(items, users=users, schedules=get_schedule_name_store()),
@@ -58,12 +63,10 @@ def list_jobs(
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: str,
-    _: UserRecord = Depends(require_permission("jobs:run")),
+    user: UserRecord = Depends(require_permission("jobs:run")),
     users: UserStore = Depends(get_user_store),
 ) -> JobResponse:
-    record = get_job_store().get(job_id)
-    if record is None:
-        raise JobNotFound()
+    record = _require_visible_job(job_id, user.id)
     return JobResponse(
         job=present_jobs([record], users=users, schedules=get_schedule_name_store())[0]
     )
@@ -72,11 +75,9 @@ def get_job(
 @router.get("/jobs/{job_id}/logs", response_model=JobLogsResponse)
 def get_job_logs(
     job_id: str,
-    _: UserRecord = Depends(require_permission("jobs:run")),
+    user: UserRecord = Depends(require_permission("jobs:run")),
 ) -> JobLogsResponse:
-    record = get_job_store().get(job_id)
-    if record is None:
-        raise JobNotFound()
+    record = _require_visible_job(job_id, user.id)
     return JobLogsResponse(
         job_id=record.id,
         body=record.log_body,
@@ -92,9 +93,7 @@ def cancel_job(
     users: UserStore = Depends(get_user_store),
     roles: RoleStore = Depends(get_role_store),
 ) -> JobResponse:
-    record = get_job_store().get(job_id)
-    if record is None:
-        raise JobNotFound()
+    record = _require_visible_job(job_id, user.id)
     if not _may_cancel(user, roles, record):
         raise AuthForbidden()
     if record.status in TERMINAL:
@@ -120,6 +119,16 @@ def cancel_job(
     return JobResponse(
         job=present_jobs([logged], users=users, schedules=get_schedule_name_store())[0]
     )
+
+
+def _require_visible_job(job_id: str, user_id: str) -> JobRecord:
+    """Same allow-list as GET /jobs. A hidden stamp answers as a missing Job."""
+    record = get_job_store().get(
+        job_id, access_stamps=stamp_predicate(user_id, "jobs:run")
+    )
+    if record is None:
+        raise JobNotFound()
+    return record
 
 
 def _may_cancel(user: UserRecord, roles: RoleStore, record: JobRecord) -> bool:

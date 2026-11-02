@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Generic, Literal, NamedTuple, TypeVar
 
 from backend.core.metrics import record_catalog_hybrid
+from backend.jobs.api import predicate_for
 from backend.metadata.catalog.embedding import embedding_configured
 from backend.metadata.catalog.refs import resolve_column_ref, resolve_object_ref
 from backend.metadata.catalog.search_hybrid import vector_page
@@ -23,9 +24,11 @@ from backend.metadata.catalog.views import (
 )
 from backend.metadata.errors import (
     CatalogColumnNotFound,
+    CatalogObjectNotFound,
     CatalogSearchQueryRequired,
     JoinPathUnavailable,
 )
+from backend.metadata.source_access import allows, source_ids_for
 from backend.metadata.joins.graph import (
     JoinPath,
     JoinPathResult,
@@ -80,9 +83,45 @@ def list_objects_for_source(
     return [object_view(o, include_columns=False) for o in items], total
 
 
+def search_visible_source_ids(user_id: str) -> frozenset[str] | None:
+    """Source ids Catalog Search may rank for ``metadata:read``.
+
+    ``None`` means every Source, and only when ``source_ids_for`` says so.
+    An empty set is empty and is not converted to ``None``.
+    """
+    return predicate_for(source_ids_for(user_id, "metadata:read"))
+
+
+def _search_rank_mode() -> RankMode:
+    if embedding_configured():
+        return "vector"
+    return "lexical"
+
+
+def _source_scope(
+    visible_source_ids: frozenset[str] | None,
+    source_id: str | None,
+) -> tuple[str | None, frozenset[str] | None] | None:
+    """Store source predicates, or None when the page is empty.
+
+    ``visible_source_ids is None`` keeps the unfiltered query. An empty set
+    is an empty page and is never forwarded as None.
+    """
+    if visible_source_ids is not None and not visible_source_ids:
+        return None
+    if source_id is not None:
+        if visible_source_ids is not None and source_id not in visible_source_ids:
+            return None
+        return source_id, None
+    if visible_source_ids is None:
+        return None, None
+    return None, visible_source_ids
+
+
 def search_objects(
     query: str,
     *,
+    visible_source_ids: frozenset[str] | None,
     source_id: str | None = None,
     object_type: str | None = None,
     limit: int = 20,
@@ -91,11 +130,16 @@ def search_objects(
     cleaned = (query or "").strip()
     if not cleaned:
         raise CatalogSearchQueryRequired()
+    scope = _source_scope(visible_source_ids, source_id)
+    if scope is None:
+        return CatalogSearchPage([], _search_rank_mode(), False)
+    source_filter, source_ids = scope
     store = get_catalog_store()
     if not embedding_configured():
         items, total = store.search_objects(
             cleaned,
-            source_id=source_id,
+            source_id=source_filter,
+            source_ids=source_ids,
             object_type=object_type,
             limit=limit,
             offset=offset,
@@ -112,7 +156,8 @@ def search_objects(
         id_of=lambda o: o.id,
         limit=limit,
         offset=offset,
-        source_id=source_id,
+        source_id=source_filter,
+        source_ids=source_ids,
         object_type=object_type,
     )
     return CatalogSearchPage(
@@ -125,6 +170,7 @@ def search_objects(
 def search_columns(
     query: str,
     *,
+    visible_source_ids: frozenset[str] | None,
     source_id: str | None = None,
     object_type: str | None = None,
     limit: int = 20,
@@ -133,11 +179,16 @@ def search_columns(
     cleaned = (query or "").strip()
     if not cleaned:
         raise CatalogSearchQueryRequired()
+    scope = _source_scope(visible_source_ids, source_id)
+    if scope is None:
+        return CatalogSearchPage([], _search_rank_mode(), False)
+    source_filter, source_ids = scope
     store = get_catalog_store()
     if not embedding_configured():
         items, total = store.search_columns(
             cleaned,
-            source_id=source_id,
+            source_id=source_filter,
+            source_ids=source_ids,
             object_type=object_type,
             limit=limit,
             offset=offset,
@@ -154,7 +205,8 @@ def search_columns(
         id_of=lambda c: c.id,
         limit=limit,
         offset=offset,
-        source_id=source_id,
+        source_id=source_filter,
+        source_ids=source_ids,
         object_type=object_type,
     )
     return CatalogSearchPage([column_view(c) for c in items], "vector", truncated)
@@ -180,6 +232,34 @@ def list_semantics_changes(
     return get_catalog_store().list_semantics_changes(
         obj.id, limit=limit, offset=offset
     )
+
+
+def _endpoint_source_id(ref: str) -> str:
+    try:
+        column = resolve_column_ref(ref)
+    except CatalogColumnNotFound:
+        return resolve_object_ref(ref).source_id
+    obj = get_catalog_store().get_object(column.object_id)
+    if obj is None:
+        raise CatalogObjectNotFound()
+    return obj.source_id
+
+
+def require_join_path_visible(
+    user_id: str,
+    start_ref: str,
+    target_ref: str | None,
+) -> None:
+    """Refuse an endpoint the caller cannot see before join-path lookup.
+
+    A missing column is swallowed the same way as lookup, and the end state
+    for an invisible or unknown endpoint is CatalogObjectNotFound.
+    """
+    source_ids = [_endpoint_source_id(start_ref)]
+    if target_ref:
+        source_ids.append(_endpoint_source_id(target_ref))
+    if not allows(user_id, source_ids[0], "metadata:read", *source_ids[1:]):
+        raise CatalogObjectNotFound()
 
 
 def lookup_join_paths(

@@ -859,3 +859,156 @@ def test_embedding_stamps_and_orphan_prune(catalog_store) -> None:
     assert catalog_store.delete_orphan_embeddings() == 1
     assert catalog_store.get_embedding(kind="object", target_id="obj_missing") is None
     assert catalog_store.delete_orphan_embeddings() == 0
+
+
+def test_search_source_ids_rank_only_that_finite_set(catalog_store) -> None:
+    from backend.metadata.catalog.embedding import CatalogEmbeddingRecord
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.sources.service import require_source
+    from backend.metadata.sources.store import SourceRecord, get_source_store
+
+    other_id = "src_conformance_b"
+    other_key = "conformance-b"
+    now = utc_now()
+    _seed_source()
+    get_source_store().create_source(
+        SourceRecord(
+            id=other_id,
+            key=other_key,
+            locator_key=f"src/postgresql/{other_key}",
+            name="Conformance B",
+            kind="database",
+            status="active",
+            description=None,
+            engine="postgresql",
+            access_ciphertext=None,
+            access_updated_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    local = _object("orders", ready=False, business_name=None, columns=["id"])
+    foreign = _object("orders_hidden", ready=False, business_name=None, columns=["id"])
+    foreign = replace(foreign, source_id=other_id)
+    foreign = replace(
+        foreign,
+        locator_key=f"obj/postgresql/{other_key}/public/table/orders_hidden",
+        columns=[
+            replace(
+                foreign.columns[0],
+                locator_key=(
+                    f"col/postgresql/{other_key}/public/table/orders_hidden/column/id"
+                ),
+            )
+        ],
+    )
+    apply_structure_snapshot(
+        source=require_source(SOURCE_ID),
+        job_id="job_a",
+        collected=[local],
+        schema_scope=None,
+    )
+    apply_structure_snapshot(
+        source=require_source(other_id),
+        job_id="job_b",
+        collected=[foreign],
+        schema_scope=None,
+    )
+
+    only_local, local_total = catalog_store.search_objects(
+        "order", source_ids=frozenset({SOURCE_ID})
+    )
+    assert local_total == 1
+    assert [row.source_id for row in only_local] == [SOURCE_ID]
+
+    empty, empty_total = catalog_store.search_objects("order", source_ids=frozenset())
+    assert empty == []
+    assert empty_total == 0
+
+    both, both_total = catalog_store.search_objects("order")
+    assert both_total == 2
+
+    local_columns, local_column_total = catalog_store.search_columns(
+        "id", source_ids=frozenset({SOURCE_ID})
+    )
+    assert local_column_total == 1
+    assert local_columns[0].object_id == local.id
+
+    no_columns, no_column_total = catalog_store.search_columns(
+        "id", source_ids=frozenset()
+    )
+    assert no_columns == []
+    assert no_column_total == 0
+
+    catalog_store.upsert_embedding(
+        CatalogEmbeddingRecord(
+            id="emb_local",
+            kind="object",
+            target_id=local.id,
+            locator_key="loc/local",
+            content_hash="h",
+            embedding=[0.6, 0.8],
+            indexed_at=now,
+            generation=1,
+        )
+    )
+    catalog_store.upsert_embedding(
+        CatalogEmbeddingRecord(
+            id="emb_foreign",
+            kind="object",
+            target_id=foreign.id,
+            locator_key="loc/foreign",
+            content_hash="h",
+            embedding=[1.0, 0.0],
+            indexed_at=now,
+            generation=1,
+        )
+    )
+    catalog_store.upsert_embedding(
+        CatalogEmbeddingRecord(
+            id="emb_local_col",
+            kind="column",
+            target_id=local.columns[0].id,
+            locator_key="loc/local-col",
+            content_hash="h",
+            embedding=[0.6, 0.8],
+            indexed_at=now,
+            generation=1,
+        )
+    )
+    catalog_store.upsert_embedding(
+        CatalogEmbeddingRecord(
+            id="emb_foreign_col",
+            kind="column",
+            target_id=foreign.columns[0].id,
+            locator_key="loc/foreign-col",
+            content_hash="h",
+            embedding=[1.0, 0.0],
+            indexed_at=now,
+            generation=1,
+        )
+    )
+    assert catalog_store.nearest_embeddings(
+        kind="object",
+        query=[1.0, 0.0],
+        limit=1,
+        generation=1,
+        source_ids=frozenset({SOURCE_ID}),
+    ) == [local.id]
+    assert (
+        catalog_store.nearest_embeddings(
+            kind="object",
+            query=[1.0, 0.0],
+            limit=1,
+            generation=1,
+            source_ids=frozenset(),
+        )
+        == []
+    )
+    assert catalog_store.nearest_embeddings(
+        kind="column",
+        query=[1.0, 0.0],
+        limit=1,
+        generation=1,
+        source_ids=frozenset({SOURCE_ID}),
+    ) == [local.columns[0].id]

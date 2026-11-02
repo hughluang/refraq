@@ -39,3 +39,6 @@ class JobRow(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    access_stamp: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )

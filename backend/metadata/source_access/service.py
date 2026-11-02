@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from backend.admin.errors import AuthForbidden
 from backend.admin.role_store import RoleRecord, get_role_store
 from backend.admin.roles import SUPER_ADMIN_KEY
 from backend.admin.roles import effective_permissions as role_effective_permissions
@@ -159,6 +160,29 @@ def list_memberships(*, target: str | None = None) -> tuple[SourceMembership, ..
     listed = [_to_public(row, subjects) for row in rows]
     listed.sort(key=lambda row: (row.target, row.subject_type, row.subject_id, row.id))
     return tuple(listed)
+
+
+def allows(user_id: str, source_id: str, permission: str, *more_source_ids: str) -> bool:
+    """Whether ``permission`` is held on every given Source.
+
+    No level on any Source returns False so the caller can answer with that
+    resource's existing not-found code. When every Source has a level and one
+    lacks the key, raise AuthForbidden. Callers pass Source ids from records
+    they already loaded.
+    """
+    hidden = False
+    missing_key = False
+    for current in (source_id, *more_source_ids):
+        if effective_level(user_id, current) is None:
+            hidden = True
+            continue
+        if permission not in effective_permissions(user_id, current):
+            missing_key = True
+    if hidden:
+        return False
+    if missing_key:
+        raise AuthForbidden()
+    return True
 
 
 def effective_level(user_id: str, source_id: str) -> str | None:

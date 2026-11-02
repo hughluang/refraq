@@ -33,6 +33,7 @@ def vector_page(
     limit: int,
     offset: int,
     source_id: str | None = None,
+    source_ids: frozenset[str] | None = None,
     object_type: str | None = None,
     object_ids: list[str] | None = None,
 ) -> tuple[list[T], bool]:
@@ -40,12 +41,16 @@ def vector_page(
 
     Raises when the query vector cannot be produced or neighbor scoring
     fails (other than AppError). An empty neighbor list is a successful
-    empty page, not a lexical fallback.
+    empty page, not a lexical fallback. An empty ``source_ids`` is an empty
+    page and does not embed or scan.
     """
+    if source_ids is not None and not source_ids:
+        return [], False
     semantic_ids = _nearest_ids(
         kind,
         query,
         source_id=source_id,
+        source_ids=source_ids,
         object_type=object_type,
         object_ids=object_ids,
     )
@@ -71,6 +76,7 @@ def _nearest_ids(
     query: str,
     *,
     source_id: str | None = None,
+    source_ids: frozenset[str] | None = None,
     object_type: str | None = None,
     object_ids: list[str] | None = None,
 ) -> list[str]:
@@ -103,6 +109,7 @@ def _nearest_ids(
             limit=_SEMANTIC_CANDIDATE_LIMIT,
             generation=current_generation(),
             source_id=source_id,
+            source_ids=source_ids,
             object_type=object_type,
             object_ids=object_ids,
         )

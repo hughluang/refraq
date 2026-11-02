@@ -22,10 +22,14 @@ from backend.jobs.store import JobRecord
 
 __all__ = [
     "ScheduleNameStore",
+    "StampAllowance",
     "bind_schedule_name_store",
+    "bind_stamp_allowance",
     "get_schedule_name_store",
+    "predicate_for",
     "present_jobs",
     "revoke_queued_delivery",
+    "stamp_predicate",
 ]
 
 
@@ -50,6 +54,38 @@ def get_schedule_name_store() -> ScheduleNameStore:
     if _schedule_name_store_getter is None:
         raise RuntimeError("schedule name store is not bound")
     return _schedule_name_store_getter()
+
+
+class StampAllowance(Protocol):
+    all_sources: bool
+    source_ids: frozenset[str]
+
+
+_stamp_allowance: Callable[[str, str], StampAllowance] | None = None
+
+
+def bind_stamp_allowance(resolver: Callable[[str, str], StampAllowance]) -> None:
+    """Composition binds Source Access source_ids_for. Jobs cannot import that module."""
+    global _stamp_allowance
+    _stamp_allowance = resolver
+
+
+def predicate_for(allowed: StampAllowance) -> frozenset[str] | None:
+    """Finite Source ids, or None when every Source is included.
+
+    An empty set stays empty and is not rewritten to None. Callers must not
+    read that empty set as every Source. Job and schedule lists read it as
+    null stamps only.
+    """
+    if allowed.all_sources:
+        return None
+    return frozenset(allowed.source_ids)
+
+
+def stamp_predicate(user_id: str, permission: str) -> frozenset[str] | None:
+    if _stamp_allowance is None:
+        raise RuntimeError("stamp allowance is not bound")
+    return predicate_for(_stamp_allowance(user_id, permission))
 
 
 def present_jobs(

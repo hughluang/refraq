@@ -6,12 +6,13 @@ from backend.core.time import format_instant, utc_now
 import os
 import threading
 import uuid
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any, Literal, Sequence
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
@@ -54,6 +55,7 @@ class JobRecord:
     started_at: datetime | None
     finished_at: datetime | None
     running_timeout_sec: int | None = None
+    access_stamp: str | None = None
 
 
 class UniqueScheduledForError(Exception):
@@ -89,11 +91,18 @@ class MemoryJobStore:
             return record
 
     def get(
-        self, job_id: str, *, session: Session | None = None
+        self,
+        job_id: str,
+        *,
+        session: Session | None = None,
+        access_stamps: AbstractSet[str] | None = None,
     ) -> JobRecord | None:
         del session
         with self._lock:
-            return self._by_id.get(job_id)
+            record = self._by_id.get(job_id)
+            if record is None or not stamp_visible(record.access_stamp, access_stamps):
+                return None
+            return record
 
     def delete(self, job_id: str) -> None:
         """Remove one Job row. Callers that still need the run delete that first."""
@@ -114,6 +123,7 @@ class MemoryJobStore:
         trigger_ref: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        access_stamps: AbstractSet[str] | None = None,
     ) -> tuple[list[JobRecord], int]:
         with self._lock:
             items = list(self._by_id.values())
@@ -125,6 +135,7 @@ class MemoryJobStore:
                 items = [r for r in items if r.trigger_kind == trigger_kind]
             if trigger_ref is not None:
                 items = [r for r in items if r.trigger_ref == trigger_ref]
+            items = _visible_stamps(items, access_stamps)
             items.sort(key=lambda r: (r.created_at, r.id), reverse=True)
             total = len(items)
             start = max(0, offset)
@@ -260,6 +271,7 @@ class SqlJobStore:
             created_at=record.created_at,
             started_at=record.started_at,
             finished_at=record.finished_at,
+            access_stamp=record.access_stamp,
         )
         try:
             with session.begin_nested():
@@ -286,14 +298,18 @@ class SqlJobStore:
         return _row_to_job(row)
 
     def get(
-        self, job_id: str, *, session: Session | None = None
+        self,
+        job_id: str,
+        *,
+        session: Session | None = None,
+        access_stamps: AbstractSet[str] | None = None,
     ) -> JobRecord | None:
         if session is not None:
             row = session.get(JobRow, job_id)
-            return _row_to_job(row) if row else None
+            return _job_if_visible(row, access_stamps)
         with session_scope() as owned:
             row = owned.get(JobRow, job_id)
-            return _row_to_job(row) if row else None
+            return _job_if_visible(row, access_stamps)
 
     def delete(self, job_id: str) -> None:
         """Remove one Job row. Not an HTTP delete."""
@@ -324,6 +340,7 @@ class SqlJobStore:
             row.locked_at = record.locked_at
             row.started_at = record.started_at
             row.finished_at = record.finished_at
+            row.access_stamp = record.access_stamp
             session.flush()
             return _row_to_job(row)
 
@@ -336,6 +353,7 @@ class SqlJobStore:
         trigger_ref: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        access_stamps: AbstractSet[str] | None = None,
     ) -> tuple[list[JobRecord], int]:
         with session_scope() as session:
             filters = []
@@ -347,6 +365,9 @@ class SqlJobStore:
                 filters.append(JobRow.trigger_kind == trigger_kind)
             if trigger_ref is not None:
                 filters.append(JobRow.trigger_ref == trigger_ref)
+            stamp_clause = opaque_stamp_clause(JobRow.access_stamp, access_stamps)
+            if stamp_clause is not None:
+                filters.append(stamp_clause)
             count_stmt = select(func.count()).select_from(JobRow)
             if filters:
                 count_stmt = count_stmt.where(*filters)
@@ -542,6 +563,7 @@ def _row_to_job(row: object) -> JobRecord:
         created_at=row.created_at,
         started_at=row.started_at,
         finished_at=row.finished_at,
+        access_stamp=row.access_stamp,
     )
 
 
@@ -577,6 +599,43 @@ def format_job_log_line(*, level: str, message: str, at: datetime | None = None)
     return f"{ts} {level.upper()} {message}"
 
 
+def stamp_visible(stamp: str | None, access_stamps: AbstractSet[str] | None) -> bool:
+    """None skips the predicate. A null stamp stays visible. An empty set hides stamps."""
+    if access_stamps is None or stamp is None:
+        return True
+    return stamp in access_stamps
+
+
+def _job_if_visible(
+    row: JobRow | None, access_stamps: AbstractSet[str] | None
+) -> JobRecord | None:
+    if row is None:
+        return None
+    record = _row_to_job(row)
+    if not stamp_visible(record.access_stamp, access_stamps):
+        return None
+    return record
+
+
+def opaque_stamp_clause(column: Any, access_stamps: AbstractSet[str] | None) -> Any:
+    """None skips the predicate. An empty set keeps only null stamps."""
+    if access_stamps is None:
+        return None
+    if not access_stamps:
+        return column.is_(None)
+    return or_(column.is_(None), column.in_(tuple(access_stamps)))
+
+
+def _visible_stamps(
+    records: list[JobRecord], access_stamps: AbstractSet[str] | None
+) -> list[JobRecord]:
+    return [
+        record
+        for record in records
+        if stamp_visible(record.access_stamp, access_stamps)
+    ]
+
+
 def create_queued_job(
     *,
     kind: str,
@@ -590,6 +649,7 @@ def create_queued_job(
     running_timeout_sec: int | None = None,
     session: Session | None = None,
     created_at: datetime | None = None,
+    access_stamp: str | None = None,
 ) -> JobRecord:
     now = created_at or utc_now()
     record = JobRecord(
@@ -614,6 +674,7 @@ def create_queued_job(
         created_at=now,
         started_at=None,
         finished_at=None,
+        access_stamp=access_stamp,
     )
     return get_job_store().create(record, session=session)
 

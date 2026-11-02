@@ -7,12 +7,15 @@ from fastapi import APIRouter, Depends
 from backend.admin.deps import require_permission
 from backend.admin.user_store import UserRecord
 from backend.core.pagination import PageParams, page_params
+from backend.metadata.errors import SourceNotFound, StructureDiffNotFound
 from backend.metadata.schemas.structure_diffs import (
     StructureDiffListItemOut,
     StructureDiffListResponse,
     StructureDiffOut,
     StructureDiffResponse,
 )
+from backend.metadata.source_access import allows
+from backend.metadata.sources.service import require_source
 from backend.metadata.structure_diffs import service as diff_service
 from backend.metadata.structure_diffs.store import StructureDiffRecord
 
@@ -49,8 +52,11 @@ def _detail_out(record: StructureDiffRecord) -> StructureDiffOut:
 def list_source_structure_diffs(
     source_id: str,
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> StructureDiffListResponse:
+    record = require_source(source_id)
+    if not allows(user.id, record.id, "metadata:read"):
+        raise SourceNotFound()
     items, total = diff_service.list_structure_diffs(
         source_id, limit=page.limit, offset=page.offset
     )
@@ -68,7 +74,9 @@ def list_source_structure_diffs(
 )
 def get_structure_diff(
     diff_id: str,
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> StructureDiffResponse:
     record = diff_service.get_structure_diff(diff_id)
+    if not allows(user.id, record.source_id, "metadata:read"):
+        raise StructureDiffNotFound()
     return StructureDiffResponse(structure_diff=_detail_out(record))

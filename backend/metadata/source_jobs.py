@@ -93,6 +93,7 @@ def enqueue_source_work_job(
         log_body=queued_line,
         scheduled_for=scheduled_for,
         running_timeout_sec=running_timeout_sec,
+        access_stamp=source_id,
     )
     dispatch_queued_job(job)
     return get_job_store().get(job.id) or job
@@ -174,6 +175,7 @@ def _mint_on_session(
             ),
             session=session,
             created_at=now,
+            access_stamp=source_id or None,
         )
     except UniqueScheduledForError as exc:
         already = True
