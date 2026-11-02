@@ -35,7 +35,7 @@ For repository structure and long-lived development guidance, read:
 
 ### Issue tracker
 
-Issues and specs live as markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
+Issues and specs live as markdown files under `.scratch/`. Completed feature directories move to `.scratch/archive/`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
