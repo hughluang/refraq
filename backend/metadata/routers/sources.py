@@ -9,7 +9,15 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from backend.core.pagination import SOURCE_LIST, PageParams, page_params
 
 from backend.admin.audit import persist_audit_event
-from backend.admin.deps import get_actor_token_id, require_permission
+from backend.admin.deps import (
+    get_actor_token_id,
+    get_current_user,
+    require_permission,
+    resolve_user_permissions,
+)
+from backend.admin.errors import AuthForbidden
+from backend.admin.permissions import permissions_include
+from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.user_store import UserRecord
 from backend.metadata.connectors.specs import get_connector_spec
 from backend.metadata.errors import (
@@ -23,7 +31,7 @@ from backend.metadata.sources.access import (
 from backend.metadata.sources import service as source_service
 from backend.core.admission import await_admitted
 from backend.metadata.sources.probe import ProbeResult, run_source_probe
-from backend.metadata.sources.store import SourceRecord, get_source_store
+from backend.metadata.sources.store import SourceRecord
 from backend.metadata.schemas.sources import (
     AccessSchemaResponse,
     CreateSourceRequest,
@@ -40,26 +48,43 @@ from backend.metadata.schemas.sources import (
 
 router = APIRouter(tags=["sources"])
 
+_SOURCE_LIST_KEYS = ("sources:read", "sources:access_manage")
+
+
+def require_source_list_access(
+    user: UserRecord = Depends(get_current_user),
+    roles: RoleStore = Depends(get_role_store),
+) -> UserRecord:
+    perms = resolve_user_permissions(user, roles)
+    if any(permissions_include(perms, key) for key in _SOURCE_LIST_KEYS):
+        return user
+    raise AuthForbidden()
+
 
 def _source_out(record: SourceRecord) -> SourceOut:
     return SourceOut.model_validate(source_service.public_view(record))
 
 
-@router.get("/sources", response_model=SourceListResponse)
+@router.get(
+    "/sources",
+    response_model=SourceListResponse,
+    response_model_exclude_unset=True,
+)
 def list_sources(
-    _: UserRecord = Depends(require_permission("sources:read")),
+    user: UserRecord = Depends(require_source_list_access),
     page: PageParams = Depends(page_params(SOURCE_LIST)),
     q: str | None = Query(default=None),
     engine: Literal["postgresql", "mssql", "oracle"] | None = Query(default=None),
 ) -> SourceListResponse:
-    records, total = get_source_store().list_sources(
+    items, total = source_service.list_sources_for_user(
+        user,
         query_text=(q or "").strip() or None,
         engine=engine,
         limit=page.limit,
         offset=page.offset,
     )
     return SourceListResponse(
-        items=[_source_out(r) for r in records],
+        items=[SourceOut.model_validate(item) for item in items],
         total=total,
         limit=page.limit,
         offset=page.offset,
@@ -142,18 +167,22 @@ async def test_source_draft(
 @router.get("/sources/{source_id}", response_model=SourceResponse)
 def get_source(
     source_id: str,
-    _: UserRecord = Depends(require_permission("sources:read")),
+    user: UserRecord = Depends(require_permission("sources:read")),
 ) -> SourceResponse:
-    record = source_service.require_source(source_id)
+    record = source_service.require_source_permission(
+        user.id, source_id, "sources:read"
+    )
     return SourceResponse(source=_source_out(record))
 
 
 @router.get("/sources/{source_id}/access", response_model=SourceAccessResponse)
 def get_source_access(
     source_id: str,
-    _: UserRecord = Depends(require_permission("sources:write")),
+    user: UserRecord = Depends(require_permission("sources:write")),
 ) -> SourceAccessResponse:
-    record = source_service.require_source(source_id)
+    record = source_service.require_source_permission(
+        user.id, source_id, "sources:write"
+    )
     return SourceAccessResponse(access=source_service.full_access(record))
 
 
@@ -168,6 +197,7 @@ def patch_source(
     request: Request,
     user: UserRecord = Depends(require_permission("sources:write")),
 ) -> PatchSourceResponse:
+    source_service.require_source_permission(user.id, source_id, "sources:write")
     data = payload.model_dump(exclude_unset=True)
     actor_token_id = get_actor_token_id(request)
     record, seeded = source_service.update_source(
@@ -204,6 +234,7 @@ def delete_source_endpoint(
     request: Request,
     user: UserRecord = Depends(require_permission("sources:write")),
 ) -> Response:
+    source_service.require_source_permission(user.id, source_id, "sources:write")
     record = source_service.delete_source(source_id)
     persist_audit_event(
         actor_user_id=user.id,
@@ -224,7 +255,9 @@ async def test_source_stored(
     request: Request,
     user: UserRecord = Depends(require_permission("sources:write")),
 ) -> SourceTestResponse:
-    record = source_service.require_source(source_id)
+    record = source_service.require_source_permission(
+        user.id, source_id, "sources:write"
+    )
 
     engine = payload.engine or record.engine
     if not engine:

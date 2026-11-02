@@ -17,6 +17,7 @@ os.environ.pop("REDIS_URL", None)
 os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
 from backend.admin.roles import seed_roles  # noqa: E402
+from backend.metadata.source_access import reset_source_access_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.jobs.store import get_job_store, reset_job_store  # noqa: E402
@@ -47,6 +48,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     reset_user_store()
     reset_role_store()
     reset_source_store()
+    reset_source_access_store()
     reset_catalog_store()
     reset_job_store()
     roles = get_role_store()

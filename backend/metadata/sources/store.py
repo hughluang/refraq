@@ -21,6 +21,16 @@ from backend.metadata.locators import format_source_locator
 from backend.metadata.models import SourceRow
 
 
+class AllVisibleSources:
+    """Caller asked for every Source id.
+
+    ``list_sources(..., visible_ids=None)`` is the historical unfiltered read.
+    An empty frozenset is an empty page, not every Source.
+    """
+
+
+ALL_SOURCES = AllVisibleSources()
+
 SUPPORTED_KINDS = frozenset({"database"})
 
 @dataclass
@@ -62,6 +72,7 @@ class SourceStore(Protocol):
         engine: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        visible_ids: frozenset[str] | AllVisibleSources | None = None,
     ) -> tuple[list[SourceRecord], int]: ...
     def get_source(self, source_id: str) -> SourceRecord | None: ...
 
@@ -87,6 +98,19 @@ def _source_matches_engine(record: SourceRecord, engine: str | None) -> bool:
     if code is None:
         return True
     return record.engine == code
+
+
+def _allowed_ids(
+    visible_ids: frozenset[str] | AllVisibleSources | None,
+) -> frozenset[str] | None:
+    """Ids to keep, or None when the id predicate is absent.
+
+    ``None`` and ``ALL_SOURCES`` both omit the predicate. Only an explicit
+    frozenset, including an empty one, restricts ids.
+    """
+    if visible_ids is None or isinstance(visible_ids, AllVisibleSources):
+        return None
+    return visible_ids
 
 
 def source_matches_query(record: SourceRecord, query_text: str | None) -> bool:
@@ -125,7 +149,11 @@ class MemorySourceStore:
         engine: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        visible_ids: frozenset[str] | AllVisibleSources | None = None,
     ) -> tuple[list[SourceRecord], int]:
+        allowed = _allowed_ids(visible_ids)
+        if allowed is not None and not allowed:
+            return [], 0
         with self._lock:
             items = sorted(
                 (
@@ -133,6 +161,7 @@ class MemorySourceStore:
                     for r in self._sources.values()
                     if source_matches_query(r, query_text)
                     and _source_matches_engine(r, engine)
+                    and (allowed is None or r.id in allowed)
                 ),
                 key=lambda r: (r.key, r.id),
             )
@@ -205,12 +234,18 @@ class SqlSourceStore:
         engine: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        visible_ids: frozenset[str] | AllVisibleSources | None = None,
     ) -> tuple[list[SourceRecord], int]:
+        allowed = _allowed_ids(visible_ids)
+        if allowed is not None and not allowed:
+            return [], 0
         with session_scope() as session:
             filters = _source_query_sql_filters(query_text)
             code = _engine_code(engine)
             if code is not None:
                 filters.append(SourceRow.engine == code)
+            if allowed is not None:
+                filters.append(SourceRow.id.in_(allowed))
             count_stmt = select(func.count()).select_from(SourceRow)
             if filters:
                 count_stmt = count_stmt.where(*filters)
@@ -294,12 +329,15 @@ class SqlSourceStore:
 
     def delete_source(self, source_id: str) -> bool:
         with session_scope() as session:
-            row = session.get(SourceRow, source_id)
-            if row is None:
-                return False
-            session.delete(row)
-            session.flush()
-            return True
+            return self.delete_source_on(session, source_id)
+
+    def delete_source_on(self, session: Session, source_id: str) -> bool:
+        row = session.get(SourceRow, source_id)
+        if row is None:
+            return False
+        session.delete(row)
+        session.flush()
+        return True
 
 def _row_to_source(row: object) -> SourceRecord:
     assert isinstance(row, SourceRow)

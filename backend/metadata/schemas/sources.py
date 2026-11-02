@@ -14,15 +14,15 @@ from backend.worker.schemas.schedules import ScheduleOut
 class SourceOut(BaseModel):
     id: str
     key: str
-    locator_key: str
+    locator_key: str | None = None
     name: str
     kind: str
     status: str
-    description: str | None
+    description: str | None = None
     engine: str | None
-    access: dict[str, Any] | None
-    has_access: bool
-    access_updated_at: Instant | None
+    access: dict[str, Any] | None = None
+    has_access: bool | None = None
+    access_updated_at: Instant | None = None
 
 
 class SourceListResponse(OffsetPage[SourceOut]):
