@@ -43,6 +43,13 @@ from backend.metadata.catalog import refs as catalog_refs
 from backend.metadata.catalog import semantics as catalog_semantics
 from backend.metadata.catalog import service as catalog_reads
 from backend.metadata.catalog import views as catalog_views
+from backend.metadata.errors import (
+    CatalogColumnNotFound,
+    CatalogJoinNotFound,
+    CatalogObjectNotFound,
+)
+from backend.metadata.source_access import allows, source_ids_for
+from backend.metadata.sources.store import ALL_SOURCES, get_source_store
 from backend.metadata.catalog.present import (
     ObjectPresentProfile,
     present_column,
@@ -92,6 +99,43 @@ def _require(user: UserRecord, permission: str) -> None:
     perms = resolve_user_permissions(user, roles)
     if not permissions_include(perms, permission):
         raise AuthForbidden(f"Missing permission {permission}")
+
+
+def _require_source(user_id: str, source_ref: str, permission: str):
+    """Resolve a locator, then the same Source gate HTTP uses."""
+    located = catalog_refs.resolve_source_ref(source_ref)
+    return source_service.require_source_permission(user_id, located.id, permission)
+
+
+def _require_object(user_id: str, object_ref: str, permission: str):
+    record = catalog_refs.resolve_object_ref(object_ref)
+    if not allows(user_id, record.source_id, permission):
+        raise CatalogObjectNotFound()
+    return record
+
+
+def _column_source_id(column_id: str) -> str:
+    column = catalog_refs.require_column(column_id)
+    return catalog_refs.resolve_object_ref(column.object_id).source_id
+
+
+def _require_columns(user_id: str, column_ids: list[str], permission: str) -> None:
+    if not column_ids:
+        return
+    source_ids = [_column_source_id(column_id) for column_id in column_ids]
+    if not allows(user_id, source_ids[0], permission, *source_ids[1:]):
+        raise CatalogColumnNotFound()
+
+
+def _require_join_write(user_id: str, join_id: str) -> None:
+    record = catalog_refs.require_join(join_id)
+    source_ids = [
+        _column_source_id(record.from_column_id),
+        _column_source_id(record.to_column_id),
+    ]
+    if not allows(user_id, source_ids[0], "metadata:write", *source_ids[1:]):
+        raise CatalogJoinNotFound()
+
 
 def _err(exc: Exception) -> str:
     if isinstance(exc, AppError):
@@ -153,6 +197,9 @@ def enrich_semantics(object_locator_key: str) -> str:
     header = f"Enrich object: {object_locator_key}\n\n"
     gaps = ""
     try:
+        user, _token_id = current_actor()
+        _require(user, "metadata:read")
+        _require_object(user.id, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         missing: list[str] = []
         if not view.business_name:
@@ -175,6 +222,8 @@ def enrich_semantics(object_locator_key: str) -> str:
             + (", ".join(col_gaps[:20]) if col_gaps else "none")
             + ".\n\n"
         )
+    except (CatalogObjectNotFound, AuthForbidden):
+        gaps = ""
     except Exception as exc:  # noqa: BLE001
         gaps = f"Could not preload object ({exc}).\n\n"
     return header + gaps + ENRICH_SEMANTICS_BODY
@@ -191,9 +240,15 @@ def search_sources(
         _require(user, "sources:read")
         lim = SOURCE_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
-        items, total = source_service.list_sources_page(
-            query_text=query_text, limit=lim, offset=off
+        granted = source_ids_for(user.id, "sources:read")
+        visible_ids = ALL_SOURCES if granted.all_sources else granted.source_ids
+        records, total = get_source_store().list_sources(
+            query_text=query_text,
+            limit=lim,
+            offset=off,
+            visible_ids=visible_ids,
         )
+        items = [source_service.public_view(record) for record in records]
         return _dumps(
             {
                 "items": items,
@@ -211,7 +266,7 @@ def get_source(source_locator_key: str) -> str:
     try:
         user, _token_id = current_actor()
         _require(user, "sources:read")
-        s = catalog_refs.resolve_source_ref(source_locator_key)
+        s = _require_source(user.id, source_locator_key, "sources:read")
         return _dumps(source_service.public_view(s))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -229,7 +284,7 @@ def list_objects(
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
-        source = catalog_refs.resolve_source_ref(source_locator_key)
+        source = _require_source(user.id, source_locator_key, "metadata:read")
         lim = CATALOG_OBJECT_LIST.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = catalog_reads.list_objects_for_source(
@@ -257,6 +312,7 @@ def get_object(object_locator_key: str) -> str:
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
+        _require_object(user.id, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(_object_payload(view, include_columns=True))
     except Exception as exc:  # noqa: BLE001
@@ -267,6 +323,7 @@ def get_object_semantics(object_locator_key: str) -> str:
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
+        _require_object(user.id, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(
             present_object(view, profile=ObjectPresentProfile.MCP_SUMMARY)
@@ -279,6 +336,7 @@ def get_object_columns(object_locator_key: str) -> str:
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
+        _require_object(user.id, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(
             present_object(view, profile=ObjectPresentProfile.MCP_COLUMNS)
@@ -291,6 +349,7 @@ def get_object_ddl(object_locator_key: str) -> str:
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
+        _require_object(user.id, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(present_object(view, profile=ObjectPresentProfile.MCP_DDL))
     except Exception as exc:  # noqa: BLE001
@@ -311,7 +370,7 @@ def set_object_semantics(
     try:
         user, token_id = current_actor()
         _require(user, "metadata:write")
-        o = catalog_refs.resolve_object_ref(object_locator_key)
+        o = _require_object(user.id, object_locator_key, "metadata:write")
         data = _mcp_strip_empty(
             {
                 "business_name": business_name,
@@ -350,7 +409,7 @@ def set_column_semantics(
     try:
         user, token_id = current_actor()
         _require(user, "metadata:write")
-        o = catalog_refs.resolve_object_ref(object_locator_key)
+        o = _require_object(user.id, object_locator_key, "metadata:write")
         stripped_columns: list[dict[str, Any]] = []
         for item in columns:
             name = item.get("column_name")
@@ -378,6 +437,7 @@ def list_semantics_changes(
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
+        _require_object(user.id, object_locator_key, "metadata:read")
         lim = SEMANTICS_CHANGE_LIST.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = catalog_reads.list_semantics_changes(
@@ -421,7 +481,9 @@ async def search_objects(
         _require(user, "metadata:read")
         source_id = None
         if source_locator_key:
-            source_id = catalog_refs.resolve_source_ref(source_locator_key).id
+            source_id = _require_source(
+                user.id, source_locator_key, "metadata:read"
+            ).id
         lim = CATALOG_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
 
@@ -466,7 +528,9 @@ async def search_columns(
         _require(user, "metadata:read")
         source_id = None
         if source_locator_key:
-            source_id = catalog_refs.resolve_source_ref(source_locator_key).id
+            source_id = _require_source(
+                user.id, source_locator_key, "metadata:read"
+            ).id
         lim = CATALOG_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
 
@@ -508,7 +572,7 @@ def list_joins(
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
-        o = catalog_refs.resolve_object_ref(object_locator_key)
+        o = _require_object(user.id, object_locator_key, "metadata:read")
         lim = JOIN_LIST.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = catalog_joins.list_joins(o.id, limit=lim, offset=off)
@@ -537,6 +601,7 @@ def upsert_join(
         _require(user, "metadata:write")
         from_col = catalog_refs.resolve_column_ref(from_column_locator_key)
         to_col = catalog_refs.resolve_column_ref(to_column_locator_key)
+        _require_columns(user.id, [from_col.id, to_col.id], "metadata:write")
         record = catalog_joins.create_join(
             from_column_id=from_col.id,
             to_column_id=to_col.id,
@@ -562,6 +627,7 @@ def patch_join(
     try:
         user, token_id = current_actor()
         _require(user, "metadata:write")
+        _require_join_write(user.id, join_id)
         record = catalog_joins.amend_join(
             join_id=join_id,
             evidence=evidence,
@@ -580,6 +646,7 @@ def reject_join(join_id: str) -> str:
     try:
         user, token_id = current_actor()
         _require(user, "metadata:write")
+        _require_join_write(user.id, join_id)
         record = catalog_joins.reject_join(
             join_id=join_id,
             actor_user_id=user.id,
@@ -595,6 +662,7 @@ def restore_join(join_id: str) -> str:
     try:
         user, token_id = current_actor()
         _require(user, "metadata:write")
+        _require_join_write(user.id, join_id)
         record = catalog_joins.restore_join(
             join_id=join_id,
             actor_user_id=user.id,
@@ -659,6 +727,15 @@ def upsert_joins(
                     "items": [],
                 }
             )
+        _require_columns(
+            user.id,
+            [
+                column_id
+                for item in normalized
+                for column_id in (item["from_column_id"], item["to_column_id"])
+            ],
+            "metadata:write",
+        )
         items, created, known, rejected = catalog_joins.upsert_joins_batch(
             joins=normalized,
             actor_user_id=user.id,
@@ -684,6 +761,7 @@ def delete_join(join_id: str) -> str:
     try:
         user, token_id = current_actor()
         _require(user, "metadata:write")
+        _require_join_write(user.id, join_id)
         catalog_joins.delete_join(
             join_id=join_id,
             actor_user_id=user.id,
@@ -705,6 +783,9 @@ async def find_join_path(
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
+        catalog_reads.require_join_path_visible(
+            user.id, start_locator_key, target_locator_key
+        )
 
         def _run() -> object:
             return catalog_reads.lookup_join_paths(
@@ -750,7 +831,7 @@ async def run_sql(
     try:
         user, token_id = current_actor()
         _require(user, "query:run")
-        source = catalog_refs.resolve_source_ref(source_locator_key)
+        source = _require_source(user.id, source_locator_key, "query:run")
 
         def _run() -> query_service.QueryOutcome:
             return query_service.run_controlled_query(
