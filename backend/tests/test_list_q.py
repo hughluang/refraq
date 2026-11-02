@@ -479,9 +479,9 @@ def client():
     reset_session_store()
     reset_source_store()
     reset_channel_store()
-    role_store = MemoryRoleStore()
+    role_store = get_role_store()
     seed_roles(role_store)
-    user_store = MemoryUserStore()
+    user_store = get_user_store()
     super_admin = role_store.get_by_key("super_admin")
     assert super_admin is not None
     user_store.create_user(

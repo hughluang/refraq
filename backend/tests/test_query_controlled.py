@@ -21,7 +21,7 @@ os.environ.pop("REDIS_URL", None)
 os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
 from backend.admin.audit_store import get_audit_store, reset_audit_store  # noqa: E402
-from backend.admin.roles import seed_roles  # noqa: E402
+from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
@@ -314,6 +314,48 @@ def test_query_missing_source(client: TestClient) -> None:
     )
     assert resp.status_code == 404
     assert resp.json()["code"] == "SOURCE_NOT_FOUND"
+    events, _ = get_audit_store().list_events(action="query.run")
+    assert len(events) == 1
+    assert events[0].result == "failure"
+    assert events[0].detail["code"] == "SOURCE_NOT_FOUND"
+
+
+def test_query_no_level_audits_not_found(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(client, key="hid-src")
+    connector = _RecordingConnector()
+    monkeypatch.setattr(
+        "backend.metadata.connectors.runtime.get_connector", lambda engine: connector
+    )
+    disabled = client.patch(f"/sources/{source['id']}", json={"status": "disabled"})
+    assert disabled.status_code == 200
+    role = create_role(
+        get_role_store(),
+        key="query_only",
+        name="Query only",
+        permissions=["console:access", "query:run"],
+    )
+    get_user_store().create_user(
+        account="hiddenq",
+        display_name="Hidden",
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    with TestClient(app) as hidden:
+        login = hidden.post(
+            "/auth/login",
+            json={"account": "hiddenq", "password": "secret"},
+        )
+        assert login.status_code == 200
+        resp = hidden.post(
+            f"/sources/{source['id']}/query",
+            json={"sql": "SELECT 1"},
+        )
+    assert resp.status_code == 404
+    assert resp.json()["code"] == "SOURCE_NOT_FOUND"
+    assert connector.calls == []
     events, _ = get_audit_store().list_events(action="query.run")
     assert len(events) == 1
     assert events[0].result == "failure"

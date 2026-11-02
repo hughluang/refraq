@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from backend.admin.audit import persist_audit_event
+from backend.admin.user_store import SYSTEM_USER_ID
 from backend.core.errors import AppError
 from backend.core.time import encode_temporal_cell
 from backend.metadata.catalog.normalized_type import canonicalize_native_type
@@ -25,6 +26,7 @@ from backend.metadata.errors import (
     SampleFilterInvalid,
     SampleObjectTypeUnsupported,
     SourceEngineUnsupported,
+    SourceNotFound,
 )
 from backend.metadata.query.compile_sample import (
     SampleFilterSpec,
@@ -32,6 +34,7 @@ from backend.metadata.query.compile_sample import (
     compile_sample_sql,
 )
 from backend.metadata.query.guards import assert_readonly_single_statement
+from backend.metadata.source_access import allows
 from backend.metadata.source_statements import _temporal_kind
 from backend.metadata.sources.access import decrypt_access_blob
 from backend.metadata.sources.service import require_source
@@ -285,6 +288,18 @@ def _present_query(
     return declarations, rows
 
 
+def _require_query_instance(actor_user_id: str | None, source_id: str) -> None:
+    """Missing Source and no level share SOURCE_NOT_FOUND before execute.
+
+    Channel runs pass the System Identity, which has no Source level.
+    """
+    record = require_source(source_id)
+    if actor_user_id == SYSTEM_USER_ID:
+        return
+    if actor_user_id is None or not allows(actor_user_id, record.id, "query:run"):
+        raise SourceNotFound()
+
+
 def run_controlled_query(
     *,
     source_id: str,
@@ -306,6 +321,7 @@ def run_controlled_query(
             raise QueryRowLimit(
                 f"max_rows {effective_max} exceeds platform cap {platform_cap}"
             )
+        _require_query_instance(actor_user_id, source_id)
         return _execute_readonly(
             source_id=source_id,
             sql=sql,

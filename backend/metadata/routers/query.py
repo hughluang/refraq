@@ -6,12 +6,9 @@ from fastapi import APIRouter, Depends, Request
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
-from backend.metadata.errors import SourceNotFound
-from backend.metadata.query import service as query_service
 from backend.core.admission import await_admitted
+from backend.metadata.query import service as query_service
 from backend.metadata.schemas.query import QueryRequest, QueryResponse
-from backend.metadata.source_access import allows
-from backend.metadata.sources.service import require_source
 
 router = APIRouter(tags=["query"])
 
@@ -23,10 +20,6 @@ async def run_query(
     request: Request,
     user: UserRecord = Depends(require_permission("query:run")),
 ) -> QueryResponse:
-    record = require_source(source_id)
-    if not allows(user.id, record.id, "query:run"):
-        raise SourceNotFound()
-
     def _run() -> query_service.QueryOutcome:
         return query_service.run_controlled_query(
             source_id=source_id,
