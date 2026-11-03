@@ -3,7 +3,11 @@ import type { AuthActionResponse, AuthProvider } from "@refinedev/core";
 import { clearRecents } from "@/lib/recents";
 import { useModuleIdentityStore } from "@/features/console/module-identity";
 import { apiClient, ApiError } from "@/lib/api";
-import { expireClientSession } from "@/lib/session-expiry";
+import {
+  beginVoluntaryLogout,
+  cancelVoluntaryLogout,
+  expireClientSession,
+} from "@/lib/session-expiry";
 import { loginRedirectWithFrom } from "@/lib/return-path";
 import { isProtectedPath } from "@/lib/route-scope";
 import { translateKey } from "@/providers/i18n-runtime";
@@ -189,6 +193,7 @@ export const authProvider: RefineAuth = {
   },
 
   async logout(): Promise<AuthActionResponse> {
+    beginVoluntaryLogout();
     try {
       await apiClient<{ success: boolean }>("/auth/logout", { method: "POST" });
     } catch (error) {
@@ -198,6 +203,7 @@ export const authProvider: RefineAuth = {
         // Omit redirectTo; ConsoleShell hard-navigates after success.
         return { success: true };
       }
+      cancelVoluntaryLogout();
       return {
         success: false,
         error: isApiError(error)

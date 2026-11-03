@@ -793,10 +793,11 @@ async function loadVisibleSource(
       const body = await getSource(sourceId);
       return { identityOnly: false, source: body.source };
     } catch (err) {
-      if (!(canManageAccess && isAbsentOrForbidden(err))) throw err;
-      const listed = await findListedSource(sourceId);
-      if (listed) return { identityOnly: true, source: listed };
-      if (err instanceof ApiError && err.status === 404) return null;
+      if (canManageAccess && isAbsentOrForbidden(err)) {
+        const listed = await findListedSource(sourceId);
+        if (listed) return { identityOnly: true, source: listed };
+      }
+      if (isSourceAbsent(err)) return null;
       throw err;
     }
   }
@@ -810,6 +811,10 @@ async function loadVisibleSource(
 
 function isAbsentOrForbidden(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 403 || err.status === 404);
+}
+
+function isSourceAbsent(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && err.code === "SOURCE_NOT_FOUND";
 }
 
 async function canListMembers(sourceId: string, canManageAccess: boolean): Promise<boolean> {

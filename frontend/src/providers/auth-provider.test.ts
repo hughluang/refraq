@@ -247,4 +247,49 @@ describe("authProvider.check optimistic", () => {
     expect(session.getCurrentUser()).toBeNull();
     expect(session.isSignedOutLocally()).toBe(true);
   });
+
+  it("keeps a 401 during voluntary logout off the session-expired URL", async () => {
+    const expiry = await import("@/lib/session-expiry");
+    expiry.beginVoluntaryLogout();
+    vi.mocked(api.apiClient).mockRejectedValue(
+      new api.ApiError(401, "AUTH_UNAUTHENTICATED", "gone"),
+    );
+
+    await auth.authProvider.check();
+    await vi.waitFor(() => {
+      expect(window.location.assign).toHaveBeenCalledWith("/login");
+    });
+    expect(window.location.assign).not.toHaveBeenCalledWith(
+      "/login?from=%2Fconsole&error=AUTH_SESSION_EXPIRED",
+    );
+  });
+
+  it("uses the session-expired URL again after voluntary logout is cancelled", async () => {
+    const expiry = await import("@/lib/session-expiry");
+    expiry.beginVoluntaryLogout();
+    expiry.cancelVoluntaryLogout();
+    vi.mocked(api.apiClient).mockRejectedValue(
+      new api.ApiError(401, "AUTH_UNAUTHENTICATED", "gone"),
+    );
+
+    await auth.authProvider.check();
+    await vi.waitFor(() => {
+      expect(window.location.assign).toHaveBeenCalledWith(
+        "/login?from=%2Fconsole&error=AUTH_SESSION_EXPIRED",
+      );
+    });
+  });
+
+  it("clears voluntary logout when the logout request fails", async () => {
+    vi.mocked(api.apiClient)
+      .mockRejectedValueOnce(new api.ApiError(500, "INTERNAL", "nope"))
+      .mockRejectedValue(new api.ApiError(401, "AUTH_UNAUTHENTICATED", "gone"));
+    await expect(auth.authProvider.logout()).resolves.toMatchObject({ success: false });
+    await auth.authProvider.check();
+    await vi.waitFor(() => {
+      expect(window.location.assign).toHaveBeenCalledWith(
+        "/login?from=%2Fconsole&error=AUTH_SESSION_EXPIRED",
+      );
+    });
+  });
 });

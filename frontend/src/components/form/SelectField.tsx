@@ -54,6 +54,7 @@ export function SelectField({
             description={undefined}
             error={invalid || undefined}
             withAsterisk={false}
+            allowDeselect={props.allowDeselect ?? false}
             aria-describedby={joinDescribedBy(props["aria-describedby"], describedBy)}
           />
         )}

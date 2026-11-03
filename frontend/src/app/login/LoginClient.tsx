@@ -271,8 +271,10 @@ function LoginGate() {
 
   useEffect(() => {
     if (!errorCode) return;
+    const id = `login-error:${errorCode}`;
     if (errorCode === "AUTH_SSO_NOT_ADMITTED") {
       presentConsoleNotification({
+        id,
         type: "warning",
         title: t("auth.login.sso.pendingTitle"),
         message: t("auth.login.error.AUTH_SSO_NOT_ADMITTED"),
@@ -280,6 +282,7 @@ function LoginGate() {
       return;
     }
     presentConsoleNotification({
+      id,
       type: "error",
       title: t(`auth.login.error.${errorCode}`, {
         defaultValue: t("auth.login.error.sso"),

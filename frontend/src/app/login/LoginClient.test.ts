@@ -3,7 +3,7 @@
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createElement, type ReactNode } from "react";
+import { StrictMode, createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
@@ -244,6 +244,17 @@ describe("login card failures", () => {
     expect(loginCard().textContent).not.toContain("auth.login.error.AUTH_SSO_PROVIDER_UNAVAILABLE");
     expect(alert.textContent).not.toContain("auth.login.error.sso");
     expect(screen.queryByRole("button", { name: "common.retry" })).toBeNull();
+  });
+
+  it("shows a session-ended query once under strict mode", async () => {
+    search.params = new URLSearchParams("error=AUTH_SESSION_EXPIRED");
+    const { default: LoginPage } = await import("@/app/login/LoginClient");
+    render(shell(createElement(StrictMode, null, createElement(LoginPage))));
+
+    await screen.findByRole("button", { name: "auth.login.submit" });
+    const alert = notice("error", "auth.login.error.AUTH_SESSION_EXPIRED");
+    expect(alert.textContent).not.toContain("Repeated");
+    expect(alert.textContent).not.toContain("feedback.repeated");
   });
 
   it("falls back to the generic SSO error when the code has no login copy", async () => {

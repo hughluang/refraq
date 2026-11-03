@@ -604,4 +604,77 @@ describe("SourceRecord", () => {
     expect(screen.queryByText(copy["sources.membership.empty"])).toBeNull();
     expect(screen.queryByRole("button", { name: copy["status.unloaded"] })).toBeNull();
   });
+
+  it("shows not-found when a reader has no level, without a retry notice", async () => {
+    permissions.data = ["sources:read"];
+    getSource.mockRejectedValue(
+      new ApiError(404, "SOURCE_NOT_FOUND", "Source not found", "req-absent"),
+    );
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    expect(await screen.findByRole("heading", { name: copy["layout.notFound.title"] })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: copy["status.unloaded"] })).toBeNull();
+    expect(screen.queryByText(copy["problems.unknown"])).toBeNull();
+    expect(screen.queryByText("Source not found")).toBeNull();
+    expect(screen.queryByText("Ledger")).toBeNull();
+    expect(listSources).not.toHaveBeenCalled();
+    expect(getAccessSchema).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reader load failure as unloaded with one retry notice", async () => {
+    permissions.data = ["sources:read"];
+    getSource.mockRejectedValue(new ApiError(500, "NO_SUCH_CODE", "boom", "req-down"));
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    expect(await screen.findByRole("button", { name: copy["status.unloaded"] })).toBeTruthy();
+    expect(await screen.findByText(copy["problems.unknown"])).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: copy["layout.notFound.title"] })).toBeNull();
+    expect(screen.getByText(`${copy["common.requestId"]}: req-down`)).toBeTruthy();
+  });
+
+  it("shows an identity row when access manage can list a source the read missed", async () => {
+    permissions.data = ["sources:access_manage", "sources:read"];
+    gate.canEdit = false;
+    getSource.mockRejectedValue(
+      new ApiError(404, "SOURCE_NOT_FOUND", "Source not found", "req-hidden"),
+    );
+    listSources.mockResolvedValue({
+      items: [
+        {
+          id: "src_1",
+          key: "ledger",
+          name: "Ledger",
+          kind: "database",
+          engine: "postgresql",
+          status: "active",
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
+    expect(screen.getByText("ledger")).toBeTruthy();
+    expect(screen.getByText(copy["sources.engines.postgresql"])).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: copy["layout.notFound.title"] })).toBeNull();
+    expect(screen.queryByText(copy["problems.unknown"])).toBeNull();
+    expect(getSourceAccess).not.toHaveBeenCalled();
+    expect(getAccessSchema).not.toHaveBeenCalled();
+  });
+
+  it("shows not-found when access manage cannot list the missing source either", async () => {
+    permissions.data = ["sources:access_manage", "sources:read"];
+    getSource.mockRejectedValue(
+      new ApiError(404, "SOURCE_NOT_FOUND", "Source not found", "req-missing"),
+    );
+    listSources.mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    expect(await screen.findByRole("heading", { name: copy["layout.notFound.title"] })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: copy["status.unloaded"] })).toBeNull();
+    expect(screen.queryByText(copy["problems.unknown"])).toBeNull();
+    expect(listSources).toHaveBeenCalled();
+  });
 });

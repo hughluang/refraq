@@ -2,7 +2,7 @@
 
 import { MantineProvider } from "@mantine/core";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createElement } from "react";
+import { createElement, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@refinedev/core", () => ({
@@ -270,5 +270,59 @@ describe("form fields", () => {
         screen.getByText("Enter a JSON object, for example {\"status\": \"ready\"}."),
       ).toBeTruthy();
     });
+  });
+
+  it("keeps the current option when it is chosen again", async () => {
+    const { SelectField } = await import("@/components/form/SelectField");
+    const onChange = vi.fn();
+    function LevelSelect() {
+      const [value, setValue] = useState<string | null>("viewer");
+      return createElement(SelectField, {
+        editable: true,
+        label: "Level",
+        data: [
+          { value: "viewer", label: "Viewer" },
+          { value: "steward", label: "Steward" },
+        ],
+        value,
+        onChange: (next: string | null) => {
+          onChange(next);
+          setValue(next);
+        },
+      });
+    }
+    mount(createElement(LevelSelect));
+    const level = screen.getByRole("combobox", { name: "Level" }) as HTMLInputElement;
+    expect(level.value).toBe("Viewer");
+    fireEvent.mouseDown(level);
+    fireEvent.click(screen.getByRole("option", { name: "Viewer", hidden: true }));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(level.value).toBe("Viewer");
+  });
+
+  it("clears a clearable select from the clear control", async () => {
+    const { SelectField } = await import("@/components/form/SelectField");
+    const onChange = vi.fn();
+    function FilterSelect() {
+      const [value, setValue] = useState<string | null>("viewer");
+      return createElement(SelectField, {
+        editable: true,
+        label: "Column",
+        clearable: true,
+        data: [
+          { value: "viewer", label: "Viewer" },
+          { value: "steward", label: "Steward" },
+        ],
+        value,
+        onChange: (next: string | null) => {
+          onChange(next);
+          setValue(next);
+        },
+      });
+    }
+    mount(createElement(FilterSelect));
+    fireEvent.click(screen.getByRole("button", { hidden: true }));
+    expect(onChange).toHaveBeenCalledWith(null);
+    expect((screen.getByRole("combobox", { name: "Column" }) as HTMLInputElement).value).toBe("");
   });
 });
