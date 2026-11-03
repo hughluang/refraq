@@ -22,6 +22,10 @@ const api = vi.hoisted(() => ({
   listRuns: vi.fn(),
 }));
 
+const i18n = vi.hoisted(() => ({
+  extra: {} as Record<string, string>,
+}));
+
 vi.mock("@/features/channels/api", () => ({
   listRuns: (
     channelId: string,
@@ -32,7 +36,8 @@ vi.mock("@/features/channels/api", () => ({
 
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
-    const template = key === "status.freshness" ? "Last updated {{time}}" : key;
+    const template =
+      key === "status.freshness" ? "Last updated {{time}}" : (i18n.extra[key] ?? key);
     if (!options) return template;
     return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
   },
@@ -163,6 +168,7 @@ describe("ChannelRuns load feedback", () => {
     vi.setSystemTime(new Date("2026-10-11T06:00:29Z"));
     stubDom();
     resetNotifications();
+    i18n.extra = {};
     api.listRuns.mockReset();
     useSessionStore.setState({
       user: viewer,
@@ -273,6 +279,170 @@ describe("ChannelRuns load feedback", () => {
     expect(screen.getByRole("tooltip").textContent).toBe("writer rejected the row");
   });
 
+  it("shows status, start time, and duration, and opens the run from the start time", async () => {
+    api.listRuns.mockResolvedValue(
+      page([
+        {
+          ...run("running"),
+          job_id: "job_run",
+          trigger_kind: "inbound",
+          trigger_ref: "payments/callback",
+          ignore_checkpoints: true,
+          target: "draft",
+        },
+        {
+          ...run("succeeded"),
+          job_id: "job_done",
+          started_at: "2026-10-11T06:00:00Z",
+          finished_at: "2026-10-11T06:01:00Z",
+        },
+        {
+          ...run("queued"),
+          job_id: "job_wait",
+          started_at: null,
+          created_at: "2026-10-11T05:00:00Z",
+        },
+      ]),
+    );
+    renderRuns();
+
+    await advance(0);
+    expect(screen.getByText("jobs.fields.duration: 0ms")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.duration: 1m")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.duration: —")).toBeTruthy();
+    const openRun = screen.getByRole("link", { name: "10/11/2026, 6:00:29 AM" });
+    expect(openRun.getAttribute("href")).toBe("/console/channels/chn_1/runs/job_run");
+    expect(screen.getByText("status.job.running").closest("a")).toBeNull();
+    expect(screen.getByText("channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
+    expect(screen.getByText("channels.runs.ignoreCheckpoints")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "channels.runs.subject.draft" })).toBeTruthy();
+
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(screen.getByText("jobs.fields.duration: 2s")).toBeTruthy();
+    expect(screen.queryByText("jobs.fields.duration: 0ms")).toBeNull();
+    expect(screen.getByText("jobs.fields.duration: 1m")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.duration: —")).toBeTruthy();
+  });
+
+  it("names the failed node and states the error the way the run detail header does", async () => {
+    i18n.extra["problems.CHANNEL_NODE_FAILED"] = "A node failed";
+    const untilSentence = "Until iteration output exceeds 16 MiB.";
+    api.listRuns.mockResolvedValue(
+      page([
+        {
+          ...run("failed"),
+          job_id: "job_fail",
+          failed_node_id: "node_writer",
+          error_code: "CHANNEL_NODE_FAILED",
+          error_message: "writer rejected the row",
+          finished_at: "2026-10-11T06:00:30Z",
+        },
+        {
+          ...run("failed"),
+          job_id: "job_until",
+          failed_node_id: null,
+          error_code: "CHANNEL_ITERATION_VOLUME_EXCEEDED",
+          error_message: untilSentence,
+          started_at: "2026-10-11T06:00:00Z",
+          finished_at: "2026-10-11T06:00:01Z",
+        },
+      ]),
+    );
+    renderRuns();
+
+    await advance(0);
+    expect(screen.getByText("node_writer")).toBeTruthy();
+    expect(screen.getByText("A node failed")).toBeTruthy();
+    expect(screen.getByText("writer rejected the row")).toBeTruthy();
+    expect(screen.getAllByText(untilSentence)).toHaveLength(1);
+    expect(screen.queryByText("node_until")).toBeNull();
+
+    const label = screen.getAllByText("status.job.failed")[0];
+    const badge = label?.parentElement;
+    if (!badge) throw new Error("missing status badge");
+    fireEvent.mouseEnter(badge);
+    expect(screen.getByRole("tooltip").textContent).toBe("A node failed");
+  });
+
+  it("names the stop node on a cancelled row and states an error when one is present", async () => {
+    i18n.extra["channels.runDetail.stoppedAt"] = "Stopped at {{node}}";
+    i18n.extra["problems.CHANNEL_NODE_FAILED"] = "A node failed";
+    api.listRuns.mockResolvedValue(
+      page([
+        {
+          ...run("cancelled"),
+          job_id: "job_stop",
+          stopped_node_id: "node_stop",
+          failed_node_id: "node_writer",
+          error_code: "CHANNEL_NODE_FAILED",
+          error_message: "writer rejected the row",
+          finished_at: "2026-10-11T06:00:40Z",
+        },
+        {
+          ...run("cancelled"),
+          job_id: "job_quiet",
+          stopped_node_id: null,
+          started_at: "2026-10-11T06:00:00Z",
+          finished_at: "2026-10-11T06:00:01Z",
+        },
+        {
+          ...run("failed"),
+          job_id: "job_fail",
+          failed_node_id: "node_writer",
+          stopped_node_id: "node_failstop",
+          started_at: "2026-10-11T05:00:00Z",
+          finished_at: "2026-10-11T05:00:01Z",
+        },
+      ]),
+    );
+    renderRuns();
+
+    await advance(0);
+    expect(screen.getByText("Stopped at node_stop")).toBeTruthy();
+    expect(screen.getAllByText(/Stopped at /)).toHaveLength(1);
+    expect(screen.getByText("A node failed")).toBeTruthy();
+    expect(screen.getByText("writer rejected the row")).toBeTruthy();
+    expect(screen.getAllByText("node_writer")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "10/11/2026, 6:00:00 AM" }).getAttribute("href")).toBe(
+      "/console/channels/chn_1/runs/job_quiet",
+    );
+  });
+
+  it("shows only status, start time, and duration on a row that is not failed or cancelled", async () => {
+    i18n.extra["problems.CHANNEL_NODE_FAILED"] = "A node failed";
+    i18n.extra["channels.runDetail.stoppedAt"] = "Stopped at {{node}}";
+    api.listRuns.mockResolvedValue(
+      page([
+        {
+          ...run("succeeded"),
+          job_id: "job_ok",
+          failed_node_id: "node_hidden",
+          stopped_node_id: "node_stop",
+          error_code: "CHANNEL_NODE_FAILED",
+          error_message: "writer rejected the row",
+          finished_at: "2026-10-11T06:00:30Z",
+        },
+      ]),
+    );
+    renderRuns();
+
+    await advance(0);
+    expect(screen.getByText("status.job.succeeded")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "10/11/2026, 6:00:29 AM" }).getAttribute("href")).toBe(
+      "/console/channels/chn_1/runs/job_ok",
+    );
+    expect(screen.getByText("jobs.fields.duration: 1s")).toBeTruthy();
+    expect(screen.queryByText("node_hidden")).toBeNull();
+    expect(screen.queryByText("Stopped at node_stop")).toBeNull();
+    expect(screen.queryByText("A node failed")).toBeNull();
+    expect(screen.queryByText("writer rejected the row")).toBeNull();
+
+    const badge = screen.getByText("status.job.succeeded").parentElement;
+    if (!badge) throw new Error("missing status badge");
+    fireEvent.mouseEnter(badge);
+    expect(screen.getByRole("tooltip").textContent).toBe("A node failed");
+  });
+
   it("notifies when refreshing from the freshness marker fails, and not on the next poll", async () => {
     bindClientI18n({
       t: (key: string) => (key === "feedback.repeated" ? "Repeated {{count}} times" : key),
@@ -378,16 +548,35 @@ describe("ChannelRuns load feedback", () => {
     expect(screen.queryByText("job_source")).toBeNull();
   });
 
-  it("announces a later status in the polite live region", async () => {
+  it("announces each later run by the start time on its row and by its status", async () => {
     api.listRuns
       .mockResolvedValueOnce(page([run("running")]))
-      .mockResolvedValue(page([run("succeeded")]));
+      .mockResolvedValue(
+        page([
+          {
+            ...run("succeeded"),
+            job_id: "job_done",
+            created_at: "2026-10-11T05:00:00Z",
+            started_at: "2026-10-11T06:00:29Z",
+          },
+          {
+            ...run("failed"),
+            job_id: "job_fail",
+            created_at: "2026-10-11T05:00:00Z",
+            started_at: null,
+          },
+        ]),
+      );
     renderRuns();
 
     await advance(0);
     expect(politeRegion()?.textContent).toBe("");
 
     await advance(LIVE_STATUS_INTERVAL_MS);
-    expect(politeRegion()?.textContent).toBe("status.job.succeeded");
+    expect(screen.getByRole("link", { name: "10/11/2026, 6:00:29 AM" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "10/11/2026, 5:00:00 AM" })).toBeTruthy();
+    expect(politeRegion()?.textContent).toBe(
+      "10/11/2026, 6:00:29 AM status.job.succeeded, 10/11/2026, 5:00:00 AM status.job.failed",
+    );
   });
 });

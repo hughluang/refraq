@@ -13,11 +13,14 @@ import { presentProblemNotification } from "@/components/feedback/presentProblem
 import { PencilIcon } from "@/components/icons";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { listRuns } from "@/features/channels/api";
+import { formatFailedNode, nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
 import { isTerminalRun } from "@/features/channels/runSession";
 import type { ChannelRun } from "@/features/channels/types";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
 import { isSessionExpiredError } from "@/lib/api";
+import { formatJobDuration } from "@/lib/datetime";
 import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
 
@@ -36,6 +39,7 @@ export function inboundRunLabel(
 
 export function ChannelRuns({ channelId }: { channelId: string }) {
   const t = useTranslate();
+  const showInstant = useShowInstant();
   const tRef = useRef(t);
   tRef.current = t;
   const unloadedNotice = useRef(false);
@@ -87,7 +91,10 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
     });
   }, [live.data, live.error, live.stale, sessionExpired]);
   const statusText = items
-    .map((run) => t(presentJobStatus(run.status).labelKey))
+    .map((run) => {
+      const started = showInstant(run.started_at ?? run.created_at);
+      return `${started} ${t(presentJobStatus(run.status).labelKey)}`;
+    })
     .join(", ");
   const list = {
     presentation: listPresentationOf({
@@ -123,7 +130,14 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
         {items.map((run) => {
           const presentation = presentJobStatus(run.status);
           const error = formatRunError(t, run.error_code, run.error_message);
+          const errorDetail =
+            error.detail && error.detail !== error.label ? error.detail : null;
           const hasError = Boolean(run.error_code || run.error_message);
+          const failedNode =
+            run.status === "failed" ? formatFailedNode([], run.failed_node_id) : null;
+          const stoppedNode =
+            run.status === "cancelled" ? nodeDisplayName([], run.stopped_node_id) : null;
+          const showError = run.status === "failed" || run.status === "cancelled";
           const inbound = inboundRunLabel(run, t);
           const href = `/console/channels/${channelId}/runs/${run.job_id}`;
           return (
@@ -140,6 +154,29 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
                   <Anchor component={ConsoleLink} href={href} size="sm">
                     <Instant value={run.started_at ?? run.created_at} />
                   </Anchor>
+                  <Text span size="sm">
+                    {t("jobs.fields.duration")}: {formatJobDuration(run)}
+                  </Text>
+                  {failedNode ? (
+                    <Text span size="sm">
+                      {failedNode}
+                    </Text>
+                  ) : null}
+                  {stoppedNode ? (
+                    <Text span size="sm">
+                      {t("channels.runDetail.stoppedAt", { node: stoppedNode })}
+                    </Text>
+                  ) : null}
+                  {showError && error.label ? (
+                    <Text span size="sm">
+                      {error.label}
+                    </Text>
+                  ) : null}
+                  {showError && errorDetail ? (
+                    <Text span size="sm" c="dimmed">
+                      {errorDetail}
+                    </Text>
+                  ) : null}
                   {inbound ? (
                     <Text span size="xs" c="dimmed">
                       {inbound}
