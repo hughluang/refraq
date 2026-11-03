@@ -22,6 +22,29 @@ const api = vi.hoisted(() => ({
   getRun: vi.fn(),
   listNodeTypes: vi.fn(),
   rerunRun: vi.fn(),
+  listExecutions: vi.fn(),
+}));
+
+const bridges = vi.hoisted(() => ({
+  canvas: null as null | {
+    focusNodeId?: string | null;
+    onRunNodeOpen?: (open: {
+      nodeId: string;
+      status: "none" | "ready" | "unfetched";
+      execution?: { seq: number; node_id: string };
+    }) => void;
+    runNodeFocus?: { token: number; nodeId: string; pins: Record<string, number> } | null;
+  },
+  browser: null as null | {
+    reloadToken?: number;
+    selectionRequest?: { seq: number; token: number } | null;
+    onExecutionSelect?: (execution: {
+      seq: number;
+      node_id: string;
+      container_seq: number | null;
+      round: number | null;
+    }) => void;
+  },
 }));
 
 const jobs = vi.hoisted(() => ({
@@ -41,6 +64,11 @@ vi.mock("@/features/channels/api", () => ({
     api.getRun(channelId, jobId, init),
   listNodeTypes: () => api.listNodeTypes(),
   rerunRun: (channelId: string, jobId: string) => api.rerunRun(channelId, jobId),
+  listExecutions: (
+    channelId: string,
+    jobId: string,
+    params?: { node_id?: string; limit?: number; offset?: number },
+  ) => api.listExecutions(channelId, jobId, params),
 }));
 
 vi.mock("@/features/jobs/api", () => ({
@@ -48,15 +76,39 @@ vi.mock("@/features/jobs/api", () => ({
 }));
 
 vi.mock("@/features/channels/ChannelCanvas", () => ({
-  ChannelCanvas: () => createElement("div", { "data-testid": "run-detail-canvas" }),
+  ChannelCanvas: (props: {
+    focusNodeId?: string | null;
+    onRunNodeOpen?: (open: {
+      nodeId: string;
+      status: "none" | "ready" | "unfetched";
+      execution?: { seq: number; node_id: string };
+    }) => void;
+    runNodeFocus?: { token: number; nodeId: string; pins: Record<string, number> } | null;
+  }) => {
+    bridges.canvas = props;
+    return createElement("div", { "data-testid": "run-detail-canvas" });
+  },
 }));
 
 vi.mock("@/features/channels/RunExecutionBrowser", () => ({
-  RunExecutionBrowser: ({ reloadToken = 0 }: { reloadToken?: number }) =>
-    createElement("div", {
+  RunExecutionBrowser: (props: {
+    reloadToken?: number;
+    selectionRequest?: { seq: number; token: number } | null;
+    onExecutionSelect?: (execution: {
+      seq: number;
+      node_id: string;
+      container_seq: number | null;
+      round: number | null;
+    }) => void;
+  }) => {
+    bridges.browser = props;
+    return createElement("div", {
       "data-testid": "execution-table",
-      "data-reload-token": String(reloadToken),
-    }),
+      "data-reload-token": String(props.reloadToken ?? 0),
+      "data-selection-seq": props.selectionRequest ? String(props.selectionRequest.seq) : "",
+      "data-selection-token": props.selectionRequest ? String(props.selectionRequest.token) : "",
+    });
+  },
 }));
 
 vi.mock("@refinedev/core", () => ({
@@ -212,6 +264,9 @@ describe("ChannelRunDetail load feedback", () => {
     api.getRun.mockReset();
     api.listNodeTypes.mockReset();
     api.rerunRun.mockReset();
+    api.listExecutions.mockReset();
+    bridges.canvas = null;
+    bridges.browser = null;
     jobs.cancelJob.mockReset();
     api.listNodeTypes.mockResolvedValue({ items: [] });
     useSessionStore.setState({
@@ -619,5 +674,193 @@ describe("ChannelRunDetail load feedback", () => {
     expect(api.rerunRun).toHaveBeenCalledWith("chn_1", "job_1");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(jobs.cancelJob).not.toHaveBeenCalled();
+  });
+
+  it("selects the latest execution when a run-detail node opens and leaves the table when that node has none", async () => {
+    const body = detail("failed", [
+      { node_id: "write", execution_count: 3, status_counts: { failed: 1 } },
+    ]);
+    body.run.failed_node_id = "write";
+    api.getRun.mockResolvedValue(body);
+    api.listExecutions.mockResolvedValue({
+      items: [{ seq: 80, node_id: "write" }],
+      total: 80,
+      limit: 1,
+      offset: 2,
+    });
+    renderDetail();
+    await advance(0);
+
+    expect(bridges.canvas?.focusNodeId).toBe("write");
+    await act(async () => {
+      bridges.canvas?.onRunNodeOpen?.({ nodeId: "write", status: "unfetched" });
+    });
+    await advance(0);
+
+    expect(api.listExecutions).toHaveBeenCalledWith("chn_1", "job_1", {
+      node_id: "write",
+      limit: 1,
+      offset: 2,
+    });
+    const table = screen.getByTestId("execution-table");
+    expect(table.getAttribute("data-selection-seq")).toBe("80");
+    expect(table.getAttribute("data-selection-token")).toBe("1");
+
+    await act(async () => {
+      bridges.canvas?.onRunNodeOpen?.({
+        nodeId: "idle",
+        status: "ready",
+        execution: { seq: 4, node_id: "idle" },
+      });
+    });
+    expect(table.getAttribute("data-selection-seq")).toBe("4");
+
+    await act(async () => {
+      bridges.canvas?.onRunNodeOpen?.({ nodeId: "idle", status: "none" });
+    });
+    expect(table.getAttribute("data-selection-seq")).toBe("4");
+    expect(table.getAttribute("data-selection-token")).toBe("2");
+  });
+
+  it("does not move the selected execution when a later poll changes the summary", async () => {
+    api.getRun
+      .mockResolvedValueOnce(
+        detail("running", [
+          { node_id: "write", execution_count: 1, status_counts: { running: 1 } },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        detail("running", [
+          { node_id: "write", execution_count: 2, status_counts: { running: 1, succeeded: 1 } },
+        ]),
+      );
+    renderDetail();
+    await advance(0);
+    await act(async () => {
+      bridges.canvas?.onRunNodeOpen?.({
+        nodeId: "write",
+        status: "ready",
+        execution: { seq: 80, node_id: "write" },
+      });
+    });
+    expect(screen.getByTestId("execution-table").getAttribute("data-selection-seq")).toBe("80");
+    expect(api.listExecutions).not.toHaveBeenCalled();
+
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    const table = screen.getByTestId("execution-table");
+    expect(table.getAttribute("data-reload-token")).toBe("1");
+    expect(table.getAttribute("data-selection-seq")).toBe("80");
+    expect(table.getAttribute("data-selection-token")).toBe("1");
+    expect(api.listExecutions).not.toHaveBeenCalled();
+  });
+
+  it("opens the clicked execution's node and pins rounds from its container chain", async () => {
+    api.getRun.mockResolvedValue(detail("succeeded"));
+    api.listExecutions.mockImplementation(async (_channelId, _jobId, params) => {
+      if (params?.offset === 9) {
+        return {
+          items: [{ seq: 10, node_id: "for_1", container_seq: 3, round: 1 }],
+          total: 12,
+          limit: 1,
+          offset: 9,
+        };
+      }
+      if (params?.offset === 2) {
+        return {
+          items: [{ seq: 3, node_id: "batch_1", container_seq: null, round: null }],
+          total: 12,
+          limit: 1,
+          offset: 2,
+        };
+      }
+      return { items: [], total: 0, limit: 1, offset: params?.offset ?? 0 };
+    });
+    renderDetail();
+    await advance(0);
+
+    await act(async () => {
+      bridges.browser?.onExecutionSelect?.({
+        seq: 12,
+        node_id: "step",
+        container_seq: 10,
+        round: 2,
+      });
+    });
+    await advance(0);
+
+    expect(api.listExecutions).toHaveBeenCalledWith("chn_1", "job_1", { limit: 1, offset: 9 });
+    expect(api.listExecutions).toHaveBeenCalledWith("chn_1", "job_1", { limit: 1, offset: 2 });
+    expect(bridges.canvas?.runNodeFocus).toEqual({
+      token: 1,
+      nodeId: "step",
+      pins: { batch_1: 1, for_1: 2 },
+    });
+  });
+
+  it("stops the container walk when the execution at that offset is a different seq", async () => {
+    api.getRun.mockResolvedValue(detail("succeeded"));
+    api.listExecutions.mockResolvedValue({
+      items: [{ seq: 99, node_id: "other", container_seq: 3, round: 1 }],
+      total: 99,
+      limit: 1,
+      offset: 9,
+    });
+    renderDetail();
+    await advance(0);
+
+    await act(async () => {
+      bridges.browser?.onExecutionSelect?.({
+        seq: 12,
+        node_id: "step",
+        container_seq: 10,
+        round: 2,
+      });
+    });
+    await advance(0);
+
+    expect(api.listExecutions).toHaveBeenCalledTimes(1);
+    expect(api.listExecutions).toHaveBeenCalledWith("chn_1", "job_1", { limit: 1, offset: 9 });
+    expect(bridges.canvas?.runNodeFocus).toEqual({ token: 1, nodeId: "step", pins: {} });
+  });
+
+  it("keeps a clicked execution when a slower latest-execution read returns", async () => {
+    api.getRun.mockResolvedValue(
+      detail("running", [{ node_id: "write", execution_count: 2, status_counts: { running: 1 } }]),
+    );
+    let resolveLatest: (value: unknown) => void = () => {};
+    api.listExecutions.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveLatest = resolve;
+        }),
+    );
+    renderDetail();
+    await advance(0);
+
+    await act(async () => {
+      bridges.canvas?.onRunNodeOpen?.({ nodeId: "write", status: "unfetched" });
+    });
+    await act(async () => {
+      bridges.browser?.onExecutionSelect?.({
+        seq: 4,
+        node_id: "step",
+        container_seq: null,
+        round: null,
+      });
+    });
+    await advance(0);
+    expect(bridges.canvas?.runNodeFocus).toEqual({ token: 1, nodeId: "step", pins: {} });
+
+    await act(async () => {
+      resolveLatest({
+        items: [{ seq: 99, node_id: "write" }],
+        total: 2,
+        limit: 1,
+        offset: 1,
+      });
+    });
+    await advance(0);
+    expect(screen.getByTestId("execution-table").getAttribute("data-selection-seq")).toBe("");
+    expect(bridges.canvas?.runNodeFocus).toEqual({ token: 1, nodeId: "step", pins: {} });
   });
 });

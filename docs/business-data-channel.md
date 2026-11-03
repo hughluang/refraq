@@ -583,7 +583,7 @@ The same Output View rendering is used on the run detail page.
 - `container`: the number of rounds, the metrics, and a way to open the rounds.
 - `value`: the JSON value.
 
-The run detail page scrolls. The execution table header is on the first screen. The canvas has no minimum height that hides that header.
+The run detail page scrolls. The execution table header is on the first screen. The canvas has no minimum height that hides that header. One click on a node opens that node and selects that node's latest execution.
 
 A metric is a labeled badge. The label is the locale key `channels.view.metric.<key>`.
 

@@ -149,3 +149,31 @@ export function scopeRequest(
     round: pinned[id] ?? resolved.find((level) => level.container_node_id === id)?.round ?? 0,
   }));
 }
+
+/**
+ * Round pins for one execution's container chain, outer container first.
+ * A level's round is the child execution's round when stepping into that container.
+ */
+export async function containerRoundPins(
+  execution: { container_seq: number | null; round: number | null },
+  load: (
+    seq: number,
+  ) => Promise<{ node_id: string; container_seq: number | null; round: number | null } | null>,
+): Promise<Record<string, number>> {
+  const chain: { nodeId: string; round: number }[] = [];
+  const seen = new Set<number>();
+  let containerSeq = execution.container_seq;
+  let roundIndex = execution.round;
+  while (containerSeq != null && !seen.has(containerSeq)) {
+    seen.add(containerSeq);
+    const container = await load(containerSeq);
+    if (!container) break;
+    chain.push({ nodeId: container.node_id, round: roundIndex == null ? 0 : roundIndex });
+    roundIndex = container.round;
+    containerSeq = container.container_seq;
+  }
+  chain.reverse();
+  const pins: Record<string, number> = {};
+  for (const level of chain) pins[level.nodeId] = level.round;
+  return pins;
+}

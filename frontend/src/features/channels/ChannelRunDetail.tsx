@@ -13,15 +13,16 @@ import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { cancelJob } from "@/features/jobs/api";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
-import { getRun, listNodeTypes, rerunRun } from "@/features/channels/api";
+import { getRun, listExecutions, listNodeTypes, rerunRun } from "@/features/channels/api";
+import { latestExecutionQuery } from "@/features/channels/datasetView";
 import { RunExecutionBrowser } from "@/features/channels/RunExecutionBrowser";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { inboundRunLabel } from "@/features/channels/ChannelRuns";
 import { formatFailedNode, formatRunSubject, nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
-import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
-import { isTerminalRun, recordedKey } from "@/features/channels/runSession";
-import type { NodeTypeSpec } from "@/features/channels/types";
+import { ChannelCanvas, type RunNodeOpen } from "@/features/channels/ChannelCanvas";
+import { containerRoundPins, isTerminalRun, recordedKey } from "@/features/channels/runSession";
+import type { NodeExecution, NodeTypeSpec } from "@/features/channels/types";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
 import { isSessionExpiredError } from "@/lib/api";
@@ -69,6 +70,15 @@ export function ChannelRunDetail({
   });
   const detail = live.data;
   const [executionReload, setExecutionReload] = useState(0);
+  const gesture = useRef(0);
+  const [selectionRequest, setSelectionRequest] = useState<{ seq: number; token: number } | null>(
+    null,
+  );
+  const [runNodeFocus, setRunNodeFocus] = useState<{
+    token: number;
+    nodeId: string;
+    pins: Record<string, number>;
+  } | null>(null);
   const recorded = useRef<string | null>(null);
   const summaryKey = detail ? recordedKey(detail) : null;
   useEffect(() => {
@@ -201,6 +211,42 @@ export function ChannelRunDetail({
   const explanation =
     runError.detail && runError.detail !== runError.label ? runError.detail : null;
   const failedNode = formatFailedNode(graph.nodes, detail.run.failed_node_id);
+  const chooseExecution = (seq: number) => {
+    setSelectionRequest((current) => ({ seq, token: (current?.token ?? 0) + 1 }));
+  };
+  const onRunNodeOpen = (open: RunNodeOpen) => {
+    const generation = ++gesture.current;
+    if (open.status === "none") return;
+    if (open.status === "ready") {
+      chooseExecution(open.execution.seq);
+      return;
+    }
+    const summary = detail.node_summaries.find((item) => item.node_id === open.nodeId);
+    const query = summary ? latestExecutionQuery(summary) : null;
+    if (!query) return;
+    void listExecutions(channelId, jobId, query).then((page) => {
+      if (gesture.current !== generation) return;
+      const execution = page.items.find((item) => item.node_id === open.nodeId);
+      if (!execution) return;
+      chooseExecution(execution.seq);
+    });
+  };
+  const onExecutionSelect = (execution: NodeExecution) => {
+    const generation = ++gesture.current;
+    void containerRoundPins(execution, async (seq) => {
+      const page = await listExecutions(channelId, jobId, { limit: 1, offset: seq - 1 });
+      const item = page.items[0];
+      if (!item || item.seq !== seq) return null;
+      return item;
+    }).then((pins) => {
+      if (gesture.current !== generation) return;
+      setRunNodeFocus((current) => ({
+        token: (current?.token ?? 0) + 1,
+        nodeId: execution.node_id,
+        pins,
+      }));
+    });
+  };
   return (
     <PageChrome
       title={t("channels.title")}
@@ -251,6 +297,8 @@ export function ChannelRunDetail({
           focusNodeId={detail.run.failed_node_id}
           problems={[]}
           onChange={() => undefined}
+          onRunNodeOpen={onRunNodeOpen}
+          runNodeFocus={runNodeFocus}
         />
       </div>
       <RunExecutionBrowser
@@ -259,6 +307,8 @@ export function ChannelRunDetail({
         graph={graph}
         catalog={catalog}
         reloadToken={executionReload}
+        selectionRequest={selectionRequest}
+        onExecutionSelect={onExecutionSelect}
       />
       {stopRunAction.dialog}
     </Stack>

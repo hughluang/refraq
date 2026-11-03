@@ -4,6 +4,7 @@ import { latestExecutionQuery } from "@/features/channels/datasetView";
 import {
   ancestorIds,
   containerChain,
+  containerRoundPins,
   executionCountByNode,
   executionScope,
   phaseByNode,
@@ -206,5 +207,33 @@ describe("execution scope", () => {
     expect(ancestorIds("body", loop.edges, loop.nodes).has("trigger")).toBe(true);
     expect(ancestorIds("after", loop.edges, loop.nodes).has("body")).toBe(false);
     expect([...executionScope(loop, "after")].sort()).toEqual(["after", "loop", "trigger"]);
+  });
+});
+
+describe("containerRoundPins", () => {
+  it("pins each container with the child round, outer container first", async () => {
+    const loaded: number[] = [];
+    const pins = await containerRoundPins(
+      { container_seq: 10, round: 2 },
+      async (seq) => {
+        loaded.push(seq);
+        if (seq === 10) return { node_id: "for_1", container_seq: 3, round: 1 };
+        if (seq === 3) return { node_id: "batch_1", container_seq: null, round: null };
+        return null;
+      },
+    );
+
+    expect(loaded).toEqual([10, 3]);
+    expect(pins).toEqual({ batch_1: 1, for_1: 2 });
+  });
+
+  it("uses round 0 when the child round is absent and stops when an ancestor is missing", async () => {
+    const missing = await containerRoundPins({ container_seq: 10, round: null }, async () => null);
+    expect(missing).toEqual({});
+
+    const pins = await containerRoundPins({ container_seq: 4, round: null }, async (seq) =>
+      seq === 4 ? { node_id: "batch_1", container_seq: null, round: 7 } : null,
+    );
+    expect(pins).toEqual({ batch_1: 0 });
   });
 });

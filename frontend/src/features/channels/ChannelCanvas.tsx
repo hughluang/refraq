@@ -465,7 +465,22 @@ type Props = {
   publishedGraph?: Graph | null;
   /** Selects this node once when the canvas opens. */
   focusNodeId?: string | null;
+  /**
+   * Run detail only. One click, Enter, context-menu Settings, and failed-node
+   * focus open the panel and report the node for the execution table.
+   */
+  onRunNodeOpen?: (open: RunNodeOpen) => void;
+  /**
+   * Run detail row selection. Opens `nodeId` and replaces pinned rounds.
+   * `token` applies the request again for the same node.
+   */
+  runNodeFocus?: { token: number; nodeId: string; pins: Record<string, number> } | null;
 };
+
+export type RunNodeOpen =
+  | { nodeId: string; status: "none" }
+  | { nodeId: string; status: "ready"; execution: NodeExecution }
+  | { nodeId: string; status: "unfetched" };
 
 export function ChannelCanvas(props: Props) {
   return (
@@ -491,6 +506,8 @@ function ChannelCanvasBody({
   channelId,
   focusNodeId = null,
   publishedGraph = null,
+  onRunNodeOpen,
+  runNodeFocus = null,
 }: Props) {
   const t = useTranslate();
   const showInstant = useShowInstant();
@@ -1498,6 +1515,7 @@ function ChannelCanvasBody({
   }
   const summaryKey = sessionRun ? recordedKey(sessionRun) : "";
   const [latestExecutions, setLatestExecutions] = useState<NodeExecution[]>([]);
+  const latestExecutionKey = useRef("");
   useEffect(() => {
     if (!sessionRun || !channelId) {
       setLatestExecutions([]);
@@ -1508,6 +1526,7 @@ function ChannelCanvasBody({
       return query ? [query] : [];
     });
     if (queries.length === 0) {
+      latestExecutionKey.current = summaryKey;
       setLatestExecutions([]);
       return;
     }
@@ -1516,6 +1535,7 @@ function ChannelCanvasBody({
       queries.map((query) => listExecutions(channelId, sessionRun.run.job_id, query)),
     ).then((results) => {
       if (cancelled) return;
+      latestExecutionKey.current = summaryKey;
       setLatestExecutions(
         results.flatMap((result) => (result.status === "fulfilled" ? result.value.items : [])),
       );
@@ -1576,6 +1596,28 @@ function ChannelCanvasBody({
     [sessionRun],
   );
   const [pinnedRounds, setPinnedRounds] = useState<Record<string, number>>({});
+  const describeRunNode = (nodeId: string): RunNodeOpen => {
+    const summary = sessionRun?.node_summaries.find((item) => item.node_id === nodeId);
+    if (!summary || latestExecutionQuery(summary) == null) return { nodeId, status: "none" };
+    if (latestExecutionKey.current === summaryKey) {
+      const cached = latestExecutions.find((item) => item.node_id === nodeId);
+      if (cached) return { nodeId, status: "ready", execution: cached };
+    }
+    return { nodeId, status: "unfetched" };
+  };
+  const publishRunNode = (nodeId: string) => {
+    if (!onRunNodeOpen) return;
+    setPinnedRounds((current) => (Object.keys(current).length === 0 ? current : {}));
+    onRunNodeOpen(describeRunNode(nodeId));
+  };
+  const reportedFocus = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onRunNodeOpen || !focusNodeId) return;
+    if (reportedFocus.current === focusNodeId) return;
+    if (focusedNode.current !== focusNodeId) return;
+    reportedFocus.current = focusNodeId;
+    publishRunNode(focusNodeId);
+  }, [focusNodeId]);
   const [adoptedRounds, setAdoptedRounds] = useState<Record<string, number>>({});
   const [roundTotals, setRoundTotals] = useState<Record<string, number>>({});
   const resolvedScope = useRef<NodeSampleScopeLevel[]>([]);
@@ -2109,6 +2151,19 @@ function ChannelCanvasBody({
     const marked = highlightRef.current;
     if (marked && marked.nodeId !== nodeId) clearHighlight();
   };
+  const openRunDetailNode = (nodeId: string) => {
+    openNodeConfig(nodeId);
+    publishRunNode(nodeId);
+  };
+  const appliedRunFocus = useRef<number | null>(null);
+  useEffect(() => {
+    if (!runNodeFocus) return;
+    if (appliedRunFocus.current === runNodeFocus.token) return;
+    appliedRunFocus.current = runNodeFocus.token;
+    openNodeConfig(runNodeFocus.nodeId);
+    setPinnedRounds(runNodeFocus.pins);
+    selectOnly(runNodeFocus.nodeId);
+  }, [runNodeFocus]);
 
   const onCanvasKeyDownCapture = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const delta = ARROW_DELTA[event.key];
@@ -2131,7 +2186,8 @@ function ChannelCanvasBody({
     const focused = nodesRef.current.find((node) => node.id === nodeId);
     if (!focused || isNoteNode(focused)) return;
     if (nodesRef.current.filter((node) => node.selected).length > 1) return;
-    openNodeConfig(nodeId);
+    if (onRunNodeOpen) openRunDetailNode(nodeId);
+    else openNodeConfig(nodeId);
   };
 
   const selectedNodes = nodes.filter((node) => node.selected);
@@ -2216,7 +2272,12 @@ function ChannelCanvasBody({
             onEdgesChange={onEdgesChange}
             onNodeClick={(event, node) => {
               if (isNoteNode(node)) return;
-              if (event.shiftKey || configNodeId == null) return;
+              if (event.shiftKey) return;
+              if (onRunNodeOpen) {
+                openRunDetailNode(node.id);
+                return;
+              }
+              if (configNodeId == null) return;
               openNodeConfig(node.id);
             }}
             onNodeDoubleClick={(_, node) => {
@@ -2336,7 +2397,8 @@ function ChannelCanvasBody({
               onClose={closeMenu}
               onSettings={(nodeId) => {
                 closeMenu();
-                openNodeConfig(nodeId);
+                if (onRunNodeOpen) openRunDetailNode(nodeId);
+                else openNodeConfig(nodeId);
               }}
               onRun={(nodeId) => {
                 closeMenu();

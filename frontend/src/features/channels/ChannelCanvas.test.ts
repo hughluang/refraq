@@ -338,12 +338,25 @@ function renderCanvas(
     onChange?: (graph: Graph) => void;
     channelId?: string;
     colorScheme?: "light" | "dark";
+    onRunNodeOpen?: (open: {
+      nodeId: string;
+      status: "none" | "ready" | "unfetched";
+      execution?: NodeExecution;
+    }) => void;
+    focusNodeId?: string | null;
+    runNodeFocus?: { token: number; nodeId: string; pins: Record<string, number> } | null;
   } = {},
 ) {
   const appearance = options.appearance ?? "edit";
   const mutable = options.mutable ?? appearance === "edit";
   return import("@/features/channels/ChannelCanvas").then(({ ChannelCanvas }) => {
-    const element = (next: GraphProblem[]) =>
+    let sessionRun = options.sessionRun;
+    let runNodeFocus = options.runNodeFocus;
+    const element = (
+      next: GraphProblem[],
+      nextRun: ChannelRunDetail | null | undefined = sessionRun,
+      nextFocus: { token: number; nodeId: string; pins: Record<string, number> } | null | undefined = runNodeFocus,
+    ) =>
         createElement(
           MantineProvider,
           {
@@ -357,15 +370,26 @@ function renderCanvas(
           mutable,
           problems: next,
           onChange: options.onChange ?? vi.fn(),
-          sessionRun: options.sessionRun,
+          sessionRun: nextRun,
           onRun: options.onRun,
           channelId: options.channelId,
+          onRunNodeOpen: options.onRunNodeOpen,
+          focusNodeId: options.focusNodeId,
+          runNodeFocus: nextFocus,
         }),
       );
     const view = render(element(problems));
     return {
       rerenderProblems(next: GraphProblem[]) {
         view.rerender(element(next));
+      },
+      rerenderRun(next: ChannelRunDetail | null) {
+        sessionRun = next;
+        view.rerender(element(problems, next));
+      },
+      rerenderFocus(next: { token: number; nodeId: string; pins: Record<string, number> } | null) {
+        runNodeFocus = next;
+        view.rerender(element(problems, sessionRun, next));
       },
     };
   });
@@ -1378,6 +1402,246 @@ describe("canvas selection", () => {
     expect(within(toolbar).getByRole("button", { name: "Settings" })).toBeTruthy();
     expect(within(toolbar).getByRole("button", { name: "Run node" })).toBeTruthy();
     expect(within(toolbar).getByRole("button", { name: "Delete" })).toBeTruthy();
+  });
+
+  it("opens the panel on one run-detail click and leaves a node with no execution unselected in the table", async () => {
+    const onRunNodeOpen = vi.fn();
+    await renderCanvas([], nodeGraph, {
+      appearance: "browse",
+      mutable: false,
+      onRunNodeOpen,
+    });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.click(node, { shiftKey: true });
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    expect(onRunNodeOpen).not.toHaveBeenCalled();
+
+    fireEvent.click(node);
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+    expect(onRunNodeOpen).toHaveBeenCalledTimes(1);
+    expect(onRunNodeOpen).toHaveBeenCalledWith({ nodeId: "nd_1", status: "none" });
+  });
+
+  it("reuses a settled latest execution and does not reuse it after the summary moves on", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    vi.mocked(listExecutions).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const onRunNodeOpen = vi.fn();
+    const first = runDetail(nodeGraph, "running", [
+      { seq: 5, node_id: "nd_1", status: "succeeded" },
+    ]);
+    const second = runDetail(nodeGraph, "running", [
+      { seq: 5, node_id: "nd_1", status: "succeeded" },
+      { seq: 8, node_id: "nd_1", status: "running" },
+    ]);
+    const view = await renderCanvas([], nodeGraph, {
+      appearance: "browse",
+      mutable: false,
+      channelId: "chn_1",
+      onRunNodeOpen,
+      sessionRun: first,
+    });
+    await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+    const latest = {
+      seq: 5,
+      node_id: "nd_1",
+      status: "succeeded",
+      output_preview: { kept: true },
+      output_truncated: false,
+      preview_only: false,
+      preview_totals: {},
+    };
+    const settled = {
+      items: [latest],
+      total: 1,
+      limit: 1,
+      offset: 0,
+    };
+    await act(async () => {
+      for (const resolve of resolvers) resolve(settled);
+    });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    expect(onRunNodeOpen).toHaveBeenCalledWith({
+      nodeId: "nd_1",
+      status: "ready",
+      execution: expect.objectContaining({ seq: 5, node_id: "nd_1" }),
+    });
+
+    const callsBeforeMove = vi.mocked(listExecutions).mock.calls.length;
+    view.rerenderRun(second);
+    await waitFor(() => expect(listExecutions.mock.calls.length).toBeGreaterThan(callsBeforeMove));
+    fireEvent.click(node);
+    expect(onRunNodeOpen).toHaveBeenCalledTimes(2);
+    expect(onRunNodeOpen.mock.calls[1]?.[0]).toEqual({ nodeId: "nd_1", status: "unfetched" });
+    vi.mocked(listExecutions).mockImplementation(() =>
+      Promise.resolve({ items: [], total: 0, limit: 50, offset: 0 }),
+    );
+  });
+
+  it("asks the table to fetch when the latest-execution read failed", async () => {
+    let rejectExec: (reason: unknown) => void = () => {};
+    vi.mocked(listExecutions).mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectExec = reject;
+        }),
+    );
+    const onRunNodeOpen = vi.fn();
+    await renderCanvas([], nodeGraph, {
+      appearance: "browse",
+      mutable: false,
+      channelId: "chn_1",
+      onRunNodeOpen,
+      sessionRun: runDetail(nodeGraph, "failed", [
+        { seq: 1, node_id: "nd_1", status: "succeeded" },
+        { seq: 2, node_id: "nd_1", status: "failed" },
+      ]),
+    });
+    await waitFor(() => expect(listExecutions).toHaveBeenCalled());
+    await act(async () => {
+      rejectExec(new Error("latest down"));
+    });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    expect(onRunNodeOpen).toHaveBeenCalledWith({ nodeId: "nd_1", status: "unfetched" });
+    vi.mocked(listExecutions).mockImplementation(() =>
+      Promise.resolve({ items: [], total: 0, limit: 50, offset: 0 }),
+    );
+  });
+
+  it("reports Enter and context-menu Settings on run detail the same way as a click", async () => {
+    const onRunNodeOpen = vi.fn();
+    await renderCanvas([], nodeGraph, {
+      appearance: "browse",
+      mutable: false,
+      onRunNodeOpen,
+    });
+    const node = () => {
+      const found = document.querySelector(".react-flow__node");
+      if (!(found instanceof HTMLElement)) throw new Error("missing node");
+      return found;
+    };
+
+    node().focus();
+    fireEvent.keyDown(node(), { key: "Enter" });
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+    expect(onRunNodeOpen).toHaveBeenCalledWith({ nodeId: "nd_1", status: "none" });
+
+    fireEvent.click(screen.getByRole("button", { name: "channels.node.close" }));
+    await waitFor(() => {
+      expect(document.querySelector(".channel-node-config")).toBeNull();
+    });
+
+    fireEvent.contextMenu(node());
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Settings/ }));
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+    expect(onRunNodeOpen).toHaveBeenCalledTimes(2);
+    expect(onRunNodeOpen.mock.calls[1]?.[0]).toEqual({ nodeId: "nd_1", status: "none" });
+  });
+
+  it("reports a failed node once when the run detail opens it", async () => {
+    let resolveExec: (value: unknown) => void = () => {};
+    vi.mocked(listExecutions).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveExec = resolve;
+        }),
+    );
+    const onRunNodeOpen = vi.fn();
+    await renderCanvas([], nodeGraph, {
+      appearance: "browse",
+      mutable: false,
+      channelId: "chn_1",
+      onRunNodeOpen,
+      focusNodeId: "nd_1",
+      sessionRun: runDetail(nodeGraph, "failed", [
+        { seq: 1, node_id: "nd_1", status: "succeeded" },
+        { seq: 2, node_id: "nd_1", status: "failed" },
+      ]),
+    });
+    await waitFor(() => {
+      expect(document.querySelector(".channel-node-config")).not.toBeNull();
+    });
+    expect(onRunNodeOpen).toHaveBeenCalledTimes(1);
+    expect(onRunNodeOpen.mock.calls[0]?.[0]).toEqual({ nodeId: "nd_1", status: "unfetched" });
+    await act(async () => {
+      resolveExec({
+        items: [
+          {
+            seq: 2,
+            node_id: "nd_1",
+            status: "failed",
+            output_preview: null,
+            output_truncated: false,
+            preview_only: false,
+            preview_totals: {},
+          },
+        ],
+        total: 2,
+        limit: 1,
+        offset: 1,
+      });
+    });
+    expect(onRunNodeOpen).toHaveBeenCalledTimes(1);
+    vi.mocked(listExecutions).mockImplementation(() =>
+      Promise.resolve({ items: [], total: 0, limit: 50, offset: 0 }),
+    );
+  });
+
+  it("pins the execution chain for a row and clears those pins when the node is opened for its latest execution", async () => {
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("batch", "volume.batch_read", "Batches", 0),
+        { ...placed("step", "read.sql", "Step", 200), parent: "batch" },
+      ],
+    };
+    const onRunNodeOpen = vi.fn();
+    await renderCanvas([], graph, {
+      appearance: "browse",
+      mutable: false,
+      catalog: [BATCH_SPEC, READ_SPEC],
+      channelId: "chn_1",
+      onRunNodeOpen,
+      sessionRun: runDetail(graph, "succeeded", [
+        { seq: 4, node_id: "step", status: "succeeded" },
+      ]),
+      runNodeFocus: { token: 1, nodeId: "step", pins: { batch: 4 } },
+    });
+
+    await waitFor(() => {
+      expect(nodeSample).toHaveBeenCalledWith(
+        "chn_1",
+        "job_1",
+        expect.objectContaining({
+          node_id: "step",
+          scope: [{ container_node_id: "batch", round: 4 }],
+        }),
+      );
+    });
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+    const step = document.querySelector('.react-flow__node[data-id="step"]');
+    if (!(step instanceof HTMLElement)) throw new Error("missing step");
+    expect(step.classList.contains("selected")).toBe(true);
+
+    fireEvent.click(step);
+    await waitFor(() => {
+      const body = vi.mocked(nodeSample).mock.calls.at(-1)?.[2];
+      expect(body?.node_id).toBe("step");
+      expect(body?.scope).toBeUndefined();
+    });
+    expect(onRunNodeOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: "step", status: "unfetched" }),
+    );
   });
 
   it("opens settings from a double-click, Enter, or the toolbar settings button", async () => {

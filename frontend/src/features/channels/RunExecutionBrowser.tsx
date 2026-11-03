@@ -33,6 +33,8 @@ export function RunExecutionBrowser({
   graph,
   catalog = [],
   reloadToken = 0,
+  selectionRequest = null,
+  onExecutionSelect,
 }: {
   channelId: string;
   jobId: string;
@@ -40,6 +42,10 @@ export function RunExecutionBrowser({
   catalog?: readonly NodeTypeSpec[];
   /** Parent bump. Reloads the current page without moving the page index. */
   reloadToken?: number;
+  /** Move to the page that contains this seq, select it, and scroll it into view. */
+  selectionRequest?: { seq: number; token: number } | null;
+  /** The operator chose this row. The parent opens that node. */
+  onExecutionSelect?: (execution: NodeExecution) => void;
 }) {
   const t = useTranslate();
   const tRef = useRef(t);
@@ -53,6 +59,10 @@ export function RunExecutionBrowser({
   const [requestId, setRequestId] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+  const [scrollTick, setScrollTick] = useState(0);
+  const appliedSelection = useRef<number | null>(null);
+  const pendingScroll = useRef<number | null>(null);
+  const selectedRowRef = useRef<HTMLButtonElement | null>(null);
   const seenReload = useRef(reloadToken);
   const seenRetry = useRef(retryToken);
   retryRef.current = () => setRetryToken((token) => token + 1);
@@ -98,6 +108,25 @@ export function RunExecutionBrowser({
       cancelled = true;
     };
   }, [channelId, jobId, page, reloadToken, retryToken]);
+
+  useEffect(() => {
+    if (!selectionRequest) return;
+    if (appliedSelection.current === selectionRequest.token) return;
+    appliedSelection.current = selectionRequest.token;
+    pendingScroll.current = selectionRequest.seq;
+    const nextPage = Math.floor((selectionRequest.seq - 1) / PAGE_SIZE) + 1;
+    setSelected(selectionRequest.seq);
+    setPage(nextPage);
+    setScrollTick((tick) => tick + 1);
+  }, [selectionRequest]);
+
+  useEffect(() => {
+    const seq = pendingScroll.current;
+    if (seq == null || loading) return;
+    if (!items.some((item) => item.seq === seq)) return;
+    selectedRowRef.current?.closest("tr")?.scrollIntoView({ block: "nearest" });
+    pendingScroll.current = null;
+  }, [items, loading, scrollTick, selected]);
 
   const current = items.find((item) => item.seq === selected) ?? null;
   const list = {
@@ -145,9 +174,13 @@ export function RunExecutionBrowser({
             <Table.Tr key={item.seq}>
               <Table.Td>
                 <Button
+                  ref={item.seq === selected ? selectedRowRef : undefined}
                   variant={item.seq === selected ? "light" : "subtle"}
                   size="compact-sm"
-                  onClick={() => setSelected(item.seq)}
+                  onClick={() => {
+                    setSelected(item.seq);
+                    onExecutionSelect?.(item);
+                  }}
                 >
                   {named && label ? label : item.node_id}
                 </Button>

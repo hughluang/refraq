@@ -198,6 +198,88 @@ it("pages executions and loads one batch round through the row window", async ()
   });
 });
 
+it("selects a requested execution on its page and scrolls that row into view", async () => {
+  const scrollIntoView = vi.fn();
+  HTMLElement.prototype.scrollIntoView = scrollIntoView;
+  const early = execution({ seq: 9, node_id: "write", output_preview: { marker: "early" } });
+  const latest = execution({
+    seq: 101,
+    node_id: "write",
+    output_preview: { marker: "latest-row" },
+  });
+  let release: (() => void) | null = null;
+  vi.mocked(listExecutions).mockImplementation(async (_channelId, _jobId, params) => {
+    if (params?.offset === 100) {
+      return new Promise((resolve) => {
+        release = () => {
+          resolve({ items: [latest], total: 101, limit: 50, offset: 100 });
+        };
+      });
+    }
+    return { items: [early], total: 101, limit: 50, offset: 0 };
+  });
+  const view = render(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+      }),
+    ),
+  );
+  expect(await screen.findByRole("button", { name: "Write" })).toBeTruthy();
+
+  view.rerender(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        selectionRequest: { seq: 101, token: 1 },
+      }),
+    ),
+  );
+  await waitFor(() => {
+    expect(listExecutions).toHaveBeenCalledWith("chn_1", "job_1", { limit: 50, offset: 100 });
+  });
+  expect(scrollIntoView).not.toHaveBeenCalled();
+
+  await act(async () => {
+    release?.();
+  });
+  expect(await screen.findByText(/latest-row/)).toBeTruthy();
+  expect(screen.queryByText(/early/)).toBeNull();
+  const row = screen.getByRole("button", { name: "Write" }).closest("tr");
+  expect(scrollIntoView.mock.instances).toContain(row);
+});
+
+it("reports an execution row click and keeps that row's preview under the table", async () => {
+  const onExecutionSelect = vi.fn();
+  const row = execution({
+    seq: 9,
+    node_id: "write",
+    container_seq: 4,
+    round: 1,
+    preview_only: true,
+    output_preview: { inserted: 1 },
+  });
+  vi.mocked(listExecutions).mockResolvedValue({ items: [row], total: 1, limit: 50, offset: 0 });
+  render(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        onExecutionSelect,
+      }),
+    ),
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Write" }));
+  expect(onExecutionSelect).toHaveBeenCalledWith(row);
+  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+});
+
 it("shows unloaded and one notification when the first execution load fails", async () => {
   bindClientI18n({
     t: (key: string) => (key === "feedback.repeated" ? "Repeated {{count}} times" : key),
