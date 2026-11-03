@@ -32,11 +32,11 @@ vi.mock("@/features/channels/api", () => ({
 }));
 
 vi.mock("@/features/channels/ChannelCanvas", () => ({
-  ChannelCanvas: () => null,
+  ChannelCanvas: () => createElement("div", { "data-testid": "run-detail-canvas" }),
 }));
 
 vi.mock("@/features/channels/RunExecutionBrowser", () => ({
-  RunExecutionBrowser: () => null,
+  RunExecutionBrowser: () => createElement("div", { "data-testid": "execution-table" }),
 }));
 
 vi.mock("@refinedev/core", () => ({
@@ -365,6 +365,30 @@ describe("ChannelRunDetail load feedback", () => {
     await advance(0);
     expect(screen.queryByText(/channels\.runs\.trigger\.inbound/)).toBeNull();
     expect(screen.queryByText("user")).toBeNull();
+  });
+
+  it("scrolls the run detail so the execution table stays on the page and the canvas has no height floor", async () => {
+    api.getRun.mockResolvedValue(detail("succeeded"));
+    renderDetail();
+
+    await advance(0);
+
+    const scroll = document.querySelector("[data-page-scroll]") as HTMLElement;
+    expect(scroll.style.overflow).toBe("auto");
+
+    const table = screen.getByTestId("execution-table");
+    expect(table.closest("[data-page-scroll]")).toBe(scroll);
+
+    const canvas = screen.getByTestId("run-detail-canvas");
+    const host = canvas.parentElement as HTMLElement;
+    const column = host.parentElement as HTMLElement;
+    expect(host.contains(table)).toBe(false);
+    expect(table.parentElement).toBe(column);
+    expect(host.style.minHeight).toBe("");
+    expect(host.style.flex).toBe("");
+    expect(host.style.height).not.toBe("");
+    expect(host.style.height).not.toBe("360px");
+    expect(column.style.height).not.toBe("100%");
   });
 
   it("announces a later status in the polite live region", async () => {

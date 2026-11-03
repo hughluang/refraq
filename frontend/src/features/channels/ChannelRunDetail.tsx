@@ -148,7 +148,6 @@ export function ChannelRunDetail({
   const failedNode = formatFailedNode(graph.nodes, detail.run.failed_node_id);
   return (
     <PageChrome
-      fill
       title={t("channels.title")}
       recordTitle={subject || detail.run.job_id}
       recent={{
@@ -158,7 +157,7 @@ export function ChannelRunDetail({
       titleExtra={<JobStatusBadge status={detail.run.status} freshness={freshness} />}
       actions={back}
     >
-    <Stack gap="sm" style={{ height: "100%", minHeight: 0 }}>
+    <Stack gap="sm">
       <LiveStatusAnnouncer text={t(presentJobStatus(detail.run.status).labelKey)} />
       <Stack gap={4}>
         {inbound ? <Text size="sm">{inbound}</Text> : null}
@@ -186,7 +185,7 @@ export function ChannelRunDetail({
         ) : null}
         {failedNode ? <Text size="sm">{failedNode}</Text> : null}
       </Stack>
-      <div style={{ flex: 1, minHeight: 360 }}>
+      <div style={{ height: "min(20rem, 32dvh)" }}>
         <ChannelCanvas
           channelId={channelId}
           graph={graph}

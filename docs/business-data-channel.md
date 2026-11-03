@@ -583,6 +583,8 @@ The same Output View rendering is used on the run detail page.
 - `container`: the number of rounds, the metrics, and a way to open the rounds.
 - `value`: the JSON value.
 
+The run detail page scrolls. The execution table header is on the first screen. The canvas has no minimum height that hides that header.
+
 A metric is a labeled badge. The label is the locale key `channels.view.metric.<key>`.
 
 A key, a cell, or a column header in the upstream column inserts its path at the caret of the template field that last had focus. The path begins at `self.<ref>.output`. An identifier segment is `.name`. Any other key is `["key"]`. A list index is `[i]`. A column header inserts the path of the list. When the caret is inside `{{ }}`, the insertion is the path. Otherwise the insertion is `{{ path }}`. When no template field has focus, the control is disabled and the panel says that a template field must have focus.
