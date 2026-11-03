@@ -32,11 +32,14 @@ export function RunExecutionBrowser({
   jobId,
   graph,
   catalog = [],
+  reloadToken = 0,
 }: {
   channelId: string;
   jobId: string;
   graph: Graph;
   catalog?: readonly NodeTypeSpec[];
+  /** Parent bump. Reloads the current page without moving the page index. */
+  reloadToken?: number;
 }) {
   const t = useTranslate();
   const tRef = useRef(t);
@@ -49,11 +52,17 @@ export function RunExecutionBrowser({
   const [failure, setFailure] = useState<unknown>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-  retryRef.current = () => setReloadToken((token) => token + 1);
+  const [retryToken, setRetryToken] = useState(0);
+  const seenReload = useRef(reloadToken);
+  const seenRetry = useRef(retryToken);
+  retryRef.current = () => setRetryToken((token) => token + 1);
 
   useEffect(() => {
     let cancelled = false;
+    const reloadAtStart = reloadToken;
+    const retryAtStart = retryToken;
+    const reconcileSelection =
+      seenReload.current !== reloadAtStart || seenRetry.current !== retryAtStart;
     setLoading(true);
     void listExecutions(channelId, jobId, {
       limit: PAGE_SIZE,
@@ -65,6 +74,10 @@ export function RunExecutionBrowser({
         setTotal(body.total);
         setRequestId(successRequestId(body));
         setFailure(null);
+        if (!reconcileSelection) return;
+        setSelected((current) =>
+          body.items.some((item) => item.seq === current) ? current : null,
+        );
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
@@ -74,12 +87,17 @@ export function RunExecutionBrowser({
         });
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        // Strict Mode runs this effect twice. Recording the token here, after the
+        // fetch settles, keeps the second run able to clear a missing seq.
+        seenReload.current = reloadAtStart;
+        seenRetry.current = retryAtStart;
+        setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [channelId, jobId, page, reloadToken]);
+  }, [channelId, jobId, page, reloadToken, retryToken]);
 
   const current = items.find((item) => item.seq === selected) ?? null;
   const list = {

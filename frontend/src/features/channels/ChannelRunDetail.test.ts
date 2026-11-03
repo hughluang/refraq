@@ -36,7 +36,11 @@ vi.mock("@/features/channels/ChannelCanvas", () => ({
 }));
 
 vi.mock("@/features/channels/RunExecutionBrowser", () => ({
-  RunExecutionBrowser: () => createElement("div", { "data-testid": "execution-table" }),
+  RunExecutionBrowser: ({ reloadToken = 0 }: { reloadToken?: number }) =>
+    createElement("div", {
+      "data-testid": "execution-table",
+      "data-reload-token": String(reloadToken),
+    }),
 }));
 
 vi.mock("@refinedev/core", () => ({
@@ -82,9 +86,9 @@ const viewer: CurrentUser = {
   identity_source: "local",
 };
 
-function run(status: string): ChannelRun {
+function run(status: string, jobId = "job_1"): ChannelRun {
   return {
-    job_id: "job_1",
+    job_id: jobId,
     status,
     outcome: null,
     target: "published",
@@ -105,8 +109,12 @@ function run(status: string): ChannelRun {
   };
 }
 
-function detail(status: string): RunDetail {
-  return { run: run(status), graph: EMPTY_GRAPH, node_summaries: [] };
+function detail(
+  status: string,
+  summaries: RunDetail["node_summaries"] = [],
+  jobId = "job_1",
+): RunDetail {
+  return { run: run(status, jobId), graph: EMPTY_GRAPH, node_summaries: summaries };
 }
 
 function upstream(requestId: string) {
@@ -157,15 +165,17 @@ async function advance(ms: number) {
   });
 }
 
-function renderDetail() {
-  return render(
-    createElement(
-      MantineProvider,
-      { env: "test" },
-      createElement(ConsoleNotifications),
-      createElement(ChannelRunDetail, { channelId: "chn_1", jobId: "job_1" }),
-    ),
+function detailElement(jobId = "job_1") {
+  return createElement(
+    MantineProvider,
+    { env: "test" },
+    createElement(ConsoleNotifications),
+    createElement(ChannelRunDetail, { channelId: "chn_1", jobId }),
   );
+}
+
+function renderDetail() {
+  return render(detailElement());
 }
 
 function politeRegion(): HTMLElement | null {
@@ -389,6 +399,101 @@ describe("ChannelRunDetail load feedback", () => {
     expect(host.style.height).not.toBe("");
     expect(host.style.height).not.toBe("360px");
     expect(column.style.height).not.toBe("100%");
+  });
+
+  it("reloads executions when a later poll changes the recorded run and not on the first load", async () => {
+    const same = { node_id: "write", execution_count: 1, status_counts: { running: 1 } };
+    api.getRun
+      .mockResolvedValueOnce(detail("running", [same]))
+      .mockResolvedValueOnce(detail("running", [{ ...same }]))
+      .mockResolvedValueOnce(
+        detail("running", [{ node_id: "write", execution_count: 2, status_counts: { running: 1 } }]),
+      );
+    renderDetail();
+
+    await advance(0);
+    expect(api.getRun).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("execution-table").getAttribute("data-reload-token")).toBe("0");
+
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("execution-table").getAttribute("data-reload-token")).toBe("0");
+
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(api.getRun).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId("execution-table").getAttribute("data-reload-token")).toBe("1");
+  });
+
+  it("reloads executions when a later poll changes only the run status", async () => {
+    api.getRun.mockResolvedValueOnce(detail("running")).mockResolvedValueOnce(detail("succeeded"));
+    renderDetail();
+
+    await advance(0);
+    expect(screen.getByTestId("execution-table").getAttribute("data-reload-token")).toBe("0");
+
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("execution-table").getAttribute("data-reload-token")).toBe("1");
+  });
+
+  it("reloads executions when a later poll changes only a node status count", async () => {
+    api.getRun
+      .mockResolvedValueOnce(
+        detail("running", [{ node_id: "write", execution_count: 1, status_counts: { running: 1 } }]),
+      )
+      .mockResolvedValueOnce(
+        detail("running", [
+          { node_id: "write", execution_count: 1, status_counts: { succeeded: 1 } },
+        ]),
+      );
+    renderDetail();
+
+    await advance(0);
+    expect(screen.getByTestId("execution-table").getAttribute("data-reload-token")).toBe("0");
+
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("execution-table").getAttribute("data-reload-token")).toBe("1");
+  });
+
+  it("does not reload executions on the first getRun after the job changes", async () => {
+    const running = { node_id: "write", execution_count: 1, status_counts: { running: 1 } };
+    const later = { node_id: "write", execution_count: 2, status_counts: { running: 1 } };
+    api.getRun
+      .mockResolvedValueOnce(detail("running", [running], "job_1"))
+      .mockResolvedValueOnce(detail("running", [later], "job_2"))
+      .mockResolvedValueOnce(
+        detail(
+          "running",
+          [{ node_id: "write", execution_count: 3, status_counts: { running: 1 } }],
+          "job_2",
+        ),
+      );
+    const view = renderDetail();
+    const token = () => screen.getByTestId("execution-table").getAttribute("data-reload-token");
+
+    await advance(0);
+    expect(token()).toBe("0");
+
+    view.rerender(detailElement("job_2"));
+    await advance(0);
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(api.getRun.mock.calls[1]?.[1]).toBe("job_2");
+    expect(token()).toBe("0");
+
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(api.getRun).toHaveBeenCalledTimes(3);
+    expect(token()).toBe("1");
+  });
+
+  it("does not reload executions when a later poll fails", async () => {
+    api.getRun.mockResolvedValueOnce(detail("running")).mockRejectedValueOnce(new Error("offline"));
+    renderDetail();
+
+    await advance(0);
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("execution-table").getAttribute("data-reload-token")).toBe("0");
   });
 
   it("announces a later status in the polite live region", async () => {

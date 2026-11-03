@@ -18,7 +18,7 @@ import { inboundRunLabel } from "@/features/channels/ChannelRuns";
 import { formatFailedNode, formatRunSubject, nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
-import { isTerminalRun } from "@/features/channels/runSession";
+import { isTerminalRun, recordedKey } from "@/features/channels/runSession";
 import type { NodeTypeSpec } from "@/features/channels/types";
 import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
 import { isSessionExpiredError } from "@/lib/api";
@@ -58,6 +58,21 @@ export function ChannelRunDetail({
     isTerminal: (body) => isTerminalRun(body.run.status),
   });
   const detail = live.data;
+  const [executionReload, setExecutionReload] = useState(0);
+  const recorded = useRef<string | null>(null);
+  const summaryKey = detail ? recordedKey(detail) : null;
+  useEffect(() => {
+    if (!summaryKey) {
+      recorded.current = null;
+      return;
+    }
+    const prior = recorded.current;
+    recorded.current = summaryKey;
+    // The first key after a gap is the page the browser already loads.
+    if (prior && prior !== summaryKey) {
+      setExecutionReload((token) => token + 1);
+    }
+  }, [summaryKey]);
   const sessionExpired = isSessionExpiredError(live.error);
   retryRef.current = () => live.refresh();
   const freshness =
@@ -198,7 +213,13 @@ export function ChannelRunDetail({
           onChange={() => undefined}
         />
       </div>
-      <RunExecutionBrowser channelId={channelId} jobId={jobId} graph={graph} catalog={catalog} />
+      <RunExecutionBrowser
+        channelId={channelId}
+        jobId={jobId}
+        graph={graph}
+        catalog={catalog}
+        reloadToken={executionReload}
+      />
     </Stack>
     </PageChrome>
   );

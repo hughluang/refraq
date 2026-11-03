@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -217,6 +217,250 @@ it("shows unloaded and one notification when the first execution load fails", as
   await waitFor(() => expect(listExecutions).toHaveBeenCalledTimes(2));
   expect(screen.getAllByRole("alert")).toHaveLength(1);
   expect(screen.getByText("problems.unknown Repeated 2 times")).toBeTruthy();
+});
+
+it("reloads the current execution page when the parent reload token changes and keeps the page", async () => {
+  const pageOne = execution({ seq: 9, node_id: "write", status: "succeeded" });
+  const pageTwo = execution({ seq: 60, node_id: "write", status: "succeeded" });
+  const pageTwoNext = execution({ seq: 60, node_id: "write", status: "running" });
+  let pageTwoLoads = 0;
+  vi.mocked(listExecutions).mockImplementation(async (_channelId, _jobId, params) => {
+    if (params?.offset === 50) {
+      pageTwoLoads += 1;
+      return {
+        items: [pageTwoLoads > 1 ? pageTwoNext : pageTwo],
+        total: 51,
+        limit: 50,
+        offset: 50,
+      };
+    }
+    return { items: [pageOne], total: 51, limit: 50, offset: 0 };
+  });
+  const view = render(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        reloadToken: 0,
+      }),
+    ),
+  );
+
+  expect(await screen.findByText("channels.editor.status.succeeded")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "2" }));
+  expect(await screen.findByText("51-51 of 51")).toBeTruthy();
+  view.rerender(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        reloadToken: 1,
+      }),
+    ),
+  );
+
+  expect(await screen.findByText("channels.editor.status.running")).toBeTruthy();
+  expect(screen.getByText("51-51 of 51")).toBeTruthy();
+  expect(vi.mocked(listExecutions).mock.calls.map((call) => call[2]?.offset)).toEqual([0, 50, 50]);
+});
+
+it("keeps a selected execution that is still on the reloaded page", async () => {
+  const row = execution({
+    seq: 9,
+    node_id: "write",
+    preview_only: true,
+    output_preview: { inserted: 1 },
+  });
+  const refreshed = execution({
+    seq: 9,
+    node_id: "write",
+    status: "running",
+    preview_only: true,
+    output_preview: { inserted: 2 },
+  });
+  vi.mocked(listExecutions)
+    .mockResolvedValueOnce({ items: [row], total: 1, limit: 50, offset: 0 })
+    .mockResolvedValueOnce({ items: [refreshed], total: 1, limit: 50, offset: 0 });
+  const view = render(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        reloadToken: 0,
+      }),
+    ),
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Write" }));
+  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+  view.rerender(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        reloadToken: 1,
+      }),
+    ),
+  );
+  expect(await screen.findByText("channels.editor.status.running")).toBeTruthy();
+  expect(screen.getByText("This execution stored a preview.")).toBeTruthy();
+});
+
+it("keeps a selected execution when the reader leaves its page and comes back", async () => {
+  const first = execution({
+    seq: 9,
+    node_id: "write",
+    preview_only: true,
+    output_preview: { inserted: 1 },
+  });
+  const later = execution({ seq: 60, node_id: "write" });
+  vi.mocked(listExecutions).mockImplementation(async (_channelId, _jobId, params) => {
+    if (params?.offset === 50) {
+      return { items: [later], total: 51, limit: 50, offset: 50 };
+    }
+    return { items: [first], total: 51, limit: 50, offset: 0 };
+  });
+  render(
+    shell(createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph })),
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Write" }));
+  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+  fireEvent.click(screen.getAllByRole("button", { name: "2" })[0]);
+  expect(await screen.findByText("51-51 of 51")).toBeTruthy();
+  expect(screen.queryByText("This execution stored a preview.")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "1" }));
+  expect(await screen.findByText("1-50 of 51")).toBeTruthy();
+  expect(screen.getByText("This execution stored a preview.")).toBeTruthy();
+});
+
+it("clears a selected execution that is absent after the reload", async () => {
+  const selectedRow = execution({
+    seq: 9,
+    node_id: "write",
+    preview_only: true,
+    output_preview: { inserted: 1 },
+  });
+  const other = execution({ seq: 10, node_id: "write", status: "running" });
+  const returned = execution({
+    seq: 9,
+    node_id: "write",
+    status: "succeeded",
+    preview_only: true,
+    output_preview: { inserted: 1 },
+  });
+  vi.mocked(listExecutions)
+    .mockResolvedValueOnce({ items: [selectedRow], total: 1, limit: 50, offset: 0 })
+    .mockResolvedValueOnce({ items: [other], total: 1, limit: 50, offset: 0 })
+    .mockResolvedValueOnce({ items: [returned], total: 1, limit: 50, offset: 0 });
+  const view = render(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        reloadToken: 0,
+      }),
+    ),
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Write" }));
+  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+  view.rerender(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        reloadToken: 1,
+      }),
+    ),
+  );
+  expect(await screen.findByText("channels.editor.status.running")).toBeTruthy();
+  expect(screen.queryByText("This execution stored a preview.")).toBeNull();
+
+  view.rerender(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        reloadToken: 2,
+      }),
+    ),
+  );
+  expect(await screen.findByText("channels.editor.status.succeeded")).toBeTruthy();
+  expect(screen.queryByText("This execution stored a preview.")).toBeNull();
+});
+
+it("keeps the rows, the selection, and sends one notification when a parent reload fails", async () => {
+  const child = execution({
+    seq: 9,
+    node_id: "write",
+    preview_only: true,
+    output_preview: { inserted: 1 },
+  });
+  vi.mocked(listExecutions)
+    .mockResolvedValueOnce({ items: [child], total: 1, limit: 50, offset: 0 })
+    .mockRejectedValueOnce(new ApiError(500, "NO_SUCH_CODE", "upstream timed out", "req-reload"));
+  const view = render(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        reloadToken: 0,
+      }),
+    ),
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Write" }));
+  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+  view.rerender(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        reloadToken: 1,
+      }),
+    ),
+  );
+
+  expect(await screen.findAllByRole("alert")).toHaveLength(1);
+  expect(screen.getByText("problems.unknown")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" })).toBeTruthy();
+  expect(screen.getByText("This execution stored a preview.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
+  expect(screen.queryByText("channels.run.outputFailed")).toBeNull();
+});
+
+it("does not load executions on its own timer", async () => {
+  vi.mocked(listExecutions).mockResolvedValue({
+    items: [execution({ seq: 1, node_id: "write" })],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  });
+  render(
+    shell(createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph })),
+  );
+  expect(await screen.findByRole("button", { name: "Write" })).toBeTruthy();
+  expect(listExecutions).toHaveBeenCalledTimes(1);
+
+  vi.useFakeTimers();
+  try {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(listExecutions).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("keeps execution rows and sends one notification when a later refresh fails", async () => {
