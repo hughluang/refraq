@@ -897,6 +897,7 @@ Query: `node_id` (optional), `container_seq` (optional integer), `round` (option
 ```
 
 - `container_seq` and `round` are null when the execution is not inside a container. Otherwise `container_seq` is the `seq` of the direct container's execution, and `round` is the zero-based round index.
+- Duration is derived by clients from `started_at` and `finished_at`.
 - `output_preview` is the stored output with each list cut to its first 100 elements. `output_truncated` is true when this response cut a list.
 - `preview_only` is false and `preview_totals` is `{}`. A successful execution stores its full output, including when a Batch Read is among its container ancestors. A failed execution stores its full output. A stored output that carries the preview envelope reports `preview_only` true, and `preview_totals` maps each list's dot path to the length recorded in the envelope.
 - `input_preview` is the execution's **Execution Input** (`docs/business-data-channel.md` §6.9) with each list cut to its first 100 elements. Each entry is `{ "value": … }` or `{ "error": { "code", "message" } }`, keyed by configuration path. `input_truncated` and `input_totals` follow the list rule below. When the execution recorded no input, `input_preview` and `input_totals` are `null` and `input_truncated` is false.

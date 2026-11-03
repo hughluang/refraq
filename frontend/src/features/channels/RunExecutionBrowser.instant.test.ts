@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -146,6 +146,12 @@ it("shows the response started_at string on the execution row", async () => {
   const shown = formatInstant(STARTED, { timeZone: "UTC", locale: "en-US" });
   expect(await screen.findByText(shown)).toBeTruthy();
   expect(screen.getByRole("button", { name: "Write" })).toBeTruthy();
+  const cells = within(screen.getByRole("button", { name: "Write" }).closest("tr") as HTMLElement).getAllByRole(
+    "cell",
+  );
+  expect(cells[3].textContent).toBe("");
+  expect(cells[4].textContent).toBe("31s");
+  expect(cells[5].textContent).toBe("12");
 });
 
 it("keeps the rest of the row when started_at is illegal and shows the request id", async () => {
@@ -167,4 +173,9 @@ it("keeps the rest of the row when started_at is illegal and shows the request i
   expect(screen.getByText("common.requestId: req-exec")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Write" })).toBeTruthy();
   expect(screen.getByText("channels.editor.status.succeeded")).toBeTruthy();
+  const cells = within(screen.getByRole("button", { name: "Write" }).closest("tr") as HTMLElement).getAllByRole(
+    "cell",
+  );
+  expect(cells[4].textContent).toBe("—");
+  expect(screen.getAllByText("problems.API_CONTRACT_INVALID")).toHaveLength(1);
 });

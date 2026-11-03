@@ -1,8 +1,11 @@
 /** @vitest-environment jsdom */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -10,6 +13,8 @@ import { listDatasetRows, listExecutions, previewTemplate } from "@/features/cha
 import { RunExecutionBrowser } from "@/features/channels/RunExecutionBrowser";
 import { EMPTY_GRAPH, type Graph, type NodeExecution } from "@/features/channels/types";
 import { ApiError } from "@/lib/api";
+import en from "@/locales/en-US/common.json";
+import zh from "@/locales/zh-CN/common.json";
 import { bindClientI18n } from "@/providers/i18n-runtime";
 import { ConsoleNotifications } from "@/providers/notification-provider";
 
@@ -240,4 +245,196 @@ it("keeps execution rows and sends one notification when a later refresh fails",
   expect(screen.getByRole("button", { name: "Write" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
   expect(screen.queryByText("channels.run.outputFailed")).toBeNull();
+});
+
+it("shows the stored round plus one as text in the ledger column order", async () => {
+  vi.mocked(listExecutions).mockResolvedValue({
+    items: [
+      execution({ seq: 1, node_id: "write", round: 0 }),
+      execution({ seq: 2, node_id: "write", round: null }),
+    ],
+    total: 2,
+    limit: 50,
+    offset: 0,
+  });
+  render(
+    createElement(
+      MantineProvider,
+      { env: "test" },
+      createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph }),
+    ),
+  );
+
+  expect(await screen.findAllByRole("button", { name: "Write" })).toHaveLength(2);
+  expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+    "channels.run.column.node",
+    "channels.run.column.status",
+    "channels.runs.started",
+    "channels.run.column.executionRound",
+    "channels.run.column.duration",
+    "channels.run.column.outputBytes",
+    "channels.run.column.error",
+  ]);
+  const rows = screen.getAllByRole("button", { name: "Write" }).map((button) => button.closest("tr"));
+  const cells = (row: HTMLElement | null) => within(row as HTMLElement).getAllByRole("cell");
+  expect(cells(rows[0])).toHaveLength(7);
+  expect(cells(rows[0])[3].textContent).toBe("1");
+  expect(within(rows[0] as HTMLElement).queryByRole("button", { name: "1" })).toBeNull();
+  expect(cells(rows[1])[3].textContent).toBe("");
+});
+
+it("derives duration on render and moves a running row only when the table renders again", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-08-11T10:02:00.000Z"));
+  const started = "2026-08-11T10:00:00.000Z";
+  try {
+    vi.mocked(listExecutions).mockResolvedValue({
+      items: [
+        execution({
+          seq: 1,
+          status: "succeeded",
+          started_at: started,
+          finished_at: "2026-08-11T10:00:45.000Z",
+        }),
+        execution({
+          seq: 2,
+          status: "running",
+          started_at: started,
+          finished_at: "2026-08-11T10:00:10.000Z",
+        }),
+        execution({
+          seq: 3,
+          status: "running",
+          started_at: started,
+          finished_at: null,
+        }),
+        execution({
+          seq: 4,
+          status: "failed",
+          started_at: started,
+          finished_at: null,
+        }),
+        execution({
+          seq: 5,
+          status: "succeeded",
+          started_at: null,
+          finished_at: "2026-08-11T10:00:45.000Z",
+        }),
+        execution({
+          seq: 6,
+          status: "failed",
+          started_at: "2026-08-11T10:00:45.000Z",
+          finished_at: started,
+        }),
+      ],
+      total: 6,
+      limit: 50,
+      offset: 0,
+    });
+    const view = render(
+      createElement(
+        MantineProvider,
+        { env: "test" },
+        createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph }),
+      ),
+    );
+
+    expect(await screen.findAllByRole("button", { name: "Write" })).toHaveLength(6);
+    const duration = (index: number) => {
+      const row = screen.getAllByRole("button", { name: "Write" })[index]?.closest("tr");
+      return within(row as HTMLElement).getAllByRole("cell")[4].textContent;
+    };
+    expect(duration(0)).toBe("45s");
+    expect(duration(1)).toBe("10s");
+    expect(duration(2)).toBe("2m");
+    expect(duration(3)).toBe("—");
+    expect(duration(4)).toBe("—");
+    expect(duration(5)).toBe("—");
+
+    vi.setSystemTime(new Date("2026-08-11T10:03:00.000Z"));
+    expect(duration(2)).toBe("2m");
+    view.rerender(
+      createElement(
+        MantineProvider,
+        { env: "test" },
+        createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph }),
+      ),
+    );
+    expect(duration(2)).toBe("3m");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("shows the stored output byte count with no unit", async () => {
+  vi.mocked(listExecutions).mockResolvedValue({
+    items: [
+      execution({ seq: 1, output_bytes: 4096 }),
+      execution({ seq: 2, output_bytes: 0 }),
+    ],
+    total: 2,
+    limit: 50,
+    offset: 0,
+  });
+  render(
+    createElement(
+      MantineProvider,
+      { env: "test" },
+      createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph }),
+    ),
+  );
+
+  expect(await screen.findAllByRole("button", { name: "Write" })).toHaveLength(2);
+  const bytes = (index: number) => {
+    const row = screen.getAllByRole("button", { name: "Write" })[index]?.closest("tr");
+    return within(row as HTMLElement).getAllByRole("cell")[5].textContent;
+  };
+  expect(bytes(0)).toBe("4096");
+  expect(bytes(1)).toBe("0");
+});
+
+it("keeps seven columns on the loading ledger and widens the table floor", () => {
+  vi.mocked(listExecutions).mockReturnValue(new Promise(() => {}));
+  render(
+    createElement(
+      MantineProvider,
+      { env: "test" },
+      createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph }),
+    ),
+  );
+
+  const bodyRow = screen.getAllByRole("row")[1];
+  expect(within(bodyRow).getAllByRole("cell")).toHaveLength(7);
+  const scroller = screen.getByRole("table").parentElement?.parentElement;
+  expect(scroller?.getAttribute("style") ?? "").toContain(
+    "--table-min-width: calc(52.5rem * var(--mantine-scale))",
+  );
+});
+
+it("names the new ledger columns without reusing the container round mark", () => {
+  const english = en as Record<string, string>;
+  const chinese = zh as Record<string, string>;
+  expect(english["channels.run.column.executionRound"]).toBe("Round");
+  expect(english["channels.run.column.duration"]).toBe("Duration");
+  expect(english["channels.run.column.outputBytes"]).toBe("Output bytes");
+  expect(chinese["channels.run.column.executionRound"]).toBe("\u8f6e");
+  expect(chinese["channels.run.column.duration"]).toBe("\u8017\u65f6");
+  expect(chinese["channels.run.column.outputBytes"]).toBe("\u8f93\u51fa\u5b57\u8282");
+  expect(english["channels.run.column.round"]).toBe("#");
+  expect(chinese["channels.run.column.round"]).toBe("#");
+});
+
+it("tells execution clients to derive duration and leaves duration off the example", () => {
+  const doc = readFileSync(resolve(process.cwd(), "../docs/api-contracts-data-channel.md"), "utf8");
+  const section = doc.split("### 5.17 ")[1]?.split("### 5.18 ")[0] ?? "";
+  const example = section.match(/```json([\s\S]*?)```/)?.[1] ?? "";
+  expect(example).not.toContain('"duration"');
+  const roundBullet = section.indexOf("`round` is the zero-based round index.");
+  const durationBullet = section.indexOf(
+    "Duration is derived by clients from `started_at` and `finished_at`.",
+  );
+  const previewBullet = section.indexOf("`output_preview` is the stored output");
+  expect(roundBullet).toBeGreaterThan(-1);
+  expect(durationBullet).toBeGreaterThan(roundBullet);
+  expect(previewBullet).toBeGreaterThan(durationBullet);
 });

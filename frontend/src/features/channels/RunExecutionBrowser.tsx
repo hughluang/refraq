@@ -16,10 +16,16 @@ import { RunErrorText } from "@/features/channels/RunErrorText";
 import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
 import type { Graph, NodeExecution, NodeTypeSpec } from "@/features/channels/types";
 import { successRequestId } from "@/lib/api";
+import { formatJobDuration } from "@/lib/datetime";
 import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
+
+function shownRound(round: number | null): string {
+  if (round == null) return "";
+  return String(round + 1);
+}
 
 export function RunExecutionBrowser({
   channelId,
@@ -100,13 +106,16 @@ export function RunExecutionBrowser({
       <ListTable
         embedded
         list={list}
-        columnCount={4}
-        minWidth={480}
+        columnCount={7}
+        minWidth={840}
         head={
           <Table.Tr>
             <Table.Th>{t("channels.run.column.node")}</Table.Th>
             <Table.Th>{t("channels.run.column.status")}</Table.Th>
             <Table.Th>{t("channels.runs.started")}</Table.Th>
+            <Table.Th>{t("channels.run.column.executionRound")}</Table.Th>
+            <Table.Th>{t("channels.run.column.duration")}</Table.Th>
+            <Table.Th>{t("channels.run.column.outputBytes")}</Table.Th>
             <Table.Th>{t("channels.run.column.error")}</Table.Th>
           </Table.Tr>
         }
@@ -135,6 +144,9 @@ export function RunExecutionBrowser({
               <Table.Td>
                 <Instant value={item.started_at} requestId={requestId} />
               </Table.Td>
+              <Table.Td>{shownRound(item.round)}</Table.Td>
+              <Table.Td>{formatJobDuration(item)}</Table.Td>
+              <Table.Td>{item.output_bytes}</Table.Td>
               <Table.Td>
                 <RunErrorText code={item.error_code} message={item.error_message} />
               </Table.Td>
