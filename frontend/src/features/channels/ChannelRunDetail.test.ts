@@ -2,7 +2,7 @@
 
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,11 +24,27 @@ const api = vi.hoisted(() => ({
   rerunRun: vi.fn(),
 }));
 
+const jobs = vi.hoisted(() => ({
+  cancelJob: vi.fn(),
+}));
+
+const access = vi.hoisted(() => ({
+  grants: new Set<string>(),
+}));
+
+const i18n = vi.hoisted(() => ({
+  extra: {} as Record<string, string>,
+}));
+
 vi.mock("@/features/channels/api", () => ({
   getRun: (channelId: string, jobId: string, init?: { signal?: AbortSignal }) =>
     api.getRun(channelId, jobId, init),
   listNodeTypes: () => api.listNodeTypes(),
   rerunRun: (channelId: string, jobId: string) => api.rerunRun(channelId, jobId),
+}));
+
+vi.mock("@/features/jobs/api", () => ({
+  cancelJob: (jobId: string) => jobs.cancelJob(jobId),
 }));
 
 vi.mock("@/features/channels/ChannelCanvas", () => ({
@@ -45,12 +61,15 @@ vi.mock("@/features/channels/RunExecutionBrowser", () => ({
 
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
-    const template = key === "status.freshness" ? "Last updated {{time}}" : key;
+    const template =
+      key === "status.freshness" ? "Last updated {{time}}" : (i18n.extra[key] ?? key);
     if (!options) return template;
     return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
   },
   useNotification: () => ({ open: vi.fn() }),
-  useCan: () => ({ data: { can: false } }),
+  useCan: (request: { resource: string; action: string }) => ({
+    data: { can: access.grants.has(`${request.resource}:${request.action}`) },
+  }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
 }));
 
@@ -188,9 +207,12 @@ describe("ChannelRunDetail load feedback", () => {
     vi.setSystemTime(new Date("2026-10-11T06:00:29Z"));
     stubDom();
     resetNotifications();
+    i18n.extra = {};
+    access.grants.clear();
     api.getRun.mockReset();
     api.listNodeTypes.mockReset();
     api.rerunRun.mockReset();
+    jobs.cancelJob.mockReset();
     api.listNodeTypes.mockResolvedValue({ items: [] });
     useSessionStore.setState({
       user: viewer,
@@ -505,5 +527,97 @@ describe("ChannelRunDetail load feedback", () => {
 
     await advance(LIVE_STATUS_INTERVAL_MS);
     expect(politeRegion()?.textContent).toBe("status.job.succeeded");
+  });
+
+  it("stops this run from the header by its start time", async () => {
+    access.grants.add("channels:edit");
+    i18n.extra["channels.run.stop.confirmTitle"] = "Stop {{name}}?";
+    i18n.extra["feedback.confirm.body"] = "{{record}}: {{consequence}}";
+    const running = detail("running");
+    running.run = {
+      ...running.run,
+      created_at: "2026-10-11T05:00:00Z",
+      started_at: "2026-10-11T06:00:29Z",
+    };
+    api.getRun.mockResolvedValue(running);
+    renderDetail();
+
+    await advance(0);
+    fireEvent.click(screen.getByRole("button", { name: "channels.run.stop" }));
+    const dialog = screen.getByRole("dialog", { name: "Stop 10/11/2026, 6:00:29 AM?" });
+    const shown = "10/11/2026, 6:00:29 AM";
+    expect(dialog.textContent?.split(shown).length).toBe(3);
+    expect(dialog.textContent).not.toContain("10/11/2026, 5:00:00 AM");
+    expect(screen.getByRole("link", { name: "channels.runDetail.back" }).getAttribute("href")).toBe(
+      "/console/channels/chn_1",
+    );
+  });
+
+  it("cancels this page's job from the header and reloads the run before the next poll", async () => {
+    access.grants.add("channels:edit");
+    i18n.extra["channels.run.stop.confirmTitle"] = "Stop {{name}}?";
+    api.getRun.mockResolvedValue(detail("running", [], "job_page"));
+    jobs.cancelJob.mockResolvedValue({ job: { id: "job_page" } });
+    render(detailElement("job_page"));
+
+    await advance(0);
+    expect(api.getRun).toHaveBeenCalledTimes(1);
+    expect(api.getRun.mock.calls[0]?.[1]).toBe("job_page");
+    fireEvent.click(screen.getByRole("button", { name: "channels.run.stop" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Stop 10/11/2026, 6:00:29 AM?" })).getByRole(
+        "button",
+        { name: "channels.run.stop" },
+      ),
+    );
+    await advance(0);
+
+    expect(jobs.cancelJob).toHaveBeenCalledTimes(1);
+    expect(jobs.cancelJob).toHaveBeenCalledWith("job_page");
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("execution-table").getAttribute("data-reload-token")).toBe("0");
+  });
+
+  it("offers header Stop when the caller can list jobs, and hides it when they can do neither", async () => {
+    api.getRun.mockResolvedValue(detail("queued"));
+    const view = renderDetail();
+    await advance(0);
+    expect(screen.queryByRole("button", { name: "channels.run.stop" })).toBeNull();
+
+    access.grants.add("jobs:list");
+    view.rerender(detailElement());
+    expect(screen.getByRole("button", { name: "channels.run.stop" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "channels.runDetail.rerun" })).toBeNull();
+  });
+
+  it("hides header Stop once the run has ended", async () => {
+    access.grants.add("channels:edit");
+    for (const status of ["succeeded", "cancelled"]) {
+      api.getRun.mockResolvedValue(detail(status));
+      const view = renderDetail();
+      await advance(0);
+      expect(screen.queryByRole("button", { name: "channels.run.stop" })).toBeNull();
+      view.unmount();
+    }
+    api.getRun.mockResolvedValue(detail("failed"));
+    renderDetail();
+    await advance(0);
+    expect(screen.queryByRole("button", { name: "channels.run.stop" })).toBeNull();
+    expect(screen.getByRole("button", { name: "channels.runDetail.rerun" })).toBeTruthy();
+  });
+
+  it("reruns a failed published run on one click", async () => {
+    access.grants.add("channels:edit");
+    api.getRun.mockResolvedValue(detail("failed"));
+    api.rerunRun.mockReturnValue(new Promise(() => undefined));
+    renderDetail();
+    await advance(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "channels.runDetail.rerun" }));
+    await advance(0);
+    expect(api.rerunRun).toHaveBeenCalledTimes(1);
+    expect(api.rerunRun).toHaveBeenCalledWith("chn_1", "job_1");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(jobs.cancelJob).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
-import { Anchor, Box, Group, Table, Text, Tooltip } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
+import { Anchor, Box, Button, Group, Table, Text, Tooltip } from "@mantine/core";
+import { useCan, useTranslate } from "@refinedev/core";
 import { useEffect, useRef, useState } from "react";
 
 import { Instant } from "@/components/display/Instant";
@@ -10,6 +10,7 @@ import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentJobStatus } from "@/components/display/statusTone";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { PencilIcon } from "@/components/icons";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { listRuns } from "@/features/channels/api";
@@ -17,6 +18,8 @@ import { formatFailedNode, nodeDisplayName } from "@/features/channels/formatRun
 import { formatRunError } from "@/features/channels/problemLabel";
 import { isTerminalRun } from "@/features/channels/runSession";
 import type { ChannelRun } from "@/features/channels/types";
+import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { cancelJob } from "@/features/jobs/api";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
 import { isSessionExpiredError } from "@/lib/api";
@@ -40,6 +43,16 @@ export function inboundRunLabel(
 export function ChannelRuns({ channelId }: { channelId: string }) {
   const t = useTranslate();
   const showInstant = useShowInstant();
+  const { data: canWrite } = useCan({
+    resource: ModuleId.channels,
+    action: ModuleAction.edit,
+  });
+  const { data: canJobs } = useCan({
+    resource: ModuleId.jobs,
+    action: ModuleAction.list,
+  });
+  const canStop = Boolean(canWrite?.can || canJobs?.can);
+  const stopRun = useConsoleMutation();
   const tRef = useRef(t);
   tRef.current = t;
   const unloadedNotice = useRef(false);
@@ -188,12 +201,39 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
                     </Text>
                   ) : null}
                   {run.target === "draft" ? <DraftMark label={t("channels.runs.subject.draft")} /> : null}
+                  {!isTerminalRun(run.status) && canStop ? (
+                    <Button
+                      type="button"
+                      size="xs"
+                      color="red"
+                      variant="light"
+                      loading={stopRun.isSubmitting(run.job_id)}
+                      onClick={() => {
+                        const name = showInstant(run.started_at ?? run.created_at);
+                        stopRun.run({
+                          key: run.job_id,
+                          safety: "confirm",
+                          recordName: name,
+                          title: t("channels.run.stop.confirmTitle", { name }),
+                          consequence: t("channels.run.stop.consequence"),
+                          confirmLabel: t("channels.run.stop"),
+                          confirmColor: "red",
+                          outcome: t("channels.run.stop.outcome"),
+                          execute: () => cancelJob(run.job_id),
+                          onSuccess: () => live.refresh(),
+                        });
+                      }}
+                    >
+                      {t("channels.run.stop")}
+                    </Button>
+                  ) : null}
                 </Group>
               </Table.Td>
             </Table.Tr>
           );
         })}
       </ListTable>
+      {stopRun.dialog}
     </div>
   );
 }

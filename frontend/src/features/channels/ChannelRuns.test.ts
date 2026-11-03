@@ -2,7 +2,7 @@
 
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +22,14 @@ const api = vi.hoisted(() => ({
   listRuns: vi.fn(),
 }));
 
+const jobs = vi.hoisted(() => ({
+  cancelJob: vi.fn(),
+}));
+
+const access = vi.hoisted(() => ({
+  grants: new Set<string>(),
+}));
+
 const i18n = vi.hoisted(() => ({
   extra: {} as Record<string, string>,
 }));
@@ -34,6 +42,10 @@ vi.mock("@/features/channels/api", () => ({
   ) => api.listRuns(channelId, params, init),
 }));
 
+vi.mock("@/features/jobs/api", () => ({
+  cancelJob: (jobId: string) => jobs.cancelJob(jobId),
+}));
+
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
     const template =
@@ -41,6 +53,9 @@ vi.mock("@refinedev/core", () => ({
     if (!options) return template;
     return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
   },
+  useCan: (request: { resource: string; action: string }) => ({
+    data: { can: access.grants.has(`${request.resource}:${request.action}`) },
+  }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
 }));
 
@@ -169,7 +184,9 @@ describe("ChannelRuns load feedback", () => {
     stubDom();
     resetNotifications();
     i18n.extra = {};
+    access.grants.clear();
     api.listRuns.mockReset();
+    jobs.cancelJob.mockReset();
     useSessionStore.setState({
       user: viewer,
       permissionsReady: true,
@@ -578,5 +595,108 @@ describe("ChannelRuns load feedback", () => {
     expect(politeRegion()?.textContent).toBe(
       "10/11/2026, 6:00:29 AM status.job.succeeded, 10/11/2026, 5:00:00 AM status.job.failed",
     );
+  });
+
+  it("stops a non-terminal row by the start time on that row and does not open the run", async () => {
+    access.grants.add("channels:edit");
+    i18n.extra["channels.run.stop.confirmTitle"] = "Stop {{name}}?";
+    i18n.extra["feedback.confirm.body"] = "{{record}}: {{consequence}}";
+    api.listRuns.mockResolvedValue(
+      page([
+        {
+          ...run("queued"),
+          job_id: "job_wait",
+          started_at: null,
+          created_at: "2026-10-11T05:00:00Z",
+        },
+        {
+          ...run("running"),
+          job_id: "job_live",
+          started_at: "2026-10-11T06:00:29Z",
+        },
+        { ...run("succeeded"), job_id: "job_ok", started_at: "2026-10-11T04:00:00Z" },
+        { ...run("failed"), job_id: "job_fail", started_at: "2026-10-11T03:00:00Z" },
+        { ...run("cancelled"), job_id: "job_stop", started_at: "2026-10-11T02:00:00Z" },
+      ]),
+    );
+    renderRuns();
+
+    await advance(0);
+    const queued = screen.getByRole("link", { name: "10/11/2026, 5:00:00 AM" });
+    const running = screen.getByRole("link", { name: "10/11/2026, 6:00:29 AM" });
+    expect(queued.getAttribute("href")).toBe("/console/channels/chn_1/runs/job_wait");
+    expect(within(queued.closest("tr") as HTMLElement).getByRole("button", { name: "channels.run.stop" })).toBeTruthy();
+    expect(within(running.closest("tr") as HTMLElement).getByRole("button", { name: "channels.run.stop" })).toBeTruthy();
+    for (const when of ["10/11/2026, 4:00:00 AM", "10/11/2026, 3:00:00 AM", "10/11/2026, 2:00:00 AM"]) {
+      const row = screen.getByRole("link", { name: when }).closest("tr") as HTMLElement;
+      expect(within(row).queryByRole("button", { name: "channels.run.stop" })).toBeNull();
+    }
+
+    fireEvent.click(
+      within(queued.closest("tr") as HTMLElement).getByRole("button", { name: "channels.run.stop" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "Stop 10/11/2026, 5:00:00 AM?" });
+    const shown = "10/11/2026, 5:00:00 AM";
+    expect(dialog.textContent?.split(shown).length).toBe(3);
+    expect(dialog.textContent).not.toContain("10/11/2026, 6:00:29 AM");
+    expect(queued.getAttribute("href")).toBe("/console/channels/chn_1/runs/job_wait");
+    expect(screen.getByRole("link", { name: shown })).toBe(queued);
+  });
+
+  it("cancels that row's job and reloads the list before the next poll", async () => {
+    access.grants.add("channels:edit");
+    i18n.extra["channels.run.stop.confirmTitle"] = "Stop {{name}}?";
+    api.listRuns.mockResolvedValue(
+      page([
+        {
+          ...run("running"),
+          job_id: "job_live",
+          started_at: "2026-10-11T06:00:29Z",
+        },
+        {
+          ...run("queued"),
+          job_id: "job_wait",
+          started_at: null,
+          created_at: "2026-10-11T05:00:00Z",
+        },
+      ]),
+    );
+    jobs.cancelJob.mockResolvedValue({ job: { id: "job_wait" } });
+    renderRuns();
+
+    await advance(0);
+    expect(api.listRuns).toHaveBeenCalledTimes(1);
+    const row = screen.getByRole("link", { name: "10/11/2026, 5:00:00 AM" }).closest("tr") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "channels.run.stop" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Stop 10/11/2026, 5:00:00 AM?" })).getByRole(
+        "button",
+        { name: "channels.run.stop" },
+      ),
+    );
+    await advance(0);
+
+    expect(jobs.cancelJob).toHaveBeenCalledTimes(1);
+    expect(jobs.cancelJob).toHaveBeenCalledWith("job_wait");
+    expect(api.listRuns).toHaveBeenCalledTimes(2);
+    expect(api.listRuns.mock.calls[1]?.[0]).toBe("chn_1");
+  });
+
+  it("offers Stop when the caller can list jobs, and hides it when they can do neither", async () => {
+    api.listRuns.mockResolvedValue(page([run("running")]));
+    const view = renderRuns();
+    await advance(0);
+    expect(screen.queryByRole("button", { name: "channels.run.stop" })).toBeNull();
+
+    access.grants.add("jobs:list");
+    view.rerender(
+      createElement(
+        MantineProvider,
+        { env: "test" },
+        createElement(ConsoleNotifications),
+        createElement(ChannelRuns, { channelId: "chn_1" }),
+      ),
+    );
+    expect(screen.getByRole("button", { name: "channels.run.stop" })).toBeTruthy();
   });
 });

@@ -7,9 +7,11 @@ import { useEffect, useRef, useState } from "react";
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
 import { presentJobStatus } from "@/components/display/statusTone";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { cancelJob } from "@/features/jobs/api";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { getRun, listNodeTypes, rerunRun } from "@/features/channels/api";
 import { RunExecutionBrowser } from "@/features/channels/RunExecutionBrowser";
@@ -20,6 +22,7 @@ import { formatRunError } from "@/features/channels/problemLabel";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import { isTerminalRun, recordedKey } from "@/features/channels/runSession";
 import type { NodeTypeSpec } from "@/features/channels/types";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
 import { isSessionExpiredError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
@@ -33,10 +36,17 @@ export function ChannelRunDetail({
 }) {
   const t = useTranslate();
   const { open } = useNotification();
+  const showInstant = useShowInstant();
+  const stopRunAction = useConsoleMutation();
   const { data: canWrite } = useCan({
     resource: ModuleId.channels,
     action: ModuleAction.edit,
   });
+  const { data: canJobs } = useCan({
+    resource: ModuleId.jobs,
+    action: ModuleAction.list,
+  });
+  const canStop = Boolean(canWrite?.can || canJobs?.can);
   const [catalog, setCatalog] = useState<NodeTypeSpec[]>([]);
   const [rerunning, setRerunning] = useState(false);
   const tRef = useRef(t);
@@ -126,6 +136,32 @@ export function ChannelRunDetail({
         {t("channels.runDetail.rerun")}
       </Button>
     ) : null;
+  const stopHeader =
+    canStop && detail && !isTerminalRun(detail.run.status) ? (
+      <Button
+        type="button"
+        size="sm"
+        color="red"
+        variant="light"
+        loading={stopRunAction.submitting}
+        onClick={() => {
+          const name = showInstant(detail.run.started_at);
+          stopRunAction.run({
+            safety: "confirm",
+            recordName: name,
+            title: t("channels.run.stop.confirmTitle", { name }),
+            consequence: t("channels.run.stop.consequence"),
+            confirmLabel: t("channels.run.stop"),
+            confirmColor: "red",
+            outcome: t("channels.run.stop.outcome"),
+            execute: () => cancelJob(jobId),
+            onSuccess: () => live.refresh(),
+          });
+        }}
+      >
+        {t("channels.run.stop")}
+      </Button>
+    ) : null;
   const back = (
     <HeaderActions
       navigation={
@@ -141,18 +177,22 @@ export function ChannelRunDetail({
           </Button>
         </Group>
       }
+      lifecycle={stopHeader}
     />
   );
   const graph = detail?.graph ?? null;
   if (!detail || !graph) {
     const unloaded = detail == null && live.stale && !sessionExpired;
     return (
-      <PageChrome
-        title={t("channels.title")}
-        actions={back}
-        status={unloaded ? "unloaded" : "loading"}
-        onRetry={unloaded ? () => void retryRef.current() : undefined}
-      />
+      <>
+        <PageChrome
+          title={t("channels.title")}
+          actions={back}
+          status={unloaded ? "unloaded" : "loading"}
+          onRetry={unloaded ? () => void retryRef.current() : undefined}
+        />
+        {stopRunAction.dialog}
+      </>
     );
   }
   const subject = formatRunSubject(detail.run, t);
@@ -220,6 +260,7 @@ export function ChannelRunDetail({
         catalog={catalog}
         reloadToken={executionReload}
       />
+      {stopRunAction.dialog}
     </Stack>
     </PageChrome>
   );
