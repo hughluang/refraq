@@ -448,6 +448,10 @@
   opacity: 1;
 }
 
+.channel-canvas-stage .react-flow__edge.channel-flow-edge--dormant .react-flow__edge-path {
+  stroke-dasharray: 6 4;
+}
+
 .channel-node-toolbar {
   display: flex;
   gap: 2px;
@@ -636,6 +640,11 @@
   .channel-canvas-stage .react-flow__edge.channel-flow-edge--live .react-flow__edge-path {
     stroke-dasharray: 8 6;
     animation: channel-flow-edge-live 1.4s linear infinite;
+  }
+
+  .channel-canvas-stage .react-flow__edge.channel-flow-edge--live.channel-flow-edge--dormant .react-flow__edge-path {
+    stroke-dasharray: 6 4;
+    animation: none;
   }
 
   @keyframes channel-flow-edge-live {

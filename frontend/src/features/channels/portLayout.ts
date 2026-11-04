@@ -42,20 +42,19 @@ export function layoutNodePorts(
     inputs.filter((port) => port.port !== LOOP_RETURN_PORT),
     "left",
   );
-  const visible = outputs.filter((port) => port.port !== "error");
   if (!options?.frame) {
-    return { inputs: inputsLaid, outputs: place(visible, "right") };
+    return { inputs: inputsLaid, outputs: place(outputs, "right") };
   }
   return {
     inputs: inputsLaid,
     outputs: [
       ...place(
-        visible.filter((port) => port.port === EACH_PORT),
+        outputs.filter((port) => port.port === EACH_PORT),
         "right",
         true,
       ),
       ...place(
-        visible.filter((port) => port.port !== EACH_PORT),
+        outputs.filter((port) => port.port !== EACH_PORT),
         "right",
       ),
     ],

@@ -144,6 +144,8 @@ const LABELS: Record<string, string> = {
   "channels.canvas.ports.false": "False",
   "channels.canvas.ports.each": "Each",
   "channels.canvas.ports.done": "Done",
+  "channels.canvas.ports.error": "Error",
+  "channels.canvas.errorPortIdle": "This line runs only when On error is Error output.",
 };
 
 vi.mock("@refinedev/core", () => ({
@@ -2122,6 +2124,10 @@ const BATCH_SPEC = {
 const READ_SPEC = catalogSpec("read.sql", [{ port: "main", description: "" }], [
   { port: "main", description: "" },
 ]);
+const STEP_SPEC = catalogSpec("lab.step", [{ port: "main", description: "" }], [
+  { port: "main", description: "" },
+  { port: "error", description: "" },
+]);
 const MERGE_SPEC = catalogSpec("transform.merge", [{ port: "main", description: "" }], [
   { port: "main", description: "" },
 ]);
@@ -2145,6 +2151,133 @@ describe("channel ports", () => {
     expect(screen.getByText("True")).toBeTruthy();
     expect(screen.getByText("False")).toBeTruthy();
     expect((await port("Check True output")).getAttribute("data-handleid")).toBe("true");
+  });
+
+  it("hides the error output until on error is error output", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("step", "lab.step", "Step", 40)],
+    }, { catalog: [STEP_SPEC] });
+
+    expect(await port("Step Main output")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Step Error output" })).toBeNull();
+    expect(screen.queryByText("Error")).toBeNull();
+  });
+
+  it("shows the error output when on error is error output", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [{ ...placed("step", "lab.step", "Step", 40), on_error: "error_output" }],
+    }, { catalog: [STEP_SPEC] });
+
+    const handle = await port("Step Error output");
+    expect(handle.getAttribute("data-handleid")).toBe("error");
+    expect(handle.getAttribute("data-handlepos")).toBe("right");
+    expect(handle.getAttribute("title")).toBeNull();
+    expect(handle.hasAttribute("aria-description")).toBe(false);
+    expect(screen.getByText("Error").className).toContain("channel-flow-port--right");
+
+    const flow = document.querySelector(".channel-flow-node");
+    if (!(flow instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.mouseEnter(flow);
+    expect(screen.getByRole("button", { name: "Add the next step from Error" })).toBeTruthy();
+  });
+
+  it("does not draw an error output for a type that does not declare one", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [{ ...placed("read", "read.sql", "Read", 40), on_error: "error_output" }],
+    }, { catalog: [READ_SPEC] });
+
+    expect(await port("Read Main output")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Read Error output" })).toBeNull();
+  });
+
+  const idleLine = "This line runs only when On error is Error output.";
+
+  async function renderErrorBranch(onError: "stop" | "continue" | "error_output") {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        { ...placed("step", "lab.step", "Step", 40), on_error: onError },
+        placed("next", "read.sql", "Next", 280),
+        placed("after", "read.sql", "After", 520),
+      ],
+      edges: [
+        {
+          id: "ed_err",
+          source: { node_id: "step", port: "error" },
+          target: { node_id: "next", port: "main" },
+        },
+        {
+          id: "ed_main",
+          source: { node_id: "step", port: "main" },
+          target: { node_id: "after", port: "main" },
+        },
+      ],
+    }, { catalog: [STEP_SPEC, READ_SPEC] });
+  }
+
+  function canvasEdge(id: string) {
+    const edge = document.querySelector(`.react-flow__edge[data-id='${id}']`);
+    if (!(edge instanceof Element)) throw new Error(`missing edge ${id}`);
+    return edge;
+  }
+
+  it("keeps the error output when an error edge exists and on error is stop", async () => {
+    await renderErrorBranch("stop");
+
+    const handle = await port("Step Error output");
+    expect(handle.getAttribute("title")).toBe(idleLine);
+    expect(handle.getAttribute("aria-description")).toBe(idleLine);
+    const flow = handle.closest(".channel-flow-node");
+    if (!(flow instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.mouseEnter(flow);
+    expect(screen.queryByRole("button", { name: "Add the next step from Error" })).toBeNull();
+
+    const errorEdge = canvasEdge("ed_err");
+    expect(errorEdge.classList.contains("channel-flow-edge--dormant")).toBe(true);
+    expect(errorEdge.getAttribute("aria-label")).toBe(`Error to Main ${idleLine}`);
+    const mainEdge = canvasEdge("ed_main");
+    expect(mainEdge.classList.contains("channel-flow-edge--dormant")).toBe(false);
+    expect(mainEdge.getAttribute("aria-label")).toBe("Main to Main");
+
+    const css = readFileSync(resolve(__dirname, "ChannelCanvas.css"), "utf8");
+    const dormant =
+      css.match(
+        /\.channel-canvas-stage \.react-flow__edge\.channel-flow-edge--dormant \.react-flow__edge-path \{([\s\S]*?)\n\}/,
+      )?.[1] ?? "";
+    expect(dormant).toMatch(/stroke-dasharray:\s*6 4/);
+    expect(dormant).not.toMatch(/opacity/);
+    const held =
+      css.match(
+        /\.channel-flow-edge--live\.channel-flow-edge--dormant \.react-flow__edge-path \{([\s\S]*?)\n\}/,
+      )?.[1] ?? "";
+    expect(held).toMatch(/stroke-dasharray:\s*6 4/);
+    expect(held).toMatch(/animation:\s*none/);
+  });
+
+  it("draws a dormant error edge when on error is continue", async () => {
+    await renderErrorBranch("continue");
+
+    const handle = await port("Step Error output");
+    expect(handle.getAttribute("title")).toBe(idleLine);
+    expect(handle.getAttribute("aria-description")).toBe(idleLine);
+    const errorEdge = canvasEdge("ed_err");
+    expect(errorEdge.classList.contains("channel-flow-edge--dormant")).toBe(true);
+    expect(errorEdge.getAttribute("aria-label")).toBe(`Error to Main ${idleLine}`);
+    expect(canvasEdge("ed_main").classList.contains("channel-flow-edge--dormant")).toBe(false);
+  });
+
+  it("draws an error edge as a live path when on error is error output", async () => {
+    await renderErrorBranch("error_output");
+
+    const handle = await port("Step Error output");
+    expect(handle.getAttribute("title")).toBeNull();
+    expect(handle.hasAttribute("aria-description")).toBe(false);
+    const errorEdge = canvasEdge("ed_err");
+    expect(errorEdge.classList.contains("channel-flow-edge--dormant")).toBe(false);
+    expect(errorEdge.getAttribute("aria-label")).toBe("Error to Main");
   });
 
   it("draws For as a frame with each inset on the left facing right, and done on the right", async () => {

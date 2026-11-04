@@ -10,16 +10,24 @@ import type { ContainerDeclaration } from "@/features/channels/types";
 
 describe("layoutNodePorts", () => {
   it("keeps a single main handle unlabelled on its side", () => {
+    const laid = layoutNodePorts([{ port: "main" }], [{ port: "main" }]);
+    expect(laid.inputs).toEqual([
+      { port: "main", position: "left", top: "50%", labelled: false, inset: false },
+    ]);
+    expect(laid.outputs).toEqual([
+      { port: "main", position: "right", top: "50%", labelled: false, inset: false },
+    ]);
+  });
+
+  it("places main and error on the right, labelled and evenly spaced", () => {
     const laid = layoutNodePorts(
       [{ port: "main" }],
       [{ port: "main" }, { port: "error" }],
     );
-    expect(laid.inputs).toEqual([
-      { port: "main", position: "left", top: "50%", labelled: false, inset: false },
+    expect(laid.outputs.map((port) => [port.port, port.top, port.labelled, port.inset])).toEqual([
+      ["main", `${(1 / 3) * 100}%`, true, false],
+      ["error", `${(2 / 3) * 100}%`, true, false],
     ]);
-    expect(laid.outputs.map((port) => port.port)).toEqual(["main"]);
-    expect(laid.outputs[0]?.labelled).toBe(false);
-    expect(laid.outputs[0]?.inset).toBe(false);
   });
 
   it("labels both If outputs and spaces them evenly", () => {

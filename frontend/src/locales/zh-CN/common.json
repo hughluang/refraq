@@ -1826,6 +1826,7 @@
   "channels.canvas.ports.each": "每一项",
   "channels.canvas.ports.done": "完成",
   "channels.canvas.ports.error": "错误",
+  "channels.canvas.errorPortIdle": "这条线只在「出错时」为「走错误出口」时执行",
   "channels.canvas.toolbar": "画布工具",
   "channels.canvas.zoomIn": "放大",
   "channels.canvas.zoomOut": "缩小",

@@ -1826,6 +1826,7 @@
   "channels.canvas.ports.each": "Each",
   "channels.canvas.ports.done": "Done",
   "channels.canvas.ports.error": "Error",
+  "channels.canvas.errorPortIdle": "This line runs only when On error is Error output.",
   "channels.canvas.toolbar": "Canvas tools",
   "channels.canvas.zoomIn": "Zoom in",
   "channels.canvas.zoomOut": "Zoom out",

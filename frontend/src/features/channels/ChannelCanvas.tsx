@@ -377,6 +377,14 @@ const CANVAS_MIN_ZOOM = 0.25;
 const CANVAS_MAX_ZOOM = 2;
 const CHANNEL_EDGE_TYPE = "channel";
 const CHANNEL_EDGE_MARKER = { type: MarkerType.ArrowClosed, color: "context-stroke" };
+
+/** The engine keeps an `error` port dead unless `on_error` is `error_output`. */
+function errorPortDormant(
+  onError: string | undefined,
+  sourceHandle: string | null | undefined,
+): boolean {
+  return sourceHandle === "error" && onError !== "error_output";
+}
 const nodeTypes = { channel: ChannelFlowNode, note: NoteFlowNode };
 const edgeTypes = { [CHANNEL_EDGE_TYPE]: ChannelFlowEdge };
 const PROBLEM_STROKE = "var(--refraq-tone-danger)";
@@ -2195,6 +2203,9 @@ function ChannelCanvasBody({
   const busyOutputs = new Set(
     edges.map((edge) => `${edge.source}:${edge.sourceHandle || "main"}`),
   );
+  const onErrorByNode = new Map(
+    nodes.filter(isChannelNode).map((node) => [node.id, node.data.onError] as const),
+  );
   const stageRect = flowRootRef.current?.getBoundingClientRect();
   const pickerFrame = { width: stageRect?.width ?? 0, height: stageRect?.height ?? 0 };
 
@@ -2241,28 +2252,34 @@ function ChannelCanvasBody({
           <ReactFlow
             colorMode={colorScheme}
             nodes={flowNodes}
-            edges={flowEdges.map((edge) => ({
-              ...edge,
-              ariaLabel: t("channels.canvas.edge", {
+            edges={flowEdges.map((edge) => {
+              const connection = t("channels.canvas.edge", {
                 source: portLabel(t, edge.sourceHandle || "main"),
                 target: portLabel(t, edge.targetHandle || "main"),
-              }),
-              className: [
-                edge.className,
-                phases.get(edge.target) === "running" ? "channel-flow-edge--live" : "",
-                drawingIds.has(edge.id) && phases.get(edge.target) !== "running"
-                  ? "channel-flow-edge--draw"
-                  : "",
-                phases.get(edge.source) === "dead" || phases.get(edge.target) === "dead"
-                  ? "channel-flow-edge--settled"
-                  : "",
-                adjacentTo != null && (edge.source === adjacentTo || edge.target === adjacentTo)
-                  ? "channel-flow-edge--adjacent"
-                  : "",
-              ]
-                .filter(Boolean)
-                .join(" ") || undefined,
-            }))}
+              });
+              const dormant = errorPortDormant(onErrorByNode.get(edge.source), edge.sourceHandle);
+              const idle = t("channels.canvas.errorPortIdle");
+              return {
+                ...edge,
+                ariaLabel: dormant ? `${connection} ${idle}` : connection,
+                className: [
+                  edge.className,
+                  dormant ? "channel-flow-edge--dormant" : "",
+                  phases.get(edge.target) === "running" ? "channel-flow-edge--live" : "",
+                  drawingIds.has(edge.id) && phases.get(edge.target) !== "running"
+                    ? "channel-flow-edge--draw"
+                    : "",
+                  phases.get(edge.source) === "dead" || phases.get(edge.target) === "dead"
+                    ? "channel-flow-edge--settled"
+                    : "",
+                  adjacentTo != null && (edge.source === adjacentTo || edge.target === adjacentTo)
+                    ? "channel-flow-edge--adjacent"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ") || undefined,
+              };
+            })}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE, markerEnd: CHANNEL_EDGE_MARKER }}
@@ -3344,8 +3361,14 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const inputs = spec ? spec.inputs : data.trigger ? [] : [{ port: "main", description: "" }];
   const outputs = spec ? spec.outputs : [{ port: "main", description: "" }];
   const frame = data.container != null;
-  const laid = layoutNodePorts(inputs, outputs, { frame });
-  const errorAnchor = outputs.some((port) => port.port === "error");
+  const errorWired = busyOutputs.has(`${id}:error`);
+  const showError = data.onError === "error_output" || errorWired;
+  const laid = layoutNodePorts(
+    inputs,
+    showError ? outputs : outputs.filter((port) => port.port !== "error"),
+    { frame },
+  );
+  const errorIdle = showError && errorPortDormant(data.onError, "error");
   const run = useContext(CanvasRunContext);
   const entering = useContext(CanvasMotionContext).entering.has(id);
   const phase = run.phases.get(id);
@@ -3479,27 +3502,8 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
         onAdd={(port, point) =>
           openPickerAt(point, { kind: "afterPort", sourceId: id, sourceHandle: port })
         }
+        notes={errorIdle ? { error: t("channels.canvas.errorPortIdle") } : undefined}
       />
-      {errorAnchor ? (
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          id="error"
-          aria-hidden
-          isConnectable={false}
-          isConnectableStart={false}
-          isConnectableEnd={false}
-          style={{
-            width: 0,
-            height: 0,
-            minWidth: 0,
-            minHeight: 0,
-            opacity: 0,
-            border: "none",
-            pointerEvents: "none",
-          }}
-        />
-      ) : null}
     </div>
   );
 }
@@ -3609,6 +3613,7 @@ function PortHandles({
   onAdd,
   onAddEnter,
   onAddLeave,
+  notes,
 }: {
   ports: readonly PortPlacement[];
   nodeName: string;
@@ -3619,6 +3624,7 @@ function PortHandles({
   onAdd?: (port: string, point: { x: number; y: number }) => void;
   onAddEnter?: () => void;
   onAddLeave?: (event: { relatedTarget: EventTarget | null }) => void;
+  notes?: Readonly<Record<string, string>>;
 }) {
   const t = useTranslate();
   return (
@@ -3627,6 +3633,7 @@ function PortHandles({
         const name = portLabel(t, port.port);
         const occupied = busyOutputs?.has(`${nodeId}:${port.port}`) ?? false;
         const showAdd = kind === "source" && addable && !occupied && onAdd != null;
+        const note = notes?.[port.port];
         return (
           <Fragment key={`${kind}-${port.port}`}>
             <Handle
@@ -3640,6 +3647,8 @@ function PortHandles({
                 port: name,
                 side: t(kind === "target" ? "channels.canvas.input" : "channels.canvas.output"),
               })}
+              aria-description={note}
+              title={note}
               role="button"
             />
             {showAdd ? (
