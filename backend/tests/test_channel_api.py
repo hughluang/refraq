@@ -2324,3 +2324,502 @@ def _capacity_row(
         status=status,
         created_at=utc_now(),
     )
+
+
+def test_channel_datasets_pages_loading_and_ready_largest_first(
+    client: TestClient,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from backend.channel.dataset_registry import get_dataset_store, reset_dataset_store
+    from backend.channel.run_store import ChannelRunRecord
+
+    reset_dataset_store()
+    created = client.post(
+        "/channels", json={"name": "Order sync", "description": None}
+    )
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    job_id = "job_page"
+    get_run_store().insert_run(
+        ChannelRunRecord(
+            job_id=job_id,
+            channel_id=channel_id,
+            target="published",
+            version=1,
+            draft_revision=None,
+            graph={
+                "nodes": [
+                    {"id": "n_query", "name": "Query orders"},
+                    {"id": "n_blank"},
+                ],
+                "edges": [],
+            },
+            trigger_node_id="n_query",
+            ignore_checkpoints=False,
+            outcome=None,
+            failed_node_id=None,
+            skipped_node_ids=[],
+            created_at=datetime(2026, 11, 4, 1, 0, tzinfo=timezone.utc),
+        )
+    )
+    early = datetime(2026, 11, 4, 1, 0, tzinfo=timezone.utc)
+    middle = datetime(2026, 11, 4, 2, 0, tzinfo=timezone.utc)
+    late = datetime(2026, 11, 4, 3, 0, tzinfo=timezone.utc)
+    store = get_dataset_store()
+    store.save(
+        _usage_row(
+            "ds_big",
+            job_id=job_id,
+            node_id="n_query",
+            status="ready",
+            size_bytes=300,
+            row_count=120000,
+            created_at=early,
+            expires_at=early + timedelta(days=1),
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_mid_late",
+            job_id=job_id,
+            node_id="n_query",
+            status="ready",
+            size_bytes=200,
+            row_count=2,
+            created_at=late,
+            expires_at=late,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_mid_early",
+            job_id=job_id,
+            node_id="n_query",
+            status="ready",
+            size_bytes=200,
+            row_count=1,
+            created_at=middle,
+            expires_at=middle,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_tie_a",
+            job_id=job_id,
+            node_id="n_query",
+            status="ready",
+            size_bytes=100,
+            row_count=1,
+            created_at=early,
+            expires_at=early,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_tie_b",
+            job_id=job_id,
+            node_id="n_query",
+            status="ready",
+            size_bytes=100,
+            row_count=1,
+            created_at=early,
+            expires_at=early,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_loading",
+            job_id=job_id,
+            node_id="n_blank",
+            status="loading",
+            size_bytes=50,
+            row_count=0,
+            created_at=early,
+            expires_at=None,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_dropped",
+            job_id=job_id,
+            node_id="n_query",
+            status="dropped",
+            size_bytes=999,
+            row_count=9,
+            created_at=late,
+            expires_at=late,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_lost",
+            job_id=job_id,
+            node_id="n_query",
+            status="lost",
+            size_bytes=888,
+            row_count=8,
+            created_at=late,
+            expires_at=late,
+        )
+    )
+
+    response = client.get("/channel-datasets")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 6
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert [item["id"] for item in body["items"]] == [
+        "ds_big",
+        "ds_mid_late",
+        "ds_mid_early",
+        "ds_tie_b",
+        "ds_tie_a",
+        "ds_loading",
+    ]
+    assert body["items"][0] == {
+        "id": "ds_big",
+        "job_id": job_id,
+        "channel_id": channel_id,
+        "channel_name": "Order sync",
+        "node_id": "n_query",
+        "node_name": "Query orders",
+        "status": "ready",
+        "size_bytes": 300,
+        "row_count": 120000,
+        "created_at": "2026-11-04T01:00:00Z",
+        "expires_at": "2026-11-05T01:00:00Z",
+    }
+    assert body["items"][5] == {
+        "id": "ds_loading",
+        "job_id": job_id,
+        "channel_id": channel_id,
+        "channel_name": "Order sync",
+        "node_id": "n_blank",
+        "node_name": "n_blank",
+        "status": "loading",
+        "size_bytes": 50,
+        "row_count": 0,
+        "created_at": "2026-11-04T01:00:00Z",
+        "expires_at": None,
+    }
+    assert "relation" not in body["items"][0]
+    assert "columns" not in body["items"][0]
+    assert "seq" not in body["items"][0]
+
+
+def test_channel_datasets_keeps_rows_when_the_channel_or_run_is_gone(
+    client: TestClient,
+) -> None:
+    from datetime import datetime, timezone
+
+    from backend.channel.dataset_registry import get_dataset_store, reset_dataset_store
+    from backend.channel.run_store import ChannelRunRecord
+
+    reset_dataset_store()
+    created = client.post(
+        "/channels", json={"name": "Order sync", "description": None}
+    )
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    kept = datetime(2026, 11, 4, 1, 12, tzinfo=timezone.utc)
+    store = get_dataset_store()
+    runs = get_run_store()
+
+    def insert(job_id: str, graph: dict | None) -> None:
+        runs.insert_run(
+            ChannelRunRecord(
+                job_id=job_id,
+                channel_id=channel_id,
+                target="published",
+                version=1,
+                draft_revision=None,
+                graph=graph,
+                trigger_node_id="n_query",
+                ignore_checkpoints=False,
+                outcome=None,
+                failed_node_id=None,
+                skipped_node_ids=[],
+                created_at=kept,
+            )
+        )
+
+    insert("job_named", {"nodes": [{"id": "n_query", "name": "Query orders"}], "edges": []})
+    insert("job_blank_name", {"nodes": [{"id": "n_query", "name": ""}], "edges": []})
+    insert("job_no_graph", None)
+    insert("job_gone", {"nodes": [{"id": "n_query", "name": "Query orders"}], "edges": []})
+    store.save(
+        _usage_row(
+            "ds_named",
+            job_id="job_named",
+            node_id="n_query",
+            status="ready",
+            size_bytes=40,
+            row_count=3,
+            created_at=kept,
+            expires_at=kept,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_blank_name",
+            job_id="job_blank_name",
+            node_id="n_query",
+            status="ready",
+            size_bytes=30,
+            row_count=1,
+            created_at=kept,
+            expires_at=kept,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_no_graph",
+            job_id="job_no_graph",
+            node_id="n_query",
+            status="loading",
+            size_bytes=20,
+            row_count=0,
+            created_at=kept,
+            expires_at=None,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_gone",
+            job_id="job_gone",
+            node_id="n_query",
+            status="ready",
+            size_bytes=10,
+            row_count=4,
+            created_at=kept,
+            expires_at=kept,
+        )
+    )
+    deleted = client.delete(f"/channels/{channel_id}")
+    assert deleted.status_code == 204, deleted.text
+    runs.delete_run("job_gone")
+
+    response = client.get("/channel-datasets")
+    assert response.status_code == 200, response.text
+    by_id = {item["id"]: item for item in response.json()["items"]}
+    assert set(by_id) == {"ds_named", "ds_blank_name", "ds_no_graph", "ds_gone"}
+    assert by_id["ds_named"]["channel_id"] == channel_id
+    assert by_id["ds_named"]["channel_name"] == channel_id
+    assert by_id["ds_named"]["node_name"] == "Query orders"
+    assert by_id["ds_blank_name"]["channel_id"] == channel_id
+    assert by_id["ds_blank_name"]["node_name"] == "n_query"
+    assert by_id["ds_no_graph"]["channel_id"] == channel_id
+    assert by_id["ds_no_graph"]["node_name"] == "n_query"
+    assert by_id["ds_gone"]["channel_id"] is None
+    assert by_id["ds_gone"]["channel_name"] == ""
+    assert by_id["ds_gone"]["node_name"] == "n_query"
+
+
+def test_channel_datasets_read_does_not_change_rows(client: TestClient) -> None:
+    from datetime import datetime, timezone
+
+    from backend.channel.dataset_registry import get_dataset_store, reset_dataset_store
+
+    reset_dataset_store()
+    kept = datetime(2026, 11, 4, 1, 12, tzinfo=timezone.utc)
+    store = get_dataset_store()
+    store.save(
+        _usage_row(
+            "ds_loading",
+            job_id="job_usage",
+            node_id="n_query",
+            status="loading",
+            size_bytes=50,
+            row_count=0,
+            created_at=kept,
+            expires_at=None,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_dropped",
+            job_id="job_usage",
+            node_id="n_query",
+            status="dropped",
+            size_bytes=9,
+            row_count=2,
+            created_at=kept,
+            expires_at=kept,
+        )
+    )
+    before = {
+        "ds_loading": store.get("ds_loading"),
+        "ds_dropped": store.get("ds_dropped"),
+    }
+    response = client.get("/channel-datasets")
+    assert response.status_code == 200, response.text
+    assert response.json()["items"][0]["id"] == "ds_loading"
+    assert "CHANNEL_DATASET_QUOTA_EXCEEDED" not in response.text
+    after_loading = store.get("ds_loading")
+    after_dropped = store.get("ds_dropped")
+    assert after_loading == before["ds_loading"]
+    assert after_dropped == before["ds_dropped"]
+    assert after_loading is not None
+    assert after_loading.status == "loading"
+    assert after_loading.size_bytes == 50
+    assert after_loading.row_count == 0
+    assert after_loading.expires_at is None
+    assert after_dropped is not None
+    assert after_dropped.status == "dropped"
+
+
+def test_channel_datasets_echoes_the_page_and_rejects_out_of_range(
+    client: TestClient,
+) -> None:
+    from datetime import datetime, timezone
+
+    from backend.channel.dataset_registry import get_dataset_store, reset_dataset_store
+
+    reset_dataset_store()
+    kept = datetime(2026, 11, 4, 1, 12, tzinfo=timezone.utc)
+    store = get_dataset_store()
+    store.save(
+        _usage_row(
+            "ds_large",
+            job_id="job_usage",
+            node_id="n_query",
+            status="ready",
+            size_bytes=20,
+            row_count=1,
+            created_at=kept,
+            expires_at=None,
+        )
+    )
+    store.save(
+        _usage_row(
+            "ds_small",
+            job_id="job_usage",
+            node_id="n_query",
+            status="ready",
+            size_bytes=10,
+            row_count=1,
+            created_at=kept,
+            expires_at=None,
+        )
+    )
+    first = client.get("/channel-datasets", params={"limit": 1, "offset": 0})
+    assert first.status_code == 200, first.text
+    assert first.json() == {
+        "items": [
+            {
+                "id": "ds_large",
+                "job_id": "job_usage",
+                "channel_id": None,
+                "channel_name": "",
+                "node_id": "n_query",
+                "node_name": "n_query",
+                "status": "ready",
+                "size_bytes": 20,
+                "row_count": 1,
+                "created_at": "2026-11-04T01:12:00Z",
+                "expires_at": None,
+            }
+        ],
+        "total": 2,
+        "limit": 1,
+        "offset": 0,
+    }
+    past = client.get("/channel-datasets", params={"offset": 5})
+    assert past.status_code == 200, past.text
+    assert past.json()["items"] == []
+    assert past.json()["total"] == 2
+    assert past.json()["limit"] == 50
+    assert past.json()["offset"] == 5
+    assert_problem(
+        client.get("/channel-datasets", params={"limit": 201}),
+        status=422,
+        code="REQUEST_INVALID",
+    )
+    assert_problem(
+        client.get("/channel-datasets", params={"offset": -1}),
+        status=422,
+        code="REQUEST_INVALID",
+    )
+    assert_problem(
+        client.get("/channel-datasets", params={"limit": 0}),
+        status=422,
+        code="REQUEST_INVALID",
+    )
+
+
+def test_channel_datasets_requires_channel_read() -> None:
+    from backend.channel.dataset_registry import reset_dataset_store
+
+    reset_dataset_store()
+    with TestClient(app) as anon:
+        anonymous = anon.get("/channel-datasets")
+    assert anonymous.status_code == 401
+    assert anonymous.json()["code"] == "AUTH_UNAUTHENTICATED"
+
+    roles = get_role_store()
+    seed_roles(roles)
+    denied_role = create_role(
+        roles,
+        key="dataset_list_denied",
+        name="Dataset list denied",
+        permissions=["console:access", "settings:read"],
+    )
+    get_user_store().create_user(
+        account="dataset_list_denied",
+        display_name="Dataset list denied",
+        password_hash=hash_password("secret"),
+        role_id=denied_role.id,
+        status="active",
+    )
+    reader_role = create_role(
+        roles,
+        key="dataset_list_reader",
+        name="Dataset list reader",
+        permissions=["console:access", "channel:read"],
+    )
+    get_user_store().create_user(
+        account="dataset_list_reader",
+        display_name="Dataset list reader",
+        password_hash=hash_password("secret"),
+        role_id=reader_role.id,
+        status="active",
+    )
+    with TestClient(app) as denied:
+        _login(denied, "dataset_list_denied", "secret")
+        refused = denied.get("/channel-datasets")
+    assert_problem(refused, status=403, code="AUTH_FORBIDDEN")
+    with TestClient(app) as reader:
+        _login(reader, "dataset_list_reader", "secret")
+        allowed = reader.get("/channel-datasets")
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
+
+
+def _usage_row(
+    dataset_id: str,
+    *,
+    job_id: str,
+    node_id: str,
+    status: str,
+    size_bytes: int,
+    row_count: int,
+    created_at: "datetime",
+    expires_at: "datetime | None",
+) -> "DatasetRecord":
+    from backend.channel.dataset_registry import DatasetRecord
+
+    return DatasetRecord(
+        id=dataset_id,
+        job_id=job_id,
+        node_id=node_id,
+        seq=7,
+        relation=f"channel_dataset.{dataset_id}",
+        columns=[{"name": "n", "type": "int8"}],
+        row_count=row_count,
+        size_bytes=size_bytes,
+        status=status,
+        created_at=created_at,
+        expires_at=expires_at,
+    )

@@ -574,6 +574,7 @@ On `succeeded` only:
 | --- | --- | --- | --- |
 | `GET` | `/channel-node-types` | `channel:read` | Node type catalog |
 | `GET` | `/channel-dataset-capacity` | `channel:read` | Site-wide dataset capacity (§5.24) |
+| `GET` | `/channel-datasets` | `channel:read` | Loading and ready channel datasets (**Offset Page**, §5.25) |
 | `POST` | `/channels` | `channel:write` | Create a channel with an empty draft |
 | `GET` | `/channels` | `channel:read` | List channels (**Offset Page**) |
 | `GET` | `/channels/{id}` | `channel:read` | Get one channel |
@@ -1082,6 +1083,39 @@ Requires `channel:read`. `settings:read` is not required.
 `used_bytes` may be greater than `ceiling_bytes`. Both integers are returned unclamped. The read does not create, drop, or evict a dataset, and it does not change `CHANNEL_DATASET_QUOTA_EXCEEDED`.
 
 The body is not an **Offset Page** and has no per-channel breakdown. Store failure follows the other channel registry reads and does not add a problem code.
+
+### 5.25 `GET /channel-datasets`
+
+Query: `limit` (default 50, max 200), `offset` (default 0). No status query, no name query, no channel filter. Requires `channel:read`. `200` is an **Offset Page** of registry rows whose `status` is `loading` or `ready`. `total` counts that set. Order is `size_bytes` descending, then `created_at` descending, then `id` descending. An `offset` past the end is `200` with empty `items` and the same `total`. Out-of-range `limit` or `offset` is `422` `REQUEST_INVALID`.
+
+```json
+{
+  "items": [
+    {
+      "id": "ds_01HZX",
+      "job_id": "job_01HZX",
+      "channel_id": "chn_01HZX",
+      "channel_name": "Order sync",
+      "node_id": "n_query",
+      "node_name": "Query orders",
+      "status": "ready",
+      "size_bytes": 42949672960,
+      "row_count": 120000,
+      "created_at": "2026-11-04T01:12:00Z",
+      "expires_at": "2026-11-05T01:12:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+`status` is `loading` or `ready`. `size_bytes` and `row_count` are the stored integers. A `loading` row keeps `row_count` at 0 and `expires_at` null. The item does not include `relation`, `columns`, or `seq`.
+
+`channel_id` and `channel_name` come from the run record for `job_id` and from that channel's current name. `node_name` is the `name` of `node_id` on that run's graph snapshot. A missing channel name uses `channel_id`. A missing node name uses `node_id`. A row whose run record is gone still appears: `channel_id` is null, `channel_name` is empty, and `node_name` is `node_id`.
+
+The read does not create, drop, or change a dataset, and it does not raise `CHANNEL_DATASET_QUOTA_EXCEEDED`. Store failure follows the other channel registry reads and does not add a problem code.
 
 ## 6. Errors
 

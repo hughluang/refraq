@@ -484,3 +484,23 @@ class DatasetCapacityResponse(BaseModel):
 
     used_bytes: int
     ceiling_bytes: int
+
+
+class ChannelDatasetListItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    job_id: str
+    channel_id: str | None
+    channel_name: str
+    node_id: str
+    node_name: str
+    status: Literal["loading", "ready"]
+    size_bytes: int
+    row_count: int
+    created_at: Instant
+    expires_at: Instant | None
+
+
+class ChannelDatasetListResponse(OffsetPage[ChannelDatasetListItem]):
+    """Offset Page of loading and ready channel datasets."""

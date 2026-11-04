@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
@@ -13,7 +14,11 @@ from backend.admin.deps import (
 )
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.user_store import UserRecord
-from backend.channel.dataset_registry import _limit_bytes, get_dataset_store
+from backend.channel.dataset_registry import (
+    DatasetRecord,
+    _limit_bytes,
+    get_dataset_store,
+)
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import NodeType
 from backend.channel.schemas.channels import (
@@ -32,6 +37,8 @@ from backend.channel.schemas.channels import (
     DraftResponse,
     LatestVersionOut,
     ContainerOut,
+    ChannelDatasetListItem,
+    ChannelDatasetListResponse,
     DatasetCapacityResponse,
     NodeTypeListResponse,
     NodeTypeOut,
@@ -72,7 +79,8 @@ from backend.channel.service import (
     validate_draft,
 )
 from backend.channel.recovery import PERSISTENT_FAILURE_STREAK
-from backend.channel.store import ChannelRecord, ChannelVersionRecord
+from backend.channel.run_store import get_run_store
+from backend.channel.store import ChannelRecord, ChannelVersionRecord, get_channel_store
 from backend.core.pagination import PageBounds, PageParams, page_params
 from backend.tags.api import KIND_CHANNEL, read_assignment
 
@@ -205,6 +213,73 @@ def http_get_dataset_capacity(
     return DatasetCapacityResponse(
         used_bytes=get_dataset_store().used_bytes(),
         ceiling_bytes=_limit_bytes(),
+    )
+
+
+def _dataset_node_name(graph: object, node_id: str) -> str:
+    if not isinstance(graph, dict):
+        return node_id
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return node_id
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("id") != node_id:
+            continue
+        name = node.get("name")
+        if isinstance(name, str) and name != "":
+            return name
+        return node_id
+    return node_id
+
+
+def _dataset_status(status: str) -> Literal["loading", "ready"]:
+    if status == "loading":
+        return "loading"
+    if status == "ready":
+        return "ready"
+    raise RuntimeError(f"dataset list included status {status}")
+
+
+def _dataset_list_item(record: DatasetRecord) -> ChannelDatasetListItem:
+    run = get_run_store().get_run(record.job_id)
+    if run is None:
+        channel_id: str | None = None
+        channel_name = ""
+        node_name = record.node_id
+    else:
+        channel = get_channel_store().get(run.channel_id)
+        channel_id = run.channel_id
+        channel_name = channel.name if channel is not None else run.channel_id
+        node_name = _dataset_node_name(run.graph, record.node_id)
+    return ChannelDatasetListItem(
+        id=record.id,
+        job_id=record.job_id,
+        channel_id=channel_id,
+        channel_name=channel_name,
+        node_id=record.node_id,
+        node_name=node_name,
+        status=_dataset_status(record.status),
+        size_bytes=record.size_bytes,
+        row_count=record.row_count,
+        created_at=record.created_at,
+        expires_at=record.expires_at,
+    )
+
+
+@router.get("/channel-datasets", response_model=ChannelDatasetListResponse)
+def http_list_channel_datasets(
+    page: PageParams = Depends(page_params(CHANNEL_PAGE)),
+    user: UserRecord = Depends(require_permission("channel:read")),
+) -> ChannelDatasetListResponse:
+    del user
+    records, total = get_dataset_store().page_active(
+        limit=page.limit, offset=page.offset
+    )
+    return ChannelDatasetListResponse(
+        items=[_dataset_list_item(record) for record in records],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
     )
 
 

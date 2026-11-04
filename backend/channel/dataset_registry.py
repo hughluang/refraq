@@ -149,6 +149,20 @@ class MemoryDatasetStore:
                 if record.job_id in wanted
             ]
 
+    def page_active(self, *, limit: int, offset: int) -> tuple[list[DatasetRecord], int]:
+        """Loading and ready rows, largest first. ``total`` is that filtered count."""
+        with self._lock:
+            rows = [
+                copy.deepcopy(record)
+                for record in self._rows.values()
+                if record.status in _CAPACITY_STATUSES
+            ]
+        rows.sort(
+            key=lambda record: (record.size_bytes, record.created_at, record.id),
+            reverse=True,
+        )
+        return rows[offset : offset + limit], len(rows)
+
     def list_expired(self, now: datetime) -> list[DatasetRecord]:
         with self._lock:
             return [
@@ -221,6 +235,26 @@ class SqlDatasetStore:
                 select(ChannelDatasetRow).where(ChannelDatasetRow.job_id.in_(tuple(job_ids)))
             ).all()
             return [_from_row(row) for row in rows]
+
+    def page_active(self, *, limit: int, offset: int) -> tuple[list[DatasetRecord], int]:
+        """Loading and ready rows, largest first. ``total`` is a count, not a full load."""
+        predicate = ChannelDatasetRow.status.in_(tuple(_CAPACITY_STATUSES))
+        with session_scope() as session:
+            total = session.scalar(
+                select(func.count()).select_from(ChannelDatasetRow).where(predicate)
+            )
+            rows = session.scalars(
+                select(ChannelDatasetRow)
+                .where(predicate)
+                .order_by(
+                    ChannelDatasetRow.size_bytes.desc(),
+                    ChannelDatasetRow.created_at.desc(),
+                    ChannelDatasetRow.id.desc(),
+                )
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            return [_from_row(row) for row in rows], int(total or 0)
 
     def list_expired(self, now: datetime) -> list[DatasetRecord]:
         with session_scope() as session:

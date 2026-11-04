@@ -321,6 +321,20 @@ export type DatasetCapacity = {
   ceiling_bytes: number;
 };
 
+export type ChannelDatasetListItem = {
+  id: string;
+  job_id: string;
+  channel_id: string | null;
+  channel_name: string;
+  node_id: string;
+  node_name: string;
+  status: "loading" | "ready";
+  size_bytes: number;
+  row_count: number;
+  created_at: string;
+  expires_at: string | null;
+};
+
 export type NodeTypeSpec = {
   type: string;
   family: string;

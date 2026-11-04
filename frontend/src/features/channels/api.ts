@@ -18,6 +18,7 @@ import type {
   ExpressionContext,
   Graph,
   GraphProblem,
+  ChannelDatasetListItem,
   DatasetCapacity,
   NodeTypeSpec,
   RefinedPort,
@@ -53,6 +54,12 @@ export function listNodeTypes() {
 
 export function getDatasetCapacity() {
   return apiClient<DatasetCapacity>("/channel-dataset-capacity");
+}
+
+export function listChannelDatasets(params?: { limit?: number; offset?: number }) {
+  return apiClient<OffsetPage<ChannelDatasetListItem>>(
+    `/channel-datasets${querySuffix(params)}`,
+  );
 }
 
 export function listChannels(params?: {
