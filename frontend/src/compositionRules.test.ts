@@ -22,7 +22,12 @@ const SHELL_FILES = new Set(["app/providers.tsx", "app/console/layout.tsx"]);
  * useConsoleTab do not cover the read. Each value is the reason.
  * Keep this empty unless a read truly has no hook.
  */
-const SEARCH_PARAMS_EXCEPTIONS: Record<string, string> = {};
+const SEARCH_PARAMS_EXCEPTIONS: Record<string, string> = {
+  "features/channels/ChannelRecord.tsx":
+    "Restore the optional history drawer on retained record query navigation; this is not a tab or collection query.",
+  "features/channels/ChannelRunDetail.tsx":
+    "Build the allowlisted history return link from current navigation context, not from list or tab state.",
+};
 
 const COLOR_ALLOW: Record<string, string> = {
   "features/branding/color.ts":

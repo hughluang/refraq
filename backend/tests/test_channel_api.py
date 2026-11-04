@@ -1617,6 +1617,50 @@ def test_test_run_creates_run_state(client: TestClient) -> None:
     assert after[3] == before[3] + 1
 
 
+def test_run_history_filters_before_paging(client: TestClient) -> None:
+    from datetime import timedelta
+
+    from backend.channel.run_store import ChannelRunRecord
+    from backend.jobs.store import create_queued_job, mark_failed
+
+    created = client.post("/channels", json={"name": "Filtered history", "description": None})
+    channel_id = created.json()["channel"]["id"]
+    now = utc_now()
+    expected = []
+    for index in range(55):
+        job = create_queued_job(
+            kind="channel_run", input={}, created_at=now + timedelta(seconds=index)
+        )
+        target = "draft" if index == 1 else "published"
+        get_run_store().insert_run(ChannelRunRecord(
+            job_id=job.id, channel_id=channel_id, target=target,
+            version=None, draft_revision=None, graph=None, trigger_node_id="start",
+            ignore_checkpoints=False, outcome=None, failed_node_id=None,
+            skipped_node_ids=[], created_at=job.created_at,
+        ))
+        if index < 3:
+            mark_failed(job.id, error_code="CHANNEL_NODE_FAILED", error_summary="Failed")
+            if target == "published":
+                expected.insert(0, job.id)
+    for offset in range(3):
+        response = client.get(
+            f"/channels/{channel_id}/runs",
+            params={"status": "failed", "target": "published", "limit": 1, "offset": offset},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["total"] == 2
+        assert [run["job_id"] for run in body["items"]] == expected[offset:offset + 1]
+
+    get_job_store().delete(expected[0])
+    missing = client.get(f"/channels/{channel_id}/runs/{expected[0]}")
+    assert missing.status_code == 404, missing.text
+    response = client.get(f"/channels/{channel_id}/runs", params={"status": "failed", "target": "published"})
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 1
+    assert [run["job_id"] for run in response.json()["items"]] == expected[1:]
+
+
 def test_execution_list_filters_pages_and_requires_read(client: TestClient) -> None:
     from backend.channel.channel_run import set_dispatcher
     from backend.channel.tasks import run_job

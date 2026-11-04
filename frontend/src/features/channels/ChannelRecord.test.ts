@@ -47,7 +47,7 @@ vi.mock("next/link", () => ({
 vi.mock("next/navigation", () => ({
   usePathname: () => "/console/channels",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock("@/features/channels/api", () => ({
@@ -225,6 +225,7 @@ function renderRecord(mode: "show" | "edit") {
 describe("ChannelRecord draft access", () => {
   beforeEach(() => {
     stubDomApis();
+    window.history.replaceState(null, "", "/console/channels/chn_1");
     vi.mocked(getChannel).mockResolvedValue({ channel: channel() });
     vi.mocked(getDraft).mockResolvedValue({
       draft_revision: 1,
@@ -262,6 +263,21 @@ describe("ChannelRecord draft access", () => {
     });
     expect(notify.mock.calls.some((call) => call[0]?.message === "channels.save.failed")).toBe(false);
   });
+
+  it.each(["show", "edit"] as const)("restores and closes %s history on same-route return navigation", async (mode) => {
+    const view = await renderRecord(mode);
+    const toggle = await screen.findByRole("button", { name: "channels.tabs.runs" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    window.history.replaceState(null, "", "/console/channels/chn_1?run_panel=runs&run_status=failed&run_page=3");
+    const { ChannelRecord } = await import("@/features/channels/ChannelRecord");
+    view.rerender(createElement(MantineProvider, { env: "test" }, createElement(ChannelRecord, { mode, channelId: "chn_1" })));
+    await waitFor(() => expect(screen.getByRole("button", { name: "channels.tabs.runs" }).getAttribute("aria-expanded")).toBe("true"));
+    await waitFor(() => expect(listRuns).toHaveBeenCalledWith("chn_1", { status: "failed", limit: 50, offset: 100 }, expect.objectContaining({ signal: expect.any(AbortSignal) })));
+    fireEvent.click(screen.getByRole("button", { name: "channels.tabs.runs" }));
+    expect(new URLSearchParams(window.location.search).has("run_panel")).toBe(false);
+    act(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(screen.getByRole("button", { name: "channels.tabs.runs" }).getAttribute("aria-expanded")).toBe("false");
+  }, 30000);
 
   it("does not offer a run from the show page", async () => {
     await renderRecord("show");

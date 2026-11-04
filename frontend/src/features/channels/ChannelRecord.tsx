@@ -17,6 +17,7 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
+import { useSearchParams } from "next/navigation";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import {
   suppressLeaveGuard,
@@ -247,6 +248,7 @@ function ChannelExisting({
 }) {
   const t = useTranslate();
   const { replace } = useConsoleNavigation();
+  const searchParams = useSearchParams();
   const { open } = useNotification();
   const stopRunAction = useConsoleMutation();
   const deleteAction = useConsoleMutation();
@@ -270,9 +272,18 @@ function ChannelExisting({
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [panel, setPanel] = useState<"versions" | "runs" | "rejections" | "variables" | null>(
-    null,
-  );
+  const [panel, setPanel] = useState<"versions" | "runs" | "rejections" | "variables" | null>(null);
+  const historyPanel = searchParams.get("run_panel");
+  useEffect(() => {
+    setPanel((current) => historyPanel === "runs" ? "runs" : current === "runs" ? null : current);
+  }, [channelId, historyPanel]);
+  const changePanel = (opened: "versions" | "runs" | "rejections" | "variables" | null) => {
+    setPanel(opened);
+    const url = new URL(window.location.href);
+    if (opened === "runs") url.searchParams.set("run_panel", "runs");
+    else url.searchParams.delete("run_panel");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  };
   const [preview, setPreview] = useState<Confirmation | null>(null);
   const [publishJobId, setPublishJobId] = useState<string | null>(null);
   const [publishRevision, setPublishRevision] = useState(1);
@@ -515,7 +526,7 @@ function ChannelExisting({
     setProblems(result.problems);
     setPorts(result.ports);
     setExpressionContext(result.context);
-    setPanel(null);
+    changePanel(null);
     const firstError =
       blocking[0] ?? result.problems.find((problem) => problem.severity !== "warning");
     open?.({
@@ -778,7 +789,7 @@ function ChannelExisting({
     ? `v${channel.latest_version.number}`
     : t("channels.versions.unpublished");
   const togglePanel = (next: "versions" | "runs" | "rejections" | "variables") => {
-    setPanel((current) => (current === next ? null : next));
+    changePanel(panel === next ? null : next);
   };
   const loadErrorChannels = () => {
     setErrorChannelsFailed(false);
@@ -1439,9 +1450,9 @@ function ChannelExisting({
       </Drawer>
       <Drawer
         opened={panel === "runs"}
-        onClose={() => setPanel(null)}
+        onClose={() => changePanel(null)}
         position="right"
-        size="xl"
+        size="min(72rem, 100%)"
         withinPortal={false}
         withOverlay={false}
         lockScroll={false}
@@ -1449,7 +1460,7 @@ function ChannelExisting({
         zIndex={20}
         title={t("channels.tabs.runs")}
       >
-        {panel === "runs" ? <ChannelRuns channelId={channelId} /> : null}
+        {panel === "runs" ? <ChannelRuns channelId={channelId} origin={mode} /> : null}
       </Drawer>
       <Drawer
         opened={panel === "rejections"}

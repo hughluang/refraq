@@ -2,7 +2,19 @@
 
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen as allScreen, within } from "@testing-library/react";
+
+const screen = {
+  ...allScreen,
+  getByText: (...args: Parameters<typeof allScreen.getByText>) =>
+    typeof args[0] === "string" && args[0].startsWith("status.job.")
+      ? within(document.querySelector("tbody")!).getByText(...args)
+      : allScreen.getByText(...args),
+  getAllByText: (...args: Parameters<typeof allScreen.getAllByText>) =>
+    typeof args[0] === "string" && args[0].startsWith("status.job.")
+      ? within(document.querySelector("tbody")!).getAllByText(...args)
+      : allScreen.getAllByText(...args),
+};
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -21,6 +33,10 @@ import {
 const api = vi.hoisted(() => ({
   listRuns: vi.fn(),
 }));
+
+const notify = vi.hoisted(() => vi.fn());
+const clipboard = vi.hoisted(() => ({ copyText: vi.fn() }));
+vi.mock("@/lib/copy-text", () => clipboard);
 
 const jobs = vi.hoisted(() => ({
   cancelJob: vi.fn(),
@@ -47,6 +63,7 @@ vi.mock("@/features/jobs/api", () => ({
 }));
 
 vi.mock("@refinedev/core", () => ({
+  useNotification: () => ({ open: notify }),
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
     const template =
       key === "status.freshness" ? "Last updated {{time}}" : (i18n.extra[key] ?? key);
@@ -186,6 +203,8 @@ describe("ChannelRuns load feedback", () => {
     i18n.extra = {};
     access.grants.clear();
     api.listRuns.mockReset();
+    notify.mockReset();
+    clipboard.copyText.mockReset().mockResolvedValue(undefined);
     jobs.cancelJob.mockReset();
     useSessionStore.setState({
       user: viewer,
@@ -241,6 +260,44 @@ describe("ChannelRuns load feedback", () => {
 
     await advance(LIVE_STATUS_INTERVAL_MS);
     expect(screen.queryByText("problems.unknown Repeated 3 times")).toBeNull();
+  });
+
+  it.each([true, false])("copies only the job id and reports clipboard success=%s", async (success) => {
+    api.listRuns.mockResolvedValue(page([run("succeeded")]));
+    if (!success) clipboard.copyText.mockRejectedValue(new Error("denied"));
+    renderRuns();
+    await advance(0);
+    fireEvent.click(screen.getByRole("button", { name: "channels.runs.copyId" }));
+    await advance(0);
+    expect(clipboard.copyText).toHaveBeenCalledWith("job_1");
+    expect(notify).toHaveBeenCalledWith({ type: success ? "success" : "error", message: success ? "common.copy.success" : "common.copy.failed" });
+    expect(jobs.cancelJob).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes a requested partial draft from its completed outcome", async () => {
+    i18n.extra["channels.runs.revision"] = "Revision {{number}}";
+    i18n.extra["channels.runs.partial"] = "Partial run through {{node}}";
+    api.listRuns.mockResolvedValue(page([{ ...run("succeeded"), target: "draft", version: null,
+      draft_revision: 7, stop_at_node_id: "writer", outcome: "completed",
+      nodes: [{ id: "writer", name: "Write orders", ref: "write_orders" }] }]));
+    renderRuns();
+    await advance(0);
+    expect(screen.getByText("channels.runs.subject.draft · Revision 7")).toBeTruthy();
+    expect(screen.getByText("Partial run through Write orders")).toBeTruthy();
+    expect(screen.getByText("channels.runs.outcome.completed")).toBeTruthy();
+    expect(screen.getByRole("columnheader").textContent).toContain("jobs.fields.status");
+    expect(screen.getByRole("heading", { level: 2, name: "channels.runs.history" })).toBeTruthy();
+  });
+
+  it("discovers a new run after an empty history without manual refresh", async () => {
+    api.listRuns.mockResolvedValueOnce(page([])).mockResolvedValue(page([run("queued")]));
+    renderRuns();
+    await advance(0);
+    expect(screen.getByText("channels.runs.empty")).toBeTruthy();
+    await advance(30000);
+    expect(api.listRuns).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("status.job.queued")).toBeTruthy();
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 
   it("keeps an empty list empty when the load succeeds", async () => {
@@ -328,11 +385,11 @@ describe("ChannelRuns load feedback", () => {
     expect(screen.getByText("jobs.fields.duration: 1m")).toBeTruthy();
     expect(screen.getByText("jobs.fields.duration: —")).toBeTruthy();
     const openRun = screen.getByRole("link", { name: "10/11/2026, 6:00:29 AM" });
-    expect(openRun.getAttribute("href")).toBe("/console/channels/chn_1/runs/job_run");
+    expect(openRun.getAttribute("href")).toBe("/console/channels/chn_1/runs/job_run?run_panel=runs");
     expect(screen.getByText("status.job.running").closest("a")).toBeNull();
-    expect(screen.getByText("channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.trigger: channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
     expect(screen.getByText("channels.runs.ignoreCheckpoints")).toBeTruthy();
-    expect(screen.getByRole("img", { name: "channels.runs.subject.draft" })).toBeTruthy();
+    expect(screen.getByText("channels.runs.subject.draft")).toBeTruthy();
 
     await advance(LIVE_STATUS_INTERVAL_MS);
     expect(screen.getByText("jobs.fields.duration: 2s")).toBeTruthy();
@@ -437,7 +494,7 @@ describe("ChannelRuns load feedback", () => {
     expect(screen.getByText("writer rejected the row")).toBeTruthy();
     expect(screen.getAllByText("node_writer")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "10/11/2026, 6:00:00 AM" }).getAttribute("href")).toBe(
-      "/console/channels/chn_1/runs/job_quiet",
+      "/console/channels/chn_1/runs/job_quiet?run_panel=runs",
     );
   });
 
@@ -462,7 +519,7 @@ describe("ChannelRuns load feedback", () => {
     await advance(0);
     expect(screen.getByText("status.job.succeeded")).toBeTruthy();
     expect(screen.getByRole("link", { name: "10/11/2026, 6:00:29 AM" }).getAttribute("href")).toBe(
-      "/console/channels/chn_1/runs/job_ok",
+      "/console/channels/chn_1/runs/job_ok?run_panel=runs",
     );
     expect(screen.getByText("jobs.fields.duration: 1s")).toBeTruthy();
     expect(screen.queryByText("node_hidden")).toBeNull();
@@ -571,7 +628,7 @@ describe("ChannelRuns load feedback", () => {
     renderRuns();
 
     await advance(0);
-    expect(screen.getByText("channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.trigger: channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
     expect(screen.queryByText("user_1")).toBeNull();
     expect(screen.queryByText("Ada")).toBeNull();
     expect(screen.queryByText("sched_1")).toBeNull();
@@ -640,7 +697,7 @@ describe("ChannelRuns load feedback", () => {
     await advance(0);
     const queued = screen.getByRole("link", { name: "10/11/2026, 5:00:00 AM" });
     const running = screen.getByRole("link", { name: "10/11/2026, 6:00:29 AM" });
-    expect(queued.getAttribute("href")).toBe("/console/channels/chn_1/runs/job_wait");
+    expect(queued.getAttribute("href")).toBe("/console/channels/chn_1/runs/job_wait?run_panel=runs");
     expect(within(queued.closest("tr") as HTMLElement).getByRole("button", { name: "channels.run.stop" })).toBeTruthy();
     expect(within(running.closest("tr") as HTMLElement).getByRole("button", { name: "channels.run.stop" })).toBeTruthy();
     for (const when of ["10/11/2026, 4:00:00 AM", "10/11/2026, 3:00:00 AM", "10/11/2026, 2:00:00 AM"]) {
@@ -655,7 +712,7 @@ describe("ChannelRuns load feedback", () => {
     const shown = "10/11/2026, 5:00:00 AM";
     expect(dialog.textContent?.split(shown).length).toBe(3);
     expect(dialog.textContent).not.toContain("10/11/2026, 6:00:29 AM");
-    expect(queued.getAttribute("href")).toBe("/console/channels/chn_1/runs/job_wait");
+    expect(queued.getAttribute("href")).toBe("/console/channels/chn_1/runs/job_wait?run_panel=runs");
     expect(screen.getByRole("link", { name: shown })).toBe(queued);
   });
 

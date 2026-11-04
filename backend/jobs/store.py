@@ -617,6 +617,12 @@ def _job_if_visible(
     return record
 
 
+def job_ids_with_status(status: str | None):
+    """SQL membership query for domain records paired with an existing Job."""
+    stmt = select(JobRow.id)
+    return stmt if status is None else stmt.where(JobRow.status == status)
+
+
 def opaque_stamp_clause(column: Any, access_stamps: AbstractSet[str] | None) -> Any:
     """None skips the predicate. An empty set keeps only null stamps."""
     if access_stamps is None:

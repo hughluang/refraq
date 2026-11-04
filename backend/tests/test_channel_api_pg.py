@@ -167,6 +167,12 @@ def channel_client(monkeypatch: pytest.MonkeyPatch):
     reset_settings_cache()
 
 
+def test_history_filters_before_paging(channel_client: TestClient) -> None:
+    from backend.tests.test_channel_api import test_run_history_filters_before_paging
+
+    test_run_history_filters_before_paging(channel_client)
+
+
 def test_publish_keeps_version_immutable(channel_client: TestClient) -> None:
     created = channel_client.post(
         "/channels", json={"name": "Material master", "description": None}

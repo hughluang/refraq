@@ -2,8 +2,14 @@
 
 import { Button, Group, Stack, Text } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { Instant } from "@/components/display/Instant";
+import { historyContext, historyReturn } from "@/features/channels/channelHistory";
+import { formatJobDuration } from "@/lib/datetime";
+import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
 import { presentJobStatus } from "@/components/display/statusTone";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
@@ -39,6 +45,10 @@ export function ChannelRunDetail({
   channelId: string;
   jobId: string;
 }) {
+  const { push } = useConsoleNavigation();
+  const searchParams = useSearchParams();
+  const search = searchParams.toString();
+  const returnHref = historyReturn(channelId, search);
   const t = useTranslate();
   const { open } = useNotification();
   const showInstant = useShowInstant();
@@ -84,6 +94,13 @@ export function ChannelRunDetail({
     pins: Record<string, number>;
   } | null>(null);
   const recorded = useRef<string | null>(null);
+  useEffect(() => {
+    gesture.current += 1;
+    setSelectionRequest(null);
+    setRunNodeFocus(null);
+    setRerunning(false);
+    return () => { gesture.current += 1; };
+  }, [channelId, jobId]);
   const summaryKey = detail ? recordedKey(detail) : null;
   useEffect(() => {
     if (!summaryKey) {
@@ -126,7 +143,7 @@ export function ChannelRunDetail({
     };
   }, []);
   const rerun =
-    canWrite?.can && detail?.run.status === "failed" && detail.run.target === "published" ? (
+    canWrite?.can && detail?.run.status === "failed" && detail.run.target === "published" && detail.run.version != null ? (
       <Button
         size="sm"
         loading={rerunning}
@@ -134,8 +151,8 @@ export function ChannelRunDetail({
           setRerunning(true);
           void rerunRun(channelId, jobId)
             .then((body) => {
-              window.location.assign(
-                `/console/channels/${channelId}/runs/${body.run.job_id}`,
+              push(
+                `/console/channels/${channelId}/runs/${body.run.job_id}?${historyContext(window.location.search)}`,
               );
             })
             .catch((error: unknown) => {
@@ -183,7 +200,7 @@ export function ChannelRunDetail({
           {rerun}
           <Button
             component={ConsoleLink}
-            href={`/console/channels/${channelId}`}
+            href={returnHref}
             variant="default"
             size="sm"
           >
@@ -195,7 +212,7 @@ export function ChannelRunDetail({
     />
   );
   const graph = detail?.graph ?? null;
-  if (!detail || !graph) {
+  if (!detail) {
     const unloaded = detail == null && live.stale && !sessionExpired;
     return (
       <>
@@ -214,7 +231,7 @@ export function ChannelRunDetail({
   const runError = formatRunError(t, detail.run.error_code, detail.run.error_message);
   const explanation =
     runError.detail && runError.detail !== runError.label ? runError.detail : null;
-  const failedNode = formatFailedNode(graph.nodes, detail.run.failed_node_id);
+  const failedNode = formatFailedNode(graph?.nodes ?? [], detail.run.failed_node_id);
   const chooseExecution = (seq: number) => {
     setSelectionRequest((current) => ({ seq, token: (current?.token ?? 0) + 1 }));
   };
@@ -264,8 +281,18 @@ export function ChannelRunDetail({
     >
     <Stack gap="sm">
       <LiveStatusAnnouncer text={t(presentJobStatus(detail.run.status).labelKey)} />
-      <Stack gap={4}>
-        {inbound ? <Text size="sm">{inbound}</Text> : null}
+      <Stack gap={4} style={{ overflowWrap: "anywhere", minWidth: 0 }}>
+        <Text size="sm">{t("channels.title")}: {channelId}</Text>
+        <Text size="sm" fw={500}>{subject || t("channels.runs.subject.unresolved")}{detail.run.target === "draft" && detail.run.draft_revision != null ? ` · ${t("channels.runs.revision", { number: detail.run.draft_revision })}` : ""}</Text>
+        <Text size="sm">{detail.run.job_id}</Text>
+        <Group gap="sm">
+          <Text size="sm">{t(detail.run.started_at ? "channels.runs.started" : "jobs.fields.created")}: <Instant value={detail.run.started_at ?? detail.run.created_at} /></Text>
+          <Text size="sm">{t("jobs.fields.duration")}: {formatJobDuration(detail.run)}</Text>
+        </Group>
+        <Text size="sm">{t("jobs.fields.trigger")}: {detail.run.trigger_kind === "retry" || detail.run.trigger_kind === "error" ? t(`channels.runs.trigger.${detail.run.trigger_kind}`) : inbound ?? formatJobTrigger(detail.run, t)}</Text>
+        {detail.run.stop_at_node_id ? <Text size="sm">{t("channels.runs.partial", { node: nodeDisplayName(graph?.nodes ?? [], detail.run.stop_at_node_id) })}</Text> : null}
+        {detail.run.outcome ? <Text size="sm">{t(`channels.runs.outcome.${detail.run.outcome}`)}</Text> : null}
+        {rerun ? <Text size="xs" c="dimmed">{t("channels.runDetail.rerunConsequence")}</Text> : null}
         {detail.run.ignore_checkpoints || detail.run.stopped_node_id ? (
           <Text>
             {detail.run.ignore_checkpoints ? (
@@ -276,7 +303,7 @@ export function ChannelRunDetail({
             {detail.run.stopped_node_id ? (
               <Text span size="xs" c="dimmed" ml={detail.run.ignore_checkpoints ? 6 : 0}>
                 {t("channels.runDetail.stoppedAt", {
-                  node: nodeDisplayName(graph.nodes, detail.run.stopped_node_id),
+                  node: nodeDisplayName(graph?.nodes ?? [], detail.run.stopped_node_id),
                 })}
               </Text>
             ) : null}
@@ -290,6 +317,7 @@ export function ChannelRunDetail({
         ) : null}
         {failedNode ? <Text size="sm">{failedNode}</Text> : null}
       </Stack>
+      {graph ? <>
       <div style={{ height: "min(20rem, 32dvh)" }}>
         <ChannelCanvas
           channelId={channelId}
@@ -314,6 +342,7 @@ export function ChannelRunDetail({
         selectionRequest={selectionRequest}
         onExecutionSelect={onExecutionSelect}
       />
+      </> : <Text size="sm" c="dimmed">{t(isTerminalRun(detail.run.status) ? "channels.runDetail.graphUnavailable" : "channels.runDetail.graphPending")}</Text>}
       {stopRunAction.dialog}
     </Stack>
     </PageChrome>

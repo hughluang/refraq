@@ -214,7 +214,7 @@ def http_list_runs(
     items = []
     for record in records:
         job = get_job_store().get(record.job_id)
-        if status is not None and job.status != status:
+        if job is None:
             continue
         presented = _present(job, record)
         presented["nodes"] = _snapshot_nodes(record.graph)
@@ -233,6 +233,8 @@ def http_get_run(
 ) -> dict[str, Any]:
     record = _owned(channel_id, job_id)
     job = get_job_store().get(job_id)
+    if job is None:
+        raise ChannelRunNotFound()
     summaries = [
         {
             "node_id": item.node_id,

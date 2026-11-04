@@ -96,6 +96,61 @@ afterEach(() => {
 });
 
 describe("useLiveStatus", () => {
+  it("discovers terminal collections quietly and coalesces automatic requests", async () => {
+    const result = vi.fn();
+    const load = vi.fn().mockResolvedValueOnce({ status: "succeeded" })
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockImplementation(() => new Promise<Row>(() => {}));
+    function Collection() {
+      const live = useLiveStatus({ fetch: load, isTerminal: () => true,
+        terminalIntervalMs: 30000, onRefreshResult: result });
+      return createElement("div", null, live.stale ? "stale collection" : "fresh collection");
+    }
+    render(createElement(Collection));
+    await advance(0);
+    await advance(30000);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("stale collection")).toBeTruthy();
+    expect(result).not.toHaveBeenCalled();
+    await advance(30000);
+    act(() => { setHidden(true); setHidden(false); });
+    await advance(30000);
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+  it("aborts old collection requests when the query key changes", async () => {
+    const signals: AbortSignal[] = [];
+    const load = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<Row>(() => {});
+    });
+    function Collection({ query }: { query: string }) {
+      useLiveStatus({ key: query, fetch: load, isTerminal: () => false });
+      return null;
+    }
+    const view = render(createElement(Collection, { query: "all" }));
+    await advance(0);
+    view.rerender(createElement(Collection, { query: "failed" }));
+    await advance(0);
+    expect(signals).toHaveLength(2);
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+  });
+
+  it("keeps polling after a manual refresh supersedes a hung automatic request", async () => {
+    const signals: AbortSignal[] = [];
+    const load = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return signals.length === 1 ? new Promise<Row>(() => {}) : Promise.resolve({ status: "running" });
+    });
+    renderProbe(load);
+    await advance(0);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await advance(0);
+    expect(signals[0].aborted).toBe(true);
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
   it("polls on the interval while the status is non-terminal", async () => {
     const load = vi
       .fn<(signal: AbortSignal) => Promise<Row>>()
@@ -185,7 +240,8 @@ describe("useLiveStatus", () => {
     expect(load).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("value").textContent).toBe("none");
 
-    await advance(LIVE_STATUS_INTERVAL_MS);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await advance(0);
     expect(load).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("value").textContent).toBe("succeeded");
 

@@ -138,7 +138,7 @@ vi.mock("next/link", () => ({
 vi.mock("next/navigation", () => ({
   usePathname: () => "/console/channels/chn_1/runs/job_1",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 const UPDATED = "Last updated 10/11/2026, 6:00:29 AM";
@@ -254,10 +254,20 @@ function politeRegion(): HTMLElement | null {
 }
 
 describe("ChannelRunDetail load feedback", () => {
+  it.each(["queued", "cancelled"])("keeps %s graphless run inspectable", async (status) => {
+    api.getRun.mockResolvedValue({ ...detail(status), graph: null });
+    renderDetail();
+    await advance(0);
+    expect(screen.getByText("job_1")).toBeTruthy();
+    expect(screen.getByText(status === "queued" ? "channels.runDetail.graphPending" : "channels.runDetail.graphUnavailable")).toBeTruthy();
+    expect(screen.queryByTestId("run-detail-canvas")).toBeNull();
+    expect(screen.getByRole("link", { name: "channels.runDetail.back" })).toBeTruthy();
+  });
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-11T06:00:29Z"));
     stubDom();
+    window.history.replaceState(null, "", "/console/channels/chn_1/runs/job_1");
     resetNotifications();
     i18n.extra = {};
     access.grants.clear();
@@ -284,6 +294,17 @@ describe("ChannelRunDetail load feedback", () => {
     resetSessionStoreForTests();
     bindClientI18n({ t: (key: string) => key } as never);
     vi.useRealTimers();
+  });
+
+  it("updates the return link when retained detail receives a new history context", async () => {
+    api.getRun.mockResolvedValue(detail("succeeded"));
+    const view = renderDetail();
+    await advance(0);
+    window.history.replaceState(null, "", "/console/channels/chn_1/runs/job_1?run_origin=edit&run_status=failed&run_target=draft&run_page=3");
+    view.rerender(detailElement());
+    expect(screen.getByRole("link", { name: "channels.runDetail.back" }).getAttribute("href")).toBe(
+      "/console/channels/chn_1/edit?run_panel=runs&run_origin=edit&run_status=failed&run_target=draft&run_page=3",
+    );
   });
 
   it("shows unloaded and one retry notification when the first load never gets a run", async () => {
@@ -442,7 +463,7 @@ describe("ChannelRunDetail load feedback", () => {
     renderDetail();
 
     await advance(0);
-    expect(screen.getByText("channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.trigger: channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
   });
 
   it("leaves a user run without an inbound label", async () => {
@@ -604,7 +625,7 @@ describe("ChannelRunDetail load feedback", () => {
     expect(dialog.textContent?.split(shown).length).toBe(3);
     expect(dialog.textContent).not.toContain("10/11/2026, 5:00:00 AM");
     expect(screen.getByRole("link", { name: "channels.runDetail.back" }).getAttribute("href")).toBe(
-      "/console/channels/chn_1",
+      "/console/channels/chn_1?run_panel=runs",
     );
   });
 
@@ -676,6 +697,18 @@ describe("ChannelRunDetail load feedback", () => {
     await advance(0);
     expect(screen.queryByRole("button", { name: "channels.run.stop" })).toBeNull();
     expect(screen.getByRole("button", { name: "channels.runDetail.rerun" })).toBeTruthy();
+  });
+
+  it("does not offer rerun without a resolved published version", async () => {
+    access.grants.add("channels:edit");
+    const body = detail("failed");
+    body.run.version = null;
+    body.graph = null;
+    api.getRun.mockResolvedValue(body);
+    renderDetail();
+    await advance(0);
+    expect(screen.queryByRole("button", { name: "channels.runDetail.rerun" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "job_1" })).toBeTruthy();
   });
 
   it("reruns a failed published run on one click", async () => {

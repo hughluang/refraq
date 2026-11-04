@@ -19,7 +19,7 @@ from backend.channel.models import (
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.time import utc_now
-from backend.jobs.store import TERMINAL, get_job_store
+from backend.jobs.store import TERMINAL, get_job_store, job_ids_with_status
 
 __all__ = [
     "ChannelRunRecord",
@@ -221,14 +221,17 @@ class MemoryRunStore:
         limit: int,
         offset: int,
     ) -> tuple[list[ChannelRunRecord], int]:
-        del status
+        jobs = get_job_store()
         with self._lock:
-            items = [
-                item
-                for item in self._runs.values()
-                if item.channel_id == channel_id
-                and (target is None or item.target == target)
-            ]
+            snapshot = list(self._runs.values())
+        items = [
+            item
+            for item in snapshot
+            if item.channel_id == channel_id
+            and (target is None or item.target == target)
+            and (job := jobs.get(item.job_id)) is not None
+            and (status is None or job.status == status)
+        ]
         items.sort(key=lambda item: (item.created_at, item.job_id), reverse=True)
         return items[offset : offset + limit], len(items)
 
@@ -480,9 +483,11 @@ class SqlRunStore:
         limit: int,
         offset: int,
     ) -> tuple[list[ChannelRunRecord], int]:
-        del status
         with session_scope() as session:
-            stmt = select(ChannelRunRow).where(ChannelRunRow.channel_id == channel_id)
+            stmt = select(ChannelRunRow).where(
+                ChannelRunRow.channel_id == channel_id,
+                ChannelRunRow.job_id.in_(job_ids_with_status(status)),
+            )
             if target is not None:
                 stmt = stmt.where(ChannelRunRow.target == target)
             total = int(

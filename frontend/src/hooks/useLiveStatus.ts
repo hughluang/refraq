@@ -8,6 +8,8 @@ export type UseLiveStatusOptions<T> = {
   fetch: (signal: AbortSignal) => Promise<T>;
   isTerminal: (data: T) => boolean;
   enabled?: boolean;
+  /** Keep discovering new collection members after the visible items finish. */
+  terminalIntervalMs?: number;
   key?: string | number | null;
   /** Fires for `refresh` only. Interval polls do not call it. */
   onRefreshResult?: (result: LiveRefreshResult) => void;
@@ -62,6 +64,8 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
     }
 
     let alive = true;
+    pausedRef.current = document.hidden;
+    let lastAttemptAt = 0;
     const controllers = new Set<AbortController>();
     dataRef.current = null;
     setData(null);
@@ -72,7 +76,10 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
 
     const run = (): Promise<LiveRefreshResult> => {
       if (!alive) return Promise.resolve({ ok: true });
+      lastAttemptAt = Date.now();
       const seq = ++requestSeq.current;
+      for (const pending of controllers) pending.abort();
+      controllers.clear();
       const controller = new AbortController();
       controllers.add(controller);
       setRefreshing(true);
@@ -105,17 +112,22 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
     const terminal = () =>
       dataRef.current != null && terminalRef.current(dataRef.current);
 
-    if (!pausedRef.current) void run();
+    const automatic = () => {
+      if (controllers.size > 0) return;
+      void run();
+    };
+    if (!pausedRef.current) automatic();
 
     const timer = window.setInterval(() => {
-      if (!alive || pausedRef.current || terminal()) return;
-      void run();
+      if (!alive || pausedRef.current) return;
+      if (terminal() && (!options.terminalIntervalMs || Date.now() - lastAttemptAt < options.terminalIntervalMs)) return;
+      automatic();
     }, LIVE_STATUS_INTERVAL_MS);
 
     const onVisibility = () => {
       const hidden = document.hidden;
       pausedRef.current = hidden;
-      if (!hidden && alive && !terminal()) void run();
+      if (!hidden && alive && (!terminal() || options.terminalIntervalMs)) automatic();
     };
     document.addEventListener("visibilitychange", onVisibility);
 
@@ -128,7 +140,7 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
       controllers.clear();
       runRef.current = async () => ({ ok: true });
     };
-  }, [enabled, key]);
+  }, [enabled, key, options.terminalIntervalMs]);
 
   const refresh = useCallback((): Promise<void> => {
     return runRef.current().then((result) => {
