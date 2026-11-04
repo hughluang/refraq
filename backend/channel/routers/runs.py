@@ -216,7 +216,9 @@ def http_list_runs(
         job = get_job_store().get(record.job_id)
         if status is not None and job.status != status:
             continue
-        items.append(_present(job, record))
+        presented = _present(job, record)
+        presented["nodes"] = _snapshot_nodes(record.graph)
+        items.append(presented)
     return {"items": items, "total": total, "limit": page.limit, "offset": page.offset}
 
 
@@ -253,7 +255,7 @@ def http_list_executions(
     node_id: str | None = None,
     container_seq: int | None = None,
     round_index: int | None = Query(default=None, alias="round"),
-    status: Literal["running", "succeeded", "failed", "skipped"] | None = None,
+    status: Literal["running", "succeeded", "failed", "skipped", "cancelled"] | None = None,
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> dict[str, Any]:
     _owned(channel_id, job_id)
@@ -467,6 +469,30 @@ def _owned(channel_id: str, job_id: str) -> Any:
     if record is None or record.channel_id != channel_id:
         raise ChannelRunNotFound()
     return record
+
+
+def _snapshot_nodes(graph: Any) -> list[dict[str, str]]:
+    """Node id, name, and ref from the run snapshot, for list naming."""
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if not isinstance(nodes, list):
+        return []
+    labels: list[dict[str, str]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("id")
+        if not isinstance(node_id, str) or not node_id:
+            continue
+        name = node.get("name")
+        ref = node.get("ref")
+        labels.append(
+            {
+                "id": node_id,
+                "name": name if isinstance(name, str) else "",
+                "ref": ref if isinstance(ref, str) else "",
+            }
+        )
+    return labels
 
 
 def _present(job: Any, record: Any) -> dict[str, Any]:

@@ -146,10 +146,11 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
           const errorDetail =
             error.detail && error.detail !== error.label ? error.detail : null;
           const hasError = Boolean(run.error_code || run.error_message);
+          const nodes = run.nodes ?? [];
           const failedNode =
-            run.status === "failed" ? formatFailedNode([], run.failed_node_id) : null;
+            run.status === "failed" ? formatFailedNode(nodes, run.failed_node_id) : null;
           const stoppedNode =
-            run.status === "cancelled" ? nodeDisplayName([], run.stopped_node_id) : null;
+            run.status === "cancelled" ? nodeDisplayName(nodes, run.stopped_node_id) : null;
           const showError = run.status === "failed" || run.status === "cancelled";
           const inbound = inboundRunLabel(run, t);
           const href = `/console/channels/${channelId}/runs/${run.job_id}`;

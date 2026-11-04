@@ -1000,9 +1000,10 @@ def note_killed_run(job_id: str) -> None:
     if not running:
         return
     current = running[-1]
-    current.status = "failed"
+    current.status = "cancelled"
     current.finished_at = utc_now()
-    current.error_message = "cancelled"
+    current.error_code = None
+    current.error_message = None
     store.finish_execution(current)
     if run.stopped_node_id is None:
         run.stopped_node_id = current.node_id

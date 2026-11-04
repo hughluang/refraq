@@ -15,7 +15,7 @@ type ChainNode = {
   container: ContainerDeclaration | null;
 };
 
-export type NodeRunPhase = "waiting" | "running" | "succeeded" | "failed" | "dead";
+export type NodeRunPhase = "waiting" | "running" | "succeeded" | "failed" | "cancelled" | "dead";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
 
@@ -81,6 +81,7 @@ function phaseOf(summary: NodeSummary | undefined, latest: string | undefined): 
   const status = latest ?? soleStatus(summary.status_counts);
   if (status === "running") return "running";
   if (status === "failed") return "failed";
+  if (status === "cancelled") return "cancelled";
   if (status === "succeeded" || status === "skipped") return "succeeded";
   return "waiting";
 }
@@ -104,7 +105,7 @@ export function recordedKey(detail: ChannelRunDetail): string {
 }
 
 function countKey(counts: NodeSummary["status_counts"]): string {
-  return (["running", "succeeded", "failed", "skipped"] as const)
+  return (["running", "succeeded", "failed", "skipped", "cancelled"] as const)
     .map((name) => `${name}:${counts[name] ?? 0}`)
     .join(",");
 }

@@ -82,6 +82,12 @@ export type ChannelDraft = {
   source_displays?: SourceDisplay[];
 };
 
+export type RunNodeLabel = {
+  id: string;
+  name: string;
+  ref?: string;
+};
+
 export type ChannelRun = {
   job_id: string;
   status: string;
@@ -103,9 +109,11 @@ export type ChannelRun = {
   finished_at: string | null;
   error_code: string | null;
   error_message: string | null;
+  /** Snapshot node labels. Present on a run list item; absent on other run reads. */
+  nodes?: RunNodeLabel[];
 };
 
-export type NodeStatusName = "running" | "succeeded" | "failed" | "skipped";
+export type NodeStatusName = "running" | "succeeded" | "failed" | "skipped" | "cancelled";
 
 export type NodeSummary = {
   node_id: string;
@@ -263,7 +271,7 @@ export type NodeSampleUpstream = {
   name: string;
   type_id: string;
   referenced: boolean;
-  state: "ok" | "not_recorded" | "failed";
+  state: "ok" | "not_recorded" | "failed" | "cancelled";
   source: "execution" | "round_step";
   seq: number | null;
   value: unknown;
@@ -275,7 +283,7 @@ export type NodeSampleUpstream = {
 };
 
 export type NodeSampleNode = {
-  state: "ok" | "not_recorded" | "running" | "failed" | "skipped";
+  state: "ok" | "not_recorded" | "running" | "failed" | "skipped" | "cancelled";
   seq: number | null;
   status: string | null;
   output: unknown;

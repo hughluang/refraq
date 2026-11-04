@@ -325,6 +325,10 @@
   border-color: var(--refraq-tone-danger);
 }
 
+.channel-flow-node--cancelled {
+  border-color: var(--refraq-tone-neutral);
+}
+
 .channel-flow-node--waiting {
   border-style: dashed;
 }

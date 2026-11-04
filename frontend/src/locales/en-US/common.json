@@ -1464,6 +1464,7 @@
   "problems.ENTITY_NOT_SERVING": "Business Entity has no serving head table",
   "problems.ENTITY_PUBLISHING": "A publishing version refuses writes",
   "problems.CHANNEL_NOT_FOUND": "Data Channel was not found",
+  "problems.CHANNEL_RUN_NOT_FOUND": "Channel run was not found",
   "problems.CHANNEL_VERSION_NOT_FOUND": "Data Channel version was not found",
   "problems.CHANNEL_DRAFT_CONFLICT": "The draft changed. Reload and try again",
   "problems.CHANNEL_GRAPH_INVALID": "The draft is not valid",

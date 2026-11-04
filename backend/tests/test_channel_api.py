@@ -1577,6 +1577,13 @@ def test_test_run_creates_run_state(client: TestClient) -> None:
     assert detail.status_code == 200, detail.text
     body = detail.json()
     assert body["run"]["status"] == "succeeded"
+    listed_runs = client.get(f"/channels/{channel_id}/runs")
+    assert listed_runs.status_code == 200, listed_runs.text
+    listed_run = next(item for item in listed_runs.json()["items"] if item["job_id"] == job_id)
+    assert listed_run["nodes"] == [
+        {"id": "nd_trigger", "name": "Run manually", "ref": "run_manually"}
+    ]
+    assert "graph" not in listed_run
     assert "node_executions" not in body
     assert body["node_summaries"] == [
         {

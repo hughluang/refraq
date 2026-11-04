@@ -608,6 +608,23 @@ describe("ChannelRunDetail load feedback", () => {
     );
   });
 
+  it("names a queued run by its created time in the stop confirmation", async () => {
+    access.grants.add("channels:edit");
+    i18n.extra["channels.run.stop.confirmTitle"] = "Stop {{name}}?";
+    const queued = detail("queued");
+    queued.run = {
+      ...queued.run,
+      created_at: "2026-10-11T05:00:00Z",
+      started_at: null,
+    };
+    api.getRun.mockResolvedValue(queued);
+    renderDetail();
+
+    await advance(0);
+    fireEvent.click(screen.getByRole("button", { name: "channels.run.stop" }));
+    expect(screen.getByRole("dialog", { name: "Stop 10/11/2026, 5:00:00 AM?" })).toBeTruthy();
+  });
+
   it("cancels this page's job from the header and reloads the run before the next poll", async () => {
     access.grants.add("channels:edit");
     i18n.extra["channels.run.stop.confirmTitle"] = "Stop {{name}}?";

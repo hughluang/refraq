@@ -626,6 +626,9 @@ function UpstreamEntry({
           {t("channels.run.upstreamFailed")}
         </Text>
       ) : null}
+      {entry.state === "cancelled" ? (
+        <Text size="xs">{t("channels.editor.status.cancelled")}</Text>
+      ) : null}
       {entry.error ? (
         <Text size="xs" c="red">
           {entry.error.message || entry.error.code}
@@ -702,9 +705,17 @@ export function ResultRegion({
         </Text>
       ) : sample ? (
         <Stack gap={4}>
-          {sample.node.state === "failed" || sample.node.state === "skipped" ? (
+          {sample.node.state === "failed" ||
+          sample.node.state === "skipped" ||
+          sample.node.state === "cancelled" ? (
             <Text size="xs">
-              {t(sample.node.state === "failed" ? "channels.run.upstreamFailed" : "channels.run.skipped")}
+              {t(
+                sample.node.state === "failed"
+                  ? "channels.run.upstreamFailed"
+                  : sample.node.state === "skipped"
+                    ? "channels.run.skipped"
+                    : "channels.editor.status.cancelled",
+              )}
             </Text>
           ) : null}
           {bodyStopName ? (

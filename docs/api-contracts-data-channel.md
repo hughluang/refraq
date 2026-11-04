@@ -777,7 +777,7 @@ Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active cha
 
 ### 5.12 `GET /channels/{id}/runs`
 
-Query: `status` (optional Job status), `target` (`draft` | `published` | omitted), `limit` (default 50, max 200), `offset` (default 0). Ordered by `created_at DESC`, `job_id DESC`. Items are Channel Runs (§3.6) of every trigger kind for this channel.
+Query: `status` (optional Job status), `target` (`draft` | `published` | omitted), `limit` (default 50, max 200), `offset` (default 0). Ordered by `created_at DESC`, `job_id DESC`. Items are Channel Runs (§3.6) of every trigger kind for this channel. Each item also carries `nodes`, the run snapshot's nodes as `{id, name, ref}`, so the Console can name a failed node and a stop node. The list does not include the graph.
 
 ### 5.13 `GET /channels/{id}/runs/{job_id}`
 
@@ -797,7 +797,7 @@ Query: `status` (optional Job status), `target` (`draft` | `published` | omitted
 }
 ```
 
-`graph` is the snapshot the run executes, or `null` before a `published` run has resolved a version. `node_summaries` has one object per node that has at least one execution, ordered by that node's smallest `seq`. `execution_count` is the number of executions. `status_counts` maps each status that occurred (`running`, `succeeded`, `failed`, `skipped`) to its count. The response does not include `node_executions`. Executions are §5.17. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`. Requires `channel:read`.
+`graph` is the snapshot the run executes, or `null` before a `published` run has resolved a version. `node_summaries` has one object per node that has at least one execution, ordered by that node's smallest `seq`. `execution_count` is the number of executions. `status_counts` maps each status that occurred (`running`, `succeeded`, `failed`, `skipped`, `cancelled`) to its count. The response does not include `node_executions`. Executions are §5.17. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`. Requires `channel:read`.
 
 ### 5.14 `GET /channels/{id}/runs/{job_id}/executions/{seq}/output`
 
@@ -869,7 +869,7 @@ Empty body. Requires `channel:write`. The source run must be `failed` and `targe
 
 ### 5.17 `GET /channels/{id}/runs/{job_id}/executions`
 
-Query: `node_id` (optional), `container_seq` (optional integer), `round` (optional integer), `status` (optional: `running`, `succeeded`, `failed`, or `skipped`), `limit` (default 50, max 200), `offset` (default 0). `200` is an **Offset Page** ordered by `seq` ascending. Requires `channel:read`. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
+Query: `node_id` (optional), `container_seq` (optional integer), `round` (optional integer), `status` (optional: `running`, `succeeded`, `failed`, `skipped`, or `cancelled`), `limit` (default 50, max 200), `offset` (default 0). `200` is an **Offset Page** ordered by `seq` ascending. Requires `channel:read`. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
 
 ```json
 {
@@ -897,6 +897,7 @@ Query: `node_id` (optional), `container_seq` (optional integer), `round` (option
 ```
 
 - `container_seq` and `round` are null when the execution is not inside a container. Otherwise `container_seq` is the `seq` of the direct container's execution, and `round` is the zero-based round index.
+- `status` is `running`, `succeeded`, `failed`, `skipped`, or `cancelled`. `cancelled` means a cancel stopped the execution. It is not a node failure: `error_code` and `error_message` are null, and the stored output is kept.
 - Duration is derived by clients from `started_at` and `finished_at`.
 - `output_preview` is the stored output with each list cut to its first 100 elements. `output_truncated` is true when this response cut a list.
 - `preview_only` is false and `preview_totals` is `{}`. A successful execution stores its full output, including when a Batch Read is among its container ancestors. A failed execution stores its full output. A stored output that carries the preview envelope reports `preview_only` true, and `preview_totals` maps each list's dot path to the length recorded in the envelope.
@@ -944,7 +945,7 @@ Binding, evaluated on the server for this endpoint and for Template Preview (§5
 3. An ancestor that is a container in the scope contributes that round's **Container Round** (`source` `round_step`): `{current, index, count}` for a For, `{rows, index, count, total}` for a Batch Read, and `{index}` plus `until` when that round has evaluated its condition for an Until. `until` is `{value}` or `{error: {code, message}}`. It does not contribute the container's stored output. An Until body reads `{previous, index}` at run time; `previous` is not on the round record. An ancestor whose parent is a container in the scope contributes its latest `succeeded` or `skipped` execution with that `container_seq` and `round` (`source` `execution`). Any other ancestor contributes its latest `succeeded` or `skipped` execution in the run (`source` `execution`).
 4. The node itself contributes its latest execution inside the scope, of any status.
 
-A selected `succeeded` execution has `state` `ok`. A selected `skipped` execution has `state` `ok`, `value` set to the stored output, and `error` set when that execution recorded an error. When the slot has no `succeeded` or `skipped` execution and has a `failed` execution, `state` is `failed`, `value` is the stored output when there is one, and `error` is that execution's error. When the slot has no execution, `state` is `not_recorded`. A round step that was recorded has `state` `ok`. A round that was not recorded has `state` `not_recorded` and `source` `round_step`. Ancestors that the node's templates name statically (`self.<ref>` or `self.nodes["<name>"]`) come first. The rest follow the graph's topological order.
+A selected `succeeded` execution has `state` `ok`. A selected `skipped` execution has `state` `ok`, `value` set to the stored output, and `error` set when that execution recorded an error. When the slot has no `succeeded` or `skipped` execution and has a `failed` execution, `state` is `failed`, `value` is the stored output when there is one, and `error` is that execution's error. When the slot has no `succeeded`, `skipped`, or `failed` execution and has a `cancelled` execution, `state` is `cancelled` and `value` is the stored output when there is one. A cancel records no error. When the slot has no execution, `state` is `not_recorded`. A round step that was recorded has `state` `ok`. A round that was not recorded has `state` `not_recorded` and `source` `round_step`. Ancestors that the node's templates name statically (`self.<ref>` or `self.nodes["<name>"]`) come first. The rest follow the graph's topological order.
 
 `200`:
 
@@ -988,8 +989,8 @@ A selected `succeeded` execution has `state` `ok`. A selected `skipped` executio
 
 - `config_changed` is true when the submitted node's `config` differs from that node in the graph the run executed, or when the snapshot has no node with that id.
 - `referenced` is true when the node's templates statically name that ancestor.
-- Upstream `state` is `ok`, `not_recorded`, or `failed`. `source` is `execution` or `round_step`. `seq` is null when no execution was selected. `value` is null when `state` is `not_recorded`. `truncated` and `totals` follow §5.17. `error` is null when the selected record has no error.
-- Node `state` is `ok` for a `succeeded` execution, `running`, `failed`, or `skipped` for those statuses, and `not_recorded` when the scope contains no execution of the node. `status` is the execution status, or null. `output` is the stored output, or null. A `failed` or `skipped` execution keeps that stored output and sets `error` to `{ "code", "message" }` when the execution recorded an error. `input` is the Execution Input object, or null when none was recorded. When `container_round` applies, `input` includes that round's Round Template entries, and the execution's stored input is not written. `input_totals` is the input length map, or null when no input was recorded.
+- Upstream `state` is `ok`, `not_recorded`, `failed`, or `cancelled`. `source` is `execution` or `round_step`. `seq` is null when no execution was selected. `value` is null when `state` is `not_recorded`. `truncated` and `totals` follow §5.17. `error` is null when the selected record has no error.
+- Node `state` is `ok` for a `succeeded` execution, `running`, `failed`, `skipped`, or `cancelled` for those statuses, and `not_recorded` when the scope contains no execution of the node. `status` is the execution status, or null. `output` is the stored output, or null. A `failed` or `skipped` execution keeps that stored output and sets `error` to `{ "code", "message" }` when the execution recorded an error. A `cancelled` execution keeps its stored output and has no error. `input` is the Execution Input object, or null when none was recorded. When `container_round` applies, `input` includes that round's Round Template entries, and the execution's stored input is not written. `input_totals` is the input length map, or null when no input was recorded.
 - List values follow §5.17. An execution stored in full supplies that output. `preview_only` is true only when the stored output carries the preview envelope, and then the sample supplies the stored preview. A round step, and a slot with no execution, are false. The settings panel does not page a rows view when `preview_only` is true.
 - Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`. `node_id` that is not a node of `graph` is `422 REQUEST_INVALID`. A present `scope` that is not the outer-to-inner list of container frames containing the node, or a `round` that is not an integer greater than or equal to 0, is `422 REQUEST_INVALID`. A round with no recorded step is not that error: the sample returns `not_recorded`. A `graph` that fails the save shape is `422`.
 

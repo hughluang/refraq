@@ -392,8 +392,9 @@ def test_note_killed_run_keeps_the_full_output() -> None:
     note_killed_run(job_id)
     stored = store.get_execution(job_id, running.seq)
     assert stored is not None
-    assert stored.status == "failed"
-    assert stored.error_message == "cancelled"
+    assert stored.status == "cancelled"
+    assert stored.error_code is None
+    assert stored.error_message is None
     assert stored.output["rows"] is rows
     assert len(stored.output["rows"]) == 120
     assert stored.preview_only is False

@@ -121,6 +121,17 @@ describe("phaseByNode", () => {
     expect(phases.get("body")).toBe("failed");
     expect(latestExecutionQuery(summary)).toEqual({ node_id: "body", limit: 1, offset: 2 });
     expect(phaseByNode(detail("succeeded", [summary]), graph()).get("body")).toBe("waiting");
+    const cancelled: NodeSummary = {
+      node_id: "body",
+      execution_count: 1,
+      status_counts: { cancelled: 1 },
+    };
+    expect(phaseByNode(detail("cancelled", [cancelled]), graph()).get("body")).toBe("cancelled");
+    expect(
+      phaseByNode(detail("cancelled", [cancelled]), graph(), new Map([["body", "cancelled"]])).get(
+        "body",
+      ),
+    ).toBe("cancelled");
     expect(executionCountByNode([]).get("body")).toBeUndefined();
     expect(
       executionCountByNode([

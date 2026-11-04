@@ -1464,6 +1464,7 @@
   "problems.ENTITY_NOT_SERVING": "该业务实体没有在役数据表",
   "problems.ENTITY_PUBLISHING": "正在发布的版本拒绝写入",
   "problems.CHANNEL_NOT_FOUND": "找不到该数据通道",
+  "problems.CHANNEL_RUN_NOT_FOUND": "找不到该次运行",
   "problems.CHANNEL_VERSION_NOT_FOUND": "找不到该数据通道版本",
   "problems.CHANNEL_DRAFT_CONFLICT": "草稿已被别人改过，请重新加载后再试",
   "problems.CHANNEL_GRAPH_INVALID": "草稿不合法",

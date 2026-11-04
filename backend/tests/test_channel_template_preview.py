@@ -924,3 +924,40 @@ def test_node_sample_overlays_a_declared_round_template(client: TestClient) -> N
         assert ignored.json()["node"]["input"] == {"kept": {"n": 2}}
     finally:
         app.dependency_overrides.pop(get_node_catalog, None)
+
+
+def test_sample_selects_a_cancelled_execution_when_nothing_succeeded(
+    client: TestClient,
+) -> None:
+    graph = {
+        "nodes": [
+            _node("nd_trigger", "run_manually", "trigger.manual", 0, {}),
+            _node(
+                "nd_prior",
+                "prior",
+                "transform.set_fields",
+                50,
+                {"fields": [{"name": "n", "value": "1"}]},
+            ),
+            _node(
+                "nd_read",
+                "read_back",
+                "transform.set_fields",
+                100,
+                {"fields": [{"name": "n", "value": "{{ self.prior.output.n }}"}]},
+            ),
+        ],
+        "edges": [_edge("nd_trigger", "nd_prior"), _edge("nd_prior", "nd_read")],
+        "settings": _settings(),
+    }
+    channel_id, job_id = _seed(client, graph, name="Cancelled ancestor")
+    prior = get_run_store().start_execution(job_id, "nd_prior")
+    _finish(prior, status="cancelled", output={"n": 1})
+    response = _sample(client, channel_id, job_id, graph, "nd_read")
+    assert response.status_code == 200, response.text
+    slot = _upstream(response.json(), "nd_prior")
+    assert slot["state"] == "cancelled"
+    assert slot["seq"] == prior.seq
+    assert slot["value"] == {"n": 1}
+    assert slot["error"] is None
+    assert response.json()["node"]["state"] == "not_recorded"

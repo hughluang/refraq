@@ -441,10 +441,15 @@ def _round_stop_result(stopped: _RoundStopped) -> NodeResult:
             error_message=_BODY_STOP_MESSAGE,
             error_detail={"index": stopped.index, "node_id": outcome.failed_node_id},
         )
+    if outcome.status == "cancelled":
+        return NodeResult(
+            status="cancelled",
+            error_detail={"index": stopped.index},
+        )
     return NodeResult(
         status="failed",
         error_code=outcome.error_code,
-        error_message=outcome.error_message or "cancelled",
+        error_message=outcome.error_message,
         error_detail={"index": stopped.index},
     )
 

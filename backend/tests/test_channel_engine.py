@@ -824,7 +824,7 @@ def test_cancel_inside_a_for_body() -> None:
     assert outcome.status == "cancelled"
     assert outcome.stopped_node_id == "tail"
     assert hooks.order == ["walk", "step"]
-    assert ("walk", "failed", {"index": 0}) in hooks.finished
+    assert ("walk", "cancelled", {"index": 0}) in hooks.finished
 
 
 def test_stop_at_inside_a_for_body_excludes_the_back_edge_downstream() -> None:

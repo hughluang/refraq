@@ -452,6 +452,9 @@ def _preferred(
     failed = _latest_execution(store, job_id, node_id=node_id, status="failed", **filters)
     if failed is not None:
         return failed, "failed"
+    cancelled = _latest_execution(store, job_id, node_id=node_id, status="cancelled", **filters)
+    if cancelled is not None:
+        return cancelled, "cancelled"
     return None, "not_recorded"
 
 

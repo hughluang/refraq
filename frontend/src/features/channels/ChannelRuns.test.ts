@@ -350,9 +350,20 @@ describe("ChannelRuns load feedback", () => {
           ...run("failed"),
           job_id: "job_fail",
           failed_node_id: "node_writer",
+          nodes: [{ id: "node_writer", name: "Write rows", ref: "writer" }],
           error_code: "CHANNEL_NODE_FAILED",
           error_message: "writer rejected the row",
           finished_at: "2026-10-11T06:00:30Z",
+        },
+        {
+          ...run("failed"),
+          job_id: "job_blank",
+          failed_node_id: "node_blank",
+          nodes: [{ id: "node_blank", name: "  ", ref: "blank_ref" }],
+          error_code: null,
+          error_message: null,
+          started_at: "2026-10-11T07:00:00Z",
+          finished_at: "2026-10-11T07:00:01Z",
         },
         {
           ...run("failed"),
@@ -368,7 +379,9 @@ describe("ChannelRuns load feedback", () => {
     renderRuns();
 
     await advance(0);
-    expect(screen.getByText("node_writer")).toBeTruthy();
+    expect(screen.getByText("Write rows")).toBeTruthy();
+    expect(screen.queryByText("node_writer")).toBeNull();
+    expect(screen.getByText("node_blank")).toBeTruthy();
     expect(screen.getByText("A node failed")).toBeTruthy();
     expect(screen.getByText("writer rejected the row")).toBeTruthy();
     expect(screen.getAllByText(untilSentence)).toHaveLength(1);
@@ -391,6 +404,7 @@ describe("ChannelRuns load feedback", () => {
           job_id: "job_stop",
           stopped_node_id: "node_stop",
           failed_node_id: "node_writer",
+          nodes: [{ id: "node_stop", name: "Read sql", ref: "read_sql" }],
           error_code: "CHANNEL_NODE_FAILED",
           error_message: "writer rejected the row",
           finished_at: "2026-10-11T06:00:40Z",
@@ -407,6 +421,7 @@ describe("ChannelRuns load feedback", () => {
           job_id: "job_fail",
           failed_node_id: "node_writer",
           stopped_node_id: "node_failstop",
+          nodes: [{ id: "node_writer", name: "   ", ref: "writer" }],
           started_at: "2026-10-11T05:00:00Z",
           finished_at: "2026-10-11T05:00:01Z",
         },
@@ -415,7 +430,8 @@ describe("ChannelRuns load feedback", () => {
     renderRuns();
 
     await advance(0);
-    expect(screen.getByText("Stopped at node_stop")).toBeTruthy();
+    expect(screen.getByText("Stopped at Read sql")).toBeTruthy();
+    expect(screen.queryByText("node_stop")).toBeNull();
     expect(screen.getAllByText(/Stopped at /)).toHaveLength(1);
     expect(screen.getByText("A node failed")).toBeTruthy();
     expect(screen.getByText("writer rejected the row")).toBeTruthy();

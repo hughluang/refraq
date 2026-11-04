@@ -18,7 +18,11 @@ import { latestExecutionQuery } from "@/features/channels/datasetView";
 import { RunExecutionBrowser } from "@/features/channels/RunExecutionBrowser";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { inboundRunLabel } from "@/features/channels/ChannelRuns";
-import { formatFailedNode, formatRunSubject, nodeDisplayName } from "@/features/channels/formatRunSubject";
+import {
+  formatFailedNode,
+  formatRunSubject,
+  nodeDisplayName,
+} from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
 import { ChannelCanvas, type RunNodeOpen } from "@/features/channels/ChannelCanvas";
 import { containerRoundPins, isTerminalRun, recordedKey } from "@/features/channels/runSession";
@@ -155,7 +159,7 @@ export function ChannelRunDetail({
         variant="light"
         loading={stopRunAction.submitting}
         onClick={() => {
-          const name = showInstant(detail.run.started_at);
+          const name = showInstant(detail.run.started_at ?? detail.run.created_at);
           stopRunAction.run({
             safety: "confirm",
             recordName: name,

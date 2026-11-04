@@ -3509,6 +3509,7 @@ const PHASE_ICON: Record<NodeRunPhase, typeof CheckIcon> = {
   running: LoaderIcon,
   succeeded: CheckIcon,
   failed: ErrorIcon,
+  cancelled: CloseIcon,
   dead: CircleDashedIcon,
 };
 

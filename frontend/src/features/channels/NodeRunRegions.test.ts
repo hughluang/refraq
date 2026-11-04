@@ -40,6 +40,7 @@ const LABELS: Record<string, string> = {
   "channels.run.notRecorded": "Not recorded",
   "channels.run.upstreamFailed": "Failed",
   "channels.run.skipped": "Skipped",
+  "channels.editor.status.cancelled": "Cancelled",
   "channels.run.otherUpstream": "Other available upstream",
   "channels.run.roundBadge": "Round {{n}}",
   "channels.template.focusRequired": "Focus a template field to insert a path.",
@@ -296,6 +297,33 @@ describe("node run regions", () => {
       }),
     );
     expect(screen.getByText("Absent")).toBeTruthy();
+  });
+
+  it("names a cancelled execution instead of saying it never ran", () => {
+    mount(
+      createElement(ResultRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        nodeId: "b",
+        nodeType: "transform.set_fields",
+        nodes: [],
+        detail: detail("cancelled"),
+        sample: sample({
+          node: { ...sample().node, state: "cancelled", status: "cancelled", output: { n: 1 } },
+        }),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        graph: null,
+        selectedRound: null,
+        onRound: vi.fn(),
+        onRoundsTotal: vi.fn(),
+      }),
+    );
+    expect(screen.getByText("Cancelled")).toBeTruthy();
+    expect(screen.queryByText("Absent")).toBeNull();
+    expect(screen.queryByText("Failed")).toBeNull();
   });
 
   it("shows the node executing without an execution list", () => {
@@ -608,12 +636,22 @@ describe("node run regions", () => {
               value: { rows: [{ code: "kept" }], count: 1 },
               error: { code: "CHANNEL_NODE_FAILED", message: "skipped downstream" },
             }),
+            upstream({
+              node_id: "stopped",
+              ref: "stopped",
+              name: "Stopped",
+              state: "cancelled",
+              value: { rows: [{ code: "kept-cancel" }], count: 1 },
+              error: null,
+            }),
           ],
         }),
       }),
     );
     expect(screen.getByText("Not recorded")).toBeTruthy();
     expect(screen.getByText("Failed")).toBeTruthy();
+    expect(screen.getByText("Cancelled")).toBeTruthy();
+    expect(screen.getByText("kept-cancel")).toBeTruthy();
     expect(screen.getByText("broke")).toBeTruthy();
     expect(screen.getByText("partial")).toBeTruthy();
     expect(screen.getByText("skipped downstream")).toBeTruthy();
