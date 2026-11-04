@@ -244,13 +244,24 @@ describe("DatasetUsagePage", () => {
     });
     await renderPage();
     const control = await waitFor(() => bar());
+    const track = document.querySelector("[data-capacity-track]");
+    const tick = document.querySelector("[data-capacity-tick]");
+    const over = document.querySelector("[data-capacity-over]");
+    const trackStyle = track?.getAttribute("style") ?? "";
+    const tickStyle = tick?.getAttribute("style") ?? "";
+    const overStyle = over?.getAttribute("style") ?? "";
     expect(document.querySelector("[data-capacity-fill]")?.getAttribute("style")).toContain(
       "width: 100%",
     );
-    expect(document.querySelector("[data-capacity-over]")?.getAttribute("style")).toContain(
-      "width: 50%",
-    );
-    expect(document.querySelector("[data-capacity-tick]")?.textContent).toBe("");
+    expect(trackStyle).toContain(`flex: ${100 * GIB} 0 0px`);
+    expect(overStyle).toContain(`flex: ${50 * GIB} 0 0px`);
+    expect(trackStyle).not.toContain("left:");
+    expect(tickStyle).toContain("flex: 0 0 2px");
+    expect(tickStyle).not.toContain("left:");
+    expect(overStyle).not.toContain("left:");
+    expect(track?.nextElementSibling).toBe(tick);
+    expect(tick?.nextElementSibling).toBe(over);
+    expect(tick?.textContent).toBe("");
     fireEvent.focus(control);
     expect(tipLines()).toEqual([
       "Used 150 GB",

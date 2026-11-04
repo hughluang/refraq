@@ -16,8 +16,7 @@ export function CapacityBar({ capacity }: { capacity: DatasetCapacity }) {
   const open = hovered || focused;
   const used = capacity.used_bytes;
   const ceiling = capacity.ceiling_bytes;
-  const ratio = used / ceiling;
-  const fill = Math.min(ratio, 1);
+  const fill = Math.min(used / ceiling, 1);
   const over = used > ceiling;
   const lines = [
     t("channelDatasetUsage.used", { used: formatDatasetGigabytes(used) }),
@@ -43,45 +42,54 @@ export function CapacityBar({ capacity }: { capacity: DatasetCapacity }) {
       style={{ position: "relative" }}
     >
       <div
-        data-capacity-track=""
         style={{
-          position: "relative",
+          display: "flex",
           height: 12,
           background: "var(--refraq-tone-neutral-muted)",
         }}
       >
         <div
-          data-capacity-fill=""
+          data-capacity-track=""
           style={{
-            width: `${fill * 100}%`,
+            flexGrow: ceiling,
+            flexShrink: 0,
+            flexBasis: 0,
+            minWidth: 0,
             height: "100%",
-            background: "var(--refraq-tone-success)",
+          }}
+        >
+          <div
+            data-capacity-fill=""
+            style={{
+              width: `${fill * 100}%`,
+              height: "100%",
+              background: "var(--refraq-tone-success)",
+            }}
+          />
+        </div>
+        <div
+          data-capacity-tick=""
+          style={{
+            flexGrow: 0,
+            flexShrink: 0,
+            flexBasis: 2,
+            height: "100%",
+            background: "var(--mantine-color-text)",
           }}
         />
         {over ? (
           <div
             data-capacity-over=""
             style={{
-              position: "absolute",
-              left: "100%",
-              top: 0,
+              flexGrow: used - ceiling,
+              flexShrink: 0,
+              flexBasis: 0,
+              minWidth: 0,
               height: "100%",
-              width: `${((used - ceiling) / ceiling) * 100}%`,
               background: "var(--refraq-tone-danger)",
             }}
           />
         ) : null}
-        <div
-          data-capacity-tick=""
-          style={{
-            position: "absolute",
-            left: "100%",
-            top: -4,
-            bottom: -4,
-            width: 2,
-            background: "var(--mantine-color-text)",
-          }}
-        />
       </div>
       {open ? (
         <div data-capacity-tip="">
