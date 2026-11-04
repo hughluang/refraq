@@ -428,9 +428,13 @@ def test_list_entries_decodes_the_page_in_one_statement(change_log_database) -> 
     assert executions == 2
 
 
-def _bound(conn: Connection) -> int:
+def _bound(conn: Connection, entity_id: str) -> int:
     value = conn.execute(
-        text("SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint")
+        text(
+            "SELECT COALESCE(MAX(commit_seq), 0) "
+            "FROM entity_change_log.entry WHERE entity_id = :entity_id"
+        ),
+        {"entity_id": entity_id},
     ).scalar_one()
     return int(value)
 
@@ -473,16 +477,15 @@ def test_read_entries_after_decodes_a_mixed_page_in_one_statement(
             occurred_at=_DELETE_AT,
         )
     with engine.begin() as conn:
-        bound = _bound(conn)
+        bound = _bound(conn, entity_id)
         result, executions = _execution_count(
             conn,
             lambda: read_entries_after(
                 conn,
                 entity_id,
                 [sku, code],
-                after_xact=None,
-                after_seq=None,
-                bound_xact=bound,
+                after_commit=None,
+                bound_commit=bound,
                 limit=2,
             ),
         )
@@ -498,16 +501,15 @@ def test_read_entries_after_decodes_a_mixed_page_in_one_statement(
     assert second[0].physical_table == code.physical_table
     assert second[0].before is None
     assert second[0].after == _CODE_ROW
-    assert first[1] == second[1]
+    assert first[1] < second[1]
     assert isinstance(first[1], int)
     with engine.begin() as conn:
         rest, rest_more = read_entries_after(
             conn,
             entity_id,
             [sku, code],
-            after_xact=second[1],
-            after_seq=second[0].sequence,
-            bound_xact=bound,
+            after_commit=second[1],
+            bound_commit=bound,
             limit=2,
         )
     assert rest_more is False

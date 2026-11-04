@@ -1,8 +1,10 @@
 """Durable cursors for checkpoint-owning nodes.
 
-A position is ``(xact, seq)``. Advance keeps the greater of the stored position
-and the one a finished run proposed. A run proposes while it executes; the
-cursor moves only when that run is settled as a complete success.
+A position is ``(commit_seq, seq)``. The stored field ``xact`` holds the commit
+sequence assigned when the writing transaction commits. Advance keeps the
+greater of the stored position and the one a finished run proposed. A run
+proposes while it executes; the cursor moves only when that run is settled as
+a complete success.
 """
 
 from __future__ import annotations
@@ -31,6 +33,8 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class CheckpointPosition:
+    """One cursor. ``xact`` stores ``commit_seq``; ``seq`` is the log sequence."""
+
     xact: int
     seq: int
 
@@ -80,6 +84,7 @@ class SqlCheckpointStore:
     def read(
         self, channel_id: str, node_id: str, stream: str
     ) -> CheckpointPosition | None:
+        adopt_commit_order()
         with session_scope() as session:
             row = session.scalar(
                 select(ChannelCheckpointRow).where(
@@ -101,6 +106,7 @@ class SqlCheckpointStore:
         stream: str,
         position: CheckpointPosition,
     ) -> None:
+        adopt_commit_order()
         with session_scope() as session:
             session.execute(
                 _ADVANCE,
@@ -187,7 +193,10 @@ class RunCheckpoints:
         self._channel_id = channel_id
         self._run = run
         self._bounds: dict[tuple[str, str], int] = {}
-        self.proposals = _load_proposals(getattr(run, "checkpoint_proposals", None))
+        adopt_commit_order()
+        blob = _proposal_blob(run)
+        run.checkpoint_proposals = blob
+        self.proposals = _load_proposals(blob)
 
     def durable(self, node_id: str, stream: str) -> CheckpointPosition | None:
         return get_checkpoint_store().read(self._channel_id, node_id, stream)
@@ -205,7 +214,7 @@ class RunCheckpoints:
         if key not in self._bounds:
             from backend.entity.changes import capture_bound
 
-            self._bounds[key] = capture_bound()
+            self._bounds[key] = capture_bound(stream)
         return self._bounds[key]
 
     def propose(self, node_id: str, stream: str, position: CheckpointPosition) -> None:
@@ -229,7 +238,8 @@ def advance_from_run(run: Any) -> None:
         return
     if getattr(run, "stop_at_node_id", None):
         return
-    proposals = _load_proposals(getattr(run, "checkpoint_proposals", None))
+    adopt_commit_order()
+    proposals = _load_proposals(_proposal_blob(run))
     store = get_checkpoint_store()
     for (node_id, stream), position in proposals.items():
         store.advance(run.channel_id, node_id, stream, position)
@@ -243,6 +253,108 @@ def _max_position(
     if right is None:
         return left
     return _later(left, right)
+
+
+def _proposal_blob(run: Any) -> Any:
+    """Proposals stored for this run. A persistent run is read from the row."""
+    if get_settings().store_backend != "persistent":
+        return getattr(run, "checkpoint_proposals", None)
+    with session_scope() as session:
+        return session.execute(
+            text(
+                "SELECT checkpoint_proposals FROM channel_runs WHERE job_id = :job_id"
+            ),
+            {"job_id": run.job_id},
+        ).scalar()
+
+
+_adopted = False
+_adopt_guard = threading.Lock()
+
+
+def adopt_commit_order() -> bool:
+    """Rewrite stored transaction ids into commit sequences once.
+
+    Returns true only when this call performs the rewrite. A memory store and a
+    database that has not yet added the epoch row are left unchanged.
+    """
+    global _adopted
+    if _adopted or get_settings().store_backend != "persistent":
+        return False
+    with _adopt_guard:
+        return _adopt_once()
+
+
+def _adopt_once() -> bool:
+    global _adopted
+    with session_scope() as session:
+        if (
+            session.execute(
+                text("SELECT to_regclass('public.change_log_cursor_epoch')")
+            ).scalar()
+            is None
+        ):
+            return False
+        adopted = session.execute(
+            text("SELECT adopted FROM change_log_cursor_epoch WHERE id = 1 FOR UPDATE")
+        ).scalar()
+        if adopted:
+            _adopted = True
+            return False
+        rows = session.execute(
+            text(
+                "SELECT channel_id, node_id, stream, position_xact, position_seq "
+                "FROM channel_checkpoints"
+            )
+        ).all()
+        mapped: list[tuple[Any, CheckpointPosition]] = []
+        if rows:
+            from backend.entity.changes import (
+                commit_seq_ready,
+                legacy_commit_position,
+            )
+
+            if not commit_seq_ready():
+                return False
+
+            for row in rows:
+                mapped.append(
+                    (
+                        row,
+                        legacy_commit_position(
+                            str(row.stream),
+                            int(row.position_xact),
+                            int(row.position_seq),
+                        ),
+                    )
+                )
+        for row, position in mapped:
+            session.execute(
+                text(
+                    "UPDATE channel_checkpoints "
+                    "SET position_xact = :commit_seq, position_seq = :seq "
+                    "WHERE channel_id = :channel_id AND node_id = :node_id "
+                    "AND stream = :stream"
+                ),
+                {
+                    "commit_seq": position.xact,
+                    "seq": position.seq,
+                    "channel_id": row.channel_id,
+                    "node_id": row.node_id,
+                    "stream": row.stream,
+                },
+            )
+        session.execute(
+            text(
+                "UPDATE channel_runs SET checkpoint_proposals = NULL "
+                "WHERE checkpoint_proposals IS NOT NULL"
+            )
+        )
+        session.execute(
+            text("UPDATE change_log_cursor_epoch SET adopted = true WHERE id = 1")
+        )
+    _adopted = True
+    return True
 
 
 def _load_proposals(blob: Any) -> dict[tuple[str, str], CheckpointPosition]:

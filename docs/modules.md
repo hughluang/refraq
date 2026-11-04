@@ -179,7 +179,7 @@ Must not contain:
 - `entity/present.py` importing `entity/table_name.py` or `entity/inbound.py`
 - Owning User Group or Subject Attribute storage (lives in `admin/subjects/`)
 
-Entity owns the entity Change Log. While the effective record has recording on, a trigger on each physical table appends an entry in the same transaction as the row write. The **Entity Data API** and Data Channel write nodes keep their own statements. Neither statement appends the log. `backend.entity.changes` is the published forward read: a snapshot bound, entries below it, and the purge mark. Channel does not read the change-log tables itself.
+Entity owns the entity Change Log. While the effective record has recording on, a trigger on each physical table appends an entry in the same transaction as the row write. The **Entity Data API** and Data Channel write nodes keep their own statements. Neither statement appends the log. `backend.entity.changes` is the published forward read: the greatest commit sequence on that stream when it opened, entries at or below it, and the purge mark. Channel does not read the change-log tables itself.
 
 ### `backend/channel/`
 

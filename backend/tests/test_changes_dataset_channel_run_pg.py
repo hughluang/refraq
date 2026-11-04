@@ -382,7 +382,10 @@ def test_a_3n_backlog_drains_in_three_completed_runs_then_ten_later_updates(
         for index in range(1, _BACKLOG + 1):
             _insert(conn, harness.source_table, _sku(index), index)
     backlog = read_changes(
-        harness.source_id, after=None, bound=capture_bound(), limit=_BACKLOG + 1
+        harness.source_id,
+        after=None,
+        bound=capture_bound(harness.source_id),
+        limit=_BACKLOG + 1,
     )
     assert len(backlog.entries) == _BACKLOG
     assert backlog.has_more is False
@@ -408,7 +411,7 @@ def test_a_3n_backlog_drains_in_three_completed_runs_then_ten_later_updates(
         after=ChangePosition(
             xact=backlog.entries[-1].xact, seq=backlog.entries[-1].sequence
         ),
-        bound=capture_bound(),
+        bound=capture_bound(harness.source_id),
         limit=_LATER + 1,
     )
     assert len(later.entries) == _LATER
@@ -438,7 +441,10 @@ def test_a_later_batch_write_failure_leaves_the_cursor_and_the_next_run_converge
         for index in range(1, _LIMIT + extra + 1):
             _insert(conn, harness.source_table, _sku(index), index)
     page = read_changes(
-        harness.source_id, after=None, bound=capture_bound(), limit=_LIMIT + extra + 1
+        harness.source_id,
+        after=None,
+        bound=capture_bound(harness.source_id),
+        limit=_LIMIT + extra + 1,
     )
     assert len(page.entries) == _LIMIT + extra
     cut = _position(page.entries[_LIMIT - 1])

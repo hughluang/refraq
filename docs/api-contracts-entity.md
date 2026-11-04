@@ -478,9 +478,9 @@ A dropped physical table leaves its entries in place. The list still returns the
 
 `source` is `user`, `channel_run`, or null. The entry stores the subject id. `subject_label` is resolved on read. A user subject uses the user's name when the user exists, and the stored id when it does not. A missing user does not drop the entry. A channel-run subject uses the stored run id. The response has no channel link. An unattributed entry has `source`, `subject`, and `subject_label` null.
 
-This list orders by sequence descending. It is not the checkpoint read. A Data Channel `read.changes` node reads forward by `(xact, seq)` below a snapshot bound (`docs/business-data-channel.md` §6.1). `xact` is the writing transaction id. Entries written before that column existed have `xact` 0. The list response does not include `xact`.
+This list orders by sequence descending. It is not the checkpoint read. A Data Channel `read.changes` node reads forward by `commit_seq` up to the greatest commit sequence captured when the run opened that stream (`docs/business-data-channel.md` §6.1). `commit_seq` is assigned when the writing transaction commits. The list response does not include `commit_seq`.
 
-Retention cleanup and a delete of an entity's entries record the greatest deleted `(xact, seq)` as that entity's purge mark, in the same statement as the delete. A later delete that removes nothing does not lower the mark. The list does not return the mark. A stored checkpoint strictly behind it fails `read.changes` with `CHANNEL_CHECKPOINT_INVALID`.
+Retention cleanup and a delete of an entity's entries record the greatest deleted `(commit_seq, seq)` as that entity's purge mark, in the same statement as the delete. A later delete that removes nothing does not lower the mark. The list does not return the mark. A stored checkpoint strictly behind it fails `read.changes` with `CHANNEL_CHECKPOINT_INVALID`.
 
 ### 4.10 `GET /entities/{id}/change-log/{sequence}`
 

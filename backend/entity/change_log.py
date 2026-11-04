@@ -49,6 +49,8 @@ __all__ = [
     "list_entries",
     "read_change_log",
     "read_change_log_entry",
+    "map_legacy_cursor",
+    "max_commit_seq",
     "read_effective",
     "read_entries_after",
     "read_purge_mark",
@@ -69,6 +71,10 @@ CHANGE_LOG_PAGE_LIMIT = 50
 
 _APPEND_FUNCTION = "append_change"
 _CHANGED_FUNCTION = "changed_columns"
+_NOTE_COMMIT_FUNCTION = "note_commit_pending"
+_ASSIGN_COMMIT_FUNCTION = "assign_commit_seq"
+_COMMIT_COUNTER = "commit_counter"
+_COMMIT_PENDING = "commit_pending"
 _ENTITY_ID_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _NAME_MAX = 63
 _TRIGGER_EVENTS = (
@@ -157,9 +163,9 @@ def ensure_shared_relations(conn: Connection) -> None:
     """Create the shared change-log schema, tables, and trigger function.
 
     Idempotent. Does not commit. Entity bootstrap calls this. A read does not:
-    these statements lock the log table an open write already holds, and the
-    snapshot bound is what hides that write. Sequences and per-table triggers
-    are created by ``install_triggers``.
+    these statements lock the log table an open write already holds. Sequences
+    and per-table triggers are created by ``install_triggers``. Commit
+    sequences are assigned by a deferred trigger on the log itself.
     """
     role = str(conn.execute(text("SELECT current_user")).scalar_one())
     if role == ENTITY_OWNER_ROLE:
@@ -313,7 +319,7 @@ def remove_triggers(
 def delete_entries(conn: Connection, entity_id: str) -> None:
     """Delete every entry of this entity. Does not restart its sequence.
 
-    The same statement records the greatest deleted ``(xact, seq)`` on
+    The same statement records the greatest deleted ``(commit_seq, seq)`` on
     ``purge_mark`` so a checkpoint behind that position can be reported.
     """
     entity_id = _entity_id(entity_id)
@@ -328,7 +334,7 @@ def delete_entries(conn: Connection, entity_id: str) -> None:
 def delete_entries_before(conn: Connection, entity_id: str, cutoff: datetime) -> None:
     """Delete entries whose transaction timestamp is strictly earlier than cutoff.
 
-    The same statement records the greatest deleted ``(xact, seq)`` on
+    The same statement records the greatest deleted ``(commit_seq, seq)`` on
     ``purge_mark``. An empty delete leaves the mark unchanged.
     """
     entity_id = _entity_id(entity_id)
@@ -463,12 +469,12 @@ def read_change_log_entry(
 
 
 def read_purge_mark(conn: Connection, entity_id: str) -> tuple[int, int] | None:
-    """Greatest ``(xact, seq)`` deleted for this entity, or none."""
+    """Greatest deleted ``(commit_seq, seq)`` for this entity, or none."""
     entity_id = _entity_id(entity_id)
     row = (
         conn.execute(
             text(
-                "SELECT xact::text::bigint AS xact, seq "
+                "SELECT commit_seq, seq "
                 f"FROM {_purge_mark_table()} WHERE entity_id = :entity_id"
             ),
             {"entity_id": entity_id},
@@ -476,9 +482,95 @@ def read_purge_mark(conn: Connection, entity_id: str) -> tuple[int, int] | None:
         .mappings()
         .one_or_none()
     )
-    if row is None:
+    if row is None or row["commit_seq"] is None:
         return None
-    return int(row["xact"]), int(row["seq"])
+    return int(row["commit_seq"]), int(row["seq"])
+
+
+def max_commit_seq(conn: Connection, entity_id: str) -> int:
+    """Greatest committed sequence on this entity, or 0 when none is visible."""
+    entity_id = _entity_id(entity_id)
+    value = conn.execute(
+        text(
+            "SELECT COALESCE(MAX(commit_seq), 0) "
+            f"FROM {_entry_table()} WHERE entity_id = :entity_id"
+        ),
+        {"entity_id": entity_id},
+    ).scalar_one()
+    return int(value)
+
+
+def map_legacy_cursor(
+    conn: Connection, entity_id: str, xact: int, seq: int
+) -> tuple[int, int]:
+    """Map one stored ``(xact, seq)`` cursor onto ``(commit_seq, seq)``.
+
+    A row that is still present keeps its own commit sequence. A cursor strictly
+    behind the purge mark stays strictly behind that mark's commit sequence. A
+    cursor on the mark lands on the mark. Anything else lands on the latest
+    surviving commit sequence at or before the old position, or ``(0, 0)``.
+    """
+    entity_id = _entity_id(entity_id)
+    params = {"entity_id": entity_id, "xact": int(xact), "seq": int(seq)}
+    found = (
+        conn.execute(
+            text(
+                "SELECT commit_seq, seq "
+                f"FROM {_entry_table()} "
+                "WHERE entity_id = :entity_id "
+                "AND xact = CAST(:xact AS text)::xid8 AND seq = :seq"
+            ),
+            params,
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if found is not None and found["commit_seq"] is not None:
+        return int(found["commit_seq"]), int(found["seq"])
+    mark = (
+        conn.execute(
+            text(
+                "SELECT commit_seq, seq, "
+                "(xact, seq) > (CAST(:xact AS text)::xid8, CAST(:seq AS bigint)) "
+                "AS behind "
+                f"FROM {_purge_mark_table()} WHERE entity_id = :entity_id"
+            ),
+            params,
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if mark is not None and mark["commit_seq"] is not None and mark["behind"]:
+        return int(mark["commit_seq"]), int(mark["seq"]) - 1
+    if mark is not None and mark["commit_seq"] is not None and not mark["behind"]:
+        same = conn.execute(
+            text(
+                "SELECT 1 FROM "
+                f"{_purge_mark_table()} WHERE entity_id = :entity_id "
+                "AND xact = CAST(:xact AS text)::xid8 AND seq = :seq"
+            ),
+            params,
+        ).one_or_none()
+        if same is not None:
+            return int(mark["commit_seq"]), int(mark["seq"])
+    survivor = (
+        conn.execute(
+            text(
+                "SELECT commit_seq, seq "
+                f"FROM {_entry_table()} "
+                "WHERE entity_id = :entity_id AND commit_seq IS NOT NULL "
+                "AND (xact, seq) <= "
+                "(CAST(:xact AS text)::xid8, CAST(:seq AS bigint)) "
+                "ORDER BY commit_seq DESC LIMIT 1"
+            ),
+            params,
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if survivor is None:
+        return (0, 0)
+    return int(survivor["commit_seq"]), int(survivor["seq"])
 
 
 def read_entries_after(
@@ -486,45 +578,42 @@ def read_entries_after(
     entity_id: str,
     tables: Sequence[ChangeLogTable],
     *,
-    after_xact: int | None,
-    after_seq: int | None,
-    bound_xact: int,
+    after_commit: int | None,
+    bound_commit: int,
     limit: int,
 ) -> tuple[list[tuple[ChangeLogEntry, int]], bool]:
-    """Entries with ``xact`` strictly below ``bound_xact``, oldest position first.
+    """Entries with ``commit_seq`` at most ``bound_commit``, oldest first.
 
-    ``after_xact`` and ``after_seq`` together are an exclusive lower bound.
-    Both are absent, or both are present. ``limit`` is the page size. The
-    boolean is true when another matching entry exists after this page.
-    Positions are ``(xact, seq)``. A transaction still in progress holds the
-    snapshot xmin, so its row and every later ``xact`` stay out of the page.
+    ``after_commit`` is an exclusive lower bound, or absent to start at the
+    beginning. ``limit`` is the page size. The boolean is true when another
+    matching entry exists after this page. The integer beside each entry is
+    its ``commit_seq``. A transaction that has not committed has no
+    ``commit_seq``, so its rows stay out and do not hide a later commit.
     """
     entity_id = _entity_id(entity_id)
     if limit < 1:
         raise ValueError("limit must be at least 1")
-    if (after_xact is None) != (after_seq is None):
-        raise ValueError("after_xact and after_seq are set together")
     clauses = [
         "entity_id = :entity_id",
-        "xact::text::bigint < :bound_xact",
+        "commit_seq IS NOT NULL",
+        "commit_seq <= :bound_commit",
     ]
     params: dict[str, Any] = {
         "entity_id": entity_id,
-        "bound_xact": int(bound_xact),
+        "bound_commit": int(bound_commit),
         "lim": limit + 1,
     }
-    if after_xact is not None:
-        clauses.append("(xact::text::bigint, seq) > (:after_xact, :after_seq)")
-        params["after_xact"] = int(after_xact)
-        params["after_seq"] = int(after_seq)
+    if after_commit is not None:
+        clauses.append("commit_seq > :after_commit")
+        params["after_commit"] = int(after_commit)
     rows = list(
         conn.execute(
             text(
                 "SELECT entity_id, physical_table, operation, seq, occurred_at, "
-                "source, subject, image, xact::text::bigint AS xact_n "
+                "source, subject, image, commit_seq "
                 f"FROM {_entry_table()} "
                 f"WHERE {' AND '.join(clauses)} "
-                "ORDER BY xact, seq "
+                "ORDER BY commit_seq "
                 "LIMIT :lim"
             ),
             params,
@@ -535,7 +624,7 @@ def read_entries_after(
     entries = _entries_from_rows(conn, page, tables)
     return (
         [
-            (entry, int(row["xact_n"]))
+            (entry, int(row["commit_seq"]))
             for entry, row in zip(entries, page, strict=True)
         ],
         has_more,
@@ -664,6 +753,7 @@ def _create_shared_objects(conn: Connection) -> None:
         "subject text, "
         "image jsonb NOT NULL, "
         "xact xid8 NOT NULL DEFAULT pg_current_xact_id(), "
+        "commit_seq bigint, "
         "PRIMARY KEY (entity_id, seq), "
         "CONSTRAINT change_log_operation "
         "CHECK (operation IN ('insert', 'update', 'delete')), "
@@ -674,6 +764,7 @@ def _create_shared_objects(conn: Connection) -> None:
         ")"
     )
     _ensure_entry_position(conn)
+    _ensure_commit_order(conn)
     changed = qualified_table(CHANGE_LOG_SCHEMA, _CHANGED_FUNCTION)
     append = qualified_table(CHANGE_LOG_SCHEMA, _APPEND_FUNCTION)
     conn.exec_driver_sql(_changed_columns_sql(changed))
@@ -681,10 +772,14 @@ def _create_shared_objects(conn: Connection) -> None:
     conn.exec_driver_sql(f"REVOKE ALL ON SCHEMA {schema} FROM PUBLIC")
     conn.exec_driver_sql(
         f"REVOKE ALL ON TABLE {_effective_table()}, {_entry_table()}, "
-        f"{_purge_mark_table()} FROM PUBLIC"
+        f"{_purge_mark_table()}, {_commit_counter_table()}, "
+        f"{_commit_pending_table()} FROM PUBLIC"
     )
+    note = qualified_table(CHANGE_LOG_SCHEMA, _NOTE_COMMIT_FUNCTION)
+    assign = qualified_table(CHANGE_LOG_SCHEMA, _ASSIGN_COMMIT_FUNCTION)
     conn.exec_driver_sql(
-        f"REVOKE ALL ON FUNCTION {changed}(jsonb, jsonb), {append}() FROM PUBLIC"
+        f"REVOKE ALL ON FUNCTION {changed}(jsonb, jsonb), {append}(), "
+        f"{note}(), {assign}() FROM PUBLIC"
     )
 
 
@@ -798,18 +893,24 @@ def _delete_noting_purge(
         text(
             f"WITH deleted AS ("
             f"DELETE FROM {_entry_table()} WHERE {where_sql} "
-            f"RETURNING xact, seq"
+            f"RETURNING xact, seq, commit_seq"
             f"), top AS ("
-            f"SELECT xact, seq FROM deleted "
-            f"ORDER BY xact DESC, seq DESC LIMIT 1"
+            f"SELECT xact, seq, commit_seq FROM deleted "
+            f"WHERE commit_seq IS NOT NULL "
+            f"ORDER BY commit_seq DESC, seq DESC LIMIT 1"
             f") "
-            f"INSERT INTO {mark} AS mark (entity_id, xact, seq) "
-            f"SELECT :entity_id, xact, seq FROM top "
+            f"INSERT INTO {mark} AS mark (entity_id, xact, seq, commit_seq) "
+            f"SELECT :entity_id, xact, seq, commit_seq FROM top "
             f"ON CONFLICT (entity_id) DO UPDATE SET "
-            f"xact = CASE WHEN (EXCLUDED.xact, EXCLUDED.seq) > (mark.xact, mark.seq) "
+            f"xact = CASE WHEN mark.commit_seq IS NULL "
+            f"OR (EXCLUDED.commit_seq, EXCLUDED.seq) > (mark.commit_seq, mark.seq) "
             f"THEN EXCLUDED.xact ELSE mark.xact END, "
-            f"seq = CASE WHEN (EXCLUDED.xact, EXCLUDED.seq) > (mark.xact, mark.seq) "
-            f"THEN EXCLUDED.seq ELSE mark.seq END"
+            f"seq = CASE WHEN mark.commit_seq IS NULL "
+            f"OR (EXCLUDED.commit_seq, EXCLUDED.seq) > (mark.commit_seq, mark.seq) "
+            f"THEN EXCLUDED.seq ELSE mark.seq END, "
+            f"commit_seq = CASE WHEN mark.commit_seq IS NULL "
+            f"OR (EXCLUDED.commit_seq, EXCLUDED.seq) > (mark.commit_seq, mark.seq) "
+            f"THEN EXCLUDED.commit_seq ELSE mark.commit_seq END"
         ),
         params,
     )
@@ -837,9 +938,168 @@ def _ensure_entry_position(conn: Connection) -> None:
         f"CREATE TABLE IF NOT EXISTS {_purge_mark_table()} ("
         "entity_id text PRIMARY KEY, "
         "xact xid8 NOT NULL, "
-        "seq bigint NOT NULL"
+        "seq bigint NOT NULL, "
+        "commit_seq bigint"
         ")"
     )
+
+
+def _ensure_commit_order(conn: Connection) -> None:
+    """Add commit sequences, the per-entity counter, and the assign trigger.
+
+    Existing committed rows are numbered in ``(xact, seq)`` order. The counter
+    update is part of the writing transaction, so a rollback returns the numbers.
+    """
+    entry = _entry_table()
+    counter = _commit_counter_table()
+    pending = _commit_pending_table()
+    note = qualified_table(CHANGE_LOG_SCHEMA, _NOTE_COMMIT_FUNCTION)
+    assign = qualified_table(CHANGE_LOG_SCHEMA, _ASSIGN_COMMIT_FUNCTION)
+    conn.exec_driver_sql(
+        f"ALTER TABLE {entry} ADD COLUMN IF NOT EXISTS commit_seq bigint"
+    )
+    conn.exec_driver_sql(
+        f"CREATE INDEX IF NOT EXISTS change_log_entry_commit "
+        f"ON {entry} (entity_id, commit_seq)"
+    )
+    conn.exec_driver_sql(
+        f"CREATE TABLE IF NOT EXISTS {counter} ("
+        "entity_id text PRIMARY KEY, "
+        "last_seq bigint NOT NULL"
+        ")"
+    )
+    conn.exec_driver_sql(
+        f"CREATE TABLE IF NOT EXISTS {pending} ("
+        "xact xid8 NOT NULL, "
+        "entity_id text NOT NULL, "
+        "PRIMARY KEY (xact, entity_id)"
+        ")"
+    )
+    conn.exec_driver_sql(
+        f"ALTER TABLE {_purge_mark_table()} ADD COLUMN IF NOT EXISTS commit_seq bigint"
+    )
+    conn.exec_driver_sql(_note_commit_sql(note, pending))
+    conn.exec_driver_sql(_assign_commit_sql(assign, entry, counter, pending))
+    conn.exec_driver_sql(
+        f"CREATE OR REPLACE TRIGGER change_log_note_commit "
+        f"AFTER INSERT ON {entry} "
+        f"REFERENCING NEW TABLE AS new_rows "
+        f"FOR EACH STATEMENT "
+        f"EXECUTE FUNCTION {note}()"
+    )
+    conn.exec_driver_sql(
+        f"DROP TRIGGER IF EXISTS change_log_assign_commit ON {pending}"
+    )
+    conn.exec_driver_sql(
+        f"CREATE CONSTRAINT TRIGGER change_log_assign_commit "
+        f"AFTER INSERT ON {pending} "
+        f"DEFERRABLE INITIALLY DEFERRED "
+        f"FOR EACH ROW "
+        f"EXECUTE FUNCTION {assign}()"
+    )
+    conn.exec_driver_sql(f"LOCK TABLE {entry} IN SHARE ROW EXCLUSIVE MODE")
+    conn.exec_driver_sql(
+        f"WITH floors AS ("
+        f"SELECT entity_id, COALESCE(MAX(commit_seq), 0) AS floor "
+        f"FROM {entry} GROUP BY entity_id"
+        f"), numbered AS ("
+        f"SELECT e.entity_id, e.seq, "
+        f"f.floor + row_number() OVER ("
+        f"PARTITION BY e.entity_id ORDER BY e.xact, e.seq"
+        f") AS commit_seq "
+        f"FROM {entry} AS e "
+        f"JOIN floors AS f ON f.entity_id = e.entity_id "
+        f"WHERE e.commit_seq IS NULL"
+        f") "
+        f"UPDATE {entry} AS e SET commit_seq = numbered.commit_seq "
+        f"FROM numbered "
+        f"WHERE e.entity_id = numbered.entity_id AND e.seq = numbered.seq"
+    )
+    conn.exec_driver_sql(
+        f"INSERT INTO {counter} (entity_id, last_seq) "
+        f"SELECT entity_id, MAX(commit_seq) FROM {entry} "
+        f"WHERE commit_seq IS NOT NULL GROUP BY entity_id "
+        f"ON CONFLICT (entity_id) DO UPDATE "
+        f"SET last_seq = GREATEST({counter}.last_seq, EXCLUDED.last_seq)"
+    )
+    mark = _purge_mark_table()
+    conn.exec_driver_sql(
+        f"UPDATE {mark} AS m SET commit_seq = COALESCE(("
+        f"SELECT MAX(e.commit_seq) FROM {entry} AS e "
+        f"WHERE e.entity_id = m.entity_id "
+        f"AND (e.xact, e.seq) <= (m.xact, m.seq)"
+        f"), 0) "
+        f"WHERE m.commit_seq IS NULL"
+    )
+
+
+def _note_commit_sql(function: str, pending: str) -> str:
+    return f"""
+CREATE OR REPLACE FUNCTION {function}() RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $body$
+BEGIN
+  INSERT INTO {pending} (xact, entity_id)
+  SELECT DISTINCT pg_current_xact_id(), n.entity_id
+  FROM new_rows AS n
+  ON CONFLICT DO NOTHING;
+  RETURN NULL;
+END
+$body$
+"""
+
+
+def _assign_commit_sql(function: str, entry: str, counter: str, pending: str) -> str:
+    return f"""
+CREATE OR REPLACE FUNCTION {function}() RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $body$
+DECLARE
+  ent text;
+  base_seq bigint;
+  next_seq bigint;
+BEGIN
+  FOR ent IN
+    SELECT entity_id FROM {pending}
+    WHERE xact = pg_current_xact_id()
+    ORDER BY entity_id
+  LOOP
+    INSERT INTO {counter} (entity_id, last_seq)
+    VALUES (ent, 0)
+    ON CONFLICT (entity_id) DO NOTHING;
+
+    SELECT last_seq INTO base_seq
+    FROM {counter}
+    WHERE entity_id = ent
+    FOR UPDATE;
+
+    WITH ordered AS (
+      SELECT seq, row_number() OVER (ORDER BY seq) AS rn
+      FROM {entry}
+      WHERE entity_id = ent
+        AND xact = pg_current_xact_id()
+        AND commit_seq IS NULL
+    ), updated AS (
+      UPDATE {entry} AS e
+      SET commit_seq = base_seq + ordered.rn
+      FROM ordered
+      WHERE e.entity_id = ent AND e.seq = ordered.seq
+      RETURNING e.commit_seq
+    )
+    SELECT COALESCE(MAX(commit_seq), base_seq) INTO next_seq FROM updated;
+
+    UPDATE {counter}
+    SET last_seq = next_seq
+    WHERE entity_id = ent;
+  END LOOP;
+
+  DELETE FROM {pending} WHERE xact = pg_current_xact_id();
+  RETURN NULL;
+END
+$body$
+"""
 
 
 def _effective_table() -> str:
@@ -852,6 +1112,14 @@ def _entry_table() -> str:
 
 def _purge_mark_table() -> str:
     return qualified_table(CHANGE_LOG_SCHEMA, PURGE_MARK_TABLE)
+
+
+def _commit_counter_table() -> str:
+    return qualified_table(CHANGE_LOG_SCHEMA, _COMMIT_COUNTER)
+
+
+def _commit_pending_table() -> str:
+    return qualified_table(CHANGE_LOG_SCHEMA, _COMMIT_PENDING)
 
 
 def _sequence_name(entity_id: str) -> str:

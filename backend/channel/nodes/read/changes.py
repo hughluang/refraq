@@ -183,8 +183,8 @@ NODE_TYPE = NodeType(
     label="Read Changes",
     summary="Reads new Change Log entries for one Business Entity.",
     description=(
-        "Reads the entity Change Log after this node's checkpoint and below a "
-        "snapshot bound fixed for the run. The checkpoint advances only when "
+        "Reads the entity Change Log after this node's checkpoint and up to the "
+        "commit sequence fixed for the run. The checkpoint advances only when "
         "the whole run completes. Entries the source filter hides still count. "
         "Use Changes Dataset to read more than one page in a run."
     ),

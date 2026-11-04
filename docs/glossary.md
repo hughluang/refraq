@@ -695,7 +695,7 @@ Avoid a permission bypass, a human account, and `super_admin` as a stand-in for 
 
 ### Checkpoint
 
-A durable cursor owned by a concrete **Data Channel** business node that reads an incremental stream. The key is the channel, the node id, and a stream. `read.changes` and `volume.changes_dataset` each use the Business Entity id as the stream and a position of `(xact, seq)`. The stored cursor moves only after a completed run with no stop node, and only forward. `draft` and `published` do not otherwise differ.
+A durable cursor owned by a concrete **Data Channel** business node that reads an incremental stream. The key is the channel, the node id, and a stream. `read.changes` and `volume.changes_dataset` each use the Business Entity id as the stream and a position of `(commit_seq, seq)`. `commit_seq` is assigned when the writing transaction commits. `seq` is the change-log sequence. The stored cursor moves only after a completed run with no stop node, and only forward. `draft` and `published` do not otherwise differ.
 Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a per-schedule cursor, a framework-wide advancement rule, and a platform-derived dirty-key set.
 
 ### Dataset Reference

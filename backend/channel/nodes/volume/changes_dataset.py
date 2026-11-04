@@ -278,8 +278,8 @@ NODE_TYPE = NodeType(
     label="Changes Dataset",
     summary="Lands one bounded Change Log range for a Business Entity as a dataset.",
     description=(
-        "Reads the entity Change Log after this node's checkpoint and below the "
-        "snapshot bound fixed for the run. Visible rows land in one dataset, and "
+        "Reads the entity Change Log after this node's checkpoint and up to the "
+        "commit sequence fixed for the run. Visible rows land in one dataset, and "
         "a checkpoint is proposed only after that dataset is ready. Entries a "
         "source filter hides stay out of the dataset and still count toward the limit."
     ),

@@ -254,13 +254,14 @@ def _set_source(conn: Connection, source: str, subject: str) -> None:
 def _positions(conn: Connection, entity_id: str) -> list[tuple[int, int]]:
     rows = conn.execute(
         text(
-            "SELECT xact::text::bigint AS xact, seq "
+            "SELECT commit_seq, seq "
             "FROM entity_change_log.entry "
-            "WHERE entity_id = :entity_id ORDER BY xact, seq"
+            "WHERE entity_id = :entity_id AND commit_seq IS NOT NULL "
+            "ORDER BY commit_seq"
         ),
         {"entity_id": entity_id},
     )
-    return [(int(xact), int(seq)) for xact, seq in rows]
+    return [(int(commit_seq), int(seq)) for commit_seq, seq in rows]
 
 
 def _occurred_at(conn: Connection, entity_id: str) -> list[datetime]:
@@ -307,7 +308,7 @@ def test_empty_range_lands_an_empty_dataset_and_proposes_nothing(
 ) -> None:
     engine = get_entity_engine()
     entity_id, _table = _arm(engine)
-    hooks = _hooks(capture_bound())
+    hooks = _hooks(capture_bound(entity_id))
     result = NODE_TYPE.execute(_node(entity_id), hooks)
     assert result.status == "succeeded", result.error_message
     assert set(result.output) == {"dataset", "count"}
@@ -376,7 +377,7 @@ def test_rows_match_read_changes_entries_in_xact_seq_order(fresh_datasets) -> No
         _set_source(conn, "channel_run", "run_9")
         _insert(conn, table, "SO002")
         _delete_row(conn, table, "SO002")
-    bound = capture_bound()
+    bound = capture_bound(entity_id)
     read_hooks = _hooks(bound, run_id="run_read")
     read = READ_CHANGES.execute(
         {
@@ -412,7 +413,7 @@ def test_source_filter_omits_hidden_entries_and_the_proposal_passes_them(
         _insert(conn, table, "kept")
         _set_source(conn, "channel_run", "run_9")
         _insert(conn, table, "hidden")
-    bound = capture_bound()
+    bound = capture_bound(entity_id)
     oracle = read_changes(entity_id, after=None, bound=bound, limit=10)
     hooks = _hooks(bound)
     result = NODE_TYPE.execute(_node(entity_id, sources=["user"]), hooks)
@@ -442,7 +443,7 @@ def test_limit_counts_hidden_entries_and_the_next_execution_continues(
         _insert(conn, table, "hidden")
         _set_source(conn, "user", "alice")
         _insert(conn, table, "third")
-    bound = capture_bound()
+    bound = capture_bound(entity_id)
     oracle = read_changes(entity_id, after=None, bound=bound, limit=10)
     hooks = _hooks(bound)
     first = NODE_TYPE.execute(_node(entity_id, sources=["user"], limit=2), hooks)
@@ -467,7 +468,7 @@ def test_limit_counts_hidden_entries_and_the_next_execution_continues(
     )
 
 
-def test_an_open_transaction_holds_the_bound(fresh_datasets) -> None:
+def test_an_open_transaction_does_not_hold_later_commits(fresh_datasets) -> None:
     engine = get_entity_engine()
     entity_id, table = _arm(engine)
     held = engine.connect()
@@ -476,19 +477,23 @@ def test_an_open_transaction_holds_the_bound(fresh_datasets) -> None:
         _insert(held, table, "early")
         with engine.begin() as conn:
             _insert(conn, table, "later")
-        hooks = _hooks(capture_bound())
+        hooks = _hooks(capture_bound(entity_id))
         hidden = NODE_TYPE.execute(_node(entity_id), hooks)
         assert hidden.status == "succeeded", hidden.error_message
-        assert hidden.output["count"] == 0
-        assert hooks.checkpoints.proposals == {}
+        assert [
+            row["business_key"] for row in _rows(hidden.output["dataset"]["dataset_id"])
+        ] == ["later"]
+        assert hooks.checkpoints.proposals != {}
         held_tx.commit()
     finally:
         held.close()
-    seen = NODE_TYPE.execute(_node(entity_id), _hooks(capture_bound(), run_id="run_after"))
+    seen = NODE_TYPE.execute(
+        _node(entity_id), _hooks(capture_bound(entity_id), run_id="run_after")
+    )
     assert seen.status == "succeeded", seen.error_message
     assert [
         row["business_key"] for row in _rows(seen.output["dataset"]["dataset_id"])
-    ] == ["early", "later"]
+    ] == ["later", "early"]
 
 
 def test_recording_off_invalid_cursor_and_ignore_checkpoints(fresh_datasets) -> None:
@@ -509,7 +514,7 @@ def test_recording_off_invalid_cursor_and_ignore_checkpoints(fresh_datasets) -> 
     with engine.begin() as conn:
         positions = _positions(conn, entity_id)
         delete_entries_before(conn, entity_id, utc_now() + timedelta(days=1))
-    hooks = _hooks(capture_bound(), run_id="run_invalid")
+    hooks = _hooks(capture_bound(entity_id), run_id="run_invalid")
     hooks.checkpoints.durable_positions[(_NODE_ID, entity_id)] = CheckpointPosition(
         xact=positions[0][0], seq=positions[0][1]
     )
@@ -547,7 +552,7 @@ def test_a_missing_entity_fails_without_a_proposal(fresh_datasets) -> None:
                 applied_version_id="missing",
             ),
         )
-    hooks = _hooks(capture_bound(), run_id="run_missing")
+    hooks = _hooks(capture_bound(entity_id), run_id="run_missing")
     before = set(_relations())
     result = NODE_TYPE.execute(_node(entity_id), hooks)
     assert result.status == "failed"
@@ -570,7 +575,7 @@ def test_a_historical_purge_still_lands_the_rows_that_remain(fresh_datasets) -> 
     with engine.begin() as conn:
         occurred = _occurred_at(conn, entity_id)
         delete_entries_before(conn, entity_id, occurred[1])
-    hooks = _hooks(capture_bound(), run_id="run_history")
+    hooks = _hooks(capture_bound(entity_id), run_id="run_history")
     result = NODE_TYPE.execute(_node(entity_id), hooks)
     assert result.status == "succeeded", result.error_message
     assert [
@@ -591,7 +596,7 @@ def test_a_purge_during_the_load_drops_the_table_and_proposes_nothing(
     with engine.begin() as conn:
         _insert(conn, table, "read")
         _insert(conn, table, "also")
-    bound = capture_bound()
+    bound = capture_bound(entity_id)
     real = changes_dataset.read_changes
     purged = {"done": False}
 
@@ -646,7 +651,7 @@ def test_capacity_ceiling_drops_the_table_and_proposes_nothing(
     entity_id, table = _arm(engine)
     with engine.begin() as conn:
         _insert(conn, table, "one")
-    hooks = _hooks(capture_bound(), run_id="run_quota")
+    hooks = _hooks(capture_bound(entity_id), run_id="run_quota")
     before = set(_relations())
     result = NODE_TYPE.execute(_node(entity_id), hooks)
     assert result.status == "failed"
@@ -669,7 +674,7 @@ def test_cancel_between_pages_drops_the_table_and_proposes_nothing(
     with engine.begin() as conn:
         _insert(conn, table, "one")
         _insert(conn, table, "two")
-    hooks = _hooks(capture_bound(), run_id="run_cancel")
+    hooks = _hooks(capture_bound(entity_id), run_id="run_cancel")
     real = changes_dataset.read_changes
 
     def wrapped(read_entity_id, *, after, bound, limit):
@@ -706,7 +711,7 @@ def test_supersede_between_pages_drops_the_table_and_proposes_nothing(
     entity_id, table = _arm(engine)
     with engine.begin() as conn:
         _insert(conn, table, "one")
-    hooks = _Hooks(capture_bound())
+    hooks = _Hooks(capture_bound(entity_id))
     real = changes_dataset.read_changes
 
     def wrapped(read_entity_id, *, after, bound, limit):
@@ -735,7 +740,7 @@ def test_the_deadline_between_pages_fails_the_node_and_drops_the_table(
     with engine.begin() as conn:
         _insert(conn, table, "one")
         _insert(conn, table, "two")
-    hooks = _hooks(capture_bound(), run_id="run_deadline")
+    hooks = _hooks(capture_bound(entity_id), run_id="run_deadline")
     clock = {"now": 0.0}
     monkeypatch.setattr(changes_dataset.time, "monotonic", lambda: clock["now"])
     real = changes_dataset.read_changes
@@ -772,7 +777,7 @@ def test_a_range_past_one_page_is_scanned_in_pages_of_10000(
                 "SELECT 's' || g FROM generate_series(1, 10001) AS g"
             )
         )
-    bound = capture_bound()
+    bound = capture_bound(entity_id)
     limits: list[int] = []
     real = changes_dataset.read_changes
 

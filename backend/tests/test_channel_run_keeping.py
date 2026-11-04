@@ -394,7 +394,7 @@ def _stub_change_log(monkeypatch: pytest.MonkeyPatch) -> None:
         "backend.channel.change_range.purge_mark",
         lambda entity_id: None,
     )
-    monkeypatch.setattr("backend.entity.changes.capture_bound", lambda: 100)
+    monkeypatch.setattr("backend.entity.changes.capture_bound", lambda _entity_id: 100)
 
     def read_changes(entity_id: str, *, after: object, bound: int, limit: int) -> ChangePage:
         del entity_id, after, bound, limit

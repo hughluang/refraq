@@ -1,12 +1,13 @@
 """Change-log read for a Data Channel checkpoint.
 
-One page is every entry whose transaction id is strictly below a snapshot
-xmin captured for the run, after a stored ``(xact, seq)``. The caller commits
-nothing here. Images are the decoded physical row, JSON-safe.
+One page is every entry whose commit sequence is at most the greatest commit
+sequence visible on this stream when the run opened it, after a stored commit
+sequence. The caller commits nothing here. Images are the decoded physical
+row, JSON-safe.
 
 Shared relations come from entity bootstrap. These reads do not create or
 alter them. An open write already holds the log table, and DDL here would
-fail the read instead of letting the snapshot bound hide that write.
+fail the read.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from sqlalchemy import text
 
 from backend.core.time import format_instant
 from backend.entity.change_log import (
+    map_legacy_cursor,
+    max_commit_seq,
     read_effective,
     read_entries_after,
     read_purge_mark,
@@ -32,6 +35,8 @@ __all__ = [
     "ChangePage",
     "ChangePosition",
     "capture_bound",
+    "commit_seq_ready",
+    "legacy_commit_position",
     "purge_mark",
     "read_changes",
     "recording_enabled",
@@ -44,7 +49,7 @@ class ChangeLogOff(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ChangePosition:
-    """One consumed position. ``xact`` is the transaction id; ``seq`` is the log sequence."""
+    """One consumed position. ``xact`` stores the commit sequence; ``seq`` is the log sequence."""
 
     xact: int
     seq: int
@@ -52,7 +57,10 @@ class ChangePosition:
 
 @dataclass(frozen=True, slots=True)
 class ChangeEntry:
-    """One decoded change-log row, in ``(xact, seq)`` order."""
+    """One decoded change-log row, in commit-sequence order.
+
+    ``xact`` stores that entry's ``commit_seq``. ``sequence`` is the log sequence.
+    """
 
     sequence: int
     xact: int
@@ -76,13 +84,33 @@ class ChangePage:
     has_more: bool
 
 
-def capture_bound() -> int:
-    """Snapshot xmin as an integer. Every transaction strictly below it has ended."""
+def capture_bound(entity_id: str) -> int:
+    """Greatest committed sequence on this entity, or 0 when none is visible."""
     with get_entity_engine().begin() as conn:
-        value = conn.execute(
-            text("SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint")
-        ).scalar_one()
-    return int(value)
+        return max_commit_seq(conn, entity_id)
+
+
+def commit_seq_ready() -> bool:
+    """True when the entity log has the commit-sequence column."""
+    from backend.entity.change_log import CHANGE_LOG_SCHEMA
+
+    with get_entity_engine().begin() as conn:
+        found = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = :schema AND table_name = 'entry' "
+                "AND column_name = 'commit_seq'"
+            ),
+            {"schema": CHANGE_LOG_SCHEMA},
+        ).first()
+    return found is not None
+
+
+def legacy_commit_position(entity_id: str, xact: int, seq: int) -> ChangePosition:
+    """Rewrite one stored transaction-id cursor into commit-sequence order."""
+    with get_entity_engine().begin() as conn:
+        found = map_legacy_cursor(conn, entity_id, xact, seq)
+    return ChangePosition(xact=found[0], seq=found[1])
 
 
 def recording_enabled(entity_id: str) -> bool:
@@ -110,8 +138,9 @@ def read_changes(
 ) -> ChangePage:
     """Read one forward page. Raises ``ChangeLogOff`` when recording is off.
 
-    ``after`` is exclusive. ``bound`` is the snapshot xmin captured for the run.
-    A missing entity is ``EntityNotFound``.
+    ``after`` is exclusive and its ``xact`` is a commit sequence. ``bound`` is
+    the greatest commit sequence captured for this stream. A missing entity is
+    ``EntityNotFound``.
     """
     tables = change_log_tables(entity_id)
     with get_entity_engine().begin() as conn:
@@ -122,9 +151,8 @@ def read_changes(
             conn,
             entity_id,
             tables,
-            after_xact=None if after is None else after.xact,
-            after_seq=None if after is None else after.seq,
-            bound_xact=bound,
+            after_commit=None if after is None else after.xact,
+            bound_commit=bound,
             limit=limit,
         )
     entries = [_entry(span, xact, tables) for span, xact in spans]

@@ -24,6 +24,7 @@ from backend.entity.change_log import (
     delete_entries_before,
     ensure_shared_relations,
     install_triggers,
+    map_legacy_cursor,
     read_change_log,
     read_entries_after,
     read_purge_mark,
@@ -187,13 +188,17 @@ def _table(table: str) -> ChangeLogTable:
 def _positions(conn: Connection, entity_id: str) -> list[tuple[int, int, str]]:
     rows = conn.execute(
         text(
-            "SELECT xact::text::bigint AS xact, seq, operation "
+            "SELECT commit_seq, seq, operation "
             "FROM entity_change_log.entry "
-            "WHERE entity_id = :entity_id ORDER BY xact, seq"
+            "WHERE entity_id = :entity_id AND commit_seq IS NOT NULL "
+            "ORDER BY commit_seq"
         ),
         {"entity_id": entity_id},
     )
-    return [(int(xact), int(seq), str(operation)) for xact, seq, operation in rows]
+    return [
+        (int(commit_seq), int(seq), str(operation))
+        for commit_seq, seq, operation in rows
+    ]
 
 
 def _read(conn: Connection, entity_id: str, table: str, bound: int):
@@ -201,14 +206,13 @@ def _read(conn: Connection, entity_id: str, table: str, bound: int):
         conn,
         entity_id,
         [_table(table)],
-        after_xact=None,
-        after_seq=None,
-        bound_xact=bound,
+        after_commit=None,
+        bound_commit=bound,
         limit=100,
     )
 
 
-def test_an_open_transaction_hides_later_committed_rows_until_it_ends(
+def test_an_open_transaction_does_not_hide_later_committed_rows(
     change_log_database,
 ) -> None:
     engine = get_entity_engine()
@@ -219,20 +223,20 @@ def test_an_open_transaction_hides_later_committed_rows_until_it_ends(
         _insert(held, table, "early")
         with engine.begin() as conn:
             _insert(conn, table, "later")
-        bound = capture_bound()
+        bound = capture_bound(entity_id)
         with engine.begin() as conn:
             page, has_more = _read(conn, entity_id, table, bound)
-        assert page == []
+        assert [entry.after["sku"] for entry, _commit in page] == ["later"]
         assert has_more is False
         held_tx.commit()
     finally:
         held.close()
-    bound = capture_bound()
+    bound = capture_bound(entity_id)
     with engine.begin() as conn:
         page, _has_more = _read(conn, entity_id, table, bound)
-    keys = [entry.after["sku"] for entry, _xact in page]
-    assert keys == ["early", "later"]
-    positions = [(xact, entry.sequence) for entry, xact in page]
+    keys = [entry.after["sku"] for entry, _commit in page]
+    assert keys == ["later", "early"]
+    positions = [(commit, entry.sequence) for entry, commit in page]
     assert positions == sorted(positions)
 
 
@@ -251,13 +255,13 @@ def test_an_open_write_does_not_block_the_checkpoint_read(
         assert recording_enabled(entity_id) is True
         assert purge_mark(entity_id) is None
         assert live_change_log(entity_id) == (True, None)
-        bound = capture_bound()
+        bound = capture_bound(entity_id)
         hidden = read_changes(entity_id, after=None, bound=bound, limit=100)
-        assert hidden.entries == []
+        assert [entry.after["sku"] for entry in hidden.entries] == ["later"]
         assert hidden.has_more is False
         result = NODE_TYPE.execute(_node(entity_id), _hooks(bound))
         assert result.status == "succeeded"
-        assert result.output["count"] == 0
+        assert result.output["count"] == 1
         with engine.begin() as conn:
             listed = read_change_log(conn, entity_id, [_table(table)])
         assert [item.after["sku"] for item in listed.items] == ["later"]
@@ -265,9 +269,9 @@ def test_an_open_write_does_not_block_the_checkpoint_read(
     finally:
         held.close()
         reset_entity_table_port()
-    bound = capture_bound()
+    bound = capture_bound(entity_id)
     visible = read_changes(entity_id, after=None, bound=bound, limit=100)
-    assert [entry.after["sku"] for entry in visible.entries] == ["early", "later"]
+    assert [entry.after["sku"] for entry in visible.entries] == ["later", "early"]
 
 
 def test_a_rolled_back_sequence_does_not_block_the_next_read(
@@ -279,15 +283,82 @@ def test_a_rolled_back_sequence_does_not_block_the_next_read(
     held_tx = held.begin()
     try:
         _insert(held, table, "gone")
+        held.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         held_tx.rollback()
     finally:
         held.close()
     with engine.begin() as conn:
         _insert(conn, table, "kept")
-    bound = capture_bound()
+    bound = capture_bound(entity_id)
     with engine.begin() as conn:
         page, _has_more = _read(conn, entity_id, table, bound)
-    assert [entry.after["sku"] for entry, _xact in page] == ["kept"]
+    assert [entry.after["sku"] for entry, commit in page] == ["kept"]
+    assert page[0][1] == 1
+    with engine.begin() as conn:
+        _insert(conn, table, "after")
+    bound = capture_bound(entity_id)
+    with engine.begin() as conn:
+        page, _has_more = _read(conn, entity_id, table, bound)
+    commits = [commit for _entry, commit in page]
+    assert [entry.after["sku"] for entry, _commit in page] == ["kept", "after"]
+    assert commits[1] == commits[0] + 1
+
+
+def test_an_open_xid_does_not_hide_a_committed_row(change_log_database) -> None:
+    engine = get_entity_engine()
+    entity_id, table = _arm(engine)
+    held = engine.connect()
+    held_tx = held.begin()
+    try:
+        held.execute(text("SELECT pg_current_xact_id()"))
+        with engine.begin() as conn:
+            _insert(conn, table, "visible")
+        page = read_changes(
+            entity_id, after=None, bound=capture_bound(entity_id), limit=100
+        )
+        assert [entry.after["sku"] for entry in page.entries] == ["visible"]
+        held_tx.rollback()
+    finally:
+        held.close()
+
+
+def test_commit_sequences_are_per_entity(change_log_database) -> None:
+    engine = get_entity_engine()
+    left_id, left = _arm(engine)
+    right_id, right = _arm(engine)
+    with engine.begin() as conn:
+        _insert(conn, left, "left")
+    with engine.begin() as conn:
+        _insert(conn, right, "right")
+    assert capture_bound(left_id) == 1
+    assert capture_bound(right_id) == 1
+
+
+def test_a_legacy_cursor_maps_onto_the_commit_sequence(change_log_database) -> None:
+    engine = get_entity_engine()
+    entity_id, table = _arm(engine)
+    with engine.begin() as conn:
+        _insert(conn, table, "old")
+    with engine.begin() as conn:
+        _insert(conn, table, "new")
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT xact::text::bigint, seq, commit_seq "
+                "FROM entity_change_log.entry "
+                "WHERE entity_id = :entity_id ORDER BY commit_seq"
+            ),
+            {"entity_id": entity_id},
+        ).all()
+        kept = map_legacy_cursor(conn, entity_id, int(rows[1][0]), int(rows[1][1]))
+        assert kept == (int(rows[1][2]), int(rows[1][1]))
+        delete_entries(conn, entity_id)
+        behind = map_legacy_cursor(conn, entity_id, int(rows[0][0]), int(rows[0][1]))
+        same = map_legacy_cursor(conn, entity_id, int(rows[1][0]), int(rows[1][1]))
+        mark = read_purge_mark(conn, entity_id)
+    assert mark == (int(rows[1][2]), int(rows[1][1]))
+    assert same == mark
+    assert behind < mark
 
 
 def test_purge_mark_records_the_greatest_deleted_position(change_log_database) -> None:
@@ -297,6 +368,7 @@ def test_purge_mark_records_the_greatest_deleted_position(change_log_database) -
         _insert(conn, table, "old")
     with engine.begin() as conn:
         _insert(conn, table, "new")
+    with engine.begin() as conn:
         positions = _positions(conn, entity_id)
     assert len(positions) == 2
     with engine.begin() as conn:
@@ -328,7 +400,7 @@ def test_read_changes_pages_and_folds_one_execution(change_log_database) -> None
         _update_qty(conn, table, "SO001", 2)
         _insert(conn, table, "SO002")
         _delete(conn, table, "SO002")
-    bound = capture_bound()
+    bound = capture_bound(entity_id)
     hooks = _hooks(bound)
     first = NODE_TYPE.execute(_node(entity_id, limit=1), hooks)
     assert first.status == "succeeded"
@@ -373,7 +445,7 @@ def test_source_filter_hides_rows_without_leaving_them_behind(
             {"name": SUBJECT_GUC, "value": "run_9"},
         )
         _insert(conn, table, "channel-row")
-    hooks = _hooks(capture_bound())
+    hooks = _hooks(capture_bound(entity_id))
     result = NODE_TYPE.execute(
         _node(entity_id, sources=["channel_run"]),
         hooks,
@@ -402,7 +474,7 @@ def test_recording_off_and_an_invalid_cursor(change_log_database) -> None:
     with engine.begin() as conn:
         positions = _positions(conn, entity_id)
         delete_entries_before(conn, entity_id, utc_now() + timedelta(days=1))
-    hooks = _hooks(capture_bound())
+    hooks = _hooks(capture_bound(entity_id))
     hooks.checkpoints.durable_positions[("nd_read", entity_id)] = CheckpointPosition(
         xact=positions[0][0], seq=positions[0][1]
     )
