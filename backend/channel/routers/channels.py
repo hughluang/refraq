@@ -13,6 +13,7 @@ from backend.admin.deps import (
 )
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.user_store import UserRecord
+from backend.channel.dataset_registry import _limit_bytes, get_dataset_store
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import NodeType
 from backend.channel.schemas.channels import (
@@ -31,6 +32,7 @@ from backend.channel.schemas.channels import (
     DraftResponse,
     LatestVersionOut,
     ContainerOut,
+    DatasetCapacityResponse,
     NodeTypeListResponse,
     NodeTypeOut,
     OutputViewOut,
@@ -192,6 +194,17 @@ def http_list_node_types(
     del user
     return NodeTypeListResponse(
         items=[_node_type_out(item) for item in list_node_types()]
+    )
+
+
+@router.get("/channel-dataset-capacity", response_model=DatasetCapacityResponse)
+def http_get_dataset_capacity(
+    user: UserRecord = Depends(require_permission("channel:read")),
+) -> DatasetCapacityResponse:
+    del user
+    return DatasetCapacityResponse(
+        used_bytes=get_dataset_store().used_bytes(),
+        ceiling_bytes=_limit_bytes(),
     )
 
 

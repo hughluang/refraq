@@ -222,6 +222,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `tags` | `tags` | `tag` | `/console/tags` | `tag:read` | create/edit/delete → `tag:write`; create `/console/tags/new`; edit `/console/tags/:id/edit`; show `/console/tags/:id` → `tag:read` |
 | `channels` | `channel` | `route` | `/console/channels` | `channel:read` | create/edit/delete → `channel:write`; create `/console/channels/new`; edit `/console/channels/:id/edit`; show `/console/channels/:id` → `channel:read`; alias show `/console/channels/:id/runs/:jobId` |
 | `channel-variables` | `channel` | `variable` | `/console/channel-variables` | `channel:read` | delete → `channel:write` |
+| `channel-dataset-usage` | `channel` | `chart-bar` | `/console/channel-dataset-usage` | `channel:read` | — |
 | `jobs` | `operations` | `list-check` | `/console/jobs` | `jobs:run` | — |
 | `schedules` | `operations` | `clock` | `/console/schedules` | `jobs:run` | edit/delete → `jobs:run`; show `/console/sources/:id/schedules` → `jobs:run` |
 | `settings` | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |

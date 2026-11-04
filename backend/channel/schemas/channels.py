@@ -477,3 +477,10 @@ class NodeTypeOut(BaseModel):
 
 class NodeTypeListResponse(BaseModel):
     items: list[NodeTypeOut]
+
+
+class DatasetCapacityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    used_bytes: int
+    ceiling_bytes: int

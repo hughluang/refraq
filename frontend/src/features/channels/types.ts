@@ -316,6 +316,11 @@ export type ContainerDeclaration = {
   round_templates: string[];
 };
 
+export type DatasetCapacity = {
+  used_bytes: number;
+  ceiling_bytes: number;
+};
+
 export type NodeTypeSpec = {
   type: string;
   family: string;

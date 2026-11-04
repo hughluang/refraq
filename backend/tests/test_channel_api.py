@@ -2154,3 +2154,173 @@ def test_rerun_pins_a_failed_published_version(client: TestClient) -> None:
         assert_problem(refused, status=422, code="CHANNEL_RUN_NOT_RERUNNABLE")
     finally:
         set_dispatcher(previous)
+
+
+def test_channel_reader_reads_site_capacity_without_settings_read() -> None:
+    from backend.channel.dataset_registry import reset_dataset_store
+
+    reset_dataset_store()
+    roles = get_role_store()
+    seed_roles(roles)
+    role = create_role(
+        roles,
+        key="capacity_reader",
+        name="Capacity reader",
+        permissions=["console:access", "channel:read"],
+    )
+    get_user_store().create_user(
+        account="capacity_reader",
+        display_name="Capacity reader",
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    with TestClient(app) as reader:
+        _login(reader, "capacity_reader", "secret")
+        response = reader.get("/channel-dataset-capacity")
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "used_bytes": 0,
+        "ceiling_bytes": 107374182400,
+    }
+
+
+def test_capacity_sums_loading_and_ready_including_an_empty_table(
+    client: TestClient,
+) -> None:
+    from backend.channel.dataset_registry import (
+        DatasetRecord,
+        get_dataset_store,
+        reset_dataset_store,
+    )
+
+    reset_dataset_store()
+    store = get_dataset_store()
+    store.save(
+        _capacity_row("dst_ready_empty", status="ready", size_bytes=10, row_count=0)
+    )
+    store.save(_capacity_row("dst_loading", status="loading", size_bytes=5, row_count=0))
+    store.save(_capacity_row("dst_dropped", status="dropped", size_bytes=100, row_count=4))
+    store.save(_capacity_row("dst_lost", status="lost", size_bytes=7, row_count=0))
+
+    response = client.get("/channel-dataset-capacity")
+    assert response.status_code == 200, response.text
+    assert response.json()["used_bytes"] == 15
+    assert response.json()["ceiling_bytes"] == 107374182400
+    assert set(response.json()) == {"used_bytes", "ceiling_bytes"}
+
+
+def test_capacity_ceiling_follows_a_later_parameter_edit(client: TestClient) -> None:
+    from backend.channel.dataset_registry import reset_dataset_store
+
+    reset_dataset_store()
+    before = client.get("/channel-dataset-capacity")
+    assert before.status_code == 200, before.text
+    assert before.json()["ceiling_bytes"] == 107374182400
+    patched = client.patch(
+        "/settings",
+        json={"values": {"channel_dataset_max_total_gb": 2}},
+    )
+    assert patched.status_code == 200, patched.text
+    after = client.get("/channel-dataset-capacity")
+    assert after.status_code == 200, after.text
+    assert after.json() == {"used_bytes": 0, "ceiling_bytes": 2147483648}
+
+
+def test_capacity_returns_unclamped_overshoot_and_leaves_rows(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.channel.dataset_registry import (
+        DatasetQuotaExceeded,
+        DatasetRegistry,
+        get_dataset_store,
+        reset_dataset_store,
+    )
+
+    reset_dataset_store()
+    store = get_dataset_store()
+    store.save(
+        _capacity_row("dst_over", status="ready", size_bytes=107374182410, row_count=0)
+    )
+    store.save(_capacity_row("dst_dropped", status="dropped", size_bytes=3, row_count=1))
+
+    response = client.get("/channel-dataset-capacity")
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "used_bytes": 107374182410,
+        "ceiling_bytes": 107374182400,
+    }
+    over = store.get("dst_over")
+    dropped = store.get("dst_dropped")
+    assert over is not None
+    assert over.status == "ready"
+    assert over.size_bytes == 107374182410
+    assert over.row_count == 0
+    assert dropped is not None
+    assert dropped.status == "dropped"
+    assert dropped.size_bytes == 3
+
+    def forbid(relation: str, query: str) -> tuple[int, int]:
+        raise AssertionError(f"table create {relation} {query}")
+
+    monkeypatch.setattr(
+        "backend.channel.dataset_registry.create_table_from_query", forbid
+    )
+    with pytest.raises(DatasetQuotaExceeded) as caught:
+        DatasetRegistry(store).create_from_query(
+            job_id="job_1",
+            node_id="node_2",
+            seq=2,
+            query="SELECT 1 AS n",
+        )
+    assert caught.value.code == "CHANNEL_DATASET_QUOTA_EXCEEDED"
+    assert store.get("dst_over") is not None
+    assert store.get("dst_dropped") is not None
+
+
+def test_dataset_capacity_requires_a_session() -> None:
+    with TestClient(app) as anon:
+        response = anon.get("/channel-dataset-capacity")
+    assert response.status_code == 401
+    assert response.json()["code"] == "AUTH_UNAUTHENTICATED"
+
+
+def test_dataset_capacity_refuses_without_channel_read() -> None:
+    roles = get_role_store()
+    seed_roles(roles)
+    role = create_role(
+        roles,
+        key="capacity_denied",
+        name="Capacity denied",
+        permissions=["console:access", "settings:read"],
+    )
+    get_user_store().create_user(
+        account="capacity_denied",
+        display_name="Capacity denied",
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    with TestClient(app) as denied:
+        _login(denied, "capacity_denied", "secret")
+        response = denied.get("/channel-dataset-capacity")
+    assert_problem(response, status=403, code="AUTH_FORBIDDEN")
+
+
+def _capacity_row(
+    dataset_id: str, *, status: str, size_bytes: int, row_count: int
+) -> "DatasetRecord":
+    from backend.channel.dataset_registry import DatasetRecord
+
+    return DatasetRecord(
+        id=dataset_id,
+        job_id="job_capacity",
+        node_id="node_capacity",
+        seq=1,
+        relation=f"channel_dataset.ds_{dataset_id}",
+        columns=[],
+        row_count=row_count,
+        size_bytes=size_bytes,
+        status=status,
+        created_at=utc_now(),
+    )

@@ -18,6 +18,7 @@ import type {
   ExpressionContext,
   Graph,
   GraphProblem,
+  DatasetCapacity,
   NodeTypeSpec,
   RefinedPort,
   TemplatePreviewResult,
@@ -48,6 +49,10 @@ function querySuffix(
 
 export function listNodeTypes() {
   return apiClient<{ items: NodeTypeSpec[] }>("/channel-node-types");
+}
+
+export function getDatasetCapacity() {
+  return apiClient<DatasetCapacity>("/channel-dataset-capacity");
 }
 
 export function listChannels(params?: {

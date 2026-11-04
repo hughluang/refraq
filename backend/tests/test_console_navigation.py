@@ -112,6 +112,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
     assert [m["id"] for m in groups["channel"]["modules"]] == [
         "channels",
         "channel-variables",
+        "channel-dataset-usage",
     ]
     assert set(groups["channel"]["modules"][0]) == {"id", "label_key", "route"}
     assert [m["id"] for m in groups["operations"]["modules"]] == ["jobs", "schedules"]

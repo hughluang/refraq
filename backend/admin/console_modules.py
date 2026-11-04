@@ -347,6 +347,17 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=40,
     ),
     ConsoleModuleSeed(
+        id="channel-dataset-usage",
+        group_id="channel",
+        group_label_key="layout.navGroup.channel",
+        label_key="channelDatasetUsage.title",
+        icon="chart-bar",
+        routes=ModuleRoutes(list="/console/channel-dataset-usage"),
+        actions=ModuleActions(list="channel:read"),
+        group_order=26,
+        module_order=50,
+    ),
+    ConsoleModuleSeed(
         id="jobs",
         group_id="operations",
         group_label_key="layout.navGroup.operations",

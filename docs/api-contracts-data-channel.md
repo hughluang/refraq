@@ -573,6 +573,7 @@ On `succeeded` only:
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/channel-node-types` | `channel:read` | Node type catalog |
+| `GET` | `/channel-dataset-capacity` | `channel:read` | Site-wide dataset capacity (§5.24) |
 | `POST` | `/channels` | `channel:write` | Create a channel with an empty draft |
 | `GET` | `/channels` | `channel:read` | List channels (**Offset Page**) |
 | `GET` | `/channels/{id}` | `channel:read` | Get one channel |
@@ -1060,6 +1061,27 @@ A refusal from step 2 onward, except a returned stored answer, is an Inbound Rej
 ### 5.23 `GET /channels/{channel_id}/inbound-rejections`
 
 Requires `channel:read`. An unknown channel is `404` `CHANNEL_NOT_FOUND`. The response is an **Offset Page** with default `limit` 50 and max 200, plus `hit_count`, the integer deduplication count for that channel. Items are newest first (`received_at` descending, then `id` descending). Accepted calls are not in the list. Each item is `{id, channel_id, node_id, path, received_at, reason, method, headers, query, body}`. `reason` is `inactive`, `method_not_allowed`, `body_too_large`, `unauthenticated`, `input_invalid`, `duplicate_in_flight`, or `busy`. `id` is §2.3. Retention is `inbound_rejection_retention_days`.
+
+### 5.24 `GET /channel-dataset-capacity`
+
+Requires `channel:read`. `settings:read` is not required.
+
+`200`:
+
+```json
+{
+  "used_bytes": 0,
+  "ceiling_bytes": 107374182400
+}
+```
+
+`used_bytes` is the sum of `size_bytes` on registry rows whose `status` is `loading` or `ready`. A `loading` row contributes its current `size_bytes`. Any other status contributes nothing. A `ready` row whose table is empty still counts.
+
+`ceiling_bytes` is the current `channel_dataset_max_total_gb` times `1024**3`. A later edit of that parameter is visible on the next read. The body does not include the parameter catalog.
+
+`used_bytes` may be greater than `ceiling_bytes`. Both integers are returned unclamped. The read does not create, drop, or evict a dataset, and it does not change `CHANNEL_DATASET_QUOTA_EXCEEDED`.
+
+The body is not an **Offset Page** and has no per-channel breakdown. Store failure follows the other channel registry reads and does not add a problem code.
 
 ## 6. Errors
 

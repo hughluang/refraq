@@ -318,6 +318,26 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "channel-dataset-usage",
+    "label_key": "channelDatasetUsage.title",
+    "icon": "chart-bar",
+    "routes": {
+      "list": "/console/channel-dataset-usage",
+      "create": null,
+      "edit": null,
+      "show": null,
+      "aliases": []
+    },
+    "actions": {
+      "list": "channel:read",
+      "create": null,
+      "edit": null,
+      "delete": null,
+      "show": null,
+      "sample": null
+    }
+  },
+  {
     "id": "jobs",
     "label_key": "jobs.title",
     "icon": "list-check",

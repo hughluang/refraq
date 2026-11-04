@@ -16,6 +16,7 @@ export const ModuleId = {
   tags: "tags",
   channels: "channels",
   channelVariables: "channel-variables",
+  channelDatasetUsage: "channel-dataset-usage",
   jobs: "jobs",
   schedules: "schedules",
   settings: "settings",
