@@ -258,7 +258,8 @@ describe("ChannelRunDetail load feedback", () => {
     api.getRun.mockResolvedValue({ ...detail(status), graph: null });
     renderDetail();
     await advance(0);
-    expect(screen.getByText("job_1")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "channels.runs.subject.version" })).toBeTruthy();
+    expect(screen.queryByText("channels.title: chn_1")).toBeNull();
     expect(screen.getByText(status === "queued" ? "channels.runDetail.graphPending" : "channels.runDetail.graphUnavailable")).toBeTruthy();
     expect(screen.queryByTestId("run-detail-canvas")).toBeNull();
     expect(screen.getByRole("link", { name: "channels.runDetail.back" })).toBeTruthy();
@@ -463,7 +464,42 @@ describe("ChannelRunDetail load feedback", () => {
     renderDetail();
 
     await advance(0);
-    expect(screen.getByText("jobs.fields.trigger: channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
+    expect(screen.getByText("channels.runs.trigger.inbound · payments/callback")).toBeTruthy();
+    expect(screen.queryByText(/jobs\.fields\.trigger/)).toBeNull();
+  });
+
+  it("hides an ordinary completion and keeps a partial stop", async () => {
+    api.getRun.mockResolvedValue({
+      ...detail("succeeded"),
+      run: { ...run("succeeded"), outcome: "completed" },
+    });
+    const completed = renderDetail();
+    await advance(0);
+    expect(screen.queryByText("channels.runs.outcome.completed")).toBeNull();
+    expect(screen.getAllByText("channels.runs.subject.version")).toHaveLength(1);
+    completed.unmount();
+
+    api.getRun.mockResolvedValue({
+      ...detail("succeeded"),
+      run: { ...run("succeeded"), outcome: "completed", stop_at_node_id: "write" },
+      graph: {
+        ...EMPTY_GRAPH,
+        nodes: [{
+          id: "write",
+          ref: "write",
+          type: "transform.count",
+          name: "Count",
+          position: { x: 0, y: 0 },
+          config: {},
+          on_error: "stop",
+          retry: null,
+        }],
+      },
+    });
+    renderDetail();
+    await advance(0);
+    expect(screen.queryByText("channels.runs.outcome.completed")).toBeNull();
+    expect(screen.getByText("channels.runs.partial")).toBeTruthy();
   });
 
   it("leaves a user run without an inbound label", async () => {

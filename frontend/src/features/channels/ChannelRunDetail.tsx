@@ -1,11 +1,12 @@
 "use client";
 
-import { Button, Group, Stack, Text } from "@mantine/core";
+import { ActionIcon, Button, Group, Stack, Text, Tooltip } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { Instant } from "@/components/display/Instant";
+import { CopyIcon } from "@/components/icons";
 import { historyContext, historyReturn } from "@/features/channels/channelHistory";
 import { formatJobDuration } from "@/lib/datetime";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
@@ -36,6 +37,7 @@ import type { NodeExecution, NodeTypeSpec } from "@/features/channels/types";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
 import { isSessionExpiredError } from "@/lib/api";
+import { copyText } from "@/lib/copy-text";
 import { problemMessage } from "@/lib/problem";
 
 export function ChannelRunDetail({
@@ -228,6 +230,11 @@ export function ChannelRunDetail({
   }
   const subject = formatRunSubject(detail.run, t);
   const inbound = inboundRunLabel(detail.run, t);
+  const triggerLabel =
+    detail.run.trigger_kind === "retry" || detail.run.trigger_kind === "error"
+      ? t(`channels.runs.trigger.${detail.run.trigger_kind}`)
+      : inbound ?? formatJobTrigger(detail.run, t);
+  const copyLabel = t("channels.runs.copyId", { id: detail.run.job_id });
   const runError = formatRunError(t, detail.run.error_code, detail.run.error_message);
   const explanation =
     runError.detail && runError.detail !== runError.label ? runError.detail : null;
@@ -281,42 +288,54 @@ export function ChannelRunDetail({
     >
     <Stack gap="sm">
       <LiveStatusAnnouncer text={t(presentJobStatus(detail.run.status).labelKey)} />
-      <Stack gap={4} style={{ overflowWrap: "anywhere", minWidth: 0 }}>
-        <Text size="sm">{t("channels.title")}: {channelId}</Text>
-        <Text size="sm" fw={500}>{subject || t("channels.runs.subject.unresolved")}{detail.run.target === "draft" && detail.run.draft_revision != null ? ` · ${t("channels.runs.revision", { number: detail.run.draft_revision })}` : ""}</Text>
-        <Text size="sm">{detail.run.job_id}</Text>
-        <Group gap="sm">
-          <Text size="sm">{t(detail.run.started_at ? "channels.runs.started" : "jobs.fields.created")}: <Instant value={detail.run.started_at ?? detail.run.created_at} /></Text>
-          <Text size="sm">{t("jobs.fields.duration")}: {formatJobDuration(detail.run)}</Text>
+      <Group gap="xs" wrap="wrap" align="center" style={{ minWidth: 0 }}>
+        <Group gap={4} wrap="nowrap" align="baseline">
+          {detail.run.started_at ? null : <Text size="xs" c="dimmed">{t("jobs.fields.created")}</Text>}
+          <Text size="xs" c="dimmed"><Instant value={detail.run.started_at ?? detail.run.created_at} /></Text>
         </Group>
-        <Text size="sm">{t("jobs.fields.trigger")}: {detail.run.trigger_kind === "retry" || detail.run.trigger_kind === "error" ? t(`channels.runs.trigger.${detail.run.trigger_kind}`) : inbound ?? formatJobTrigger(detail.run, t)}</Text>
-        {detail.run.stop_at_node_id ? <Text size="sm">{t("channels.runs.partial", { node: nodeDisplayName(graph?.nodes ?? [], detail.run.stop_at_node_id) })}</Text> : null}
-        {detail.run.outcome ? <Text size="sm">{t(`channels.runs.outcome.${detail.run.outcome}`)}</Text> : null}
-        {rerun ? <Text size="xs" c="dimmed">{t("channels.runDetail.rerunConsequence")}</Text> : null}
-        {detail.run.ignore_checkpoints || detail.run.stopped_node_id ? (
-          <Text>
-            {detail.run.ignore_checkpoints ? (
-              <Text span size="xs" c="dimmed">
-                {t("channels.runs.ignoreCheckpoints")}
-              </Text>
-            ) : null}
-            {detail.run.stopped_node_id ? (
-              <Text span size="xs" c="dimmed" ml={detail.run.ignore_checkpoints ? 6 : 0}>
-                {t("channels.runDetail.stoppedAt", {
-                  node: nodeDisplayName(graph?.nodes ?? [], detail.run.stopped_node_id),
-                })}
-              </Text>
-            ) : null}
-          </Text>
+        <Text size="xs" c="dimmed">{t("jobs.fields.duration")}: {formatJobDuration(detail.run)}</Text>
+        <Text size="xs" c="dimmed">{triggerLabel}</Text>
+        {detail.run.target === "draft" && detail.run.draft_revision != null ? (
+          <Text size="xs" c="dimmed">{t("channels.runs.revision", { number: detail.run.draft_revision })}</Text>
         ) : null}
-        {runError.label ? <Text size="sm">{runError.label}</Text> : null}
-        {explanation ? (
-          <Text size="sm" c="dimmed">
-            {explanation}
-          </Text>
-        ) : null}
-        {failedNode ? <Text size="sm">{failedNode}</Text> : null}
-      </Stack>
+        <Group gap={4} wrap="nowrap" align="center" className="channel-history-id">
+          <Tooltip label={detail.run.job_id}>
+            <Text className="channel-history-id__value" component="span" size="xs" c="dimmed" ff="monospace">{detail.run.job_id}</Text>
+          </Tooltip>
+          <Tooltip label={copyLabel}>
+            <ActionIcon className="channel-history-id__copy" type="button" variant="subtle" size="sm" aria-label={copyLabel} onClick={() => {
+              void copyText(detail.run.job_id).then(() => open?.({ type: "success", message: t("common.copy.success") }), () => open?.({ type: "error", message: t("common.copy.failed") }));
+            }}>
+              <CopyIcon size={14} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      </Group>
+      {detail.run.stop_at_node_id ? <Text size="sm">{t("channels.runs.partial", { node: nodeDisplayName(graph?.nodes ?? [], detail.run.stop_at_node_id) })}</Text> : null}
+      {rerun ? <Text size="xs" c="dimmed">{t("channels.runDetail.rerunConsequence")}</Text> : null}
+      {detail.run.ignore_checkpoints || detail.run.stopped_node_id ? (
+        <Text>
+          {detail.run.ignore_checkpoints ? (
+            <Text span size="xs" c="dimmed">
+              {t("channels.runs.ignoreCheckpoints")}
+            </Text>
+          ) : null}
+          {detail.run.stopped_node_id ? (
+            <Text span size="xs" c="dimmed" ml={detail.run.ignore_checkpoints ? 6 : 0}>
+              {t("channels.runDetail.stoppedAt", {
+                node: nodeDisplayName(graph?.nodes ?? [], detail.run.stopped_node_id),
+              })}
+            </Text>
+          ) : null}
+        </Text>
+      ) : null}
+      {runError.label ? <Text size="sm">{runError.label}</Text> : null}
+      {explanation ? (
+        <Text size="sm" c="dimmed">
+          {explanation}
+        </Text>
+      ) : null}
+      {failedNode ? <Text size="sm">{failedNode}</Text> : null}
       {graph ? <>
       <div style={{ height: "min(20rem, 32dvh)" }}>
         <ChannelCanvas

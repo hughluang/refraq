@@ -453,6 +453,27 @@ describe("ChannelRecord feedback", () => {
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 
+  it("omits the run status badge after the latest draft run has ended", async () => {
+    vi.useFakeTimers();
+    readyRecord();
+    const ended = runningDetail();
+    ended.run.status = "succeeded";
+    vi.mocked(listRuns).mockResolvedValue({
+      items: [ended.run],
+      total: 1,
+      limit: 1,
+      offset: 0,
+    });
+    vi.mocked(getRun).mockResolvedValue(ended);
+    const { ChannelRecord } = await import("@/features/channels/ChannelRecord");
+    render(shell(createElement(ChannelRecord, { mode: "show", channelId: "chn_1" })));
+
+    await advance(0);
+    expect(getRun).toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Intake" })).toBeTruthy();
+    expect(screen.queryByText("status.job.succeeded")).toBeNull();
+  });
+
   it("marks a stale run with the last update, refreshes on click, and stays quiet on a background tick", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-11T06:00:29Z"));

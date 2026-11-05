@@ -81,8 +81,8 @@ Rules:
 
 ## 4. Console
 
-- Module id `schedules` lives in the **Operations** nav group (`operations`), list permission `jobs:run`: platform-wide domain schedules, including the site `catalog_embed` schedule and Data Channel `channel_run` rows; edit cadence / enabled; delete when `deletable`; run-now; related Jobs. `channel_run` rows are read-only (no edit, delete, or run-now); their cadence is edited on the Scheduled node and applied by publish. No hidden rows. No global create.
-- Source “related schedules” is a **Source-scoped workbench** at `/console/sources/:id/schedules` (not a sidebar module, not registered as `sources.show`): toolbar create plus the same row actions (enable/disable, edit, delete, run-now, related Jobs). `jobs:run` gates the surface.
+- Module id `schedules` lives in the **Operations** nav group (`operations`), list permission `jobs:run`: platform-wide domain schedules, including the site `catalog_embed` schedule and Data Channel `channel_run` rows; edit cadence / enabled; delete when `deletable`; run-now; related Jobs. The list displays enabled and does not change it; create and edit forms change `enabled` for editable rows. `channel_run` rows are read-only (no edit, delete, or run-now); their cadence is edited on the Scheduled node and applied by publish, and enabled follows channel activation. No hidden rows. No global create.
+- Source “related schedules” is a **Source-scoped workbench** at `/console/sources/:id/schedules` (not a sidebar module, not registered as `sources.show`): toolbar create plus the same row actions (edit, delete, run-now, related Jobs). The Enabled column displays the value; create and edit change it. `jobs:run` gates the surface.
 - Console delete asks for confirmation; HTTP `DELETE` remains immediate.
 - Screen copy uses **schedule**. Do not label `last_run_at` as "Last run"; the list shows a Recent runs strip of the latest related Jobs. Disabled rows show paused, not "unknown next".
 - Create/edit may set optional **Running Time Limit**. Empty = no control. No new schedule-list column in this slice.

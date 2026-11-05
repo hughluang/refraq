@@ -294,7 +294,7 @@ describe("ChannelRuns load feedback", () => {
     expect(jobs.cancelJob).not.toHaveBeenCalled();
   });
 
-  it("distinguishes a requested partial draft from its completed outcome", async () => {
+  it("shows a requested partial draft as succeeded without restating completion", async () => {
     i18n.extra["channels.runs.revision"] = "Revision {{number}}";
     i18n.extra["channels.runs.partial"] = "Partial run through {{node}}";
     api.listRuns.mockResolvedValue(page([{ ...run("succeeded"), target: "draft", version: null,
@@ -302,9 +302,12 @@ describe("ChannelRuns load feedback", () => {
       nodes: [{ id: "writer", name: "Write orders", ref: "write_orders" }] }]));
     renderRuns();
     await advance(0);
+    expect(screen.getByText("status.job.succeeded")).toBeTruthy();
     expect(screen.getByText("channels.runs.subject.draft · Revision 7")).toBeTruthy();
-    expect(screen.getByText("Partial run through Write orders")).toBeTruthy();
-    expect(screen.getByText("channels.runs.outcome.completed")).toBeTruthy();
+    const partial = screen.getByText("Partial run through Write orders");
+    expect(partial.closest(".channel-history-status")).toBeTruthy();
+    expect(partial.closest(".channel-history-row__subject")).toBeNull();
+    expect(screen.queryByText("channels.runs.outcome.completed")).toBeNull();
     expect(screen.getByRole("columnheader").textContent).toContain("jobs.fields.status");
     expect(screen.getByRole("heading", { level: 2, name: "channels.runs.history" })).toBeTruthy();
   });

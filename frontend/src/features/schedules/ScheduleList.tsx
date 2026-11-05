@@ -7,7 +7,6 @@ import { useCallback, useState } from "react";
 import { ListTable } from "@/components/display/ListTable";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listSchedules } from "@/features/schedules/api";
-import { ScheduleEnabledControl } from "@/features/schedules/ScheduleEnabledControl";
 import { ScheduleCadence } from "@/features/schedules/ScheduleCadence";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleIdentityCell } from "@/features/schedules/ScheduleIdentityCell";
@@ -16,10 +15,7 @@ import { ScheduleRunStrip } from "@/features/schedules/ScheduleRunStrip";
 import { ScheduleTableHead } from "@/features/schedules/ScheduleTableHead";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
-import {
-  isChannelRunSchedule,
-  scheduleIdentityLabel,
-} from "@/features/schedules/scheduleIdentity";
+import { scheduleIdentityLabel } from "@/features/schedules/scheduleIdentity";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
@@ -74,12 +70,9 @@ export function ScheduleList() {
               <ScheduleCadence task={task} cronTimezone={cronTimezone} />
             </Table.Td>
             <Table.Td>
-              <ScheduleEnabledControl
-                task={task}
-                editable={!isChannelRunSchedule(task)}
-                recordName={scheduleIdentityLabel(task, "platform")}
-                onChanged={() => reload()}
-              />
+              <Text size="sm">
+                {task.enabled ? t("form.value.yes") : t("form.value.no")}
+              </Text>
             </Table.Td>
             <Table.Td>
               <Text size="sm">

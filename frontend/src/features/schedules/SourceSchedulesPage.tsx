@@ -8,7 +8,6 @@ import { useCallback, useEffect, useState } from "react";
 import { ListTable } from "@/components/display/ListTable";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listSourceSchedules } from "@/features/schedules/api";
-import { ScheduleEnabledControl } from "@/features/schedules/ScheduleEnabledControl";
 import { ScheduleCadence } from "@/features/schedules/ScheduleCadence";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleIdentityCell } from "@/features/schedules/ScheduleIdentityCell";
@@ -124,12 +123,9 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                   <ScheduleCadence task={task} cronTimezone={cronTimezone} />
                 </Table.Td>
                 <Table.Td>
-                  <ScheduleEnabledControl
-                    task={task}
-                    editable
-                    recordName={scheduleIdentityLabel(task, "source")}
-                    onChanged={() => reload()}
-                  />
+                  <Text size="sm">
+                    {task.enabled ? t("form.value.yes") : t("form.value.no")}
+                  </Text>
                 </Table.Td>
                 <Table.Td>
                   <Text size="sm">

@@ -1158,18 +1158,16 @@ function ChannelExisting({
         )}
       />
       <FillColumn>
-        <Group gap="xs" wrap="nowrap" align="center">
-          <LiveStatusAnnouncer
-            text={
-              runLive.data
-                ? t(presentJobStatus(runLive.data.run.status).labelKey)
-                : ""
-            }
-          />
-          {runLive.data ? (
-            <JobStatusBadge status={runLive.data.run.status} freshness={runFreshness} />
-          ) : null}
-        </Group>
+        <LiveStatusAnnouncer
+          text={
+            runLive.data
+              ? t(presentJobStatus(runLive.data.run.status).labelKey)
+              : ""
+          }
+        />
+        {runLive.data && !isTerminalRun(runLive.data.run.status) ? (
+          <JobStatusBadge status={runLive.data.run.status} freshness={runFreshness} />
+        ) : null}
         <SourceDisplaysProvider displays={sourceDisplays}>
           <ChannelCanvas
             key={draftEpoch}

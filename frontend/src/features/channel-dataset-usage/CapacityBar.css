@@ -1,0 +1,20 @@
+[data-capacity-bar] {
+  padding-block: 6px;
+  cursor: default;
+}
+
+[data-capacity-bar]:focus {
+  outline: none;
+}
+
+[data-capacity-bar]:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+
+[data-capacity-policy] {
+  margin-top: 4px;
+  padding-top: 4px;
+  color: color-mix(in srgb, currentColor 75%, transparent);
+  border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+}

@@ -1,10 +1,11 @@
 "use client";
 
-import { Anchor, Button, Group, Select, Stack, Table, Text } from "@mantine/core";
+import { ActionIcon, Anchor, Button, Group, Select, Stack, Table, Text, Tooltip } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useRef } from "react";
 
 import { Instant } from "@/components/display/Instant";
+import { CopyIcon } from "@/components/icons";
 import { ListTable } from "@/components/display/ListTable";
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
 import { StatusBadge } from "@/components/display/StatusBadge";
@@ -125,8 +126,9 @@ export function ChannelRuns({ channelId, origin = "show" }: { channelId: string;
       </Group>
       <ListTable list={list} columnCount={1} minWidth={280} emptyMessage={t("channels.runs.empty")} onClearFilters={query.isFiltered ? query.clear : undefined}
         head={<Table.Tr><Table.Th scope="col"><div className="channel-history-row">
-          <span>{t("channels.runs.started")}</span><span>{t("jobs.fields.status")}</span>
-          <span>{t("channels.runs.target")} / {t("jobs.fields.trigger")}</span><span>{t("channels.run.column.error")}</span>
+          <span>{t("channels.runs.started")}</span>
+          <span>{t("jobs.fields.status")}</span>
+          <span className="channel-history-row__subject">{t("channels.runs.target")} / {t("jobs.fields.trigger")}</span>
         </div></Table.Th></Table.Tr>}>
         {items.map((run) => {
           const presentation = presentJobStatus(run.status);
@@ -140,39 +142,53 @@ export function ChannelRuns({ channelId, origin = "show" }: { channelId: string;
             ? `${t(`channels.runs.trigger.${run.trigger_kind}`)}${run.trigger_ref ? ` · ${run.trigger_ref}` : ""}`
             : inboundRunLabel(run, t) ?? formatJobTrigger(run, t);
           const name = showInstant(run.started_at ?? run.created_at);
+          const copyLabel = t("channels.runs.copyId", { id: run.job_id });
+          const hasErrorCopy = Boolean(failedNode || stoppedNode || (showError && error.label) || (showError && errorDetail));
           return (
             <Table.Tr key={run.job_id}><Table.Td style={{ overflowWrap: "anywhere" }}>
               <div className="channel-history-row">
-                <Stack gap={4}>
-                  <Text size="xs" c="dimmed">{t(run.started_at ? "channels.runs.started" : "jobs.fields.created")}</Text>
-                  <Anchor component={ConsoleLink} href={`/console/channels/${channelId}/runs/${run.job_id}?${historyContext(`run_origin=${origin}&run_status=${status}&run_target=${target}&run_page=${query.page}`)}`} size="sm" aria-label={name}><Instant value={run.started_at ?? run.created_at} /></Anchor>
-                  <Button variant="subtle" size="compact-xs" aria-label={t("channels.runs.copyId", { id: run.job_id })} onClick={() => {
-                    void copyText(run.job_id).then(() => open?.({ type: "success", message: t("common.copy.success") }), () => open?.({ type: "error", message: t("common.copy.failed") }));
-                  }}>{run.job_id}</Button>
+                <Stack gap={4} className="channel-history-when">
+                  <Group gap={6} wrap="nowrap" align="baseline">
+                    {run.started_at ? null : <Text size="xs" c="dimmed">{t("jobs.fields.created")}</Text>}
+                    <Anchor className="channel-history-when__link" component={ConsoleLink} href={`/console/channels/${channelId}/runs/${run.job_id}?${historyContext(`run_origin=${origin}&run_status=${status}&run_target=${target}&run_page=${query.page}`)}`} size="sm" aria-label={name}><Instant value={run.started_at ?? run.created_at} /></Anchor>
+                  </Group>
+                  <Group gap={4} wrap="nowrap" align="center" className="channel-history-id">
+                    <Tooltip label={run.job_id}>
+                      <Text className="channel-history-id__value" component="span" size="xs" c="dimmed" ff="monospace">{run.job_id}</Text>
+                    </Tooltip>
+                    <Tooltip label={copyLabel}>
+                      <ActionIcon className="channel-history-id__copy" type="button" variant="subtle" size="sm" aria-label={copyLabel} onClick={() => {
+                        void copyText(run.job_id).then(() => open?.({ type: "success", message: t("common.copy.success") }), () => open?.({ type: "error", message: t("common.copy.failed") }));
+                      }}>
+                        <CopyIcon size={14} />
+                      </ActionIcon>
+                    </Tooltip>
+                  </Group>
                 </Stack>
-                <Stack gap={4}>
-                  <StatusBadge size="xs" tone={presentation.tone} labelKey={presentation.labelKey} explanation={(run.error_code || run.error_message) && error.label ? error.label : null} freshness={freshness} />
-                  <Text size="sm">{t("jobs.fields.duration")}: {formatJobDuration(run)}</Text>
-                  {run.outcome ? <Text size="sm">{t(`channels.runs.outcome.${run.outcome}`)}</Text> : null}
+                <Stack gap={4} className="channel-history-status">
+                  <Group gap={6} align="center">
+                    <StatusBadge size="xs" tone={presentation.tone} labelKey={presentation.labelKey} explanation={(run.error_code || run.error_message) && error.label ? error.label : null} freshness={freshness} />
+                    <Text size="xs" c="dimmed">{t("jobs.fields.duration")}: {formatJobDuration(run)}</Text>
+                  </Group>
+                  {run.stop_at_node_id ? <Text size="xs" c="dimmed">{t("channels.runs.partial", { node: nodeDisplayName(nodes, run.stop_at_node_id) })}</Text> : null}
+                  {!isTerminalRun(run.status) && canStop ? <div><Button type="button" size="xs" color="red" variant="light" loading={stopRun.isSubmitting(run.job_id)} onClick={() => stopRun.run({
+                    key: run.job_id, safety: "confirm", recordName: name,
+                    title: t("channels.run.stop.confirmTitle", { name }), consequence: t("channels.run.stop.consequence"),
+                    confirmLabel: t("channels.run.stop"), confirmColor: "red", outcome: t("channels.run.stop.outcome"),
+                    execute: () => cancelJob(run.job_id), onSuccess: () => live.refresh(),
+                  })}>{t("channels.run.stop")}</Button></div> : null}
                 </Stack>
-                <Stack gap={4}>
+                <Stack gap={2} className="channel-history-row__subject">
                   <Text size="sm" fw={500}>{formatRunSubject(run, t) || t("channels.runs.subject.unresolved")}{run.target === "draft" && run.draft_revision != null ? ` · ${t("channels.runs.revision", { number: run.draft_revision })}` : ""}</Text>
-                  {run.stop_at_node_id ? <Text size="sm">{t("channels.runs.partial", { node: nodeDisplayName(nodes, run.stop_at_node_id) })}</Text> : null}
-                  <Text size="sm">{t("jobs.fields.trigger")}: {trigger}</Text>
+                  <Text size="xs" c="dimmed">{t("jobs.fields.trigger")}: {trigger}</Text>
                   {run.ignore_checkpoints ? <Text size="xs" c="dimmed">{t("channels.runs.ignoreCheckpoints")}</Text> : null}
                 </Stack>
-                <Stack gap={4}>
-                {failedNode ? <Text size="sm">{failedNode}</Text> : null}
-                {stoppedNode ? <Text size="sm">{t("channels.runDetail.stoppedAt", { node: stoppedNode })}</Text> : null}
-                {showError && error.label ? <Text size="sm">{error.label}</Text> : null}
-                {showError && errorDetail ? <Text size="sm" c="dimmed">{errorDetail}</Text> : null}
-                {!isTerminalRun(run.status) && canStop ? <div><Button type="button" size="xs" color="red" variant="light" loading={stopRun.isSubmitting(run.job_id)} onClick={() => stopRun.run({
-                  key: run.job_id, safety: "confirm", recordName: name,
-                  title: t("channels.run.stop.confirmTitle", { name }), consequence: t("channels.run.stop.consequence"),
-                  confirmLabel: t("channels.run.stop"), confirmColor: "red", outcome: t("channels.run.stop.outcome"),
-                  execute: () => cancelJob(run.job_id), onSuccess: () => live.refresh(),
-                })}>{t("channels.run.stop")}</Button></div> : null}
-                </Stack>
+                {hasErrorCopy ? <Stack gap={2} className="channel-history-row__detail">
+                  {failedNode ? <Text size="sm">{failedNode}</Text> : null}
+                  {stoppedNode ? <Text size="sm">{t("channels.runDetail.stoppedAt", { node: stoppedNode })}</Text> : null}
+                  {showError && error.label ? <Text size="sm">{error.label}</Text> : null}
+                  {showError && errorDetail ? <Text size="sm" c="dimmed">{errorDetail}</Text> : null}
+                </Stack> : null}
               </div>
             </Table.Td></Table.Tr>
           );
