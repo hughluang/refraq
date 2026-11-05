@@ -30,7 +30,7 @@ class TokenRecord:
     name: str
     token_hash: str
     prefix: str
-    expires_at: datetime
+    expires_at: datetime | None
     revoked_at: datetime | None
     deleted_at: datetime | None
     created_at: datetime
@@ -60,7 +60,7 @@ class TokenStore(Protocol):
         name: str,
         token_hash: str,
         prefix: str,
-        expires_at: datetime,
+        expires_at: datetime | None,
     ) -> TokenRecord: ...
 
     def deactivate(self, token_id: str, *, when: datetime) -> TokenRecord | None: ...
@@ -105,7 +105,7 @@ class MemoryTokenStore:
         name: str,
         token_hash: str,
         prefix: str,
-        expires_at: datetime,
+        expires_at: datetime | None,
     ) -> TokenRecord:
         with self._lock:
             token_id = f"pat_{uuid.uuid4().hex[:12]}"
@@ -199,7 +199,7 @@ class SqlTokenStore:
         name: str,
         token_hash: str,
         prefix: str,
-        expires_at: datetime,
+        expires_at: datetime | None,
     ) -> TokenRecord:
 
         token_id = f"pat_{uuid.uuid4().hex[:12]}"

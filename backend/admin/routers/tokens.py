@@ -79,7 +79,7 @@ def create_token(
 ) -> CreateTokenResponse:
     now = utc_now()
     expires_at = payload.expires_at
-    if expires_at <= now:
+    if expires_at is not None and expires_at <= now:
         raise TokenInvalidExpiresAt()
     secret, prefix, token_hash = generate_token_secret()
     record = tokens.create(

@@ -187,6 +187,36 @@ def test_soft_delete_hides_token_and_invalidates_auth(client: TestClient) -> Non
     assert "token.delete" in actions
 
 
+def test_create_token_without_expiry(client: TestClient) -> None:
+    _login(client)
+    created = client.post("/tokens", json={"name": "permanent", "expires_at": None})
+    assert created.status_code == 201
+    body = created.json()
+    assert body["token"]["expires_at"] is None
+    secret = body["secret"]
+
+    listed = client.get("/tokens")
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["expires_at"] is None
+
+    client.cookies.clear()
+    me = client.get("/auth/me", headers={"Authorization": f"Bearer {secret}"})
+    assert me.status_code == 200
+    assert me.json()["user"]["account"] == "root"
+
+
+def test_create_token_rejects_missing_or_past_expiry(client: TestClient) -> None:
+    _login(client)
+    missing = client.post("/tokens", json={"name": "no-expiry"})
+    assert missing.status_code == 422
+    assert missing.json()["code"] == "REQUEST_INVALID"
+
+    past = format_instant(utc_now() - timedelta(minutes=1))
+    rejected = client.post("/tokens", json={"name": "old", "expires_at": past})
+    assert rejected.status_code == 400
+    assert rejected.json()["code"] == "TOKEN_INVALID_EXPIRES_AT"
+
+
 def test_bearer_auth_me_without_session(client: TestClient, store_bundle) -> None:
     _login(client)
     expires = format_instant(utc_now() + timedelta(days=7))

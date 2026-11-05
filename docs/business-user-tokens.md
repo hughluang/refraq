@@ -31,7 +31,7 @@ Client (machine principal) credential management remains out of scope.
 | token_hash | Server-side hash only; plaintext shown once at creation |
 | prefix | Non-secret prefix for identification in lists |
 | scopes | Optional future narrowing; v1 inherits full Role permissions |
-| expires_at | Required expiry |
+| expires_at | Null, or a future Instant. Null does not expire |
 | revoked_at | Null until deactivated; cleared on restore |
 | deleted_at | Null until soft-deleted; never cleared |
 | created_at / last_used_at | Operational |
@@ -43,7 +43,8 @@ Rules:
 - List APIs omit soft-deleted tokens (`deleted_at` set); management APIs treat them as not found.
 - **Deactivate** sets `revoked_at` and is immediate for subsequent requests; **restore** clears `revoked_at`.
 - **Delete** is allowed only while the token is deactivated (`revoked_at` set). It is soft: sets `deleted_at`, hides the token from the UI/list, keeps the row in the database, and cannot be restored through the product surface.
-- Expired, deactivated, or soft-deleted tokens yield `401` with a distinct stable error code.
+- Create requires `expires_at`. Null means the token does not expire. A non-null value that is not later than now is rejected. Omitting the field is invalid.
+- Expired, deactivated, or soft-deleted tokens yield `401` with a distinct stable error code. A null `expires_at` is not expired.
 - Disabled Users cannot authenticate with PAT.
 - Users without `console:access` may still use PAT for permitted API/MCP calls if their Role includes the relevant resource permissions; Console login rules are unchanged.
 

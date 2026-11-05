@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Group, Modal } from "@mantine/core";
+import { Button, getDefaultZIndex, Group, Modal } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { usePathname } from "next/navigation";
 import {
@@ -116,6 +116,17 @@ export function settleLeavePrompt(allowed: boolean) {
   for (const resolve of current) resolve(allowed);
 }
 
+function onLeaveEscape(event: KeyboardEvent) {
+  if (event.key !== "Escape" || event.isComposing || !promptOpen) return;
+  event.stopImmediatePropagation();
+  settleLeavePrompt(false);
+}
+
+// Import-time capture runs before Modal effect listeners, which do not stop the event.
+if (typeof window !== "undefined") {
+  window.addEventListener("keydown", onLeaveEscape, true);
+}
+
 export function useLeaveGuardRegistration(dirty: boolean): void {
   const id = useId();
   useLayoutEffect(() => {
@@ -136,6 +147,7 @@ function LeaveGuardDialog({ opened }: { opened: boolean }) {
       onClose={() => settleLeavePrompt(false)}
       title={t("layout.leave.title")}
       centered
+      zIndex={getDefaultZIndex("overlay")}
     >
       <Group justify="flex-end">
         <Button

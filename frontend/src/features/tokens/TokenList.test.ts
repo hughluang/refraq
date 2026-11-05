@@ -155,4 +155,37 @@ describe("TokenList save", () => {
     ).toBeNull();
     expect(screen.queryByText(copy["form.error.details"])).toBeNull();
   });
+
+  it("hides the expiry draft while never-expires is on and restores it when off", async () => {
+    await renderList();
+    fireEvent.click(screen.getAllByRole("button", { name: copy["tokens.create"] })[0]);
+    const expiry = (await screen.findByRole("dialog", { name: copy["tokens.create.title"] })).querySelector(
+      'input[type="datetime-local"]',
+    ) as HTMLInputElement;
+    expect(expiry).toBeTruthy();
+    const draft = expiry.value;
+    expect(draft.length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Expires at Description" }));
+    expect(await screen.findByText(/Must be a future date and time/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("switch", { name: copy["tokens.fields.neverExpires"] }));
+    expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
+    expect(screen.queryByText(/Must be a future date and time/)).toBeNull();
+    expect(screen.getByText(copy["tokens.fields.expiresAt.neverHint"])).toBeTruthy();
+    const neverSwitch = screen.getByRole("switch", { name: /Never expires/ });
+    const expiryLabel = [...document.querySelectorAll("label")].find((label) =>
+      label.textContent?.startsWith(copy["tokens.fields.expiresAt"]),
+    );
+    expect(expiryLabel?.getAttribute("for")).toBe(neverSwitch.id);
+
+    fireEvent.click(neverSwitch);
+    const restored = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    expect(restored.value).toBe(draft);
+    expect(restored.id).toBe(
+      [...document.querySelectorAll("label")]
+        .find((label) => label.textContent?.startsWith(copy["tokens.fields.expiresAt"]))
+        ?.getAttribute("for"),
+    );
+  });
 });

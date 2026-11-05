@@ -23,6 +23,7 @@ HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
 }
 ```
 
+`expires_at` is an Instant or `null`. `null` means the token does not expire.
 `revoked_at` is the deactivate timestamp. Soft-deleted tokens are omitted from responses; `deleted_at` is not exposed.
 
 ## 3. Endpoints
@@ -65,6 +66,8 @@ Response `201`:
 
 `secret` appears only here.
 
+`expires_at` is required. `null` means the token does not expire. A non-null value must be later than now; otherwise `400` `TOKEN_INVALID_EXPIRES_AT`. Omitting the field is `422` `REQUEST_INVALID`.
+
 ### `POST /tokens/{id}/deactivate`
 
 - Permission: `tokens:write`
@@ -78,7 +81,7 @@ Response `201`:
 - Clears `revoked_at` (idempotent if already active)
 - Soft-deleted id → `404` `TOKEN_NOT_FOUND`
 - Response `200` with updated metadata
-- Auth still fails if `expires_at` is in the past
+- Auth still fails if `expires_at` is in the past. A null `expires_at` does not fail for expiry
 
 ### `DELETE /tokens/{id}`
 
@@ -94,7 +97,7 @@ Response `201`:
 Authorization: Bearer rfq_pat_ab12...full-secret
 ```
 
-- Invalid / expired / deactivated / soft-deleted → `401` with `AUTH_PAT_INVALID` (or equivalent stable code)
+- Invalid / expired / deactivated / soft-deleted → `401` with `AUTH_PAT_INVALID` (or equivalent stable code). A null `expires_at` is not expired
 - Valid PAT with insufficient permission → `403` as usual
 
 ## 5. Auth Contract Interaction

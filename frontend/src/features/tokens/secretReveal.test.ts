@@ -1,8 +1,8 @@
 /** @vitest-environment jsdom */
 
-import { MantineProvider } from "@mantine/core";
+import { getDefaultZIndex, MantineProvider } from "@mantine/core";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createElement, type ReactNode } from "react";
+import { createElement, useEffect, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const copy = vi.hoisted(() => ({
@@ -56,6 +56,45 @@ function stubDomApis() {
 
 function shell(node: ReactNode) {
   return createElement(MantineProvider, { env: "test" }, node);
+}
+
+function layerZ(dialog: HTMLElement): number {
+  let node: HTMLElement | null = dialog;
+  while (node) {
+    const computed = getComputedStyle(node).getPropertyValue("--mb-z-index").trim();
+    if (computed) return Number(computed);
+    for (const style of document.querySelectorAll("style")) {
+      const css = style.textContent ?? "";
+      for (const cls of node.classList) {
+        const at = css.indexOf(`.${cls}{`);
+        if (at < 0) continue;
+        const match = css.slice(at, at + 240).match(/--mb-z-index:\s*(\d+)/);
+        if (match) return Number(match[1]);
+      }
+    }
+    node = node.parentElement;
+  }
+  throw new Error("missing --mb-z-index");
+}
+
+function LateSecret({
+  onClose,
+  SecretRevealDialog,
+  LeaveGuardProvider,
+}: {
+  onClose: () => void;
+  SecretRevealDialog: typeof import("@/features/tokens/SecretRevealDialog").SecretRevealDialog;
+  LeaveGuardProvider: typeof import("@/components/navigation/leaveGuard").LeaveGuardProvider;
+}) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    setShown(true);
+  }, []);
+  return createElement(
+    LeaveGuardProvider,
+    null,
+    shown ? createElement(SecretRevealDialog, { secret: "pat-secret-value", onClose }) : null,
+  );
 }
 
 describe("PAT secret reveal", () => {
@@ -133,5 +172,34 @@ describe("PAT secret reveal", () => {
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("keeps a later secret dialog under the leave prompt and Escape stays", async () => {
+    const { SecretRevealDialog } = await import("@/features/tokens/SecretRevealDialog");
+    const { LeaveGuardProvider } = await import("@/components/navigation/leaveGuard");
+    const onClose = vi.fn();
+
+    render(
+      shell(
+        createElement(LateSecret, { onClose, SecretRevealDialog, LeaveGuardProvider }),
+      ),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    const leave = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    const secret = screen.getByRole("dialog", { name: "Token secret" });
+    expect(layerZ(leave)).toBe(getDefaultZIndex("overlay"));
+    expect(layerZ(leave)).toBeGreaterThan(layerZ(secret));
+
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Discard unsaved changes?")).toBeNull();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText("pat-secret-value")).toBeTruthy();
   });
 });

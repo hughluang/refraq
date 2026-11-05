@@ -23,6 +23,10 @@ describe("tokenStatus", () => {
     expect(tokenStatus(token(), now)).toBe("active");
   });
 
+  it("stays active when expires_at is null", () => {
+    expect(tokenStatus(token({ expires_at: null }), now)).toBe("active");
+  });
+
   it("returns deactivated when revoked_at is set", () => {
     expect(
       tokenStatus(token({ revoked_at: "2026-08-06T00:00:00Z" }), now),

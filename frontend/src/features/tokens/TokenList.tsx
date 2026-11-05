@@ -1,8 +1,10 @@
 "use client";
 
-import { Stack, Table } from "@mantine/core";
+import { Stack, Switch, Table, TextInput } from "@mantine/core";
 import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { FormDialog } from "@/components/form/FormDialog";
+import { FieldChrome } from "@/components/form/FieldChrome";
+import { collectNotes } from "@/components/form/fieldNotes";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
@@ -36,6 +38,7 @@ const PAGE_SIZE = 50;
 
 type CreateFormValues = {
   name: string;
+  never_expires: boolean;
   expires_at: string;
 };
 
@@ -65,12 +68,14 @@ export function TokenList() {
   const form = useConsoleForm<CreateFormValues>({
     initialValues: {
       name: "",
+      never_expires: false,
       expires_at: defaultExpiresWall(zone),
     },
     validate: {
       name: (value) =>
         value.trim().length > 0 ? null : t("tokens.validation.required"),
-      expires_at: (value) => {
+      expires_at: (value, values) => {
+        if (values.never_expires) return null;
         const expires = value ? wallToInstant(value, zone) : null;
         if (!expires) {
           return t("tokens.validation.required");
@@ -86,6 +91,7 @@ export function TokenList() {
   function openCreate() {
     form.setValues({
       name: "",
+      never_expires: false,
       expires_at: defaultExpiresWall(zone),
     });
     form.markSaved();
@@ -99,8 +105,7 @@ export function TokenList() {
   }
 
   async function onCreate(values: CreateFormValues) {
-    const expiresAt = wallToInstant(values.expires_at, zone);
-    if (!expiresAt) return;
+    const expiresAt = values.never_expires ? null : wallToInstant(values.expires_at, zone);
     try {
       const result = await createToken({
         name: values.name.trim(),
@@ -170,7 +175,11 @@ export function TokenList() {
                   labelKey={statusTone.labelKey}
                 />
               </Table.Td>
-              <Table.Td>{showInstant(row.expires_at)}</Table.Td>
+              <Table.Td>
+                {row.expires_at == null
+                  ? t("tokens.fields.neverExpires")
+                  : showInstant(row.expires_at)}
+              </Table.Td>
               <Table.Td>{showInstant(row.created_at)}</Table.Td>
               <Table.Td>{showInstant(row.last_used_at)}</Table.Td>
               <Table.Td>
@@ -302,14 +311,40 @@ export function TokenList() {
             withAsterisk
             {...form.fieldProps("name")}
           />
-          <TextField
-            editable
-            type="datetime-local"
+          <FieldChrome
             label={t("tokens.fields.expiresAt")}
-            description={t("tokens.fields.expiresAt.hint", { zone })}
-            withAsterisk
-            {...form.fieldProps("expires_at")}
-          />
+            description={
+              form.values.never_expires
+                ? t("tokens.fields.expiresAt.neverHint")
+                : t("tokens.fields.expiresAt.hint", { zone })
+            }
+            required={!form.values.never_expires}
+            notes={collectNotes(form.errors.expires_at, undefined)}
+            editSignal={form.values.expires_at}
+          >
+            {({ id, invalid }) => (
+              <Stack gap="xs">
+                <Switch
+                  id={form.values.never_expires ? id : undefined}
+                  label={t("tokens.fields.neverExpires")}
+                  checked={form.values.never_expires}
+                  onChange={(event) => {
+                    const on = event.currentTarget.checked;
+                    form.setFieldValue("never_expires", on);
+                    if (on) form.clearFieldError("expires_at");
+                  }}
+                />
+                {form.values.never_expires ? null : (
+                  <TextInput
+                    {...form.fieldProps("expires_at")}
+                    id={id}
+                    type="datetime-local"
+                    error={invalid || undefined}
+                  />
+                )}
+              </Stack>
+            )}
+          </FieldChrome>
         </Stack>
       </FormDialog>
 

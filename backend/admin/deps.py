@@ -107,7 +107,7 @@ def _user_from_bearer(
         record is None
         or record.revoked_at is not None
         or record.deleted_at is not None
-        or record.expires_at <= now
+        or (record.expires_at is not None and record.expires_at <= now)
     ):
         raise AuthPatInvalid()
     user = users.get_by_id(record.user_id)
@@ -185,7 +185,7 @@ def resolve_pat_bearer(secret: str) -> tuple[UserRecord, str]:
         record is None
         or record.revoked_at is not None
         or record.deleted_at is not None
-        or record.expires_at <= now
+        or (record.expires_at is not None and record.expires_at <= now)
     ):
         raise AuthPatInvalid()
     user = users.get_by_id(record.user_id)

@@ -11,7 +11,8 @@ export function tokenStatus(
   if (token.revoked_at) {
     return "deactivated";
   }
-  const expires = Instant.epochMsOf(token.expires_at);
+  const expires =
+    token.expires_at == null ? null : Instant.epochMsOf(token.expires_at);
   if (expires !== null && expires <= now.getTime()) {
     return "expired";
   }

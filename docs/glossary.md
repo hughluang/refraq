@@ -172,6 +172,7 @@ Avoid calling it a User PAT, a Bearer token, or a permanent login.
 ### User PAT
 
 A personal access token owned by a User for non-browser API and MCP access (`Authorization: Bearer`); may be deactivated (restorable) or soft-deleted.
+A null `expires_at` means the token does not expire.
 Coexists with Console Session cookies; authenticates the same User and Role permissions.
 Console operator copy uses **personal access token**. Do not show PAT or User PAT on screen.
 Avoid calling it a Client token, a Session id reused as Bearer, or a machine principal.
