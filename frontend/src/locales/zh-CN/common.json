@@ -1637,6 +1637,8 @@
   "channels.node.run": "运行到此节点",
   "channels.run.showFullOutput": "显示完整输出",
   "channels.run.executionList": "执行记录",
+  "channels.run.executionList.hide": "收起执行记录",
+  "channels.run.executionList.show": "显示执行记录",
   "channels.run.column.node": "节点",
   "channels.run.column.status": "状态",
   "channels.run.column.error": "错误",

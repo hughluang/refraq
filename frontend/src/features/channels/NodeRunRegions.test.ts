@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } 
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getExecutionOutput, listRounds, nodeSample } from "@/features/channels/api";
+import { getExecutionOutput, listDatasetRows, listExecutions, listRounds, nodeSample, previewTemplate } from "@/features/channels/api";
 import { ResultRegion, SampleBar, UpstreamRegion, useNodeSample } from "@/features/channels/NodeRunRegions";
 import { ApiError } from "@/lib/api";
 import { ConsoleNotifications } from "@/providers/notification-provider";
@@ -26,6 +26,7 @@ vi.mock("@/features/channels/api", () => ({
   listExecutions: vi.fn(),
   getExecutionOutput: vi.fn(),
   listDatasetRows: vi.fn(),
+  previewTemplate: vi.fn(),
 }));
 
 const LABELS: Record<string, string> = {
@@ -72,6 +73,9 @@ const LABELS: Record<string, string> = {
   "problems.CHANNEL_NODE_FAILED": "Node failed",
   "problems.CHANNEL_LOOP_BODY_STOPPED": "A loop body node stopped the run.",
   "channels.run.bodyStoppedBy": "{{name}} stopped this run.",
+  "channels.run.dataset.round": "Batch {{index}}",
+  "channels.run.dataset.count": "{{count}} rows",
+  "common.showing": "{{from}}-{{to}} of {{total}}",
 };
 
 vi.mock("@refinedev/core", () => ({
@@ -822,6 +826,158 @@ describe("node run regions", () => {
     expect(screen.getAllByRole("alert")).toHaveLength(1);
     expect(alert.textContent).toContain("Output failed");
     expect(alert.textContent).not.toContain("feedback.repeated");
+  });
+
+  it("shows the batch round's dataset rows for a direct child", async () => {
+    const batchGraph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        {
+          id: "batch",
+          ref: "batches",
+          type: "volume.batch_read",
+          name: "Batches",
+          position: { x: 0, y: 0 },
+          config: {},
+          on_error: "stop",
+          retry: null,
+        },
+        {
+          id: "write",
+          ref: "write",
+          type: "write.entity",
+          name: "Write",
+          position: { x: 40, y: 40 },
+          parent: "batch",
+          config: {},
+          on_error: "stop",
+          retry: null,
+        },
+      ],
+    };
+    vi.mocked(listExecutions).mockResolvedValue({
+      items: [
+        {
+          seq: 4,
+          node_id: "batch",
+          container_seq: null,
+          round: null,
+          status: "succeeded",
+          started_at: null,
+          finished_at: null,
+          output_bytes: 0,
+          output_preview: { count: 3, total: 2500, batch_size: 1000 },
+          output_truncated: false,
+          preview_only: false,
+          preview_totals: {},
+          error_code: null,
+          error_message: null,
+          error_detail: null,
+        },
+      ],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    });
+    vi.mocked(previewTemplate).mockResolvedValue({
+      state: "ok",
+      value: {
+        dataset_id: "dst_1",
+        columns: [{ name: "code", type: "string" }],
+        count: 2500,
+      },
+      truncated: false,
+    });
+    vi.mocked(listDatasetRows).mockResolvedValue({
+      items: [
+        { _ord: 1001, code: "S-01" },
+        { _ord: 2001, code: "past" },
+      ],
+      limit: 200,
+      next_after_ord: 2001,
+    });
+    mount(
+      createElement(ResultRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        nodeId: "write",
+        nodeType: "write.entity",
+        nodes: [
+          {
+            id: "write",
+            name: "Write",
+            ref: "write",
+            type: "write.entity",
+            parent: "batch",
+            container: null,
+          },
+        ],
+        detail: detail("succeeded"),
+        sample: sample({
+          scope: [{ container_node_id: "batch", container_seq: 4, round: 1, rounds_total: 3 }],
+          node: { ...sample().node, seq: 9, state: "ok", output: { inserted: 1 } },
+        }),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        graph: batchGraph,
+        selectedRound: null,
+        onRound: vi.fn(),
+        onRoundsTotal: vi.fn(),
+      }),
+    );
+    expect(await screen.findByText("S-01")).toBeTruthy();
+    expect(screen.queryByText("past")).toBeNull();
+    expect(screen.getByText("Batch 1")).toBeTruthy();
+    expect(listDatasetRows).toHaveBeenCalledWith("chn_1", "job_1", "dst_1", {
+      after_ord: 1000,
+      limit: 200,
+    });
+    expect(previewTemplate).toHaveBeenCalledWith("chn_1", "job_1", {
+      graph: batchGraph,
+      node_id: "batch",
+      path: ["dataset"],
+    });
+  });
+
+  it("does not add dataset rows on the batch node itself", async () => {
+    vi.mocked(listDatasetRows).mockClear();
+    mount(
+      createElement(ResultRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        nodeId: "batch",
+        nodeType: "volume.batch_read",
+        nodes: [
+          {
+            id: "batch",
+            name: "Batches",
+            ref: "batches",
+            type: "volume.batch_read",
+            container: null,
+          },
+        ],
+        detail: detail("succeeded"),
+        sample: sample({
+          scope: [],
+          node: {
+            ...sample().node,
+            output: { count: 3, total: 2500, batch_size: 1000 },
+          },
+        }),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        graph: EMPTY_GRAPH,
+        selectedRound: null,
+        onRound: vi.fn(),
+        onRoundsTotal: vi.fn(),
+      }),
+    );
+    expect(screen.getByRole("region", { name: "This node's result" })).toBeTruthy();
+    expect(listDatasetRows).not.toHaveBeenCalled();
   });
 
   it("keeps upstream output when a later sample fails", async () => {

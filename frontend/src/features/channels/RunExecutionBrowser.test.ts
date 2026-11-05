@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { listDatasetRows, listExecutions, previewTemplate } from "@/features/channels/api";
+import { listExecutions } from "@/features/channels/api";
 import { RunExecutionBrowser } from "@/features/channels/RunExecutionBrowser";
 import { EMPTY_GRAPH, type Graph, type NodeExecution } from "@/features/channels/types";
 import { ApiError } from "@/lib/api";
@@ -24,6 +24,8 @@ vi.mock("@refinedev/core", () => ({
     const template =
       ({
         "channels.run.executionList": "Executions",
+        "channels.run.executionList.hide": "Hide executions",
+        "channels.run.executionList.show": "Show executions",
         "channels.run.dataset.round": "Batch {{index}}",
         "channels.run.dataset.reference": "Dataset reference",
         "channels.run.dataset.count": "{{count}} rows",
@@ -39,16 +41,8 @@ vi.mock("@refinedev/core", () => ({
 
 vi.mock("@/features/channels/api", () => ({
   listExecutions: vi.fn(),
-  listDatasetRows: vi.fn(),
-  previewTemplate: vi.fn(),
   getExecutionOutput: vi.fn(),
 }));
-
-const reference = {
-  dataset_id: "dst_1",
-  columns: [{ name: "code", type: "string" }],
-  count: 2500,
-};
 
 function execution(overrides: Record<string, unknown>): NodeExecution {
   return {
@@ -129,7 +123,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it("pages executions and loads one batch round through the row window", async () => {
+it("pages executions and selects a row without rendering its output", async () => {
   const child = execution({
     seq: 9,
     node_id: "write",
@@ -140,58 +134,34 @@ it("pages executions and loads one batch round through the row window", async ()
     output_preview: { inserted: 1 },
   });
   const later = execution({ seq: 60, node_id: "write", round: 2, container_seq: 4 });
-  const container = execution({
-    seq: 4,
-    node_id: "batch",
-    output_preview: { count: 3, total: 2500, batch_size: 1000 },
-  });
+  const onExecutionSelect = vi.fn();
   vi.mocked(listExecutions).mockImplementation(async (_channelId, _jobId, params) => {
-    if (params?.node_id === "batch") {
-      return { items: [container], total: 1, limit: 200, offset: 0 };
-    }
     if (params?.offset === 50) {
       return { items: [later], total: 51, limit: 50, offset: 50 };
     }
     return { items: [child], total: 51, limit: 50, offset: 0 };
-  });
-  vi.mocked(previewTemplate).mockResolvedValue({
-    state: "ok",
-    value: reference,
-    truncated: false,
-  });
-  vi.mocked(listDatasetRows).mockResolvedValue({
-    items: [
-      { _ord: 1001, code: "S-01" },
-      { _ord: 2001, code: "past" },
-    ],
-    limit: 200,
-    next_after_ord: 2001,
   });
 
   render(
     createElement(
       MantineProvider,
       { env: "test" },
-      createElement(RunExecutionBrowser, { channelId: "chn_1", jobId: "job_1", graph }),
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        onExecutionSelect,
+      }),
     ),
   );
 
   expect(await screen.findByRole("button", { name: "Write" })).toBeTruthy();
   expect(listExecutions).toHaveBeenCalledWith("chn_1", "job_1", { limit: 50, offset: 0 });
   fireEvent.click(screen.getByRole("button", { name: "Write" }));
-  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
-  expect(screen.getByText("rows total 1000")).toBeTruthy();
-  expect(await screen.findByText("S-01")).toBeTruthy();
-  expect(screen.queryByText("past")).toBeNull();
-  expect(listDatasetRows).toHaveBeenCalledWith("chn_1", "job_1", "dst_1", {
-    after_ord: 1000,
-    limit: 200,
-  });
-  expect(previewTemplate).toHaveBeenCalledWith("chn_1", "job_1", {
-    graph,
-    node_id: "batch",
-    path: ["dataset"],
-  });
+  expect(onExecutionSelect).toHaveBeenCalledWith(child);
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.queryByText("This execution stored a preview.")).toBeNull();
+  expect(screen.queryByText("S-01")).toBeNull();
   fireEvent.click(screen.getAllByRole("button", { name: "2" })[0]);
   await waitFor(() => {
     expect(listExecutions).toHaveBeenCalledWith("chn_1", "job_1", { limit: 50, offset: 50 });
@@ -205,6 +175,7 @@ it("selects a requested execution on its page and scrolls that row into view", a
   const latest = execution({
     seq: 101,
     node_id: "write",
+    status: "failed",
     output_preview: { marker: "latest-row" },
   });
   let release: (() => void) | null = null;
@@ -247,13 +218,62 @@ it("selects a requested execution on its page and scrolls that row into view", a
   await act(async () => {
     release?.();
   });
-  expect(await screen.findByText(/latest-row/)).toBeTruthy();
+  expect(await screen.findByText("channels.editor.status.failed")).toBeTruthy();
+  const selectedButton = screen.getByRole("button", { name: "Write" });
+  expect(selectedButton.getAttribute("aria-pressed")).toBe("true");
   expect(screen.queryByText(/early/)).toBeNull();
-  const row = screen.getByRole("button", { name: "Write" }).closest("tr");
+  const row = selectedButton.closest("tr");
   expect(scrollIntoView.mock.instances).toContain(row);
 });
 
-it("reports an execution row click and keeps that row's preview under the table", async () => {
+it("hides the table and keeps the selected row when the index is collapsed", async () => {
+  const row = execution({ seq: 9, node_id: "write" });
+  vi.mocked(listExecutions).mockResolvedValue({ items: [row], total: 1, limit: 50, offset: 0 });
+  const view = render(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        collapsed: false,
+        onToggleCollapsed: vi.fn(),
+      }),
+    ),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Write" }));
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
+
+  view.rerender(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        collapsed: true,
+        onToggleCollapsed: vi.fn(),
+      }),
+    ),
+  );
+  expect(screen.queryByRole("button", { name: "Write" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Show executions" }).getAttribute("aria-expanded")).toBe("false");
+
+  view.rerender(
+    shell(
+      createElement(RunExecutionBrowser, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        graph,
+        collapsed: false,
+        onToggleCollapsed: vi.fn(),
+      }),
+    ),
+  );
+  expect(await screen.findByRole("button", { name: "Write" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "Hide executions" }).getAttribute("aria-expanded")).toBe("true");
+});
+
+it("reports an execution row click and does not render that row's output", async () => {
   const onExecutionSelect = vi.fn();
   const row = execution({
     seq: 9,
@@ -277,7 +297,8 @@ it("reports an execution row click and keeps that row's preview under the table"
 
   fireEvent.click(await screen.findByRole("button", { name: "Write" }));
   expect(onExecutionSelect).toHaveBeenCalledWith(row);
-  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.queryByText("This execution stored a preview.")).toBeNull();
 });
 
 it("shows unloaded and one notification when the first execution load fails", async () => {
@@ -377,7 +398,7 @@ it("keeps a selected execution that is still on the reloaded page", async () => 
   );
 
   fireEvent.click(await screen.findByRole("button", { name: "Write" }));
-  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
   view.rerender(
     shell(
       createElement(RunExecutionBrowser, {
@@ -389,7 +410,7 @@ it("keeps a selected execution that is still on the reloaded page", async () => 
     ),
   );
   expect(await screen.findByText("channels.editor.status.running")).toBeTruthy();
-  expect(screen.getByText("This execution stored a preview.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
 });
 
 it("keeps a selected execution when the reader leaves its page and comes back", async () => {
@@ -411,13 +432,13 @@ it("keeps a selected execution when the reader leaves its page and comes back", 
   );
 
   fireEvent.click(await screen.findByRole("button", { name: "Write" }));
-  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(screen.getAllByRole("button", { name: "2" })[0]);
   expect(await screen.findByText("51-51 of 51")).toBeTruthy();
-  expect(screen.queryByText("This execution stored a preview.")).toBeNull();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("false");
   fireEvent.click(screen.getByRole("button", { name: "1" }));
   expect(await screen.findByText("1-50 of 51")).toBeTruthy();
-  expect(screen.getByText("This execution stored a preview.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
 });
 
 it("clears a selected execution that is absent after the reload", async () => {
@@ -451,7 +472,7 @@ it("clears a selected execution that is absent after the reload", async () => {
   );
 
   fireEvent.click(await screen.findByRole("button", { name: "Write" }));
-  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
   view.rerender(
     shell(
       createElement(RunExecutionBrowser, {
@@ -463,7 +484,7 @@ it("clears a selected execution that is absent after the reload", async () => {
     ),
   );
   expect(await screen.findByText("channels.editor.status.running")).toBeTruthy();
-  expect(screen.queryByText("This execution stored a preview.")).toBeNull();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("false");
 
   view.rerender(
     shell(
@@ -476,7 +497,7 @@ it("clears a selected execution that is absent after the reload", async () => {
     ),
   );
   expect(await screen.findByText("channels.editor.status.succeeded")).toBeTruthy();
-  expect(screen.queryByText("This execution stored a preview.")).toBeNull();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("false");
 });
 
 it("keeps the rows, the selection, and sends one notification when a parent reload fails", async () => {
@@ -501,7 +522,7 @@ it("keeps the rows, the selection, and sends one notification when a parent relo
   );
 
   fireEvent.click(await screen.findByRole("button", { name: "Write" }));
-  expect(await screen.findByText("This execution stored a preview.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
   view.rerender(
     shell(
       createElement(RunExecutionBrowser, {
@@ -515,8 +536,7 @@ it("keeps the rows, the selection, and sends one notification when a parent relo
 
   expect(await screen.findAllByRole("alert")).toHaveLength(1);
   expect(screen.getByText("problems.unknown")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Write" })).toBeTruthy();
-  expect(screen.getByText("This execution stored a preview.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Write" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
   expect(screen.queryByText("channels.run.outputFailed")).toBeNull();
 });

@@ -511,28 +511,32 @@ describe("ChannelRunDetail load feedback", () => {
     expect(screen.queryByText("user")).toBeNull();
   });
 
-  it("scrolls the run detail so the execution table stays on the page and the canvas has no height floor", async () => {
+  it("fills the viewport and keeps the index and inspector beside the canvas", async () => {
     api.getRun.mockResolvedValue(detail("succeeded"));
     renderDetail();
 
     await advance(0);
 
     const scroll = document.querySelector("[data-page-scroll]") as HTMLElement;
-    expect(scroll.style.overflow).toBe("auto");
+    expect(scroll.style.overflow).toBe("hidden");
 
-    const table = screen.getByTestId("execution-table");
-    expect(table.closest("[data-page-scroll]")).toBe(scroll);
-
+    const workspace = screen.getByTestId("run-detail-workspace");
+    expect(workspace.getAttribute("data-arrangement")).toBeTruthy();
+    expect(workspace.className).toContain("channel-run-workspace");
     const canvas = screen.getByTestId("run-detail-canvas");
-    const host = canvas.parentElement as HTMLElement;
-    const column = host.parentElement as HTMLElement;
-    expect(host.contains(table)).toBe(false);
-    expect(table.parentElement).toBe(column);
-    expect(host.style.minHeight).toBe("");
-    expect(host.style.flex).toBe("");
-    expect(host.style.height).not.toBe("");
-    expect(host.style.height).not.toBe("360px");
-    expect(column.style.height).not.toBe("100%");
+    const table = screen.getByTestId("execution-table");
+    const inspector = screen.getByTestId("run-detail-inspector");
+    expect(workspace.contains(canvas)).toBe(true);
+    expect(workspace.contains(table)).toBe(true);
+    expect(canvas.contains(table)).toBe(false);
+    expect(canvas.contains(inspector)).toBe(false);
+    expect(canvas.parentElement?.className).toContain("channel-run-workspace__graph");
+    expect(inspector.className).toContain("channel-run-workspace__inspector");
+    expect(inspector.className).not.toContain("channel-node-config--detail");
+    expect(canvas.parentElement?.getAttribute("style") ?? "").not.toContain("32dvh");
+    expect(scroll.contains(workspace)).toBe(true);
+    expect(workspace.getAttribute("data-index")).toBe("true");
+    expect(workspace.getAttribute("data-inspector")).toBe("false");
   });
 
   it("reloads executions when a later poll changes the recorded run and not on the first load", async () => {

@@ -51,6 +51,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 
 import "@xyflow/react/dist/style.css";
 import "./ChannelCanvas.css";
@@ -483,12 +484,34 @@ type Props = {
    * `token` applies the request again for the same node.
    */
   runNodeFocus?: { token: number; nodeId: string; pins: Record<string, number> } | null;
+  /**
+   * Run detail. When set, including `null` before the host mounts, the node
+   * panel is portaled into this element instead of covering the canvas.
+   * Omit it on the editor, which keeps the overlay.
+   */
+  inspectorHost?: HTMLElement | null;
+  /** Run detail. True while the node panel is mounted, including its leave. */
+  onInspectorOpenChange?: (open: boolean) => void;
 };
 
 export type RunNodeOpen =
   | { nodeId: string; status: "none" }
   | { nodeId: string; status: "ready"; execution: NodeExecution }
   | { nodeId: string; status: "unfetched" };
+
+function InspectorFrame({
+  external,
+  host,
+  children,
+}: {
+  external: boolean;
+  host: HTMLElement | null | undefined;
+  children: ReactNode;
+}) {
+  if (!external) return children;
+  if (!host) return null;
+  return createPortal(children, host);
+}
 
 export function ChannelCanvas(props: Props) {
   return (
@@ -516,6 +539,8 @@ function ChannelCanvasBody({
   publishedGraph = null,
   onRunNodeOpen,
   runNodeFocus = null,
+  inspectorHost,
+  onInspectorOpenChange,
 }: Props) {
   const t = useTranslate();
   const showInstant = useShowInstant();
@@ -1744,10 +1769,14 @@ function ChannelCanvasBody({
   );
   const overlayKey = selected?.id ?? null;
   const pickerKey = picker?.key ?? null;
+  const externalInspector = inspectorHost !== undefined;
+  useLayoutEffect(() => {
+    onInspectorOpenChange?.(selected != null);
+  }, [onInspectorOpenChange, selected]);
   useEffect(() => {
     if (overlayKey == null || leaving) return;
     overlayRef.current?.focus();
-  }, [overlayKey, leaving]);
+  }, [inspectorHost, overlayKey, leaving]);
   useEffect(() => {
     if (overlayKey != null || leaving || pickerKey != null) return;
     const nodeId = focusReturnRef.current;
@@ -2508,6 +2537,7 @@ function ChannelCanvasBody({
             </div>
           ) : null}
           {selected ? (
+            <InspectorFrame external={externalInspector} host={inspectorHost}>
             <Paper
               ref={overlayRef}
               withBorder
@@ -2517,7 +2547,7 @@ function ChannelCanvasBody({
               aria-label={selected.data.name}
               className={[
                 "channel-node-config",
-                "channel-node-config--detail",
+                externalInspector ? "" : "channel-node-config--detail",
                 leaving ? "channel-node-config--leave" : "",
               ]
                 .filter(Boolean)
@@ -2644,6 +2674,7 @@ function ChannelCanvasBody({
                   onRun={onRun}
                 />
             </Paper>
+            </InspectorFrame>
           ) : null}
           {picker ? (
             <NodePicker

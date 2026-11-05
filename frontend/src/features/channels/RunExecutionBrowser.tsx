@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Stack, Table, Text } from "@mantine/core";
+import { Button, Group, Stack, Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useRef, useState } from "react";
 
@@ -10,11 +10,9 @@ import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentNodeStatus } from "@/components/display/statusTone";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { listExecutions } from "@/features/channels/api";
-import { BatchRoundRows } from "@/features/channels/BatchRoundRows";
 import { nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { RunErrorText } from "@/features/channels/RunErrorText";
-import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
-import type { Graph, NodeExecution, NodeTypeSpec } from "@/features/channels/types";
+import type { Graph, NodeExecution } from "@/features/channels/types";
 import { successRequestId } from "@/lib/api";
 import { formatJobDuration } from "@/lib/datetime";
 import { listPresentationOf } from "@/lib/list-state";
@@ -31,21 +29,24 @@ export function RunExecutionBrowser({
   channelId,
   jobId,
   graph,
-  catalog = [],
   reloadToken = 0,
   selectionRequest = null,
   onExecutionSelect,
+  collapsed = false,
+  onToggleCollapsed,
 }: {
   channelId: string;
   jobId: string;
   graph: Graph;
-  catalog?: readonly NodeTypeSpec[];
   /** Parent bump. Reloads the current page without moving the page index. */
   reloadToken?: number;
   /** Move to the page that contains this seq, select it, and scroll it into view. */
   selectionRequest?: { seq: number; token: number } | null;
   /** The operator chose this row. The parent opens that node. */
   onExecutionSelect?: (execution: NodeExecution) => void;
+  /** Hide the table. Selection stays so opening the index again shows the same row. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }) {
   const t = useTranslate();
   const tRef = useRef(t);
@@ -122,13 +123,20 @@ export function RunExecutionBrowser({
 
   useEffect(() => {
     const seq = pendingScroll.current;
-    if (seq == null || loading) return;
+    if (seq == null || loading || collapsed) return;
     if (!items.some((item) => item.seq === seq)) return;
     selectedRowRef.current?.closest("tr")?.scrollIntoView({ block: "nearest" });
     pendingScroll.current = null;
-  }, [items, loading, scrollTick, selected]);
+  }, [collapsed, items, loading, scrollTick, selected]);
 
-  const current = items.find((item) => item.seq === selected) ?? null;
+  const wasCollapsed = useRef(collapsed);
+  useEffect(() => {
+    const opened = wasCollapsed.current && !collapsed;
+    wasCollapsed.current = collapsed;
+    if (!opened || loading || selected == null) return;
+    selectedRowRef.current?.closest("tr")?.scrollIntoView({ block: "nearest" });
+  }, [collapsed, items, loading, selected]);
+
   const list = {
     presentation: listPresentationOf({
       loading,
@@ -146,12 +154,25 @@ export function RunExecutionBrowser({
     total,
   };
   return (
-    <Stack gap="sm">
-      <Text size="sm" fw={600}>
-        {t("channels.run.executionList")}
-      </Text>
+    <Stack gap="sm" flex={collapsed ? undefined : 1} mih={collapsed ? undefined : 0} h={collapsed ? undefined : "100%"}>
+      <Group justify="space-between" wrap="nowrap" gap="xs">
+        <Text size="sm" fw={600}>
+          {t("channels.run.executionList")}
+        </Text>
+        {onToggleCollapsed ? (
+          <Button
+            type="button"
+            variant="subtle"
+            size="compact-xs"
+            aria-expanded={!collapsed}
+            onClick={onToggleCollapsed}
+          >
+            {t(collapsed ? "channels.run.executionList.show" : "channels.run.executionList.hide")}
+          </Button>
+        ) : null}
+      </Group>
+      {collapsed ? null : (
       <ListTable
-        embedded
         list={list}
         columnCount={7}
         minWidth={840}
@@ -177,6 +198,7 @@ export function RunExecutionBrowser({
                   ref={item.seq === selected ? selectedRowRef : undefined}
                   variant={item.seq === selected ? "light" : "subtle"}
                   size="compact-sm"
+                  aria-pressed={item.seq === selected}
                   onClick={() => {
                     setSelected(item.seq);
                     onExecutionSelect?.(item);
@@ -205,28 +227,7 @@ export function RunExecutionBrowser({
           );
         })}
       </ListTable>
-      {current ? (
-        <Stack gap={4}>
-          <RunExecutionOutput
-            channelId={channelId}
-            jobId={jobId}
-            item={current}
-            graph={graph}
-            view={
-              catalog.find(
-                (spec) =>
-                  spec.type === graph.nodes.find((node) => node.id === current.node_id)?.type,
-              )?.output_view ?? null
-            }
-          />
-          <BatchRoundRows
-            channelId={channelId}
-            jobId={jobId}
-            graph={graph}
-            execution={current}
-          />
-        </Stack>
-      ) : null}
+      )}
     </Stack>
   );
 }

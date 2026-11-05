@@ -583,7 +583,7 @@ The same Output View rendering is used on the run detail page.
 - `container`: the number of rounds, the metrics, and a way to open the rounds.
 - `value`: the JSON value.
 
-The run detail page scrolls. The execution table header is on the first screen. The canvas has no minimum height that hides that header. One click on a node opens that node and selects that node's latest execution.
+The run detail page fills the console viewport. The graph is the overview. The execution index and the node inspector are arranged from the workspace width: one row when that width fits an index, the graph, and the inspector; the index under the graph and the inspector when it fits the graph and the inspector; and a vertical stack below that. The inspector sits beside or under the graph and does not cover it. The index scrolls inside itself. Selecting an execution highlights that node and opens the inspector at that execution's container rounds. Selecting a node highlights that node's latest execution. Output is shown in the inspector. A direct child of a Batch Read shows that round's dataset rows in its result column, from the sample scope's container sequence and round. The Batch Read's own round table still expands into those rows. One click on a node opens that node and selects that node's latest execution.
 
 A metric is a labeled badge. The label is the locale key `channels.view.metric.<key>`.
 

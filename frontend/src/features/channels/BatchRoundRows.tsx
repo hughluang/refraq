@@ -24,7 +24,7 @@ export function BatchRoundRows({
   channelId: string;
   jobId: string;
   graph: Graph;
-  execution: NodeExecution;
+  execution: Pick<NodeExecution, "node_id" | "round" | "container_seq">;
 }) {
   const t = useTranslate();
   const round = batchReadRound(graph, execution);

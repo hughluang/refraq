@@ -938,21 +938,9 @@ function BatchExpansion({
         jobId={jobId}
         graph={graph}
         execution={{
-          seq: 0,
           node_id: batchChildId,
           container_seq: seq,
           round: round.round,
-          status: "succeeded",
-          started_at: null,
-          finished_at: null,
-          output_bytes: 0,
-          output_preview: null,
-          output_truncated: false,
-          preview_only: false,
-          preview_totals: {},
-          error_code: null,
-          error_message: null,
-          error_detail: null,
         }}
       />
     );

@@ -3,7 +3,7 @@
 import { ActionIcon, Button, Group, Stack, Text, Tooltip } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Instant } from "@/components/display/Instant";
 import { CopyIcon } from "@/components/icons";
@@ -32,6 +32,8 @@ import {
 } from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
 import { ChannelCanvas, type RunNodeOpen } from "@/features/channels/ChannelCanvas";
+import { runDetailArrangement, type RunDetailArrangement } from "@/features/channels/runDetailArrangement";
+import "./ChannelRunDetail.css";
 import { containerRoundPins, isTerminalRun, recordedKey } from "@/features/channels/runSession";
 import type { NodeExecution, NodeTypeSpec } from "@/features/channels/types";
 import { useShowInstant } from "@/hooks/useFormatInstant";
@@ -96,6 +98,11 @@ export function ChannelRunDetail({
     pins: Record<string, number>;
   } | null>(null);
   const recorded = useRef<string | null>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [arrangement, setArrangement] = useState<RunDetailArrangement>("band");
+  const [indexOpen, setIndexOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorHost, setInspectorHost] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     gesture.current += 1;
     setSelectionRequest(null);
@@ -144,6 +151,20 @@ export function ChannelRunDetail({
       cancelled = true;
     };
   }, []);
+  const hasGraph = detail?.graph != null;
+  useLayoutEffect(() => {
+    const el = workspaceRef.current;
+    if (!el) return;
+    const apply = () => {
+      const font = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      setArrangement(runDetailArrangement(el.clientWidth, Number.isFinite(font) ? font : 16));
+    };
+    apply();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(apply);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasGraph]);
   const rerun =
     canWrite?.can && detail?.run.status === "failed" && detail.run.target === "published" && detail.run.version != null ? (
       <Button
@@ -285,8 +306,9 @@ export function ChannelRunDetail({
       }}
       titleExtra={<JobStatusBadge status={detail.run.status} freshness={freshness} />}
       actions={back}
+      fill
     >
-    <Stack gap="sm">
+    <Stack gap="sm" flex={1} mih={0} style={{ minHeight: 0, overflow: "hidden" }}>
       <LiveStatusAnnouncer text={t(presentJobStatus(detail.run.status).labelKey)} />
       <Group gap="xs" wrap="wrap" align="center" style={{ minWidth: 0 }}>
         <Group gap={4} wrap="nowrap" align="baseline">
@@ -336,32 +358,53 @@ export function ChannelRunDetail({
         </Text>
       ) : null}
       {failedNode ? <Text size="sm">{failedNode}</Text> : null}
-      {graph ? <>
-      <div style={{ height: "min(20rem, 32dvh)" }}>
-        <ChannelCanvas
-          channelId={channelId}
-          graph={graph}
-          catalog={catalog}
-          appearance="browse"
-          mutable={false}
-          sessionRun={detail}
-          focusNodeId={detail.run.failed_node_id}
-          problems={[]}
-          onChange={() => undefined}
-          onRunNodeOpen={onRunNodeOpen}
-          runNodeFocus={runNodeFocus}
-        />
+      {graph ? (
+      <div
+        ref={workspaceRef}
+        className={`channel-run-workspace channel-run-workspace--${arrangement}`}
+        data-arrangement={arrangement}
+        data-index={indexOpen ? "true" : "false"}
+        data-inspector={inspectorOpen ? "true" : "false"}
+        data-testid="run-detail-workspace"
+      >
+        <div className="channel-run-workspace__index" data-open={indexOpen ? "true" : "false"}>
+          <RunExecutionBrowser
+            channelId={channelId}
+            jobId={jobId}
+            graph={graph}
+            reloadToken={executionReload}
+            selectionRequest={selectionRequest}
+            onExecutionSelect={onExecutionSelect}
+            collapsed={!indexOpen}
+            onToggleCollapsed={() => setIndexOpen((open) => !open)}
+          />
+        </div>
+        <div className="channel-run-workspace__graph">
+          <ChannelCanvas
+            channelId={channelId}
+            graph={graph}
+            catalog={catalog}
+            appearance="browse"
+            mutable={false}
+            sessionRun={detail}
+            focusNodeId={detail.run.failed_node_id}
+            problems={[]}
+            onChange={() => undefined}
+            onRunNodeOpen={onRunNodeOpen}
+            runNodeFocus={runNodeFocus}
+            inspectorHost={inspectorHost}
+            onInspectorOpenChange={setInspectorOpen}
+          />
+        </div>
+        <div
+          className="channel-run-workspace__inspector"
+          data-open={inspectorOpen ? "true" : "false"}
+          data-testid="run-detail-inspector"
+        >
+          <div ref={setInspectorHost} className="channel-run-inspector-host" />
+        </div>
       </div>
-      <RunExecutionBrowser
-        channelId={channelId}
-        jobId={jobId}
-        graph={graph}
-        catalog={catalog}
-        reloadToken={executionReload}
-        selectionRequest={selectionRequest}
-        onExecutionSelect={onExecutionSelect}
-      />
-      </> : <Text size="sm" c="dimmed">{t(isTerminalRun(detail.run.status) ? "channels.runDetail.graphUnavailable" : "channels.runDetail.graphPending")}</Text>}
+      ) : <Text size="sm" c="dimmed">{t(isTerminalRun(detail.run.status) ? "channels.runDetail.graphUnavailable" : "channels.runDetail.graphPending")}</Text>}
       {stopRunAction.dialog}
     </Stack>
     </PageChrome>

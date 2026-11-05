@@ -1,0 +1,130 @@
+/* Floors match runDetailArrangement.ts: index 16rem, graph 20rem, inspector 28rem. The index band is 14rem. */
+.channel-run-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  overflow: hidden;
+}
+
+.channel-run-workspace__index,
+.channel-run-workspace__graph,
+.channel-run-workspace__inspector {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.channel-run-workspace__index { grid-area: index; }
+.channel-run-workspace__graph { grid-area: graph; }
+.channel-run-workspace__inspector { grid-area: inspector; }
+
+.channel-run-workspace--columns {
+  grid-template-columns: 16rem minmax(20rem, 1fr) minmax(28rem, 42%);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "index graph inspector";
+}
+
+.channel-run-workspace--columns[data-inspector="false"] {
+  grid-template-columns: 16rem minmax(0, 1fr);
+  grid-template-areas: "index graph";
+}
+
+/* Collapsed index is one content-height row. An auto side column stays as tall as the graph and leaves that column empty. */
+.channel-run-workspace--columns[data-index="false"] {
+  grid-template-columns: minmax(20rem, 1fr) minmax(28rem, 42%);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "index index"
+    "graph inspector";
+}
+
+.channel-run-workspace--columns[data-index="false"][data-inspector="false"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "index"
+    "graph";
+}
+
+.channel-run-workspace--columns[data-index="false"] .channel-run-workspace__index {
+  justify-self: start;
+  align-self: center;
+  width: max-content;
+  max-width: 100%;
+  height: auto;
+}
+
+.channel-run-workspace--band {
+  grid-template-columns: minmax(20rem, 1fr) minmax(28rem, 42%);
+  grid-template-rows: minmax(20rem, 1fr) minmax(0, 14rem);
+  grid-template-areas:
+    "graph inspector"
+    "index index";
+}
+
+.channel-run-workspace--band[data-inspector="false"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "graph"
+    "index";
+}
+
+.channel-run-workspace--band[data-index="false"] {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.channel-run-workspace--stack {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "graph"
+    "inspector"
+    "index";
+}
+
+.channel-run-workspace--stack[data-inspector="false"] {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "graph"
+    "index";
+}
+
+.channel-run-workspace--stack[data-index="false"] {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.channel-run-workspace--stack[data-index="false"][data-inspector="false"] {
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "graph"
+    "index";
+}
+
+.channel-run-workspace[data-inspector="false"] .channel-run-workspace__inspector {
+  display: none;
+}
+
+.channel-run-inspector-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.channel-run-inspector-host .channel-node-config {
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: auto;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  flex: 1 1 auto;
+  box-shadow: none;
+}

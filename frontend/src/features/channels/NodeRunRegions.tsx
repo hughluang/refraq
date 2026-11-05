@@ -7,7 +7,8 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { listRounds, nodeSample } from "@/features/channels/api";
-import { listItemProperties, readBatchOutput } from "@/features/channels/datasetView";
+import { BatchRoundRows } from "@/features/channels/BatchRoundRows";
+import { batchReadRound, listItemProperties, readBatchOutput } from "@/features/channels/datasetView";
 import { NodeRegion } from "@/features/channels/NodeRegion";
 import { RunExecutionOutput, type OutputPick, type PathSegment } from "@/features/channels/RunExecutionOutput";
 import { roundControlIds } from "@/features/channels/runSession";
@@ -18,6 +19,7 @@ import type {
   ChannelRunDetail,
   ContainerDeclaration,
   Graph,
+  NodeExecution,
   NodeSample,
   NodeSampleScopeInput,
   NodeSampleUpstream,
@@ -695,6 +697,7 @@ export function ResultRegion({
   const view = viewFor(catalog, nodeType);
   const output = sample?.node.output;
   const batch = readBatchOutput(output);
+  const batchExecution = sample && graph ? batchChildExecution(nodeId, nodes, sample, graph) : null;
   return (
     <NodeRegion title={t("channels.run.result")} tone="run">
       {unloaded ? (
@@ -747,6 +750,14 @@ export function ResultRegion({
           batchSize={batch?.batchSize ?? null}
           recordedKey={recordedKey}
         />
+        {batchExecution && jobId && graph ? (
+          <BatchRoundRows
+            channelId={channelId}
+            jobId={jobId}
+            graph={graph}
+            execution={batchExecution}
+          />
+        ) : null}
         </Stack>
       ) : null}
     </NodeRegion>
@@ -818,6 +829,25 @@ function isUntilLast(entry: NodeSampleUpstream): boolean {
     isPlainRecord(entry.value) &&
     isPlainRecord(entry.value.last)
   );
+}
+
+function batchChildExecution(
+  nodeId: string,
+  nodes: readonly RunNodeInfo[],
+  sample: NodeSample,
+  graph: Graph,
+): Pick<NodeExecution, "node_id" | "round" | "container_seq"> | null {
+  const parentId = nodes.find((node) => node.id === nodeId)?.parent;
+  if (!parentId) return null;
+  const level = sample.scope.find((item) => item.container_node_id === parentId);
+  if (!level || level.container_seq == null) return null;
+  const execution = {
+    node_id: nodeId,
+    container_seq: level.container_seq,
+    round: level.round,
+  };
+  if (!batchReadRound(graph, execution)) return null;
+  return execution;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

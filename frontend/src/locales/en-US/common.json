@@ -1638,6 +1638,8 @@
   "channels.run.showFullOutput": "Show full output",
   "channels.run.outputFailed": "The full output could not be loaded",
   "channels.run.executionList": "Executions",
+  "channels.run.executionList.hide": "Hide executions",
+  "channels.run.executionList.show": "Show executions",
   "channels.run.column.node": "Node",
   "channels.run.column.status": "Status",
   "channels.run.column.error": "Error",
