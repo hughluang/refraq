@@ -1,12 +1,15 @@
 """Entity-database SQL for Entity Data API action verbs.
 
-Reads select the caller's profile view on the reader connection. Writes run on the
-owner connection against the physical table and return only ``row_id``; the caller
-presents written rows through its read view.
+A ``row_id`` page executes the profile view's query text with the page bound in
+one block, on the reader connection. A row-dependent profile with a non-leakproof
+filter still selects the security_barrier view. Writes run on the owner connection
+against the physical table and return only ``row_id``; the caller presents written
+rows through its read view.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator
@@ -18,12 +21,18 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from backend.core.config import get_settings
 from backend.core.db import map_platform_db_error
 from backend.core.errors import PlatformCapacityExceeded
-from backend.entity.data.capabilities import ROW_WRITE_LIMIT
-from backend.entity.data.filters import CompiledFilter
+from backend.entity.attribute_type import resolve
+from backend.entity.data.capabilities import OFFSET_MAX, PAGE_LIMIT_MAX, ROW_WRITE_LIMIT
+from backend.entity.data.filters import CompiledFilter, filter_is_leakproof
 from backend.entity.data.head import HeadTarget
-from backend.entity.data.values import decode_row
+from backend.entity.data.values import decode_row, reference_value_attr
 from backend.entity.change_log import SOURCE_GUC, SUBJECT_GUC
-from backend.entity.ddl import ENTITY_DATA_SCHEMA, ident, qualified_table
+from backend.entity.ddl import (
+    ENTITY_ACCESS_SCHEMA,
+    ENTITY_DATA_SCHEMA,
+    ident,
+    qualified_table,
+)
 from backend.entity.entity_db import get_entity_engine, get_entity_reader_engine
 from backend.entity.errors import (
     EntityNotServing,
@@ -515,32 +524,49 @@ def select_stored_matching(
     ]
 
 
+# Keyset reads one extra row. The page function rejects anything larger.
+_PROFILE_PAGE_LIMIT = PAGE_LIMIT_MAX + 1
+
+
 def query_offset(
     conn: Connection,
     target: HeadTarget,
     *,
     fields: list[str],
     compiled: CompiledFilter | None,
+    filters: Any,
+    row_dependent: bool,
     limit: int,
     offset: int,
     include_total: bool,
 ) -> tuple[list[dict[str, Any]], int | None]:
-    where_sql, params = _where(compiled)
-    select_cols = ", ".join(ident(name) for name in fields)
-    sql = (
-        f"SELECT {select_cols} FROM {_read_from(target)}{where_sql} "
-        f"ORDER BY {ident('row_id')} ASC LIMIT :_limit OFFSET :_offset"
-    )
-    params = dict(params)
-    params["_limit"] = limit
-    params["_offset"] = offset
-    rows = conn.execute(text(sql), params).all()
-    items = [decode_row(fields, tuple(row), target) for row in rows]
+    if _page_through_profile(filters, target, row_dependent):
+        items = _profile_page_rows(
+            conn,
+            target,
+            fields=fields,
+            filters=filters,
+            limit=limit,
+            offset=offset,
+            after=None,
+        )
+    else:
+        where_sql, params = _where(compiled)
+        select_cols = ", ".join(ident(name) for name in fields)
+        sql = (
+            f"SELECT {select_cols} FROM {_read_from(target)}{where_sql} "
+            f"ORDER BY {ident('row_id')} ASC LIMIT :_limit OFFSET :_offset"
+        )
+        params = dict(params)
+        params["_limit"] = limit
+        params["_offset"] = offset
+        rows = conn.execute(text(sql), params).all()
+        items = [decode_row(fields, tuple(row), target) for row in rows]
     total: int | None = None
     if include_total:
+        where_sql, params = _where(compiled)
         count_sql = f"SELECT count(*) FROM {_read_from(target)}{where_sql}"
-        count_params = {k: v for k, v in params.items() if not k.startswith("_")}
-        total = int(conn.execute(text(count_sql), count_params).scalar_one())
+        total = int(conn.execute(text(count_sql), params).scalar_one())
     return items, total
 
 
@@ -550,33 +576,146 @@ def query_keyset(
     *,
     fields: list[str],
     compiled: CompiledFilter | None,
+    filters: Any,
+    row_dependent: bool,
     limit: int,
     after_row_id: int | None,
 ) -> tuple[list[dict[str, Any]], int | None]:
-    where_sql, params = _where(compiled)
-    params = dict(params)
-    if after_row_id is not None:
-        key = "_after"
-        params[key] = after_row_id
-        clause = f"{ident('row_id')} > :{key}"
-        where_sql = (
-            f"{where_sql} AND {clause}"
-            if where_sql
-            else f" WHERE {clause}"
+    fetch = limit + 1
+    if _page_through_profile(filters, target, row_dependent):
+        items = _profile_page_rows(
+            conn,
+            target,
+            fields=fields,
+            filters=filters,
+            limit=fetch,
+            offset=0,
+            after=after_row_id,
         )
+    else:
+        where_sql, params = _where(compiled)
+        params = dict(params)
+        if after_row_id is not None:
+            key = "_after"
+            params[key] = after_row_id
+            clause = f"{ident('row_id')} > :{key}"
+            where_sql = (
+                f"{where_sql} AND {clause}"
+                if where_sql
+                else f" WHERE {clause}"
+            )
+        select_cols = ", ".join(ident(name) for name in fields)
+        sql = (
+            f"SELECT {select_cols} FROM {_read_from(target)}{where_sql} "
+            f"ORDER BY {ident('row_id')} ASC LIMIT :_limit"
+        )
+        params["_limit"] = fetch
+        rows = conn.execute(text(sql), params).all()
+        items = [decode_row(fields, tuple(row), target) for row in rows]
+    page = items[:limit]
+    next_after: int | None = None
+    if len(items) > limit:
+        next_after = int(page[-1]["row_id"])
+    return page, next_after
+
+
+def _page_through_profile(filters: Any, target: HeadTarget, row_dependent: bool) -> bool:
+    return not row_dependent or filter_is_leakproof(filters, target)
+
+
+def _profile_page_rows(
+    conn: Connection,
+    target: HeadTarget,
+    *,
+    fields: list[str],
+    filters: Any,
+    limit: int,
+    offset: int,
+    after: int | None,
+) -> list[dict[str, Any]]:
+    """Read through the page function. A limit above its cap is several calls."""
+    if limit < 1:
+        raise EntityRowInvalid()
+    if limit <= _PROFILE_PAGE_LIMIT:
+        return _profile_page_once(
+            conn,
+            target,
+            fields=fields,
+            filters=filters,
+            limit=limit,
+            offset=offset,
+            after=after,
+        )
+    items: list[dict[str, Any]] = []
+    cursor = offset
+    remaining = limit
+    while remaining:
+        take = min(_PROFILE_PAGE_LIMIT, remaining)
+        if cursor > OFFSET_MAX:
+            raise EntityRowInvalid()
+        batch = _profile_page_once(
+            conn,
+            target,
+            fields=fields,
+            filters=filters,
+            limit=take,
+            offset=cursor,
+            after=None,
+        )
+        items.extend(batch)
+        if len(batch) < take:
+            break
+        remaining -= len(batch)
+        cursor += len(batch)
+    return items
+
+
+def _profile_page_once(
+    conn: Connection,
+    target: HeadTarget,
+    *,
+    fields: list[str],
+    filters: Any,
+    limit: int,
+    offset: int,
+    after: int | None,
+) -> list[dict[str, Any]]:
+    record = _record_definition(fields, target)
     select_cols = ", ".join(ident(name) for name in fields)
     sql = (
-        f"SELECT {select_cols} FROM {_read_from(target)}{where_sql} "
-        f"ORDER BY {ident('row_id')} ASC LIMIT :_limit"
+        f"SELECT {select_cols} FROM "
+        f"{qualified_table(ENTITY_ACCESS_SCHEMA, 'profile_page')}("
+        "CAST(:_view AS regclass), CAST(:_columns AS text[]), "
+        ":_limit, :_offset, :_after, CAST(:_filter AS jsonb)"
+        f") AS page({record})"
     )
-    params["_limit"] = limit + 1
-    rows = conn.execute(text(sql), params).all()
-    page = rows[:limit]
-    items = [decode_row(fields, tuple(row), target) for row in page]
-    next_after: int | None = None
-    if len(rows) > limit:
-        next_after = int(items[-1]["row_id"])
-    return items, next_after
+    rows = conn.execute(
+        text(sql),
+        {
+            "_view": _read_from(target),
+            "_columns": list(fields),
+            "_limit": limit,
+            "_offset": offset,
+            "_after": after,
+            "_filter": None if not filters else json.dumps(filters),
+        },
+    ).all()
+    return [decode_row(fields, tuple(row), target) for row in rows]
+
+
+def _record_definition(fields: list[str], target: HeadTarget) -> str:
+    by_name = {attr.name: attr for attr in target.attributes}
+    parts: list[str] = []
+    for name in fields:
+        if name == "row_id":
+            sql_type = "bigint"
+        else:
+            attr = by_name[name]
+            if attr.type == "reference":
+                attr = reference_value_attr(attr, target)
+            sql_type = resolve(attr.type).physical_sql(attr)
+        parts.append(f"{ident(name)} {sql_type}")
+    return ", ".join(parts)
 
 
 def _where(compiled: CompiledFilter | None) -> tuple[str, dict[str, Any]]:

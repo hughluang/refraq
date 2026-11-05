@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.admin.user_store import UserRecord
 from backend.entity.change_log import SOURCE_USER
+from backend.entity.access.compiler import predicate_depends_on_row
 from backend.entity.access.enforce import (
     DataAccess,
     begin_data,
@@ -235,7 +236,9 @@ def query_rows(
             "after_row_id cannot be combined with offset or include_total"
         )
     fields = _resolve_fields(body.get("fields"), target)
-    compiled = compile_filters(body.get("filters"), target, require_leaf=False)
+    filters = body.get("filters")
+    compiled = compile_filters(filters, target, require_leaf=False)
+    row_dependent = predicate_depends_on_row(access.outcome.shape)
     try:
         ctx = read_context(access)
         if keyset:
@@ -246,6 +249,8 @@ def query_rows(
                     target,
                     fields=fields,
                     compiled=compiled,
+                    filters=filters,
+                    row_dependent=row_dependent,
                     limit=limit,
                     after_row_id=after,
                 )
@@ -262,6 +267,8 @@ def query_rows(
                 target,
                 fields=fields,
                 compiled=compiled,
+                filters=filters,
+                row_dependent=row_dependent,
                 limit=limit,
                 offset=offset,
                 include_total=include_total,

@@ -17,7 +17,7 @@ import uuid
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, make_url
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import DataError, ProgrammingError
 
 from backend.entity.bootstrap import run_bootstrap
 from backend.entity.ddl import (
@@ -144,6 +144,7 @@ def test_bootstrap_is_idempotent_and_reader_cannot_bypass_rls() -> None:
         leakproof = _leakproof_operators(admin_url)
         assert ("text", "=") in leakproof
         _assert_barrier_not_pierced(admin_url, reader_url)
+        _assert_profile_page_stops_on_primary_key(admin_url, reader_url)
     finally:
         with maintenance.connect() as conn:
             try:
@@ -359,6 +360,201 @@ def _assert_leak_not_on_base_scan(plan: object) -> None:
         )
         assert "leak" not in blob, plan
     assert any("leak" in json.dumps(node.get("Filter")) for node in nodes), plan
+
+
+def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -> None:
+    admin = create_engine(admin_url)
+    reader = create_engine(reader_url)
+    secret = b"k" * 32
+    try:
+        with admin.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE entity_data.page_probe ("
+                    "row_id bigint PRIMARY KEY, name text)"
+                )
+            )
+            for statement in table_security_statements("entity_data", "page_probe"):
+                conn.exec_driver_sql(statement)
+            conn.execute(
+                text(
+                    "INSERT INTO entity_data.page_probe (row_id, name) VALUES "
+                    "(30, 'c'), (10, 'alpha'), (20, 'hidden'), (40, '100%_off')"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE VIEW entity_access.page_probe "
+                    "WITH (security_barrier = true) AS "
+                    "SELECT t.row_id, t.name "
+                    "FROM entity_data.page_probe t "
+                    "WHERE (SELECT acl.rev_ok('ent_page', 1)) AND t.row_id <> 20"
+                )
+            )
+            conn.execute(
+                text(
+                    'ALTER VIEW entity_access.page_probe OWNER TO "refraq_exposure_owner"'
+                )
+            )
+            conn.execute(
+                text('GRANT SELECT ON entity_access.page_probe TO "refraq_reader"')
+            )
+            conn.execute(
+                text(
+                    "CREATE VIEW entity_access.page_foreign "
+                    "WITH (security_barrier = true) AS "
+                    "SELECT row_id, name FROM entity_data.page_probe"
+                )
+            )
+            conn.execute(
+                text('GRANT SELECT ON entity_access.page_foreign TO "refraq_reader"')
+            )
+            conn.execute(
+                text("SELECT acl.install_key(:kid, :secret)"),
+                {"kid": "k1", "secret": secret},
+            )
+        good = _sign(
+            secret,
+            {
+                "sub": "user_1",
+                "grants": ["g1"],
+                "attrs": {},
+                "rev": {"ent_page": 1},
+                "exp": int(time.time()) + 3600,
+                "req": "req_page",
+                "kid": "k1",
+            },
+        )
+        forged = good[:-4] + "0000"
+        with reader.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.ctx', :token, true)"), {"token": good}
+            )
+            conn.execute(text("SET LOCAL enable_seqscan = off"))
+            conn.execute(text("SET LOCAL enable_bitmapscan = off"))
+            barrier = "\n".join(
+                conn.execute(
+                    text(
+                        "EXPLAIN SELECT row_id FROM entity_access.page_probe "
+                        "ORDER BY row_id LIMIT 2"
+                    )
+                ).scalars()
+            )
+            assert "Sort" in barrier, barrier
+            page = _read_page(conn, limit=2, offset=0, after=None, filt=None)
+            assert page == [10, 30]
+            assert _read_page(conn, limit=2, offset=0, after=10, filt=None) == [30, 40]
+            assert _read_page(
+                conn,
+                limit=2,
+                offset=0,
+                after=None,
+                filt='{"field":"name","op":"eq","value":"alpha"}',
+            ) == [10]
+            assert _read_page(
+                conn,
+                limit=5,
+                offset=0,
+                after=None,
+                filt='{"field":"name","op":"contains","value":"100%"}',
+            ) == [40]
+        with reader.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.ctx', :token, true)"), {"token": forged}
+            )
+            assert _read_page(conn, limit=5, offset=0, after=None, filt=None) == []
+        with reader.connect() as conn:
+            with pytest.raises(DataError, match="not an identifier"):
+                conn.execute(
+                    text(
+                        "SELECT row_id FROM entity_access.profile_page("
+                        "'entity_access.page_probe'::regclass, "
+                        "ARRAY['row_id; DELETE FROM entity_data.page_probe'], "
+                        "2, 0, NULL, NULL) AS page(row_id bigint)"
+                    )
+                )
+            conn.rollback()
+            with pytest.raises(DataError, match="not an identifier"):
+                conn.execute(
+                    text(
+                        "SELECT row_id FROM entity_access.profile_page("
+                        "'entity_access.page_probe'::regclass, ARRAY['row_id'], "
+                        "2, 0, NULL, "
+                        """CAST('{"field":"name;drop","op":"eq","value":"x"}' AS jsonb)"""
+                        ") AS page(row_id bigint)"
+                    )
+                )
+            conn.rollback()
+            with pytest.raises(ProgrammingError, match="not an exposure profile"):
+                conn.execute(
+                    text(
+                        "SELECT row_id FROM entity_access.profile_page("
+                        "'entity_access.page_foreign'::regclass, ARRAY['row_id'], "
+                        "2, 0, NULL, NULL) AS page(row_id bigint)"
+                    )
+                )
+            conn.rollback()
+            with pytest.raises(ProgrammingError, match="permission denied"):
+                conn.execute(
+                    text(
+                        "SELECT entity_access.profile_page_sql("
+                        "'entity_access.page_probe'::regclass, ARRAY['row_id'], "
+                        "2, 0, NULL, NULL)"
+                    )
+                )
+            conn.rollback()
+        with admin.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.ctx', :token, true)"), {"token": good}
+            )
+            page_sql = conn.execute(
+                text(
+                    "SELECT entity_access.profile_page_sql("
+                    "'entity_access.page_probe'::regclass, ARRAY['row_id'], "
+                    "2, 0, NULL, NULL)"
+                )
+            ).scalar_one()
+            assert "entity_data" in page_sql
+            assert "LIMIT 2" in page_sql
+            assert ";" not in page_sql
+            conn.execute(text("SET LOCAL enable_seqscan = off"))
+            conn.execute(text("SET LOCAL enable_bitmapscan = off"))
+            plan = "\n".join(conn.execute(text("EXPLAIN " + page_sql)).scalars())
+            assert "Index" in plan, plan
+            assert "Sort" not in plan, plan
+            count = conn.execute(
+                text("SELECT count(*) FROM entity_data.page_probe")
+            ).scalar_one()
+            assert int(count) == 4
+    finally:
+        reader.dispose()
+        admin.dispose()
+
+
+def _read_page(
+    conn: Connection,
+    *,
+    limit: int,
+    offset: int,
+    after: int | None,
+    filt: str | None,
+) -> list[int]:
+    rows = conn.execute(
+        text(
+            "SELECT row_id FROM entity_access.profile_page("
+            "CAST(:view AS regclass), CAST(:cols AS text[]), "
+            ":lim, :off, :after, CAST(:filt AS jsonb)) AS page(row_id bigint)"
+        ),
+        {
+            "view": "entity_access.page_probe",
+            "cols": ["row_id"],
+            "lim": limit,
+            "off": offset,
+            "after": after,
+            "filt": filt,
+        },
+    ).scalars()
+    return [int(row) for row in rows]
 
 
 def _leakproof_operators(admin_url: str) -> dict[tuple[str, str], bool]:

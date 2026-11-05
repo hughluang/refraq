@@ -9,15 +9,18 @@ from backend.entity.bootstrap import (
     LegacyRelation,
     acl_statements,
     move_statements,
+    profile_page_statements,
     retire_channel_reader_statements,
     role_statements,
     schema_statements,
     secure_existing_table_statements,
 )
+from backend.entity.data.capabilities import OFFSET_MAX, PAGE_LIMIT_MAX
 from backend.entity.ddl import (
     ACL_OWNER_ROLE,
     ENTITY_OWNER_ROLE,
     ENTITY_SCHEMAS,
+    EXPOSURE_OWNER_ROLE,
     READER_ROLE,
     ident,
 )
@@ -100,6 +103,28 @@ def test_acl_statements_are_definer_stable_and_fail_closed() -> None:
     moved = "\n".join(acl_statements(pgcrypto_schema="public"))
     assert "ALTER EXTENSION pgcrypto SET SCHEMA \"acl\"" in moved
     assert "CREATE EXTENSION" not in moved
+
+
+def test_profile_page_is_definer_and_granted_only_to_the_reader() -> None:
+    sql = profile_page_statements()
+    text = "\n".join(sql)
+    assert "SECURITY DEFINER" in text
+    assert "search_path = pg_catalog, pg_temp" in text
+    assert f'OWNER TO "{EXPOSURE_OWNER_ROLE}"' in text
+    assert f"p_limit > {PAGE_LIMIT_MAX + 1}" in text
+    assert f"p_offset > {OFFSET_MAX}" in text
+    granted = [
+        stmt
+        for stmt in sql
+        if stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_page(")
+    ]
+    assert len(granted) == 1
+    assert READER_ROLE in granted[0]
+    assert not any(
+        stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_page_sql")
+        or stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_filter")
+        for stmt in sql
+    )
 
 
 def test_move_and_secure_statements() -> None:

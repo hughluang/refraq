@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from backend.admin.subjects import existing_user_ids
 from backend.admin.user_store import UserRecord
+from backend.entity.access.compiler import predicate_depends_on_row
 from backend.entity.access.dsl import rule_sql
 from backend.entity.access.enforce import (
     _clear_names,
@@ -89,7 +90,8 @@ def read_rows(
         raise EntityNotFound()
     access = begin_data(entity.table_name, user, {}, action="read", for_write=False)
     target = access.target
-    compiled = compile_filters(_as_filter_tree(filters), target)
+    tree = _as_filter_tree(filters)
+    compiled = compile_filters(tree, target)
     fields = ["row_id", *[attr.name for attr in target.attributes]]
     ctx = read_context(access)
     with data_sql.entity_read_connection(ctx) as conn:
@@ -98,6 +100,8 @@ def read_rows(
             target,
             fields=fields,
             compiled=compiled,
+            filters=tree,
+            row_dependent=predicate_depends_on_row(access.outcome.shape),
             limit=limit + 1,
             offset=0,
             include_total=True,

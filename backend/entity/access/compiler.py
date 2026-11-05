@@ -55,6 +55,7 @@ __all__ = [
     "Shape",
     "compile_policy",
     "context_attribute_keys",
+    "predicate_depends_on_row",
 
 
     "render_shape",
@@ -108,6 +109,13 @@ class Shape:
     force_empty: bool
     withheld: bool
     view_name: str
+
+
+def predicate_depends_on_row(shape: Shape) -> bool:
+    """True when a grant or restriction predicate reads the row."""
+    if shape.row_rules:
+        return True
+    return any(grant.row_rule is not None for grant in shape.grants)
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,4 +1,4 @@
-"""Entity database bootstrap: roles, schemas, acl functions, table move, RLS.
+"""Entity database bootstrap: roles, schemas, acl functions, profile page, table move, RLS.
 
 Run with ``python -m backend.entity.bootstrap``. Connects with
 ``ENTITY_ADMIN_DATABASE_URL`` only; runtime processes never read that URL.
@@ -21,6 +21,13 @@ from sqlalchemy.engine import Connection, make_url
 
 from backend.core.config import Settings
 from backend.entity.change_log import ensure_shared_relations
+from backend.entity.data.capabilities import (
+    FILTER_DEPTH_MAX,
+    FILTER_IN_VALUES_MAX,
+    FILTER_LEAVES_MAX,
+    OFFSET_MAX,
+    PAGE_LIMIT_MAX,
+)
 from backend.entity.ddl import (
     ACL_OWNER_ROLE,
     ACL_SCHEMA,
@@ -46,6 +53,7 @@ __all__ = [
     "ensure_database",
     "main",
     "move_statements",
+    "profile_page_statements",
     "retire_channel_reader_statements",
     "role_statements",
     "run_bootstrap",
@@ -471,6 +479,347 @@ def acl_statements(*, pgcrypto_schema: str | None) -> list[str]:
     return statements
 
 
+_PROFILE_PAGE_LIMIT = PAGE_LIMIT_MAX + 1
+
+# psycopg treats "%" as a placeholder, so each LIKE percent in this body is "%%".
+_PROFILE_PAGE_SQL = r"""
+CREATE OR REPLACE FUNCTION entity_access.profile_filter(
+  p_view regclass,
+  p_node jsonb,
+  p_path text[],
+  p_depth integer
+) RETURNS TABLE (sql text, leaves integer, ins integer)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+  key_count integer;
+  items jsonb;
+  n integer;
+  i integer;
+  child jsonb;
+  part_sql text;
+  part_leaves integer;
+  part_ins integer;
+  parts text[] := ARRAY[]::text[];
+  leaf_sum integer := 0;
+  in_sum integer := 0;
+  joiner text;
+  field text;
+  op text;
+  typ text;
+  is_jsonb boolean;
+  path_lit text;
+  page_col text;
+  rhs text;
+  expr text;
+  in_count integer := 0;
+  grouped text;
+BEGIN
+  IF p_depth > __DEPTH_CAP__ THEN
+    RAISE EXCEPTION 'filter depth exceeds limit' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_typeof(p_node) IS DISTINCT FROM 'object' THEN
+    RAISE EXCEPTION 'filter node must be an object' USING ERRCODE = '22023';
+  END IF;
+  SELECT count(*) INTO key_count FROM jsonb_object_keys(p_node) AS k;
+  IF (p_node ? 'all') OR (p_node ? 'any') THEN
+    IF ((p_node ? 'all') AND (p_node ? 'any')) OR key_count <> 1 THEN
+      RAISE EXCEPTION 'filter node must be a leaf or all/any group' USING ERRCODE = '22023';
+    END IF;
+    items := CASE WHEN p_node ? 'all' THEN p_node->'all' ELSE p_node->'any' END;
+    IF jsonb_typeof(items) IS DISTINCT FROM 'array' OR jsonb_array_length(items) < 1 THEN
+      RAISE EXCEPTION 'all/any must be a non-empty array' USING ERRCODE = '22023';
+    END IF;
+    n := jsonb_array_length(items);
+    joiner := CASE WHEN p_node ? 'all' THEN ' AND ' ELSE ' OR ' END;
+    FOR i IN 0..n - 1 LOOP
+      child := items->i;
+      SELECT f.sql, f.leaves, f.ins
+        INTO part_sql, part_leaves, part_ins
+      FROM entity_access.profile_filter(
+        p_view, child, p_path || ARRAY[CASE WHEN p_node ? 'all' THEN 'all' ELSE 'any' END, i::text], p_depth + 1
+      ) AS f;
+      parts := parts || part_sql;
+      leaf_sum := leaf_sum + part_leaves;
+      in_sum := in_sum + part_ins;
+      IF leaf_sum > __LEAVES_CAP__ THEN
+        RAISE EXCEPTION 'filter leaf count exceeds limit' USING ERRCODE = '22023';
+      END IF;
+      IF in_sum > __IN_CAP__ THEN
+        RAISE EXCEPTION 'in value count exceeds limit' USING ERRCODE = '22023';
+      END IF;
+    END LOOP;
+    grouped := '(' || array_to_string(parts, joiner) || ')';
+    RETURN QUERY SELECT grouped, leaf_sum, in_sum;
+    RETURN;
+  END IF;
+  IF NOT (p_node ? 'field' AND p_node ? 'op')
+     OR EXISTS (
+       SELECT 1 FROM jsonb_object_keys(p_node) AS k
+       WHERE k NOT IN ('field', 'op', 'value')
+     ) THEN
+    RAISE EXCEPTION 'filter node must be a leaf or all/any group' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_typeof(p_node->'field') IS DISTINCT FROM 'string'
+     OR jsonb_typeof(p_node->'op') IS DISTINCT FROM 'string' THEN
+    RAISE EXCEPTION 'filter field and op must be strings' USING ERRCODE = '22023';
+  END IF;
+  field := p_node->>'field';
+  op := p_node->>'op';
+  IF field !~ '^[A-Za-z_][A-Za-z0-9_]*$' THEN
+    RAISE EXCEPTION 'filter field is not an identifier' USING ERRCODE = '22023';
+  END IF;
+  IF op NOT IN ('eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'is_null') THEN
+    RAISE EXCEPTION 'filter op is not allowed' USING ERRCODE = '22023';
+  END IF;
+  SELECT pg_catalog.format_type(a.atttypid, a.atttypmod),
+         a.atttypid = 'pg_catalog.jsonb'::regtype
+    INTO typ, is_jsonb
+  FROM pg_catalog.pg_attribute a
+  WHERE a.attrelid = p_view
+    AND a.attname = field
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+  IF typ IS NULL OR typ !~ '^[A-Za-z0-9_ ]+(\([0-9, ]+\))?$' THEN
+    RAISE EXCEPTION 'filter field is not on the view' USING ERRCODE = '22023';
+  END IF;
+  page_col := 'page.' || pg_catalog.quote_ident(field);
+  IF op = 'is_null' THEN
+    IF p_node ? 'value' AND p_node->'value' <> 'null'::jsonb THEN
+      RAISE EXCEPTION 'is_null must not carry a value' USING ERRCODE = '22023';
+    END IF;
+    RETURN QUERY SELECT page_col || ' IS NULL', 1, 0;
+    RETURN;
+  END IF;
+  IF NOT (p_node ? 'value') THEN
+    RAISE EXCEPTION 'filter op requires value' USING ERRCODE = '22023';
+  END IF;
+  path_lit := '{' || array_to_string(p_path || ARRAY['value'], ',') || '}';
+  IF op = 'contains' THEN
+    IF is_jsonb OR jsonb_typeof(p_node->'value') IS DISTINCT FROM 'string' THEN
+      RAISE EXCEPTION 'contains value must be a non-empty string' USING ERRCODE = '22023';
+    END IF;
+    IF (p_node->>'value') = '' THEN
+      RAISE EXCEPTION 'contains value must be a non-empty string' USING ERRCODE = '22023';
+    END IF;
+    expr := page_col
+      || ' ILIKE (''%%'' || replace(replace(replace($1 #>> '
+      || pg_catalog.quote_literal(path_lit)
+      || ', E''\\'', E''\\\\''), ''%%'', E''\\%%''), ''_'', E''\\_'') || ''%%'') ESCAPE E''\\''';
+    RETURN QUERY SELECT expr, 1, 0;
+    RETURN;
+  END IF;
+  IF op = 'in' THEN
+    IF jsonb_typeof(p_node->'value') IS DISTINCT FROM 'array'
+       OR jsonb_array_length(p_node->'value') < 1 THEN
+      RAISE EXCEPTION 'in value must be a non-empty array' USING ERRCODE = '22023';
+    END IF;
+    in_count := jsonb_array_length(p_node->'value');
+    IF in_count > __IN_CAP__ THEN
+      RAISE EXCEPTION 'in value count exceeds limit' USING ERRCODE = '22023';
+    END IF;
+    IF is_jsonb THEN
+      expr := page_col || ' IN (SELECT v FROM jsonb_array_elements($1 #> '
+        || pg_catalog.quote_literal(path_lit) || ') AS t(v))';
+    ELSE
+      expr := page_col || ' IN (SELECT v::' || typ || ' FROM jsonb_array_elements_text($1 #> '
+        || pg_catalog.quote_literal(path_lit) || ') AS t(v))';
+    END IF;
+    RETURN QUERY SELECT expr, 1, in_count;
+    RETURN;
+  END IF;
+  IF is_jsonb THEN
+    rhs := '($1 #> ' || pg_catalog.quote_literal(path_lit) || ')';
+  ELSE
+    rhs := '($1 #>> ' || pg_catalog.quote_literal(path_lit) || ')::' || typ;
+  END IF;
+  expr := CASE op
+    WHEN 'eq' THEN page_col || ' = ' || rhs
+    WHEN 'ne' THEN page_col || ' IS DISTINCT FROM ' || rhs
+    WHEN 'gt' THEN page_col || ' > ' || rhs
+    WHEN 'gte' THEN page_col || ' >= ' || rhs
+    WHEN 'lt' THEN page_col || ' < ' || rhs
+    WHEN 'lte' THEN page_col || ' <= ' || rhs
+  END;
+  RETURN QUERY SELECT expr, 1, 0;
+END
+$fn$
+""".strip()
+
+
+_PROFILE_PAGE_SQL_FN = """
+CREATE OR REPLACE FUNCTION entity_access.profile_page_sql(
+  p_view regclass,
+  p_columns text[],
+  p_limit integer,
+  p_offset integer,
+  p_after bigint,
+  p_filter jsonb
+) RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+  kind "char";
+  nsp text;
+  rel_owner text;
+  col text;
+  cols text := '';
+  def text;
+  filt text;
+  where_sql text := '';
+  skip_filter boolean;
+BEGIN
+  IF p_limit IS NULL OR p_limit < 1 OR p_limit > __LIMIT_CAP__ THEN
+    RAISE EXCEPTION 'page limit out of range' USING ERRCODE = '22023';
+  END IF;
+  IF p_offset IS NULL OR p_offset < 0 OR p_offset > __OFFSET_CAP__ THEN
+    RAISE EXCEPTION 'page offset out of range' USING ERRCODE = '22023';
+  END IF;
+  IF p_after IS NOT NULL AND p_after < 1 THEN
+    RAISE EXCEPTION 'page after out of range' USING ERRCODE = '22023';
+  END IF;
+  IF p_columns IS NULL OR cardinality(p_columns) < 1 OR cardinality(p_columns) > 512 THEN
+    RAISE EXCEPTION 'page columns out of range' USING ERRCODE = '22023';
+  END IF;
+  SELECT c.relkind, n.nspname, r.rolname
+    INTO kind, nsp, rel_owner
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_catalog.pg_roles r ON r.oid = c.relowner
+  WHERE c.oid = p_view;
+  IF kind IS DISTINCT FROM 'v'
+     OR nsp IS DISTINCT FROM 'entity_access'
+     OR rel_owner IS DISTINCT FROM 'refraq_exposure_owner' THEN
+    RAISE EXCEPTION 'page view is not an exposure profile' USING ERRCODE = '42501';
+  END IF;
+  IF NOT pg_catalog.has_table_privilege(session_user, p_view, 'SELECT') THEN
+    RAISE EXCEPTION 'page view is not selectable' USING ERRCODE = '42501';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_attribute a
+    WHERE a.attrelid = p_view AND a.attname = 'row_id' AND a.attnum > 0 AND NOT a.attisdropped
+  ) THEN
+    RAISE EXCEPTION 'page view has no row_id' USING ERRCODE = '22023';
+  END IF;
+  FOREACH col IN ARRAY p_columns LOOP
+    IF col IS NULL OR col !~ '^[A-Za-z_][A-Za-z0-9_]*$' THEN
+      RAISE EXCEPTION 'page column is not an identifier' USING ERRCODE = '22023';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid = p_view AND a.attname = col AND a.attnum > 0 AND NOT a.attisdropped
+    ) THEN
+      RAISE EXCEPTION 'page column is not on the view' USING ERRCODE = '22023';
+    END IF;
+    IF cols <> '' THEN
+      cols := cols || ', ';
+    END IF;
+    cols := cols || pg_catalog.quote_ident(col);
+  END LOOP;
+  def := btrim(pg_catalog.pg_get_viewdef(p_view, true));
+  def := regexp_replace(def, ';[[:space:]]*$', '');
+  skip_filter := p_filter IS NULL
+    OR jsonb_typeof(p_filter) = 'null'
+    OR p_filter = '{}'::jsonb;
+  IF NOT skip_filter THEN
+    SELECT f.sql INTO filt
+    FROM entity_access.profile_filter(p_view, p_filter, ARRAY[]::text[], 1) AS f;
+    where_sql := ' WHERE ' || filt;
+  END IF;
+  IF p_after IS NOT NULL THEN
+    IF where_sql = '' THEN
+      where_sql := ' WHERE page.row_id > ' || p_after::text;
+    ELSE
+      where_sql := where_sql || ' AND page.row_id > ' || p_after::text;
+    END IF;
+  END IF;
+  RETURN 'SELECT ' || cols
+    || ' FROM (' || def || ') AS page'
+    || where_sql
+    || ' ORDER BY page.row_id ASC LIMIT ' || p_limit::text
+    || ' OFFSET ' || p_offset::text;
+END
+$fn$
+""".strip()
+
+
+_PROFILE_PAGE_FN = """
+CREATE OR REPLACE FUNCTION entity_access.profile_page(
+  p_view regclass,
+  p_columns text[],
+  p_limit integer,
+  p_offset integer,
+  p_after bigint,
+  p_filter jsonb
+) RETURNS SETOF record
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+SET row_security = on
+AS $fn$
+DECLARE
+  query text;
+  skip_filter boolean;
+BEGIN
+  query := entity_access.profile_page_sql(
+    p_view, p_columns, p_limit, p_offset, p_after, p_filter
+  );
+  skip_filter := p_filter IS NULL
+    OR jsonb_typeof(p_filter) = 'null'
+    OR p_filter = '{}'::jsonb;
+  IF skip_filter THEN
+    RETURN QUERY EXECUTE query;
+  ELSE
+    RETURN QUERY EXECUTE query USING p_filter;
+  END IF;
+END
+$fn$
+""".strip()
+
+
+def profile_page_statements() -> list[str]:
+    """Exposure-owner page function. The reader passes a view, not a SQL string."""
+    body = (
+        _PROFILE_PAGE_SQL.replace("__DEPTH_CAP__", str(FILTER_DEPTH_MAX))
+        .replace("__LEAVES_CAP__", str(FILTER_LEAVES_MAX))
+        .replace("__IN_CAP__", str(FILTER_IN_VALUES_MAX))
+    )
+    sql_fn = (
+        _PROFILE_PAGE_SQL_FN.replace("__LIMIT_CAP__", str(_PROFILE_PAGE_LIMIT))
+        .replace("__OFFSET_CAP__", str(OFFSET_MAX))
+    )
+    exposure = ident(EXPOSURE_OWNER_ROLE)
+    reader = ident(READER_ROLE)
+    signatures = (
+        "entity_access.profile_filter(regclass, jsonb, text[], integer)",
+        "entity_access.profile_page_sql(regclass, text[], integer, integer, bigint, jsonb)",
+        "entity_access.profile_page(regclass, text[], integer, integer, bigint, jsonb)",
+    )
+    statements = [body, sql_fn, _PROFILE_PAGE_FN]
+    for signature in signatures:
+        statements.append(f"ALTER FUNCTION {signature} OWNER TO {exposure}")
+        statements.append(f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC")
+    statements.append(
+        "REVOKE ALL ON FUNCTION entity_access.profile_filter(regclass, jsonb, text[], integer) "
+        f"FROM {reader}"
+    )
+    statements.append(
+        "REVOKE ALL ON FUNCTION entity_access.profile_page_sql"
+        "(regclass, text[], integer, integer, bigint, jsonb) "
+        f"FROM {reader}"
+    )
+    statements.append(
+        "GRANT EXECUTE ON FUNCTION entity_access.profile_page"
+        "(regclass, text[], integer, integer, bigint, jsonb) "
+        f"TO {reader}"
+    )
+    return statements
+
+
 @dataclass(frozen=True, slots=True)
 class LegacyRelation:
     name: str
@@ -649,6 +998,7 @@ def _converge(
         )
     ).scalar()
     _apply(conn, acl_statements(pgcrypto_schema=pgcrypto_schema))
+    _apply(conn, profile_page_statements())
     relations = _legacy_relations(conn, legacy_schema)
     occupied = frozenset(_relation_names(conn, ENTITY_DATA_SCHEMA, ("r", "v", "m", "p", "f")))
     _apply(conn, move_statements(legacy_schema, relations, occupied=occupied))
@@ -665,8 +1015,8 @@ def _converge(
 
 
 def _apply(conn: Connection, statements: list[str]) -> None:
-    # Driver SQL without parameters: a password or body containing ':' or '%'
-    # is never parsed as a placeholder.
+    # exec_driver_sql does not bind ":name". psycopg still treats "%" as a
+    # placeholder, so a literal percent in a statement is written "%%".
     for sql in statements:
         conn.exec_driver_sql(sql)
 

@@ -21,7 +21,24 @@ __all__ = [
     "CompiledFilter",
     "compile_filters",
     "escape_like",
+    "filter_is_leakproof",
 ]
+
+# Comparisons PostgreSQL marks leakproof. numeric and jsonb are not; LIKE is not.
+_LEAKPROOF_COMPARISON_TYPES = frozenset(
+    {
+        "string",
+        "text",
+        "dictionary",
+        "user",
+        "integer",
+        "number",
+        "boolean",
+        "date",
+        "timestamp",
+        "time",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +49,34 @@ class CompiledFilter:
 
 def escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def filter_is_leakproof(filters: Any, target: HeadTarget) -> bool:
+    """True when every leaf is leakproof, so it can sit in the profile query block."""
+    if filters is None or filters == {}:
+        return True
+    return _leakproof_node(filters, target)
+
+
+def _leakproof_node(node: dict[str, Any], target: HeadTarget) -> bool:
+    if "all" in node or "any" in node:
+        items = node["all"] if "all" in node else node["any"]
+        return all(_leakproof_node(item, target) for item in items)
+    op = node["op"]
+    if op == "is_null":
+        return True
+    if op == "contains":
+        return False
+    return _comparison_type(node["field"], target) in _LEAKPROOF_COMPARISON_TYPES
+
+
+def _comparison_type(field: str, target: HeadTarget) -> str:
+    if field == "row_id":
+        return "integer"
+    attr = next(item for item in target.attributes if item.name == field)
+    if attr.type != "reference":
+        return attr.type
+    return str(target.head.reference_snapshots[attr.name]["type"])
 
 
 def compile_filters(
