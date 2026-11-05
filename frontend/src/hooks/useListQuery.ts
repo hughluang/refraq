@@ -3,8 +3,10 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { acceptedMember, acceptedPage } from "@/lib/pagination";
+
 export type ListFilterSpec =
-  | { key: string; type: "select"; defaultValue: string }
+  | { key: string; type: "select"; defaultValue: string; accept?: readonly string[] }
   | { key: string; type: "multi"; defaultValue: readonly string[] };
 
 export type UseListQueryOptions = {
@@ -78,10 +80,12 @@ function sameFilter(
 }
 
 function parsePage(raw: string | null): number {
-  if (!raw) return 1;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) return 1;
-  return value;
+  return acceptedPage(raw) ?? 1;
+}
+
+function acceptedSelect(filter: ListFilterSpec & { type: "select" }, raw: string): string {
+  if (!filter.accept) return raw;
+  return acceptedMember(raw, filter.accept) ?? filter.defaultValue;
 }
 
 function readFilter(
@@ -89,8 +93,22 @@ function readFilter(
   filter: ListFilterSpec,
 ): string | readonly string[] {
   if (!params.has(filter.key)) return filter.defaultValue;
-  if (filter.type === "select") return params.get(filter.key) ?? "";
+  if (filter.type === "select") return acceptedSelect(filter, params.get(filter.key) ?? "");
   return params.getAll(filter.key).filter((value) => value !== "");
+}
+
+/** Owned tokens the acceptance rules reject. Legal addresses are left alone. */
+function rawNeedsCanonical(
+  params: URLSearchParams,
+  filters: readonly ListFilterSpec[],
+  pageKey: string,
+): boolean {
+  for (const filter of filters) {
+    if (filter.type !== "select" || !params.has(filter.key)) continue;
+    const raw = params.get(filter.key) ?? "";
+    if (acceptedSelect(filter, raw) !== raw) return true;
+  }
+  return params.has(pageKey) && acceptedPage(params.get(pageKey)) == null;
 }
 
 function readState(
@@ -158,7 +176,7 @@ function specKeyOf(filters: readonly ListFilterSpec[]): string {
   return JSON.stringify(
     filters.map((filter) =>
       filter.type === "select"
-        ? ["select", filter.key, filter.defaultValue]
+        ? ["select", filter.key, filter.defaultValue, filter.accept ?? null]
         : ["multi", filter.key, canonical(filter.defaultValue)],
     ),
   );
@@ -170,7 +188,7 @@ function normalize(
 ): string | readonly string[] {
   if (filter.type === "select") {
     const text = typeof value === "string" ? value : "";
-    return text === filter.defaultValue ? filter.defaultValue : text;
+    return acceptedSelect(filter, text);
   }
   const items = Array.isArray(value) ? [...value] : [];
   return canonical(items) === canonical(filter.defaultValue)
@@ -215,15 +233,16 @@ export function useListQuery(options: UseListQueryOptions = {}): ListQuery {
   stateRef.current = state;
 
   useEffect(() => {
-    const next = readState(
-      new URLSearchParams(external),
-      searchKeyRef.current,
-      filtersRef.current,
-      pageKeyRef.current,
-    );
-    setState((current) =>
-      sameQuery(current, next, filtersRef.current) ? current : next,
-    );
+    const params = new URLSearchParams(external);
+    const filters = filtersRef.current;
+    const pageKey = pageKeyRef.current;
+    const next = readState(params, searchKeyRef.current, filters, pageKey);
+    setState((current) => (sameQuery(current, next, filters) ? current : next));
+    if (!rawNeedsCanonical(params, filters, pageKey)) return;
+    const href = writeHref(window.location.href, next, searchKeyRef.current, filters, pageKey);
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (href === current) return;
+    window.history.replaceState(window.history.state, "", href);
   }, [external, filtersKey]);
 
   const publish = useCallback((next: QueryState) => {
@@ -269,9 +288,10 @@ export function useListQuery(options: UseListQueryOptions = {}): ListQuery {
 
   const setPage = useCallback(
     (page: number) => {
+      const accepted = parsePage(String(page));
       const current = stateRef.current;
-      if (current.page === page) return;
-      publish({ ...current, page });
+      if (current.page === accepted) return;
+      publish({ ...current, page: accepted });
     },
     [publish],
   );

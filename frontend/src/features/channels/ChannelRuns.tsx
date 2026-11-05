@@ -14,7 +14,7 @@ import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { listRuns } from "@/features/channels/api";
 import { SectionHeader } from "@/components/layout/SectionHeader";
-import { historyContext } from "@/features/channels/channelHistory";
+import { RUN_STATUS_VALUES, RUN_TARGET_VALUES, historyContext } from "@/features/channels/channelHistory";
 import { copyText } from "@/lib/copy-text";
 import { formatFailedNode, formatRunSubject, nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
@@ -33,8 +33,8 @@ import { pageToOffset } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
 const FILTERS = [
-  { key: "run_status", type: "select", defaultValue: "" },
-  { key: "run_target", type: "select", defaultValue: "" },
+  { key: "run_status", type: "select", defaultValue: "", accept: RUN_STATUS_VALUES },
+  { key: "run_target", type: "select", defaultValue: "", accept: RUN_TARGET_VALUES },
 ] as const;
 
 export function inboundRunLabel(
@@ -119,8 +119,8 @@ export function ChannelRuns({ channelId, origin = "show" }: { channelId: string;
         <Button size="sm" variant="light" loading={live.refreshing} onClick={() => void live.refresh()}>{t("jobs.refresh")}</Button>
       } />
       <Group gap="sm" align="end" mb="sm">
-        <Select label={t("jobs.fields.status")} value={status} onChange={(value) => query.setFilter("run_status", value ?? "")} data={[{ value: "", label: t("channels.runs.all") }, ...["queued", "running", "succeeded", "failed", "cancelled"].map((value) => ({ value, label: t(`status.job.${value}`) }))]} />
-        <Select label={t("channels.runs.target")} value={target} onChange={(value) => query.setFilter("run_target", value ?? "")} data={[{ value: "", label: t("channels.runs.all") }, ...["draft", "published"].map((value) => ({ value, label: t(`channels.run.target.${value}`) }))]} />
+        <Select label={t("jobs.fields.status")} value={status} onChange={(value) => query.setFilter("run_status", value ?? "")} data={[{ value: "", label: t("channels.runs.all") }, ...RUN_STATUS_VALUES.map((value) => ({ value, label: t(`status.job.${value}`) }))]} />
+        <Select label={t("channels.runs.target")} value={target} onChange={(value) => query.setFilter("run_target", value ?? "")} data={[{ value: "", label: t("channels.runs.all") }, ...RUN_TARGET_VALUES.map((value) => ({ value, label: t(`channels.run.target.${value}`) }))]} />
         {query.isFiltered ? <Button variant="subtle" onClick={query.clear}>{t("common.filters.clear")}</Button> : null}
       </Group>
       <ListTable list={list} columnCount={1} minWidth={280} emptyMessage={t("channels.runs.empty")} onClearFilters={query.isFiltered ? query.clear : undefined}

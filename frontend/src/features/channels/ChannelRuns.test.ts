@@ -34,6 +34,10 @@ const api = vi.hoisted(() => ({
   listRuns: vi.fn(),
 }));
 
+const nav = vi.hoisted(() => ({
+  search: "",
+}));
+
 const notify = vi.hoisted(() => vi.fn());
 const clipboard = vi.hoisted(() => ({ copyText: vi.fn() }));
 vi.mock("@/lib/copy-text", () => clipboard);
@@ -85,7 +89,7 @@ vi.mock("next/link", () => ({
 vi.mock("next/navigation", () => ({
   usePathname: () => "/console/channels/chn_1",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
 const UPDATED = "Last updated 10/11/2026, 6:00:29 AM";
@@ -202,6 +206,7 @@ describe("ChannelRuns load feedback", () => {
     resetNotifications();
     i18n.extra = {};
     access.grants.clear();
+    nav.search = "";
     api.listRuns.mockReset();
     notify.mockReset();
     clipboard.copyText.mockReset().mockResolvedValue(undefined);
@@ -221,6 +226,21 @@ describe("ChannelRuns load feedback", () => {
     resetSessionStoreForTests();
     bindClientI18n({ t: (key: string) => key } as never);
     vi.useRealTimers();
+  });
+
+  it("does not request an unaccepted status, target, or page", async () => {
+    nav.search = "run_panel=runs&run_status=nope&run_target=other&run_page=-1&run_page=1e20";
+    window.history.replaceState(null, "", `/console/channels/chn_1?${nav.search}`);
+    api.listRuns.mockResolvedValue(page([run("succeeded")], 84));
+    renderRuns();
+    await advance(0);
+    expect(api.listRuns).toHaveBeenCalledWith(
+      "chn_1",
+      { limit: 50, offset: 0 },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(screen.queryByRole("button", { name: "common.filters.clear" })).toBeNull();
+    expect(screen.queryByText("channels.runs.empty")).toBeNull();
   });
 
   it("shows the unloaded list row and one notification when the first load gets no rows", async () => {

@@ -51,6 +51,16 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
   const [stale, setStale] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastSuccessAt, setLastSuccessAt] = useState<string | null>(null);
+  const [boundKey, setBoundKey] = useState(key);
+
+  if (boundKey !== key) {
+    setBoundKey(key);
+    setData(null);
+    setError(null);
+    setStale(false);
+    setLastSuccessAt(null);
+    setRefreshing(enabled);
+  }
 
   const dataRef = useRef<T | null>(null);
   const pausedRef = useRef(typeof document !== "undefined" && document.hidden);

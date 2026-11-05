@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.admin.deps import get_actor_token_id, require_permission
-from backend.admin.user_store import UserRecord
+from backend.admin.user_store import UserRecord, get_user_store
 from backend.channel.dataset_registry import get_dataset_store
 from backend.channel.errors import (
     ChannelDatasetUnavailable,
@@ -33,7 +33,8 @@ from backend.channel.template_preview import node_sample, preview_template
 from backend.core.pagination import PageParams, page_params
 from backend.core.time import Instant, format_instant, utc_now
 from backend.entity.datasets import any_row_exists, read_keyset_page
-from backend.jobs.store import get_job_store
+from backend.jobs.api import get_schedule_name_store, present_jobs
+from backend.jobs.store import JobRecord, get_job_store
 
 router = APIRouter(tags=["channels"])
 
@@ -167,9 +168,9 @@ def http_start_run(
     )
     fresh = get_job_store().get(job.id)
     stored = get_run_store().get_run(job.id)
-    if fresh is None or stored is None:
-        return {"run": _present(job, queued)}
-    return {"run": _present(fresh, stored)}
+    shown = job if fresh is None or stored is None else fresh
+    stored_run = queued if fresh is None or stored is None else stored
+    return {"run": _present(shown, stored_run, _trigger_names([shown]))}
 
 
 @router.post(
@@ -191,9 +192,9 @@ def http_rerun(
     )
     stored = get_run_store().get_run(job.id)
     current = get_job_store().get(job.id)
-    if stored is None or current is None:
-        return {"run": _present(job, record)}
-    return {"run": _present(current, stored)}
+    shown = job if stored is None or current is None else current
+    stored_run = record if stored is None or current is None else stored
+    return {"run": _present(shown, stored_run, _trigger_names([shown]))}
 
 
 @router.get("/channels/{channel_id}/runs", response_model=ChannelRunListResponse)
@@ -211,12 +212,16 @@ def http_list_runs(
         limit=page.limit,
         offset=page.offset,
     )
-    items = []
+    paired: list[tuple[JobRecord, Any]] = []
     for record in records:
         job = get_job_store().get(record.job_id)
         if job is None:
             continue
-        presented = _present(job, record)
+        paired.append((job, record))
+    names = _trigger_names([job for job, _record in paired])
+    items = []
+    for job, record in paired:
+        presented = _present(job, record, names)
         presented["nodes"] = _snapshot_nodes(record.graph)
         items.append(presented)
     return {"items": items, "total": total, "limit": page.limit, "offset": page.offset}
@@ -243,7 +248,11 @@ def http_get_run(
         }
         for item in get_run_store().execution_summaries(job_id)
     ]
-    return {"run": _present(job, record), "graph": record.graph, "node_summaries": summaries}
+    return {
+        "run": _present(job, record, _trigger_names([job])),
+        "graph": record.graph,
+        "node_summaries": summaries,
+    }
 
 
 @router.get(
@@ -497,7 +506,26 @@ def _snapshot_nodes(graph: Any) -> list[dict[str, str]]:
     return labels
 
 
-def _present(job: Any, record: Any) -> dict[str, Any]:
+def _trigger_names(
+    jobs: Sequence[JobRecord],
+) -> dict[str, tuple[str | None, str | None]]:
+    presented = present_jobs(
+        jobs,
+        users=get_user_store(),
+        schedules=get_schedule_name_store(),
+    )
+    return {
+        item.id: (item.trigger_actor_name, item.trigger_schedule_name)
+        for item in presented
+    }
+
+
+def _present(
+    job: JobRecord,
+    record: Any,
+    names: Mapping[str, tuple[str | None, str | None]],
+) -> dict[str, Any]:
+    actor_name, schedule_name = names[job.id]
     return {
         "job_id": job.id,
         "status": job.status,
@@ -508,8 +536,8 @@ def _present(job: Any, record: Any) -> dict[str, Any]:
         "trigger_kind": job.trigger_kind,
         "trigger_ref": job.trigger_ref,
         "trigger_node_id": record.trigger_node_id,
-        "trigger_actor_name": None,
-        "trigger_schedule_name": None,
+        "trigger_actor_name": actor_name,
+        "trigger_schedule_name": schedule_name,
         "ignore_checkpoints": record.ignore_checkpoints,
         "stop_at_node_id": record.stop_at_node_id,
         "failed_node_id": record.failed_node_id,

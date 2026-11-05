@@ -1572,6 +1572,7 @@ def test_test_run_creates_run_state(client: TestClient) -> None:
     finally:
         set_dispatcher(previous)
     assert response.status_code == 202, response.text
+    assert response.json()["run"]["trigger_actor_name"] == "Admin"
     job_id = response.json()["run"]["job_id"]
     detail = client.get(f"/channels/{channel_id}/runs/{job_id}")
     assert detail.status_code == 200, detail.text
@@ -1659,6 +1660,89 @@ def test_run_history_filters_before_paging(client: TestClient) -> None:
     assert response.status_code == 200, response.text
     assert response.json()["total"] == 1
     assert [run["job_id"] for run in response.json()["items"]] == expected[1:]
+
+
+def test_run_history_presents_trigger_names(client: TestClient) -> None:
+    from datetime import timedelta
+
+    from backend.channel.run_store import ChannelRunRecord
+    from backend.jobs.store import create_queued_job
+    from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    created = client.post("/channels", json={"name": "Named triggers", "description": None})
+    channel_id = created.json()["channel"]["id"]
+    now = utc_now()
+    user_job = create_queued_job(
+        kind="channel_run",
+        input={},
+        trigger_kind="user",
+        trigger_ref=admin.id,
+        created_at=now,
+    )
+    missing_job = create_queued_job(
+        kind="channel_run",
+        input={},
+        trigger_kind="user",
+        trigger_ref="user_missing",
+        created_at=now + timedelta(seconds=1),
+    )
+    get_schedule_store().upsert(
+        ScheduledTaskRecord(
+            id="sch_history_nightly",
+            key="channel-history-nightly",
+            name="Nightly",
+            enabled=True,
+            interval_seconds=3600,
+            cron=None,
+            task_name="backend.channel.schedules.fire_scheduled_channel_run",
+        )
+    )
+    schedule_job = create_queued_job(
+        kind="channel_run",
+        input={},
+        trigger_kind="schedule",
+        trigger_ref="sch_history_nightly",
+        created_at=now + timedelta(seconds=2),
+    )
+    for job in (user_job, missing_job, schedule_job):
+        get_run_store().insert_run(
+            ChannelRunRecord(
+                job_id=job.id,
+                channel_id=channel_id,
+                target="draft",
+                version=None,
+                draft_revision=None,
+                graph=None,
+                trigger_node_id="start",
+                ignore_checkpoints=False,
+                outcome=None,
+                failed_node_id=None,
+                skipped_node_ids=[],
+                created_at=job.created_at,
+            )
+        )
+
+    listed = client.get(f"/channels/{channel_id}/runs")
+    assert listed.status_code == 200, listed.text
+    by_id = {item["job_id"]: item for item in listed.json()["items"]}
+    assert by_id[user_job.id]["trigger_actor_name"] == "Admin"
+    assert by_id[user_job.id]["trigger_schedule_name"] is None
+    assert by_id[user_job.id]["trigger_ref"] == admin.id
+    assert by_id[missing_job.id]["trigger_actor_name"] is None
+    assert by_id[missing_job.id]["trigger_schedule_name"] is None
+    assert by_id[missing_job.id]["trigger_ref"] == "user_missing"
+    assert by_id[schedule_job.id]["trigger_actor_name"] is None
+    assert by_id[schedule_job.id]["trigger_schedule_name"] == "Nightly"
+    assert by_id[schedule_job.id]["trigger_ref"] == "sch_history_nightly"
+
+    user_detail = client.get(f"/channels/{channel_id}/runs/{user_job.id}")
+    assert user_detail.status_code == 200, user_detail.text
+    assert user_detail.json()["run"]["trigger_actor_name"] == "Admin"
+    schedule_detail = client.get(f"/channels/{channel_id}/runs/{schedule_job.id}")
+    assert schedule_detail.status_code == 200, schedule_detail.text
+    assert schedule_detail.json()["run"]["trigger_schedule_name"] == "Nightly"
 
 
 def test_execution_list_filters_pages_and_requires_read(client: TestClient) -> None:
@@ -2181,6 +2265,7 @@ def test_rerun_pins_a_failed_published_version(client: TestClient) -> None:
         assert body["target"] == "published"
         assert body["version"] == 1
         assert body["trigger_kind"] == "user"
+        assert body["trigger_actor_name"] == "Admin"
         queued = get_job_store().get(body["job_id"])
         assert queued is not None
         assert queued.input["pin_version"] is True

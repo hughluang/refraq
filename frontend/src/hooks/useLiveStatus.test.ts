@@ -3,7 +3,7 @@
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createElement } from "react";
+import { createElement, useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
@@ -134,6 +134,29 @@ describe("useLiveStatus", () => {
     expect(signals).toHaveLength(2);
     expect(signals[0].aborted).toBe(true);
     expect(signals[1].aborted).toBe(false);
+  });
+
+  it("does not commit the previous payload when the query key changes", async () => {
+    const load = vi.fn()
+      .mockResolvedValueOnce({ status: "succeeded" })
+      .mockImplementation(() => new Promise<Row>(() => {}));
+    const committed: string[] = [];
+    function Collection({ query }: { query: string }) {
+      const live = useLiveStatus({ key: query, fetch: load, isTerminal: () => true });
+      useLayoutEffect(() => {
+        committed.push(`${live.data?.status ?? "none"}:${live.loading ? "loading" : "idle"}`);
+      });
+      return createElement("div", { "data-testid": "value" }, live.data?.status ?? "none");
+    }
+    const view = render(createElement(Collection, { query: "all" }));
+    await advance(0);
+    expect(screen.getByTestId("value").textContent).toBe("succeeded");
+    const before = committed.length;
+    view.rerender(createElement(Collection, { query: "failed" }));
+    const afterChange = committed.slice(before);
+    expect(afterChange.length).toBeGreaterThan(0);
+    expect(afterChange.every((item) => item === "none:loading")).toBe(true);
+    expect(screen.getByTestId("value").textContent).toBe("none");
   });
 
   it("keeps polling after a manual refresh supersedes a hung automatic request", async () => {

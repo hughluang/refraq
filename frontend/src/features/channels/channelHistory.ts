@@ -1,13 +1,18 @@
+import { acceptedMember, acceptedPage } from "@/lib/pagination";
+
+export const RUN_STATUS_VALUES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
+export const RUN_TARGET_VALUES = ["draft", "published"] as const;
+
 export function historyContext(search: string): string {
   const source = new URLSearchParams(search);
   const result = new URLSearchParams({ run_panel: "runs" });
   if (source.get("run_origin") === "edit") result.set("run_origin", "edit");
-  const status = source.get("run_status");
-  if (status && ["queued", "running", "succeeded", "failed", "cancelled"].includes(status)) result.set("run_status", status);
-  const target = source.get("run_target");
-  if (target === "draft" || target === "published") result.set("run_target", target);
-  const page = Number(source.get("run_page"));
-  if (Number.isSafeInteger(page) && page > 1 && page <= 1000000) result.set("run_page", String(page));
+  const status = acceptedMember(source.get("run_status"), RUN_STATUS_VALUES);
+  if (status) result.set("run_status", status);
+  const target = acceptedMember(source.get("run_target"), RUN_TARGET_VALUES);
+  if (target) result.set("run_target", target);
+  const page = acceptedPage(source.get("run_page"));
+  if (page != null && page > 1) result.set("run_page", String(page));
   return result.toString();
 }
 

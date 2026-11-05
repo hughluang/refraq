@@ -25,6 +25,28 @@ export function offsetPageFromItems<T>(
   };
 }
 
+/** Largest page index a console list will request. Keeps the offset finite. */
+export const MAX_LIST_PAGE = 1_000_000;
+
+/**
+ * Page index carried in a query string.
+ * Missing, non-integers, and values outside 1..MAX_LIST_PAGE are not pages.
+ */
+export function acceptedPage(raw: string | null | undefined): number | null {
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_LIST_PAGE) return null;
+  return value;
+}
+
+/** Member of a closed query set. Anything else is not a value of that set. */
+export function acceptedMember(
+  value: string | null | undefined,
+  members: readonly string[],
+): string | null {
+  if (value != null && members.includes(value)) return value;
+  return null;
+}
+
 export function pageToOffset(page: number, pageSize: number): number {
   return Math.max(0, (Math.max(1, page) - 1) * pageSize);
 }

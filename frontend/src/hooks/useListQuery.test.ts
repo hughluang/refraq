@@ -187,3 +187,93 @@ describe("useListQuery", () => {
     expect(href()).not.toContain("page=");
   });
 });
+
+describe("accepted list query", () => {
+  const closed: readonly ListFilterSpec[] = [
+    { key: "run_status", type: "select", defaultValue: "", accept: ["queued", "running", "succeeded", "failed", "cancelled"] },
+    { key: "run_target", type: "select", defaultValue: "", accept: ["draft", "published"] },
+  ];
+  let replaceState: ReturnType<typeof vi.spyOn>;
+  let pushState: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    setup("");
+    replaceState = vi.spyOn(window.history, "replaceState");
+    pushState = vi.spyOn(window.history, "pushState");
+  });
+
+  afterEach(() => {
+    replaceState.mockRestore();
+    pushState.mockRestore();
+  });
+
+  function href(): string {
+    return String(replaceState.mock.calls.at(-1)?.[2] ?? "");
+  }
+
+  it("drops an unaccepted select and page, then writes the accepted address", async () => {
+    setup("run_status=nope&run_target=other&page=-1&page=1e20&tab=keep");
+    replaceState.mockClear();
+    const { result } = renderHook(() => useListQuery({ search: false, filters: closed }));
+    await act(async () => {});
+    expect(result.current.select("run_status")).toBe("");
+    expect(result.current.select("run_target")).toBe("");
+    expect(result.current.page).toBe(1);
+    expect(result.current.isFiltered).toBe(false);
+    expect(href()).toBe("/console/entities?tab=keep");
+
+    setup("page=1e20&tab=keep");
+    replaceState.mockClear();
+    const huge = renderHook(() => useListQuery({ search: false, filters: closed }));
+    await act(async () => {});
+    expect(huge.result.current.page).toBe(1);
+    expect(String(replaceState.mock.calls.at(-1)?.[2])).toBe("/console/entities?tab=keep");
+  });
+
+  it("keeps an accepted select and page without rewriting the address", async () => {
+    setup("run_status=failed&run_target=published&page=3&tab=keep");
+    replaceState.mockClear();
+    const { result } = renderHook(() => useListQuery({ search: false, filters: closed }));
+    await act(async () => {});
+    expect(result.current.select("run_status")).toBe("failed");
+    expect(result.current.select("run_target")).toBe("published");
+    expect(result.current.page).toBe(3);
+    expect(result.current.isFiltered).toBe(true);
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it("refuses a closed-set value written through setFilter or setPage", async () => {
+    setup("run_status=failed&page=4");
+    replaceState.mockClear();
+    const { result } = renderHook(() => useListQuery({ search: false, filters: closed }));
+    await act(async () => {});
+    act(() => {
+      result.current.setFilter("run_status", "nope");
+    });
+    expect(result.current.select("run_status")).toBe("");
+    expect(result.current.isFiltered).toBe(false);
+    expect(result.current.page).toBe(1);
+    act(() => {
+      result.current.setPage(4);
+    });
+    expect(result.current.page).toBe(4);
+    act(() => {
+      result.current.setPage(1e20);
+    });
+    expect(result.current.page).toBe(1);
+  });
+
+  it("still accepts an open select that declares no closed set", async () => {
+    const open: readonly ListFilterSpec[] = [
+      { key: "engine", type: "select", defaultValue: "" },
+    ];
+    setup("engine=weird&page=2");
+    replaceState.mockClear();
+    const { result } = renderHook(() => useListQuery({ search: false, filters: open }));
+    await act(async () => {});
+    expect(result.current.select("engine")).toBe("weird");
+    expect(result.current.page).toBe(2);
+    expect(result.current.isFiltered).toBe(true);
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+});
