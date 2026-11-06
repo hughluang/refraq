@@ -55,3 +55,11 @@ class UpdateStatusRequest(BaseModel):
 
 class UpdateStatusResponse(BaseModel):
     user: UserSummary
+
+
+class UpdateRoleRequest(BaseModel):
+    role_id: str | None
+
+
+class UpdateRoleResponse(BaseModel):
+    user: UserSummary

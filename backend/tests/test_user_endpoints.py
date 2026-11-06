@@ -11,7 +11,7 @@ os.environ.setdefault("REFRAQ_SKIP_SEED", "1")
 
 from backend.admin.security import hash_password  # noqa: E402
 from backend.main import app  # noqa: E402
-from backend.admin.roles import seed_roles  # noqa: E402
+from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import (  # noqa: E402
     MemoryRoleStore,
     reset_role_store,
@@ -293,3 +293,230 @@ def test_disable_revokes_target_sessions_and_requires_relogin(
     login = client.post("/auth/login", json={"account": "op", "password": "op-pass"})
     assert login.status_code == 200
     assert client.get("/auth/me").status_code == 200
+
+
+def _user_id(client: TestClient, account: str) -> str:
+    return next(
+        item["id"]
+        for item in client.get("/users").json()["items"]
+        if item["account"] == account
+    )
+
+
+def test_assign_role_after_create_and_change_it(client: TestClient, store_bundle) -> None:
+    _login_as(client, "root", "s3cret")
+    _, role_store, _ = store_bundle
+    operator = role_store.get_by_key("operator")
+    assert operator is not None
+    reader = create_role(
+        role_store,
+        key="reader",
+        name="Reader",
+        permissions=["dashboard:read"],
+    )
+
+    created = client.post(
+        "/users",
+        json={"account": "alice", "display_name": "Alice", "password": "alice-pass"},
+    )
+    assert created.status_code == 201
+    user_id = created.json()["user"]["id"]
+    assert created.json()["user"]["role_id"] is None
+
+    bound = client.patch(f"/users/{user_id}/role", json={"role_id": operator.id})
+    assert bound.status_code == 200
+    assert bound.json()["user"]["role_key"] == "operator"
+    assert client.get(f"/users/{user_id}").json()["user"]["role_id"] == operator.id
+
+    changed = client.patch(f"/users/{user_id}/role", json={"role_id": reader.id})
+    assert changed.status_code == 200
+    assert changed.json()["user"]["role_key"] == "reader"
+    assert changed.json()["user"]["account"] == "alice"
+
+
+def test_clear_role(client: TestClient) -> None:
+    _login_as(client, "root", "s3cret")
+    op_id = _user_id(client, "op")
+
+    response = client.patch(f"/users/{op_id}/role", json={"role_id": None})
+
+    assert response.status_code == 200
+    user = response.json()["user"]
+    assert user["role_id"] is None
+    assert user["role_key"] is None
+    assert user["role_name"] is None
+    assert user["status"] == "active"
+    assert user["account"] == "op"
+
+
+def test_patch_role_same_value_keeps_last_local_super_admin(client: TestClient) -> None:
+    _login_as(client, "root", "s3cret")
+    root_id = _user_id(client, "root")
+    before = client.get(f"/users/{root_id}").json()["user"]
+
+    response = client.patch(
+        f"/users/{root_id}/role", json={"role_id": before["role_id"]}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["user"] == before
+
+
+def test_patch_role_rejects_unknown_role_missing_user_and_omitted_field(
+    client: TestClient,
+) -> None:
+    _login_as(client, "root", "s3cret")
+    op_id = _user_id(client, "op")
+
+    unknown = client.patch(f"/users/{op_id}/role", json={"role_id": "role_missing"})
+    assert unknown.status_code == 400
+    assert unknown.json()["code"] == "USER_INVALID_ROLE"
+
+    missing = client.patch("/users/user_missing/role", json={"role_id": None})
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "USER_NOT_FOUND"
+
+    omitted = client.patch(f"/users/{op_id}/role", json={})
+    assert omitted.status_code == 422
+    assert omitted.json()["code"] == "REQUEST_INVALID"
+
+
+def test_patch_role_rejects_system_identity(client: TestClient, store_bundle) -> None:
+    user_store, role_store, _ = store_bundle
+    operator = role_store.get_by_key("operator")
+    assert operator is not None
+    system = user_store.create_user(
+        account="system",
+        display_name="System",
+        password_hash=None,
+        role_id=None,
+        identity_source="system",
+        user_id="usr_system",
+    )
+    _login_as(client, "root", "s3cret")
+
+    response = client.patch(
+        f"/users/{system.id}/role", json={"role_id": operator.id}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "USER_SYSTEM_IMMUTABLE"
+    assert user_store.get_by_id(system.id).role_id is None
+
+
+def test_last_local_super_admin_cannot_leave_role(client: TestClient, store_bundle) -> None:
+    _login_as(client, "root", "s3cret")
+    _, role_store, _ = store_bundle
+    operator = role_store.get_by_key("operator")
+    assert operator is not None
+    root_id = _user_id(client, "root")
+
+    response = client.patch(f"/users/{root_id}/role", json={"role_id": operator.id})
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "USER_LAST_LOCAL_SUPER_ADMIN"
+    assert client.get(f"/users/{root_id}").json()["user"]["role_key"] == "super_admin"
+
+    cleared = client.patch(f"/users/{root_id}/role", json={"role_id": None})
+    assert cleared.status_code == 409
+    assert cleared.json()["code"] == "USER_LAST_LOCAL_SUPER_ADMIN"
+
+
+def test_second_local_super_admin_can_leave_role(client: TestClient, store_bundle) -> None:
+    _login_as(client, "root", "s3cret")
+    user_store, role_store, _ = store_bundle
+    super_admin = role_store.get_by_key("super_admin")
+    operator = role_store.get_by_key("operator")
+    assert super_admin is not None and operator is not None
+    created = client.post(
+        "/users",
+        json={
+            "account": "backup",
+            "display_name": "Backup",
+            "password": "backup-pass",
+            "role_id": super_admin.id,
+        },
+    )
+    assert created.status_code == 201
+    backup_id = created.json()["user"]["id"]
+    root_id = _user_id(client, "root")
+
+    response = client.patch(f"/users/{root_id}/role", json={"role_id": operator.id})
+
+    assert response.status_code == 200
+    assert response.json()["user"]["role_key"] == "operator"
+    backup = user_store.get_by_id(backup_id)
+    assert backup is not None
+    assert backup.role_id == super_admin.id
+
+
+def test_oidc_super_admin_can_leave_when_no_local_holder_remains(
+    client: TestClient, store_bundle
+) -> None:
+    user_store, role_store, _ = store_bundle
+    super_admin = role_store.get_by_key("super_admin")
+    operator = role_store.get_by_key("operator")
+    assert super_admin is not None and operator is not None
+    writer = create_role(
+        role_store,
+        key="user_admin",
+        name="User admin",
+        permissions=["console:access", "users:write"],
+    )
+    user_store.create_user(
+        account="clerk",
+        display_name="Clerk",
+        password_hash=hash_password("clerk-pass"),
+        role_id=writer.id,
+    )
+    root = user_store.get_by_account("root")
+    assert root is not None
+    user_store.update_role(root.id, operator.id)
+    fed = user_store.create_user(
+        account="fed",
+        display_name="Fed",
+        password_hash=None,
+        role_id=super_admin.id,
+        identity_source="oidc",
+    )
+    _login_as(client, "clerk", "clerk-pass")
+
+    response = client.patch(f"/users/{fed.id}/role", json={"role_id": operator.id})
+
+    assert response.status_code == 200
+    assert response.json()["user"]["role_key"] == "operator"
+    assert response.json()["user"]["identity_source"] == "oidc"
+
+
+def test_operator_cannot_assign_role(client: TestClient) -> None:
+    _login_as(client, "op", "op-pass")
+    me = client.get("/auth/me").json()["user"]
+
+    response = client.patch(f"/users/{me['id']}/role", json={"role_id": None})
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "AUTH_FORBIDDEN"
+
+
+def test_role_change_applies_on_next_request_and_keeps_session(
+    store_bundle, client: TestClient
+) -> None:
+    user_store, role_store, session_store = store_bundle
+    users, _ = user_store.list_users()
+    op = next(record for record in users if record.account == "op")
+    super_admin = role_store.get_by_key("super_admin")
+    assert super_admin is not None
+    op_sid = session_store.create(op.id, ttl_seconds=3600, idle_seconds=3600)
+
+    assert client.get("/users", cookies={"refraq_sid": op_sid}).status_code == 403
+
+    _login_as(client, "root", "s3cret")
+    changed = client.patch(f"/users/{op.id}/role", json={"role_id": super_admin.id})
+    assert changed.status_code == 200
+    assert changed.json()["user"]["role_key"] == "super_admin"
+
+    me = client.get("/auth/me", cookies={"refraq_sid": op_sid})
+    assert me.status_code == 200
+    assert session_store.get(op_sid) == op.id
+    listed = client.get("/users", cookies={"refraq_sid": op_sid})
+    assert listed.status_code == 200

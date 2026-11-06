@@ -9,6 +9,7 @@ import type { FieldNote } from "@/components/form/fieldNotes";
 type FieldDisplayProps = {
   label?: ReactNode;
   description?: ReactNode;
+  helper?: ReactNode;
   notes?: readonly FieldNote[];
   openSignal?: string | null;
   value?: ReactNode;
@@ -19,6 +20,7 @@ type FieldDisplayProps = {
 export function FieldDisplay({
   label,
   description,
+  helper,
   notes = [],
   openSignal = null,
   value,
@@ -38,6 +40,7 @@ export function FieldDisplay({
       <DisplayField
         label={label}
         description={description}
+        helper={helper}
         notes={notes}
         openSignal={openSignal}
         value={value}

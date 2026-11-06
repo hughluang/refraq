@@ -73,6 +73,7 @@ class UserStore(Protocol):
     ) -> UserRecord: ...
 
     def update_status(self, user_id: str, status: UserStatus) -> UserRecord | None: ...
+    def update_role(self, user_id: str, role_id: str | None) -> UserRecord | None: ...
     def update_last_login(
         self, user_id: str, when: datetime, *, session: Session | None = None
     ) -> None: ...
@@ -229,6 +230,14 @@ class MemoryUserStore:
             if record is None:
                 return None
             record.status = status
+            return record
+
+    def update_role(self, user_id: str, role_id: str | None) -> UserRecord | None:
+        with self._lock:
+            record = self._by_id.get(user_id)
+            if record is None:
+                return None
+            record.role_id = role_id
             return record
 
     def update_last_login(
@@ -451,6 +460,15 @@ class SqlUserStore:
             if row is None:
                 return None
             row.status = status
+            session.flush()
+            return _row_to_user(row)
+
+    def update_role(self, user_id: str, role_id: str | None) -> UserRecord | None:
+        with session_scope() as session:
+            row = session.get(UserRow, user_id)
+            if row is None:
+                return None
+            row.role_id = role_id
             session.flush()
             return _row_to_user(row)
 

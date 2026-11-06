@@ -132,6 +132,14 @@ class UserSystemImmutable(AuthError):
         return "The system identity cannot be changed"
 
 
+class UserLastLocalSuperAdmin(AuthError):
+    code = "USER_LAST_LOCAL_SUPER_ADMIN"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "The last active local super admin cannot leave that role"
+
+
 class UserNotFound(AuthError):
     code = "USER_NOT_FOUND"
     http_status = 404

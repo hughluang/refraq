@@ -11,6 +11,7 @@ from backend.admin.errors import (
     AccountInvalidLocale,
     UserInvalidRole,
     UserInvalidStatus,
+    UserLastLocalSuperAdmin,
     UserNotFound,
     UserSelfDisableForbidden,
     UserSystemImmutable,
@@ -19,12 +20,15 @@ from backend.admin.locales import DEFAULT_LOCALE, is_supported_locale
 from backend.admin.security import hash_password
 from backend.admin.user_payload import build_user_summary
 from backend.admin.role_store import RoleStore, get_role_store
+from backend.admin.roles import is_last_local_active_super_admin
 from backend.admin.session_store import SessionStore, get_session_store
 from backend.admin.user_store import IdentitySource, UserRecord, UserStore, get_user_store
 from backend.admin.schemas.user import (
     CreateUserRequest,
     CreateUserResponse,
     GetUserResponse,
+    UpdateRoleRequest,
+    UpdateRoleResponse,
     UpdateStatusRequest,
     UpdateStatusResponse,
     UserListResponse,
@@ -137,3 +141,31 @@ def update_user_status(
         sessions.delete_by_user_id(user_id)
 
     return UpdateStatusResponse(user=build_user_summary(updated, roles))
+
+
+@router.patch("/{user_id}/role", response_model=UpdateRoleResponse)
+def update_user_role(
+    user_id: str,
+    payload: UpdateRoleRequest,
+    _caller: UserRecord = Depends(require_permission("users:write")),
+    users: UserStore = Depends(get_user_store),
+    roles: RoleStore = Depends(get_role_store),
+) -> UpdateRoleResponse:
+    record = users.get_by_id(user_id)
+    if record is None:
+        raise UserNotFound()
+    if record.identity_source == "system":
+        raise UserSystemImmutable()
+
+    role_id = payload.role_id
+    if role_id is not None and roles.get_by_id(role_id) is None:
+        raise UserInvalidRole()
+    if role_id != record.role_id and is_last_local_active_super_admin(
+        record, users, roles
+    ):
+        raise UserLastLocalSuperAdmin()
+
+    updated = users.update_role(user_id, role_id)
+    if updated is None:
+        raise UserNotFound()
+    return UpdateRoleResponse(user=build_user_summary(updated, roles))

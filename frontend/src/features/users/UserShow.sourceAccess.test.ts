@@ -42,6 +42,11 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/providers/session-store", () => ({
   useSessionStore: (selector?: (state: { user: null }) => unknown) =>
     selector ? selector({ user: null }) : { user: null },
+  getCurrentUser: () => null,
+}));
+
+vi.mock("@/providers/auth-provider", () => ({
+  reloadIdentity: vi.fn(),
 }));
 
 vi.mock("@/features/subjects/api", () => ({

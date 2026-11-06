@@ -2,12 +2,13 @@ import { Input, Stack, Text } from "@mantine/core";
 import type { ReactNode } from "react";
 
 import { FieldMarks } from "@/components/form/FieldChrome";
-import type { FieldNote } from "@/components/form/fieldNotes";
+import { presentDescription, type FieldNote } from "@/components/form/fieldNotes";
 
 type DisplayFieldProps = {
   label: ReactNode;
   value?: ReactNode;
   description?: ReactNode;
+  helper?: ReactNode;
   notes?: readonly FieldNote[];
   openSignal?: string | null;
   fallback?: ReactNode;
@@ -17,10 +18,12 @@ export function DisplayField({
   label,
   value,
   description,
+  helper,
   notes = [],
   openSignal = null,
   fallback = "—",
 }: DisplayFieldProps) {
+  const helperText = presentDescription(helper);
   const empty =
     value === null ||
     value === undefined ||
@@ -49,6 +52,11 @@ export function DisplayField({
         />
       </div>
       {display}
+      {helperText != null ? (
+        <Text className="field-chrome__helper" size="xs" c="dimmed" component="div">
+          {helperText}
+        </Text>
+      ) : null}
     </Stack>
   );
 }

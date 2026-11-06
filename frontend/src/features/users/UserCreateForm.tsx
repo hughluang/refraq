@@ -113,6 +113,7 @@ export function UserCreateForm() {
             <RecordPicker
               editable
               label={t("users.fields.role")}
+              helper={t("users.fields.role.help")}
               clearable
               placeholder={t("users.roles.none")}
               adapter={roleRecordAdapter()}

@@ -1,4 +1,4 @@
-"""User Groups, Subject Attributes, and effective values (docs/api-contracts-users.md §8–§9)."""
+"""User Groups, Subject Attributes, and effective values (docs/api-contracts-users.md §9–§10)."""
 
 from __future__ import annotations
 

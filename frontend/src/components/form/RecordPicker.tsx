@@ -271,6 +271,7 @@ export function RecordPicker({
       editable={editable}
       label={label}
       description={bare ? undefined : description}
+      helper={bare ? undefined : helper}
       notes={merged}
       openSignal={openSignal}
       value={display}
@@ -478,6 +479,7 @@ export function RecordMultiPicker({
       editable={editable}
       label={label}
       description={bare ? undefined : description}
+      helper={bare ? undefined : helper}
       notes={merged}
       openSignal={openSignal}
       value={display}

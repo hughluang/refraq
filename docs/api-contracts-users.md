@@ -184,7 +184,55 @@ When `status` is set to `disabled`, the backend invalidates all sessions belongi
 
 `404 USER_NOT_FOUND` if the target User does not exist.
 
-## 6. Pending Federated Identities
+## 6. `PATCH /users/{id}/role`
+
+Purpose: set or clear the Role of an existing User.
+
+- Permission: `users:write`
+
+### Request
+
+```json
+{
+  "role_id": "role_operator"
+}
+```
+
+`role_id` is required. `null` clears the Role. Omitting `role_id` is `422 REQUEST_INVALID`.
+
+Setting the `role_id` the User already holds succeeds and changes no other field. The call does not invalidate Sessions or **User PAT**s. The next request evaluates permissions from the current `users.role_id`.
+
+### Success Response: `200`
+
+```json
+{
+  "user": {
+    "id": "user_002",
+    "account": "alice",
+    "display_name": "Alice",
+    "email": "alice@example.com",
+    "locale": "en-US",
+    "role_id": "role_operator",
+    "role_key": "operator",
+    "role_name": "Operator",
+    "status": "active",
+    "identity_source": "local",
+    "last_login_at": null
+  }
+}
+```
+
+### Failure Responses
+
+`400 USER_INVALID_ROLE` if `role_id` is not null and does not exist.
+
+`404 USER_NOT_FOUND` if the target User does not exist.
+
+`409 USER_SYSTEM_IMMUTABLE` if the target is the system identity.
+
+`409 USER_LAST_LOCAL_SUPER_ADMIN` if the target is the last active local User on the `super_admin` Role and `role_id` is not that Role.
+
+## 7. Pending Federated Identities
 
 Pending identities are administrative handoff records, not Users or Identity Providers. Both endpoints require `users:write`; `users:read` does not expose external claims.
 
@@ -206,11 +254,11 @@ Claim either an existing User or create one with a selected Role:
 
 Existing-user claim changes no Role. New-user claim sets `identity_source=oidc` and no usable local password. A User with another binding cannot be claimed. The last active local `super_admin` cannot be converted. Codes include `PENDING_IDENTITY_NOT_FOUND`, `PENDING_IDENTITY_EXPIRED`, `FEDERATION_ALREADY_BOUND`, `FEDERATION_LAST_LOCAL_SUPER_ADMIN`, and `USER_ACCOUNT_DUPLICATE`.
 
-## 7. `POST /users/{id}/unfederate`
+## 8. `POST /users/{id}/unfederate`
 
 Requires `users:write`; clears the binding, changes `identity_source` to `local`, and sets a new initial password atomically. Account Center and the User cannot call it. A missing or empty `password` fails schema validation with `422 REQUEST_INVALID` before the domain rule runs; `FEDERATION_PASSWORD_REQUIRED` is the domain-boundary guard behind it and is not reachable over HTTP. The reachable code is `FEDERATION_NOT_BOUND`.
 
-## 8. User Groups
+## 9. User Groups
 
 A **User Group** is a named set of Users that **Access Grant**s and **Access Restriction**s may name (`docs/business-entity-access.md` §2). It carries no Permission. Reads require `users:read`; writes require `users:write`. Every successful write writes a **Management Audit Event**.
 
@@ -243,11 +291,11 @@ A **User Group** is a named set of Users that **Access Grant**s and **Access Res
 
 Grants that name a deleted group grant nothing (`docs/business-entity-access.md` §2.1). Codes: `USER_GROUP_NOT_FOUND` (404), `USER_GROUP_KEY_DUPLICATE` (409), `USER_GROUP_INVALID` (422), `USER_NOT_FOUND` (404).
 
-## 9. Subject Attributes
+## 10. Subject Attributes
 
 A **Subject Attribute** definition is a typed key whose values are set on Users and User Groups and compared by row rules (`docs/business-entity-access.md` §2.2). Reads require `users:read`; writes require `users:write`. Every successful write writes a **Management Audit Event**.
 
-### 9.1 Definitions
+### 10.1 Definitions
 
 ```json
 {
@@ -273,7 +321,7 @@ A **Subject Attribute** definition is a typed key whose values are set on Users 
 | `PATCH` | `/subject-attributes/{id}` | Update `name`, `description`, `multi_value` |
 | `DELETE` | `/subject-attributes/{id}` | Delete the definition and all its values → `204` |
 
-### 9.2 Values
+### 10.2 Values
 
 Values are addressed per subject as a map from key to a value list.
 
@@ -288,7 +336,7 @@ Values are addressed per subject as a map from key to a value list.
 
 Codes: `SUBJECT_ATTRIBUTE_NOT_FOUND` (404), `SUBJECT_ATTRIBUTE_KEY_DUPLICATE` (409), `SUBJECT_ATTRIBUTE_INVALID` (422; unknown key in a values map, wrong value type, too many values, inactive code, unknown User, or a change to an immutable field).
 
-## 10. Non-Goals
+## 11. Non-Goals
 
 - Hard delete of User records is intentionally not exposed.
 - Password reset / forgot-password flows remain out of scope (self-service password change for the current User is `docs/api-contracts-account.md`).

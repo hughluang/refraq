@@ -9,6 +9,7 @@ from collections.abc import Callable
 from backend.admin.errors import RoleInvalidKey, RoleKeyDuplicate, RoleLocked
 from backend.admin.permissions import ALL_PERMISSIONS, normalize_permissions
 from backend.admin.role_store import RoleRecord, RoleStore
+from backend.admin.user_store import UserRecord, UserStore
 
 RoleUpdateValidator = Callable[[RoleRecord], None]
 
@@ -20,6 +21,18 @@ OPERATOR_KEY = "operator"
 OPERATOR_ID = "role_operator"
 OPERATOR_NAME = "Operator"
 OPERATOR_DEFAULT_PERMISSIONS: tuple[str, ...] = ("console:access", "dashboard:read")
+
+
+def is_last_local_active_super_admin(
+    user: UserRecord, users: UserStore, roles: RoleStore
+) -> bool:
+    """True when this User is the only active local holder of the System Role."""
+    if user.identity_source != "local" or user.status != "active" or not user.role_id:
+        return False
+    role = roles.get_by_id(user.role_id)
+    if role is None or role.key != SUPER_ADMIN_KEY:
+        return False
+    return users.count_local_active_with_role(role.id) <= 1
 
 
 def effective_permissions(role: RoleRecord) -> list[str]:

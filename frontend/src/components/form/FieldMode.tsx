@@ -10,6 +10,7 @@ type FieldModeProps = {
   editable: boolean;
   label?: ReactNode;
   description?: ReactNode;
+  helper?: ReactNode;
   notes?: readonly FieldNote[];
   openSignal?: string | null;
   value?: ReactNode;
@@ -22,6 +23,7 @@ export function FieldMode({
   editable,
   label,
   description,
+  helper,
   notes,
   openSignal,
   value,
@@ -34,6 +36,7 @@ export function FieldMode({
       <FieldDisplay
         label={label}
         description={description}
+        helper={helper}
         notes={notes}
         openSignal={openSignal}
         value={value}

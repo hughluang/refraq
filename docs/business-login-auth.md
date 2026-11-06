@@ -126,6 +126,8 @@ Frontend navigation around the session boundary:
 
 Role is a first-class entity. Each User may hold **at most one** Role (`users.role_id`, nullable). The Role is the User's only source of **Permission** keys. What that User can do on one **Source** is those keys intersected with the **Source Access Level** from **Source Membership** (`docs/business-metadata.md` §6). The level never adds a key.
 
+A caller with `users:write` may set or clear that Role for the life of the User (`PATCH /users/{id}/role` in `docs/api-contracts-users.md`). `role_id` null means no Role. The **System Identity** cannot be assigned a Role. The last active local User on the `super_admin` Role cannot be given a different Role, including null. A change takes effect on the next request. It does not invalidate Sessions or **User PAT**s.
+
 A User may also belong to any number of **User Group**s and carry **Subject Attribute** values. Groups and attributes carry no Permission; they exist so **Access Grant**s and row rules on Business Entity data can name populations and facts that do not match a Role (`docs/business-entity-access.md` §2). They are managed under `users:read` / `users:write`.
 
 ### Locked system role: `super_admin`

@@ -1,4 +1,4 @@
-"""User Group and Subject Attribute HTTP adapters (docs/api-contracts-users.md §8–§9)."""
+"""User Group and Subject Attribute HTTP adapters (docs/api-contracts-users.md §9–§10)."""
 
 from __future__ import annotations
 

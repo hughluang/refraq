@@ -2,6 +2,14 @@ import type { UserRow } from "@/features/users/types";
 import { apiClient } from "@/lib/api";
 import type { OffsetPage, PageQuery } from "@/lib/pagination";
 
+export function updateUserRole(userId: string, roleId: string | null) {
+  return apiClient<{ user: UserRow }>(`/users/${userId}/role`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ role_id: roleId }),
+  });
+}
+
 export function listUsers(
   query: PageQuery & {
     q?: string;

@@ -39,7 +39,7 @@ from backend.admin.federation.provisioning import admit
 from backend.admin.federation.spec import BindingRecord, ProviderRecord, SUPPORTED_PROTOCOLS
 from backend.admin.federation.transaction import federation_transaction
 from backend.admin.role_store import RoleStore
-from backend.admin.roles import SUPER_ADMIN_KEY
+from backend.admin.roles import is_last_local_active_super_admin
 from backend.admin.security import hash_password
 from backend.admin.session_store import SessionStore
 from backend.admin.user_store import UserRecord, UserStore
@@ -331,17 +331,6 @@ def complete_sso(
     )
 
 
-def _is_last_local_active_super_admin(
-    user: UserRecord, users: UserStore, roles: RoleStore
-) -> bool:
-    if user.identity_source != "local" or user.status != "active" or not user.role_id:
-        return False
-    role = roles.get_by_id(user.role_id)
-    if role is None or role.key != SUPER_ADMIN_KEY:
-        return False
-    return users.count_local_active_with_role(role.id) <= 1
-
-
 def claim_pending(
     *,
     pending_id: str,
@@ -368,7 +357,7 @@ def claim_pending(
             raise UserNotFound()
         if bindings.get_for_user(existing_user.id) is not None:
             raise FederationAlreadyBound()
-        if _is_last_local_active_super_admin(existing_user, users, roles):
+        if is_last_local_active_super_admin(existing_user, users, roles):
             raise FederationLastLocalSuperAdmin()
     else:
         if create_role_id is None or roles.get_by_id(create_role_id) is None:
