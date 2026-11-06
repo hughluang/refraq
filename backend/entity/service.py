@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any, TypeVar
 
@@ -37,6 +37,7 @@ from backend.admin.subjects import user_group_ids
 from backend.admin.user_store import UserRecord
 from backend.entity.access.compiler import compile_policy, subject_outcome
 from backend.entity.access.facts import Person
+from backend.entity.access.membership import person_of, readable_entity_ids
 from backend.entity.access.plan import load_head, load_policy
 from backend.entity.access.store import get_access_store
 from backend.entity.inbound import inbound_references_for
@@ -151,8 +152,10 @@ def _project_entity(
     *,
     include_inbound: bool,
     user: UserRecord | None = None,
+    see_physical: bool | None = None,
 ) -> dict[str, Any]:
-    _visible, see_physical, _names = _definition(user, entity.id)
+    if see_physical is None:
+        _visible, see_physical, _names = _definition(user, entity.id)
     physical = None
     alignment = None
     if current is not None:
@@ -332,32 +335,39 @@ def list_entities(
 ) -> tuple[list[dict[str, Any]], int]:
     store = get_entity_store()
     subject_ids = _tag_subject_ids(tag_ids)
+    selected = status_filter_selection(statuses)
     full = user is None or _sees_every_definition(user)
     if full:
         records, total = store.list_entities(
             q=q,
-            statuses=status_filter_selection(statuses),
+            statuses=selected,
             subject_ids=subject_ids,
             limit=limit,
             offset=offset,
         )
+        see_physical = None
     else:
-        records, _total = store.list_entities(
+        assert user is not None
+        candidates = store.list_entity_candidates(
             q=q,
-            statuses=status_filter_selection(statuses),
+            statuses=selected,
             subject_ids=subject_ids,
-            limit=1_000_000,
-            offset=0,
         )
-        records = [entity for entity in records if _definition(user, entity.id)[0]]
-        total = len(records)
-        records = records[offset : offset + limit]
+        if candidates:
+            visible = readable_entity_ids(
+                [entity.id for entity in candidates], person_of(user)
+            )
+            candidates = [entity for entity in candidates if entity.id in visible]
+        total = len(candidates)
+        records = candidates[offset : offset + limit]
+        see_physical = False
     items = [
         _project_entity(
             entity,
             store.current_version(entity.id),
             include_inbound=False,
             user=user,
+            see_physical=see_physical,
         )
         for entity in records
     ]
@@ -861,12 +871,19 @@ def _collapse_ids(values: list[str]) -> list[str]:
     return ordered
 
 
+def _visible_ids(user: UserRecord, entity_ids: Sequence[str]) -> frozenset[str]:
+    if _sees_every_definition(user):
+        return frozenset(entity_ids)
+    return readable_entity_ids(entity_ids, person_of(user))
+
+
 def _require_entity_subjects(user: UserRecord, entity_ids: list[str]) -> None:
     missing: list[dict[str, str]] = []
     deprecated: list[dict[str, str]] = []
+    visible = _visible_ids(user, entity_ids)
     for entity_id in entity_ids:
         record = get_entity_store().get_entity(entity_id)
-        if record is None or not _definition(user, record.id)[0]:
+        if record is None or entity_id not in visible:
             missing.append({"kind": "entity", "id": entity_id})
             continue
         if is_deprecated(record):

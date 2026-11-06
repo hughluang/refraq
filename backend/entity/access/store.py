@@ -31,6 +31,7 @@ from backend.entity.access.records import (
     BindingRecord,
     GrantRecord,
     LadderRecord,
+    MembershipFacts,
     ProfileRecord,
     RestrictionRecord,
 )
@@ -86,6 +87,10 @@ class AccessStore(Protocol):
     def delete_grant(self, grant_id: str) -> None: ...
 
     def restrictions(self, entity_id: str) -> list[RestrictionRecord]: ...
+
+    def membership_facts(
+        self, entity_ids: frozenset[str]
+    ) -> dict[str, MembershipFacts]: ...
 
     def restriction(self, restriction_id: str) -> RestrictionRecord | None: ...
 
@@ -207,6 +212,24 @@ class MemoryAccessStore:
             return [
                 item for item in self._restrictions.values() if item.entity_id == entity_id
             ]
+
+    def membership_facts(
+        self, entity_ids: frozenset[str]
+    ) -> dict[str, MembershipFacts]:
+        if not entity_ids:
+            return {}
+        with self._lock:
+            return _bundle_facts(
+                entity_ids,
+                [item for item in self._ladders.values() if item.entity_id in entity_ids],
+                [item for item in self._profiles.values() if item.entity_id in entity_ids],
+                [item for item in self._grants.values() if item.entity_id in entity_ids],
+                [
+                    item
+                    for item in self._restrictions.values()
+                    if item.entity_id in entity_ids
+                ],
+            )
 
     def restriction(self, restriction_id: str) -> RestrictionRecord | None:
         with self._lock:
@@ -464,6 +487,47 @@ class SqlAccessStore:
 
         return self._run(read)
 
+    def membership_facts(
+        self, entity_ids: frozenset[str]
+    ) -> dict[str, MembershipFacts]:
+        if not entity_ids:
+            return {}
+
+        def read(session: Session) -> dict[str, MembershipFacts]:
+            ladders = [
+                _ladder(row)
+                for row in session.scalars(
+                    select(PresentationLadderRow).where(
+                        PresentationLadderRow.entity_id.in_(entity_ids)
+                    )
+                ).all()
+            ]
+            profiles = [
+                _profile(row)
+                for row in session.scalars(
+                    select(AccessProfileRow).where(
+                        AccessProfileRow.entity_id.in_(entity_ids)
+                    )
+                ).all()
+            ]
+            grants = [
+                _grant(row)
+                for row in session.scalars(
+                    select(AccessGrantRow).where(AccessGrantRow.entity_id.in_(entity_ids))
+                ).all()
+            ]
+            restrictions = [
+                _restriction(row)
+                for row in session.scalars(
+                    select(AccessRestrictionRow).where(
+                        AccessRestrictionRow.entity_id.in_(entity_ids)
+                    )
+                ).all()
+            ]
+            return _bundle_facts(entity_ids, ladders, profiles, grants, restrictions)
+
+        return self._run(read)
+
     def restriction(self, restriction_id: str) -> RestrictionRecord | None:
         def read(session: Session) -> RestrictionRecord | None:
             row = session.get(AccessRestrictionRow, restriction_id)
@@ -541,6 +605,40 @@ class SqlAccessStore:
             return int(result.rowcount or 0)
 
         return self._run(write)
+
+
+def _bundle_facts(
+    entity_ids: frozenset[str],
+    ladders: list[LadderRecord],
+    profiles: list[ProfileRecord],
+    grants: list[GrantRecord],
+    restrictions: list[RestrictionRecord],
+) -> dict[str, MembershipFacts]:
+    ladders_by: dict[str, list[LadderRecord]] = {entity_id: [] for entity_id in entity_ids}
+    profiles_by: dict[str, list[ProfileRecord]] = {
+        entity_id: [] for entity_id in entity_ids
+    }
+    grants_by: dict[str, list[GrantRecord]] = {entity_id: [] for entity_id in entity_ids}
+    restrictions_by: dict[str, list[RestrictionRecord]] = {
+        entity_id: [] for entity_id in entity_ids
+    }
+    for item in ladders:
+        ladders_by[item.entity_id].append(item)
+    for item in profiles:
+        profiles_by[item.entity_id].append(item)
+    for item in grants:
+        grants_by[item.entity_id].append(item)
+    for item in restrictions:
+        restrictions_by[item.entity_id].append(item)
+    return {
+        entity_id: MembershipFacts(
+            ladders=tuple(ladders_by[entity_id]),
+            profiles=tuple(profiles_by[entity_id]),
+            grants=tuple(grants_by[entity_id]),
+            restrictions=tuple(restrictions_by[entity_id]),
+        )
+        for entity_id in entity_ids
+    }
 
 
 def _ladder(row: PresentationLadderRow) -> LadderRecord:

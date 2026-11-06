@@ -11,7 +11,7 @@ from datetime import datetime
 
 from backend.admin.user_store import UserRecord
 from backend.entity.lifecycle import ever_published
-from backend.entity.service import _definition
+from backend.entity.service import _visible_ids
 from backend.entity.store import get_entity_store
 
 __all__ = ["EntitySubjectDisplay", "entity_subject_displays"]
@@ -30,13 +30,13 @@ def entity_subject_displays(
     user: UserRecord, entity_ids: Sequence[str]
 ) -> list[EntitySubjectDisplay]:
     store = get_entity_store()
+    visible = _visible_ids(user, entity_ids)
     found: list[EntitySubjectDisplay] = []
     for entity_id in entity_ids:
+        if entity_id not in visible:
+            continue
         entity = store.get_entity(entity_id)
         if entity is None:
-            continue
-        visible, _physical, _names = _definition(user, entity.id)
-        if not visible:
             continue
         versions = store.list_all_versions(entity.id)
         found.append(

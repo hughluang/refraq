@@ -11,6 +11,7 @@ __all__ = [
     "BindingRecord",
     "GrantRecord",
     "LadderRecord",
+    "MembershipFacts",
     "ProfileRecord",
     "RestrictionRecord",
 ]
@@ -78,6 +79,16 @@ class BindingRecord:
     ddl_sha256: str
     status: str
     sql: str
+
+
+@dataclass(frozen=True, slots=True)
+class MembershipFacts:
+    """Access rows one list-membership pass reads for a single Entity."""
+
+    ladders: tuple[LadderRecord, ...]
+    profiles: tuple[ProfileRecord, ...]
+    grants: tuple[GrantRecord, ...]
+    restrictions: tuple[RestrictionRecord, ...]
 
 
 @dataclass

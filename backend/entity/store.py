@@ -49,6 +49,18 @@ class EntityStore(Protocol):
         offset: int,
     ) -> tuple[list[BusinessEntityRecord], int]: ...
 
+    def list_entity_candidates(
+        self,
+        *,
+        q: str | None,
+        statuses: frozenset[EntityListStatus] | None,
+        subject_ids: frozenset[str] | None,
+    ) -> list[BusinessEntityRecord]: ...
+
+    def membership_sources(
+        self, entity_ids: frozenset[str]
+    ) -> dict[str, tuple[BusinessEntityRecord, EntityVersionRecord | None]]: ...
+
     def get_entity(self, entity_id: str) -> BusinessEntityRecord | None: ...
 
     def get_entity_by_table_name(
@@ -111,6 +123,18 @@ class MemoryEntityStore:
         limit: int,
         offset: int,
     ) -> tuple[list[BusinessEntityRecord], int]:
+        items = self.list_entity_candidates(
+            q=q, statuses=statuses, subject_ids=subject_ids
+        )
+        return items[offset : offset + limit], len(items)
+
+    def list_entity_candidates(
+        self,
+        *,
+        q: str | None,
+        statuses: frozenset[EntityListStatus] | None,
+        subject_ids: frozenset[str] | None = None,
+    ) -> list[BusinessEntityRecord]:
         with self._lock:
             items = list(self._entities.values())
             versions = list(self._versions.values())
@@ -133,8 +157,28 @@ class MemoryEntityStore:
         if subject_ids is not None:
             items = [item for item in items if item.id in subject_ids]
         items.sort(key=lambda item: (item.created_at, item.id), reverse=True)
-        total = len(items)
-        return items[offset : offset + limit], total
+        return items
+
+    def membership_sources(
+        self, entity_ids: frozenset[str]
+    ) -> dict[str, tuple[BusinessEntityRecord, EntityVersionRecord | None]]:
+        if not entity_ids:
+            return {}
+        with self._lock:
+            published: dict[str, EntityVersionRecord] = {}
+            for version in self._versions.values():
+                if version.entity_id not in entity_ids:
+                    continue
+                if version.publish_status != PUBLISHED:
+                    continue
+                current = published.get(version.entity_id)
+                if current is None or version.version > current.version:
+                    published[version.entity_id] = version
+            return {
+                entity_id: (entity, published.get(entity_id))
+                for entity_id, entity in self._entities.items()
+                if entity_id in entity_ids
+            }
 
     def get_entity(self, entity_id: str) -> BusinessEntityRecord | None:
         with self._lock:
@@ -302,6 +346,24 @@ def _entity_status_filter(
     return or_(*clauses)
 
 
+def _restrict_entities(stmt, *, q, statuses, subject_ids):
+    if q and q.strip():
+        needle = f"%{_escape_like_literal(q.strip())}%"
+        stmt = stmt.where(
+            or_(
+                BusinessEntityRow.table_name.ilike(needle, escape="\\"),
+                BusinessEntityRow.name.ilike(needle, escape="\\"),
+            )
+        )
+    if statuses is not None:
+        stmt = stmt.where(_entity_status_filter(statuses))
+    if subject_ids is not None:
+        stmt = stmt.where(
+            false() if not subject_ids else BusinessEntityRow.id.in_(subject_ids)
+        )
+    return stmt
+
+
 class SqlEntityStore:
     def list_entities(
         self,
@@ -313,28 +375,18 @@ class SqlEntityStore:
         offset: int,
     ) -> tuple[list[BusinessEntityRecord], int]:
         with session_scope() as session:
-            stmt = select(BusinessEntityRow)
-            count_stmt = select(func.count()).select_from(BusinessEntityRow)
-            if q and q.strip():
-                needle = f"%{_escape_like_literal(q.strip())}%"
-                filt = or_(
-                    BusinessEntityRow.table_name.ilike(needle, escape="\\"),
-                    BusinessEntityRow.name.ilike(needle, escape="\\"),
-                )
-                stmt = stmt.where(filt)
-                count_stmt = count_stmt.where(filt)
-            if statuses is not None:
-                status_filt = _entity_status_filter(statuses)
-                stmt = stmt.where(status_filt)
-                count_stmt = count_stmt.where(status_filt)
-            if subject_ids is not None:
-                id_filt = (
-                    false()
-                    if not subject_ids
-                    else BusinessEntityRow.id.in_(subject_ids)
-                )
-                stmt = stmt.where(id_filt)
-                count_stmt = count_stmt.where(id_filt)
+            stmt = _restrict_entities(
+                select(BusinessEntityRow),
+                q=q,
+                statuses=statuses,
+                subject_ids=subject_ids,
+            )
+            count_stmt = _restrict_entities(
+                select(func.count()).select_from(BusinessEntityRow),
+                q=q,
+                statuses=statuses,
+                subject_ids=subject_ids,
+            )
             total = int(session.execute(count_stmt).scalar_one())
             rows = (
                 session.execute(
@@ -349,6 +401,58 @@ class SqlEntityStore:
                 .all()
             )
             return [_entity_from_row(row) for row in rows], total
+
+    def list_entity_candidates(
+        self,
+        *,
+        q: str | None,
+        statuses: frozenset[EntityListStatus] | None,
+        subject_ids: frozenset[str] | None = None,
+    ) -> list[BusinessEntityRecord]:
+        with session_scope() as session:
+            stmt = _restrict_entities(
+                select(BusinessEntityRow),
+                q=q,
+                statuses=statuses,
+                subject_ids=subject_ids,
+            )
+            rows = (
+                session.execute(
+                    stmt.order_by(
+                        BusinessEntityRow.created_at.desc(),
+                        BusinessEntityRow.id.desc(),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [_entity_from_row(row) for row in rows]
+
+    def membership_sources(
+        self, entity_ids: frozenset[str]
+    ) -> dict[str, tuple[BusinessEntityRecord, EntityVersionRecord | None]]:
+        if not entity_ids:
+            return {}
+        with session_scope() as session:
+            entities = session.scalars(
+                select(BusinessEntityRow).where(BusinessEntityRow.id.in_(entity_ids))
+            ).all()
+            versions = session.scalars(
+                select(EntityVersionRow).where(
+                    EntityVersionRow.entity_id.in_(entity_ids),
+                    EntityVersionRow.publish_status == PUBLISHED,
+                )
+            ).all()
+            published: dict[str, EntityVersionRecord] = {}
+            for row in versions:
+                version = _version_from_row(row)
+                current = published.get(version.entity_id)
+                if current is None or version.version > current.version:
+                    published[version.entity_id] = version
+            return {
+                row.id: (_entity_from_row(row), published.get(row.id))
+                for row in entities
+            }
 
     def get_entity(self, entity_id: str) -> BusinessEntityRecord | None:
         with session_scope() as session:

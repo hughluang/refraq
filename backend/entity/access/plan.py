@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from backend.admin.subjects import (
@@ -23,21 +24,32 @@ from backend.entity.access.facts import (
     RestrictionSpec,
     SubjectAttrFact,
 )
-from backend.entity.access.records import RestrictionRecord
+from backend.entity.access.records import (
+    GrantRecord,
+    LadderRecord,
+    ProfileRecord,
+    RestrictionRecord,
+)
 from backend.entity.access.store import get_access_store
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
 from backend.entity.lifecycle import PUBLISHED
 from backend.entity.parameters import max_profile_combinations
-from backend.entity.records import AttributeRecord
+from backend.entity.records import (
+    AttributeRecord,
+    BusinessEntityRecord,
+    EntityVersionRecord,
+)
 from backend.entity.store import get_entity_store
 from backend.entity.table_name import physical_table_name, published_attributes, table_present
 
 __all__ = [
     "Head",
     "attribute_fact",
+    "head_from",
     "load_head",
     "load_policy",
     "make_head",
+    "policy_for_membership",
 ]
 
 
@@ -78,13 +90,12 @@ def make_head(
     )
 
 
-def load_head(entity_id: str) -> Head:
-    entity = get_entity_store().get_entity(entity_id)
-    if entity is None:
-        raise EntityNotFound()
-    versions = get_entity_store().list_all_versions(entity_id)
-    published = [item for item in versions if item.publish_status == PUBLISHED]
-    if not published:
+def head_from(
+    entity: BusinessEntityRecord, version: EntityVersionRecord | None
+) -> Head:
+    """Head for one Entity. A missing version has no attributes."""
+
+    if version is None:
         return make_head(
             entity_id=entity.id,
             table_name=entity.table_name,
@@ -93,7 +104,6 @@ def load_head(entity_id: str) -> Head:
             attributes=(),
             physical=None,
         )
-    version = max(published, key=lambda item: item.version)
     attributes = tuple(published_attributes(version))
     physical = (
         physical_table_name(version, entity.table_name) if table_present(version) else None
@@ -106,6 +116,16 @@ def load_head(entity_id: str) -> Head:
         attributes=attributes,
         physical=physical,
     )
+
+
+def load_head(entity_id: str) -> Head:
+    entity = get_entity_store().get_entity(entity_id)
+    if entity is None:
+        raise EntityNotFound()
+    versions = get_entity_store().list_all_versions(entity_id)
+    published = [item for item in versions if item.publish_status == PUBLISHED]
+    version = max(published, key=lambda item: item.version) if published else None
+    return head_from(entity, version)
 
 
 def attribute_fact(attr: AttributeRecord, head: Any) -> AttrFact:
@@ -146,37 +166,9 @@ def load_policy(
     """
     store = get_access_store()
     facts = {item.attribute_id: item for item in head.facts}
-    ladders = {
-        record.attribute_id: tuple(
-            Level(str(item["key"]), item["mode"]) for item in record.levels
-        )
-        for record in store.ladders(head.entity_id)
-        if record.attribute_id in facts
-    }
-    profiles = tuple(
-        ProfileSpec(
-            id=item.id,
-            key=item.key,
-            columns=tuple(
-                (str(column["attribute_id"]), str(column["level"]))
-                for column in item.columns
-            ),
-        )
-        for item in store.profiles(head.entity_id)
-    )
-    grants = tuple(
-        GrantSpec(
-            id=item.id,
-            subject_type=item.subject_type,  # type: ignore[arg-type]
-            subject_id=item.subject_id,
-            profile_id=item.profile_id,
-            row_rule=item.row_rule,
-            actions=frozenset(item.actions),
-            status=item.status,
-            valid_until=item.valid_until,
-        )
-        for item in store.grants(head.entity_id)
-    )
+    ladders = _ladder_map(store.ladders(head.entity_id), facts)
+    profiles = tuple(_profile_spec(item) for item in store.profiles(head.entity_id))
+    grants = tuple(_grant_spec(item) for item in store.grants(head.entity_id))
     restrictions = tuple(
         _restriction_spec(item) for item in store.restrictions(head.entity_id)
     )
@@ -209,6 +201,80 @@ def load_policy(
         cap=max_profile_combinations(),
         existing_combos=existing,
         now=utc_now(),
+    )
+
+
+def policy_for_membership(
+    head: Head,
+    *,
+    ladders: tuple[LadderRecord, ...] | list[LadderRecord],
+    profiles: tuple[ProfileRecord, ...] | list[ProfileRecord],
+    grants: tuple[GrantRecord, ...] | list[GrantRecord],
+    restrictions: tuple[RestrictionRecord, ...] | list[RestrictionRecord],
+    subject_attrs: dict[str, SubjectAttrFact],
+    now: datetime,
+) -> Policy:
+    """Policy whose read outcome does not depend on the user population.
+
+    ``people``, subject values, and emitted combinations stay empty. The
+    combination cap does not change that outcome. View generation keeps using
+    ``load_policy``.
+    """
+
+    facts = {item.attribute_id: item for item in head.facts}
+    return Policy(
+        entity_id=head.entity_id,
+        table_name=head.table_name,
+        revision=0,
+        source_sql=head.source_sql,
+        head_version_id=head.version_id,
+        attributes=head.facts,
+        ladders=_ladder_map(ladders, facts),
+        profiles=tuple(_profile_spec(item) for item in profiles),
+        grants=tuple(_grant_spec(item) for item in grants),
+        restrictions=tuple(_restriction_spec(item) for item in restrictions),
+        people=(),
+        subject_attrs=subject_attrs,
+        subject_values={},
+        cap=1,
+        existing_combos=frozenset(),
+        now=now,
+    )
+
+
+def _ladder_map(
+    records: tuple[LadderRecord, ...] | list[LadderRecord],
+    facts: dict[str, AttrFact],
+) -> dict[str, tuple[Level, ...]]:
+    return {
+        record.attribute_id: tuple(
+            Level(str(item["key"]), item["mode"]) for item in record.levels
+        )
+        for record in records
+        if record.attribute_id in facts
+    }
+
+
+def _profile_spec(item: ProfileRecord) -> ProfileSpec:
+    return ProfileSpec(
+        id=item.id,
+        key=item.key,
+        columns=tuple(
+            (str(column["attribute_id"]), str(column["level"])) for column in item.columns
+        ),
+    )
+
+
+def _grant_spec(item: GrantRecord) -> GrantSpec:
+    return GrantSpec(
+        id=item.id,
+        subject_type=item.subject_type,  # type: ignore[arg-type]
+        subject_id=item.subject_id,
+        profile_id=item.profile_id,
+        row_rule=item.row_rule,
+        actions=frozenset(item.actions),
+        status=item.status,
+        valid_until=item.valid_until,
     )
 
 
