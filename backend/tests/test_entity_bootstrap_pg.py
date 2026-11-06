@@ -92,7 +92,12 @@ def test_bootstrap_is_idempotent_and_reader_cannot_bypass_rls() -> None:
 
     maintenance = create_engine(_MAINTENANCE_DATABASE_URL, isolation_level="AUTOCOMMIT")
     database = f"refraq_eacl_{uuid.uuid4().hex[:8]}"
-    admin_url = _url(database, username="refraq", password=make_url(_MAINTENANCE_DATABASE_URL).password or "")
+    maintenance_url = make_url(_MAINTENANCE_DATABASE_URL)
+    admin_url = _url(
+        database,
+        username=maintenance_url.username or "refraq",
+        password=maintenance_url.password or "",
+    )
     before: dict[str, str | None] = {}
     try:
         with maintenance.connect() as conn:
