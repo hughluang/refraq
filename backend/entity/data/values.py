@@ -114,9 +114,18 @@ def decode_row(
         if col == "row_id":
             out["row_id"] = int(value) if value is not None else None
             continue
+        if col == "__withheld":
+            out["__withheld"] = _withheld_names(value)
+            continue
         attr = by_name[col]
         out[col] = _decode_value(attr, value, target)
     return out
+
+
+def _withheld_names(value: Any) -> list[str]:
+    if not value:
+        return []
+    return [str(item) for item in value]
 
 
 def writable_dictionary_codes(

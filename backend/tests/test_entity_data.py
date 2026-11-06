@@ -1791,3 +1791,156 @@ def test_api_writes_append_nothing_when_recording_is_off(data_client) -> None:
     assert deleted.status_code == 204, deleted.text
     assert _change_log(entity_id, _LOG_ATTRIBUTES) == []
 
+
+def test_get_and_query_rows_carry_withheld_on_a_multi_profile_shape(data_client) -> None:
+    """A multi-profile shape adds ``__withheld``; a single profile does not.
+
+    The low row is covered only by the profile that omits ``note``, so that
+    cell is null and the marker names ``note``. The high row is covered by
+    the profile that includes ``note``. ``fields`` and filters still reject
+    the marker, and a field subset still carries it.
+    """
+    client, stem, _physical, entity_id = data_client
+    from backend.admin.roles import create_role
+    from backend.admin.role_store import get_role_store
+    from backend.admin.security import hash_password
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.plan import load_head
+    from backend.entity.access.service import create_grant, create_profile
+    from backend.entity.access.views import rebuild_entity_views
+
+    admin_schema = client.post(f"/entities/{stem}/schema", json={})
+    assert admin_schema.status_code == 200, admin_schema.text
+    assert admin_schema.json()["withheld_field"] is None
+
+    high = client.post(
+        f"/entities/{stem}/create",
+        json={"values": {"sku": "HIGH", "qty": 10, "note": "shown-note"}},
+    )
+    assert high.status_code == 201, high.text
+    assert "__withheld" not in high.json()["row"]
+    high_id = high.json()["row"]["row_id"]
+    low = client.post(
+        f"/entities/{stem}/create",
+        json={"values": {"sku": "LOW", "qty": 1, "note": "secret-note"}},
+    )
+    assert low.status_code == 201, low.text
+    low_id = low.json()["row"]["row_id"]
+
+    ids = {attr.name: attr.attribute_id for attr in load_head(entity_id).attributes}
+    role = create_role(
+        get_role_store(),
+        key="combo_reader",
+        name="Combo reader",
+        permissions=["console:access", "entity:data_read"],
+    )
+    reader = get_user_store().create_user(
+        account="combo",
+        display_name="Combo",
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    full_columns = [
+        {"attribute_id": ids["sku"], "level": "clear"},
+        {"attribute_id": ids["qty"], "level": "clear"},
+        {"attribute_id": ids["flag"], "level": "clear"},
+        {"attribute_id": ids["note"], "level": "clear"},
+    ]
+    omitted_note = [
+        column
+        for column in full_columns
+        if column["attribute_id"] != ids["note"]
+    ]
+    full = create_profile(
+        entity_id,
+        key="with_note",
+        name="With note",
+        description=None,
+        columns=full_columns,
+        actor_user_id=reader.id,
+        actor_token_id=None,
+    )
+    create_grant(
+        entity_id,
+        subject={"type": "user", "id": reader.id},
+        profile_id=full["profile"]["id"],
+        row_rule={"gte": {"attr": ids["qty"], "value": 10}},
+        actions=["read"],
+        status="active",
+        valid_until=None,
+        actor_user_id=reader.id,
+        actor_token_id=None,
+    )
+    partial = create_profile(
+        entity_id,
+        key="without_note",
+        name="Without note",
+        description=None,
+        columns=omitted_note,
+        actor_user_id=reader.id,
+        actor_token_id=None,
+    )
+    create_grant(
+        entity_id,
+        subject={"type": "user", "id": reader.id},
+        profile_id=partial["profile"]["id"],
+        row_rule={"lt": {"attr": ids["qty"], "value": 10}},
+        actions=["read"],
+        status="active",
+        valid_until=None,
+        actor_user_id=reader.id,
+        actor_token_id=None,
+    )
+    rebuild_entity_views(entity_id)
+
+    client.post("/auth/logout")
+    login = client.post("/auth/login", json={"account": "combo", "password": "secret"})
+    assert login.status_code == 200, login.text
+
+    schema = client.post(f"/entities/{stem}/schema", json={})
+    assert schema.status_code == 200, schema.text
+    assert schema.json()["withheld_field"] == "__withheld"
+    note = next(item for item in schema.json()["attributes"] if item["name"] == "note")
+    assert note["presentation"]["may_be_withheld"] is True
+
+    got_high = client.post(f"/entities/{stem}/get", json={"row_id": high_id})
+    assert got_high.status_code == 200, got_high.text
+    assert got_high.json()["row"]["note"] == "shown-note"
+    assert got_high.json()["row"]["__withheld"] == []
+
+    got_low = client.post(f"/entities/{stem}/get", json={"row_id": low_id})
+    assert got_low.status_code == 200, got_low.text
+    assert got_low.json()["row"]["note"] is None
+    assert got_low.json()["row"]["__withheld"] == ["note"]
+    assert "secret-note" not in got_low.text
+
+    queried = client.post(f"/entities/{stem}/query", json={})
+    assert queried.status_code == 200, queried.text
+    by_sku = {item["sku"]: item for item in queried.json()["items"]}
+    assert by_sku["HIGH"]["note"] == "shown-note"
+    assert by_sku["HIGH"]["__withheld"] == []
+    assert by_sku["LOW"]["note"] is None
+    assert by_sku["LOW"]["__withheld"] == ["note"]
+    assert "secret-note" not in queried.text
+
+    subset = client.post(f"/entities/{stem}/query", json={"fields": ["sku"]})
+    assert subset.status_code == 200, subset.text
+    subset_by_sku = {item["sku"]: item for item in subset.json()["items"]}
+    assert set(subset_by_sku["HIGH"]) == {"sku", "__withheld"}
+    assert subset_by_sku["HIGH"]["__withheld"] == []
+    assert set(subset_by_sku["LOW"]) == {"sku", "__withheld"}
+    assert subset_by_sku["LOW"]["__withheld"] == ["note"]
+
+    rejected_fields = client.post(
+        f"/entities/{stem}/query", json={"fields": ["__withheld"]}
+    )
+    assert rejected_fields.status_code == 422
+    assert rejected_fields.json()["code"] == "ENTITY_ROW_INVALID"
+    rejected_filter = client.post(
+        f"/entities/{stem}/query",
+        json={"filters": {"field": "__withheld", "op": "is_null"}},
+    )
+    assert rejected_filter.status_code == 422
+    assert rejected_filter.json()["code"] == "ENTITY_ROW_INVALID"
+

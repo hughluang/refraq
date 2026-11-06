@@ -17,6 +17,7 @@ from backend.entity.access.enforce import (
     writable_names,
     write_locator_target,
 )
+from backend.entity.access.membership import readable_entity_ids
 from backend.entity.data.capabilities import ROW_WRITE_LIMIT, upsert_key_for
 from backend.entity.data.filters import compile_filters
 from backend.entity.data.head import HeadTarget
@@ -60,7 +61,10 @@ def schema_for(
             raise EntityRequestInvalid(
                 f"Unknown top-level key(s): {', '.join(sorted(unknown))}"
             )
-        schema = build_schema(access.target)
+        schema = build_schema(
+            access.target,
+            visible_entity_ids=_visible_reference_targets(access),
+        )
         _annotate_schema(schema, access)
         access.log(row_count=None, outcome_code="ok", verb="schema")
         return schema
@@ -142,7 +146,13 @@ def get_row(
     try:
         column, value = _locator(body, access.target, verb="get")
         with data_sql.entity_read_connection(read_context(access)) as conn:
-            row = data_sql.select_by_column(conn, access.target, column, value)
+            row = data_sql.select_by_column(
+                conn,
+                access.target,
+                column,
+                value,
+                withheld_field=access.outcome.withheld_field,
+            )
         access.log(row_count=1, outcome_code="ok", verb="get")
         return row
     except Exception as exc:
@@ -235,7 +245,10 @@ def query_rows(
         raise EntityRequestInvalid(
             "after_row_id cannot be combined with offset or include_total"
         )
-    fields = _resolve_fields(body.get("fields"), target)
+    fields = _read_fields(
+        _resolve_fields(body.get("fields"), target),
+        access.outcome.withheld_field,
+    )
     filters = body.get("filters")
     compiled = compile_filters(filters, target, require_leaf=False)
     row_dependent = predicate_depends_on_row(access.outcome.shape)
@@ -435,7 +448,12 @@ def _present(access: DataAccess, row_ids: list[int]) -> list[dict[str, Any]]:
     if reader is None:
         return [{"row_id": row_id} for row_id in row_ids]
     with data_sql.entity_read_connection(read_context(reader)) as conn:
-        found = data_sql.select_ids(conn, reader.target, row_ids)
+        found = data_sql.select_ids(
+            conn,
+            reader.target,
+            row_ids,
+            withheld_field=reader.outcome.withheld_field,
+        )
     return [found.get(row_id, {"row_id": row_id}) for row_id in row_ids]
 
 
@@ -498,6 +516,13 @@ def _reject_batch_unique_dups(
                     f"{seen[value]} and {index}"
                 )
             seen[value] = index
+
+
+def _read_fields(fields: list[str], withheld_field: str | None) -> list[str]:
+    """Append the shape marker. Callers cannot request it by name."""
+    if withheld_field:
+        return [*fields, withheld_field]
+    return fields
 
 
 def _resolve_fields(raw: Any, target: HeadTarget) -> list[str]:
@@ -583,6 +608,25 @@ def _reject_business_key_write(values: dict[str, Any], target: HeadTarget) -> No
 def _code(exc: Exception) -> str:
     code = getattr(exc, "code", None)
     return code if isinstance(code, str) else "error"
+
+
+def _visible_reference_targets(access: DataAccess) -> frozenset[str]:
+    """Entity ids a reference target block may name.
+
+    The caller is already reading this Entity, so a self-reference stays
+    visible. Every other target needs an effective read grant.
+    ``entity:write`` is not consulted.
+    """
+    wanted = {
+        attr.target_entity_id
+        for attr in access.target.attributes
+        if attr.type == "reference" and attr.target_entity_id
+    }
+    visible = {access.target.entity.id}
+    others = wanted - visible
+    if others:
+        visible.update(readable_entity_ids(tuple(others), access.person))
+    return frozenset(visible)
 
 
 def _annotate_schema(schema: dict[str, Any], access: DataAccess) -> None:

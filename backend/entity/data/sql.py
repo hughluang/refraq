@@ -141,12 +141,18 @@ def select_by_column(
     value: Any,
     *,
     lock: bool = False,
+    withheld_field: str | None = None,
 ) -> dict[str, Any]:
-    """One row by locator. ``lock`` takes ``FOR UPDATE`` on the physical table."""
-    row = _fetch_one(conn, target, column, value, lock=lock)
+    """One row by locator. ``lock`` takes ``FOR UPDATE`` on the physical table.
+
+    ``withheld_field`` is selected only from the read view. The physical table
+    has no marker column.
+    """
+    marker = None if lock else withheld_field
+    row = _fetch_one(conn, target, column, value, lock=lock, withheld_field=marker)
     if row is None:
         raise EntityRowNotFound()
-    return decode_row(_column_names(target), row, target)
+    return decode_row(_column_names(target, marker), row, target)
 
 
 def select_stored_row(
@@ -175,8 +181,9 @@ def _fetch_one(
     value: Any,
     *,
     lock: bool,
+    withheld_field: str | None = None,
 ) -> tuple[Any, ...] | None:
-    returning = _returning_cols(target)
+    returning = _returning_cols(target, withheld_field)
     relation = target.qualified_table if lock else _read_from(target)
     sql = (
         f"SELECT {returning} FROM {relation} "
@@ -190,18 +197,22 @@ def _fetch_one(
 
 
 def select_ids(
-    conn: Connection, target: HeadTarget, row_ids: list[int]
+    conn: Connection,
+    target: HeadTarget,
+    row_ids: list[int],
+    *,
+    withheld_field: str | None = None,
 ) -> dict[int, dict[str, Any]]:
     """Rows by id from the read relation; ids the relation does not show are absent."""
     if not row_ids:
         return {}
-    returning = _returning_cols(target)
+    returning = _returning_cols(target, withheld_field)
     sql = (
         f"SELECT {returning} FROM {_read_from(target)} "
         f"WHERE {ident('row_id')} = ANY(:ids)"
     )
     rows = conn.execute(text(sql), {"ids": list(row_ids)}).all()
-    names = _column_names(target)
+    names = _column_names(target, withheld_field)
     decoded = [decode_row(names, tuple(row), target) for row in rows]
     return {int(row["row_id"]): row for row in decoded}
 
@@ -709,6 +720,8 @@ def _record_definition(fields: list[str], target: HeadTarget) -> str:
     for name in fields:
         if name == "row_id":
             sql_type = "bigint"
+        elif name == "__withheld":
+            sql_type = "text[]"
         else:
             attr = by_name[name]
             if attr.type == "reference":
@@ -724,12 +737,19 @@ def _where(compiled: CompiledFilter | None) -> tuple[str, dict[str, Any]]:
     return f" WHERE {compiled.sql}", dict(compiled.params)
 
 
-def _column_names(target: HeadTarget) -> list[str]:
-    return ["row_id", *[attr.name for attr in target.attributes]]
+def _column_names(
+    target: HeadTarget, withheld_field: str | None = None
+) -> list[str]:
+    names = ["row_id", *[attr.name for attr in target.attributes]]
+    if withheld_field:
+        names.append(withheld_field)
+    return names
 
 
-def _returning_cols(target: HeadTarget) -> str:
-    return ", ".join(ident(name) for name in _column_names(target))
+def _returning_cols(
+    target: HeadTarget, withheld_field: str | None = None
+) -> str:
+    return ", ".join(ident(name) for name in _column_names(target, withheld_field))
 
 
 def _translate(exc: BaseException) -> BaseException:

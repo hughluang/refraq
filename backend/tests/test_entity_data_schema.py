@@ -479,6 +479,7 @@ def test_schema_names_business_key_and_reference_operators(client: TestClient) -
             updated_at=now,
         ),
     )
+    prepare_legacy_entity(supplier.id)
     ref = AttributeRecord(
         name="supplier_code",
         type="reference",
@@ -570,6 +571,7 @@ def test_schema_reference_business_key_comes_from_snapshot(
             updated_at=now,
         ),
     )
+    prepare_legacy_entity(supplier.id)
     ref = AttributeRecord(
         name="supplier_code",
         type="reference",
@@ -591,6 +593,168 @@ def test_schema_reference_business_key_comes_from_snapshot(
     assert response.status_code == 200, response.text
     by_name = {item["name"]: item for item in response.json()["attributes"]}
     assert by_name["supplier_code"]["target"]["business_key"] == "legacy_code"
+
+
+def test_schema_hides_reference_target_without_a_read_grant(
+    client: TestClient,
+) -> None:
+    """A reference target is null unless the caller has an effective read grant.
+
+    ``entity:write`` does not make the target visible. Operators stay those of
+    the snapshotted Business Key type.
+    """
+    now = datetime.now(timezone.utc)
+    supplier = BusinessEntityRecord(
+        id=new_entity_id(),
+        table_name="hidden_supplier",
+        name="Hidden Supplier",
+        description="Not granted",
+        deprecated_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    supplier_attrs = [
+        AttributeRecord(
+            name="code",
+            type="string",
+            required=True,
+            unique=True,
+            business_key=True,
+            max_length=16,
+        )
+    ]
+    get_entity_store().create_entity(
+        supplier,
+        EntityVersionRecord(
+            id=new_version_id(),
+            entity_id=supplier.id,
+            version=1,
+            attributes=list(supplier_attrs),
+            materialized_attributes=[
+                attribute_to_dict(item) for item in supplier_attrs
+            ],
+            publish_status=PUBLISHED,
+            latest_reconcile_job_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    roles = get_role_store()
+    reader = create_role(
+        roles,
+        key="ref_reader",
+        name="Reference reader",
+        permissions=["console:access", "entity:data_read"],
+    )
+    writer = create_role(
+        roles,
+        key="ref_writer",
+        name="Reference writer",
+        permissions=["console:access", "entity:data_read", "entity:write"],
+    )
+    for role, account, display in (
+        (reader, "refreader", "Reference reader"),
+        (writer, "refwriter", "Reference writer"),
+    ):
+        get_user_store().create_user(
+            account=account,
+            display_name=display,
+            password_hash=hash_password("secret"),
+            role_id=role.id,
+            status="active",
+        )
+    ref = AttributeRecord(
+        name="supplier_code",
+        type="reference",
+        required=False,
+        target_entity_id=supplier.id,
+    )
+    sku = AttributeRecord(
+        name="sku",
+        type="string",
+        required=True,
+        unique=True,
+        business_key=True,
+        max_length=32,
+    )
+    linked = _seed_serving(table_name="hidden_link", attributes=[sku, ref])
+    version = get_entity_store().current_version(linked.id)
+    assert version is not None
+    version.reference_snapshots = {
+        "supplier_code": {"attribute": "code", "type": "string", "max_length": 16}
+    }
+    get_entity_store().save_version(version)
+    string_operators = list(resolve("string").operators)
+    for account in ("admin", "refreader", "refwriter"):
+        client.post("/auth/logout")
+        login = client.post(
+            "/auth/login", json={"account": account, "password": "secret"}
+        )
+        assert login.status_code == 200, login.text
+        response = client.post("/entities/hidden_link/schema", json={})
+        assert response.status_code == 200, response.text
+        by_name = {item["name"]: item for item in response.json()["attributes"]}
+        assert "target" in by_name["supplier_code"]
+        assert by_name["supplier_code"]["target"] is None
+        assert by_name["supplier_code"]["operators"] == string_operators
+
+
+def test_schema_names_a_self_reference(client: TestClient) -> None:
+    now = datetime.now(timezone.utc)
+    entity_id = new_entity_id()
+    sku = AttributeRecord(
+        name="sku",
+        type="string",
+        required=True,
+        unique=True,
+        business_key=True,
+        max_length=32,
+    )
+    ref = AttributeRecord(
+        name="parent_sku",
+        type="reference",
+        required=False,
+        target_entity_id=entity_id,
+    )
+    attrs = [sku, ref]
+    entity = BusinessEntityRecord(
+        id=entity_id,
+        table_name="self_link",
+        name="Self",
+        description="Refers to itself",
+        deprecated_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    version = EntityVersionRecord(
+        id=new_version_id(),
+        entity_id=entity_id,
+        version=1,
+        attributes=list(attrs),
+        materialized_attributes=[attribute_to_dict(item) for item in attrs],
+        publish_status=PUBLISHED,
+        latest_reconcile_job_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+    get_entity_store().create_entity(entity, version)
+    prepare_legacy_entity(entity.id)
+    stored = get_entity_store().current_version(entity.id)
+    assert stored is not None
+    stored.reference_snapshots = {
+        "parent_sku": {"attribute": "sku", "type": "string", "max_length": 32}
+    }
+    get_entity_store().save_version(stored)
+    response = client.post("/entities/self_link/schema", json={})
+    assert response.status_code == 200, response.text
+    by_name = {item["name"]: item for item in response.json()["attributes"]}
+    assert by_name["parent_sku"]["target"] == {
+        "entity_id": entity_id,
+        "name": "Self",
+        "table_name": "self_link",
+        "business_key": "sku",
+    }
+    assert by_name["parent_sku"]["operators"] == list(resolve("string").operators)
 
 
 def test_reference_encoding_and_filters_follow_snapshot_type() -> None:

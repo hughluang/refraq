@@ -25,10 +25,21 @@ from backend.entity.store import EntityStore, get_entity_store
 __all__ = ["build_schema"]
 
 
-def build_schema(target: HeadTarget) -> dict[str, Any]:
+def build_schema(
+    target: HeadTarget,
+    *,
+    visible_entity_ids: frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Assemble the schema document.
+
+    ``visible_entity_ids`` is the caller's effective read set. A reference
+    whose target is outside that set is ``target: null``. ``None`` leaves
+    every resolved target named (callers that do not apply this cut).
+    """
     store = get_entity_store()
     attributes = [
-        _attribute_out(store, attr, target) for attr in target.attributes
+        _attribute_out(store, attr, target, visible_entity_ids)
+        for attr in target.attributes
     ]
     key = business_key_attr(target.attributes)
     return {
@@ -62,14 +73,19 @@ def build_schema(target: HeadTarget) -> dict[str, Any]:
 
 
 def _attribute_out(
-    store: EntityStore, attr: AttributeRecord, target: HeadTarget
+    store: EntityStore,
+    attr: AttributeRecord,
+    target: HeadTarget,
+    visible_entity_ids: frozenset[str] | None,
 ) -> dict[str, Any]:
     payload = attribute_to_dict(attr)
     spec = resolve(attr.type)
     payload["operators"] = _operators(attr, target)
     payload["upsert_key"] = upsert_key_for(attr)
     if "target" in spec.reads:
-        payload["target"] = _reference_target(store, attr, target)
+        payload["target"] = _reference_target(
+            store, attr, target, visible_entity_ids
+        )
     if "dictionary" in spec.reads:
         payload["dictionary"] = _dictionary_link(attr)
         payload["codes"] = _codes_for(attr, target)
@@ -83,13 +99,18 @@ def _operators(attr: AttributeRecord, target: HeadTarget) -> list[str]:
 
 
 def _reference_target(
-    store: EntityStore, attr: AttributeRecord, head: HeadTarget
+    store: EntityStore,
+    attr: AttributeRecord,
+    head: HeadTarget,
+    visible_entity_ids: frozenset[str] | None,
 ) -> dict[str, str | None] | None:
     entity_id = attr.target_entity_id
     if not entity_id:
         return None
     entity = store.get_entity(entity_id)
     if entity is None:
+        return None
+    if visible_entity_ids is not None and entity.id not in visible_entity_ids:
         return None
     snap = reference_snapshot(attr, head)
     return {
