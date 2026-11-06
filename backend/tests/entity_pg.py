@@ -17,6 +17,7 @@ from backend.entity.ddl import (
     ENTITY_OWNER_ROLE,
     EXPOSURE_OWNER_ROLE,
     READER_ROLE,
+    SIGNER_ROLE,
 )
 
 _ENSURE_ROLES = """
@@ -39,6 +40,7 @@ _ROLES = (
     EXPOSURE_OWNER_ROLE,
     ACL_OWNER_ROLE,
     READER_ROLE,
+    SIGNER_ROLE,
 )
 
 
@@ -57,6 +59,7 @@ class EntityDatabase:
     admin_url: str
     owner_url: str
     reader_url: str
+    signer_url: str
 
 
 @contextmanager
@@ -82,8 +85,9 @@ def bootstrapped_entity_database(maintenance_url: str, prefix: str) -> Iterator[
             admin_url=_url(base, database, base.username or "refraq", base.password or ""),
             owner_url=_url(base, database, ENTITY_OWNER_ROLE, "owner-secret"),
             reader_url=_url(base, database, READER_ROLE, "reader-secret"),
+            signer_url=_url(base, database, SIGNER_ROLE, "signer-secret"),
         )
-        run_bootstrap(urls.admin_url, urls.owner_url, urls.reader_url)
+        run_bootstrap(urls.admin_url, urls.owner_url, urls.reader_url, urls.signer_url)
         yield urls
     finally:
         with maintenance.connect() as conn:

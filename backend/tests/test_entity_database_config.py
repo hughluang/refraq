@@ -100,6 +100,7 @@ def test_missing_channel_dataset_names_the_bootstrap_command() -> None:
 
 _OWNER = "postgresql+psycopg://refraq_entity_owner:pw@127.0.0.1:5432/refraq_entity"
 _READER = "postgresql+psycopg://refraq_reader:pw@127.0.0.1:5432/refraq_entity"
+_SIGNER = "postgresql+psycopg://refraq_signer:pw@127.0.0.1:5432/refraq_entity"
 _METADATA = "postgresql+psycopg://refraq:pw@127.0.0.1:5432/refraq"
 _OWNER_ON_METADATA = "postgresql+psycopg://refraq_entity_owner:pw@127.0.0.1:5432/refraq"
 _READER_ON_METADATA = "postgresql+psycopg://refraq_reader:pw@127.0.0.1:5432/refraq"
@@ -112,10 +113,12 @@ class _PersistentSettings:
         entity_database_url: str | None,
         entity_reader_database_url: str | None,
         database_url: str | None,
+        entity_signer_database_url: str | None = None,
     ) -> None:
         self.store_backend = "persistent"
         self.entity_database_url = entity_database_url
         self.entity_reader_database_url = entity_reader_database_url
+        self.entity_signer_database_url = entity_signer_database_url
         self.database_url = database_url
 
 
@@ -179,6 +182,7 @@ def test_entity_mcp_reader_startup_allows_missing_owner_url(
         lambda: _PersistentSettings(
             entity_database_url=owner_url,
             entity_reader_database_url=_READER,
+            entity_signer_database_url=_SIGNER,
             database_url=_METADATA,
         ),
     )
@@ -192,7 +196,7 @@ def test_entity_mcp_reader_startup_allows_missing_owner_url(
     monkeypatch.setattr("backend.entity.entity_db.create_engine", _capture)
     try:
         open_entity_reader_pool_when_persistent()
-        assert created == [_READER]
+        assert created == [_READER, _SIGNER]
     finally:
         get_entity_reader_engine.cache_clear()
         _restore_api_role()
@@ -352,11 +356,16 @@ def test_entity_mcp_reader_startup_does_not_construct_owner_engine(
         lambda: _PersistentSettings(
             entity_database_url=_OWNER,
             entity_reader_database_url=_READER,
+            entity_signer_database_url=_SIGNER,
             database_url=_METADATA,
         ),
     )
     monkeypatch.setattr(
         "backend.entity.entity_db.get_entity_reader_engine",
+        lambda: _ReaderEngine(False, False),
+    )
+    monkeypatch.setattr(
+        "backend.entity.entity_db.get_entity_signer_engine",
         lambda: _ReaderEngine(False, False),
     )
     try:

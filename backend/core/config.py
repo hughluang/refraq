@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
 from backend.core.browser_host import valid_browser_host
+from backend.core.runtime import current_process_role
 
 StoreBackend = Literal["memory", "persistent"]
 
@@ -52,6 +53,9 @@ class Settings(BaseSettings):
     )
     entity_reader_database_url: str | None = Field(
         default=None, validation_alias="ENTITY_READER_DATABASE_URL"
+    )
+    entity_signer_database_url: str | None = Field(
+        default=None, validation_alias="ENTITY_SIGNER_DATABASE_URL"
     )
     redis_url: str | None = Field(default=None, validation_alias="REDIS_URL")
     admin_session_secret: str = Field(
@@ -135,6 +139,11 @@ def require_entity_reader_database_url(
     """
     cleaned = (url or "").strip()
     if not cleaned:
+        if current_process_role() == "entity_mcp":
+            raise ValueError(
+                "Entity MCP requires ENTITY_READER_DATABASE_URL "
+                "to open the entity reader pool"
+            )
         raise ValueError(
             "persistent API requires ENTITY_READER_DATABASE_URL "
             "to open the entity reader pool"
@@ -145,6 +154,22 @@ def require_entity_reader_database_url(
         raise ValueError(
             "ENTITY_READER_DATABASE_URL must name the same database as "
             "ENTITY_DATABASE_URL"
+        )
+    return cleaned
+
+
+def require_entity_signer_database_url(url: str | None, *, reader_url: str) -> str:
+    """Entity MCP loads the signing key as the signer role, in the reader's database."""
+    cleaned = (url or "").strip()
+    if not cleaned:
+        raise ValueError(
+            "Entity MCP requires ENTITY_SIGNER_DATABASE_URL "
+            "to open the entity signer pool"
+        )
+    if _database_target(cleaned) != _database_target(reader_url):
+        raise ValueError(
+            "ENTITY_SIGNER_DATABASE_URL must name the same database as "
+            "ENTITY_READER_DATABASE_URL"
         )
     return cleaned
 

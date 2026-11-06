@@ -2,8 +2,8 @@
 
 Opened by the API process (owner and reader pools for the Entity Data API),
 by the worker (owner pool for publish / drop), and by the Entity MCP process
-(reader pool only). Metadata MCP and Beat do not open these pools. Schema
-discovery uses only the metadata store.
+(reader pool and a one-connection signer pool). Metadata MCP and Beat do not
+open these pools. Schema discovery uses only the metadata store.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from backend.core.config import (
     require_distinct_entity_database,
     require_entity_database_url,
     require_entity_reader_database_url,
+    require_entity_signer_database_url,
 )
 from backend.core.db import ObservedQueuePool
 from backend.core.runtime import get_runtime_capacity
@@ -26,6 +27,7 @@ from backend.entity.ddl import ENTITY_SCHEMAS
 __all__ = [
     "get_entity_engine",
     "get_entity_reader_engine",
+    "get_entity_signer_engine",
     "open_entity_pool_when_persistent",
     "open_entity_reader_pool_when_persistent",
     "require_entity_schemas",
@@ -35,6 +37,8 @@ __all__ = [
 
 _LOCK_TIMEOUT_MS = 5000
 _IDLE_IN_TRANSACTION_MS = 60_000
+_SIGNER_POOL_SIZE = 1
+_SIGNER_MAX_OVERFLOW = 0
 _BOOTSTRAP_COMMAND = "python -m backend.entity.bootstrap"
 _SCHEMA_PRESENCE_SQL = text(
     "SELECT nspname FROM pg_namespace WHERE nspname IN ("
@@ -47,9 +51,9 @@ def open_entity_pool_when_persistent() -> None:
     """Open and check the entity pools in persistent mode. No-op for memory tests.
 
     The worker opens the owner pool; the API also opens the reader pool. The
-    Entity MCP process opens the reader pool only. Every runtime entity
-    connection must name a database other than the metadata database and log in
-    as a role that is not a superuser. The owner connection must already have
+    Entity MCP process opens the reader pool and the signer pool. Every runtime
+    entity connection must name a database other than the metadata database and
+    log in as a role that is not a superuser. The owner connection must already have
     every schema the entity bootstrap creates. This check does not create
     schemas and does not read the admin URL.
     """
@@ -98,7 +102,9 @@ def open_entity_reader_pool_when_persistent() -> None:
 
     Persistent Entity MCP startup. Refuses a missing reader URL, a reader
     database equal to the metadata database, and a superuser or BYPASSRLS
-    login. Does not construct the owner engine and does not require
+    reader login. Also refuses a missing signer URL, a signer database other
+    than the reader database, and a superuser or BYPASSRLS signer login.
+    Does not construct the owner engine and does not require
     ``ENTITY_DATABASE_URL``. When that variable is set, the reader database
     must still name the same database.
     """
@@ -109,6 +115,8 @@ def open_entity_reader_pool_when_persistent() -> None:
     require_distinct_entity_database(reader_url, settings.database_url)
     with get_entity_reader_engine().connect() as conn:
         require_unprivileged_role(conn, "ENTITY_READER_DATABASE_URL", reader=True)
+    with get_entity_signer_engine().connect() as conn:
+        require_unprivileged_role(conn, "ENTITY_SIGNER_DATABASE_URL", reader=True)
 
 
 def require_unprivileged_role(
@@ -153,13 +161,25 @@ def get_entity_reader_engine() -> Engine:
     return _engine(_reader_database_url())
 
 
-def _engine(url: str) -> Engine:
+@lru_cache
+def get_entity_signer_engine() -> Engine:
+    """One connection, no overflow, for the signing-key login."""
+    settings = get_settings()
+    url = require_entity_signer_database_url(
+        settings.entity_signer_database_url, reader_url=_reader_database_url()
+    )
+    return _engine(url, pool_size=_SIGNER_POOL_SIZE, max_overflow=_SIGNER_MAX_OVERFLOW)
+
+
+def _engine(
+    url: str, *, pool_size: int | None = None, max_overflow: int | None = None
+) -> Engine:
     cap = get_runtime_capacity()
     return create_engine(
         url,
         poolclass=ObservedQueuePool,
-        pool_size=cap.entity_pool_size,
-        max_overflow=cap.entity_max_overflow,
+        pool_size=cap.entity_pool_size if pool_size is None else pool_size,
+        max_overflow=cap.entity_max_overflow if max_overflow is None else max_overflow,
         pool_timeout=cap.entity_pool_timeout_sec,
         pool_recycle=cap.entity_pool_recycle_sec or -1,
         pool_pre_ping=True,
@@ -182,7 +202,7 @@ def _connect_args(database_url: str) -> dict[str, str]:
 
 
 def reset_entity_engine() -> None:
-    for factory in (get_entity_engine, get_entity_reader_engine):
+    for factory in (get_entity_engine, get_entity_reader_engine, get_entity_signer_engine):
         engine = None
         try:
             engine = factory()

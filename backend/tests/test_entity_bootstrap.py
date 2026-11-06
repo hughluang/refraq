@@ -30,6 +30,7 @@ def test_role_statements_create_then_alter_and_quote_passwords() -> None:
     created = role_statements(
         owner_password="o'brien",
         reader_password="r",
+        signer_password="s",
         existing=frozenset(),
     )
     assert created[0].startswith(f'CREATE ROLE "{ENTITY_OWNER_ROLE}"')
@@ -43,6 +44,7 @@ def test_role_statements_create_then_alter_and_quote_passwords() -> None:
     altered = role_statements(
         owner_password="x",
         reader_password="y",
+        signer_password="s",
         existing=frozenset({ENTITY_OWNER_ROLE, READER_ROLE}),
     )
     assert altered[0].startswith(f'ALTER ROLE "{ENTITY_OWNER_ROLE}"')
@@ -52,6 +54,7 @@ def test_role_statements_create_then_alter_and_quote_passwords() -> None:
         role_statements(
             owner_password="a\x00b",
             reader_password="y",
+            signer_password="s",
             existing=frozenset(),
         )
 

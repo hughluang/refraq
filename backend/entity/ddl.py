@@ -21,6 +21,7 @@ __all__ = [
     "EXPOSURE_POLICY",
     "OWNER_POLICY",
     "READER_ROLE",
+    "SIGNER_ROLE",
     "ROW_ID_COLUMN",
     "ROW_ID_SQL",
     "table_security_statements",
@@ -60,6 +61,7 @@ ENTITY_OWNER_ROLE = "refraq_entity_owner"
 EXPOSURE_OWNER_ROLE = "refraq_exposure_owner"
 ACL_OWNER_ROLE = "refraq_acl_owner"
 READER_ROLE = "refraq_reader"
+SIGNER_ROLE = "refraq_signer"
 
 EXPOSURE_POLICY = "refraq_exposure_read"
 OWNER_POLICY = "refraq_owner_write"

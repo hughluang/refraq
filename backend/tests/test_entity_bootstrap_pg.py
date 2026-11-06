@@ -25,6 +25,7 @@ from backend.entity.ddl import (
     ENTITY_OWNER_ROLE,
     EXPOSURE_OWNER_ROLE,
     READER_ROLE,
+    SIGNER_ROLE,
     table_security_statements,
 )
 
@@ -39,9 +40,11 @@ _ROLES = (
     EXPOSURE_OWNER_ROLE,
     ACL_OWNER_ROLE,
     READER_ROLE,
+    SIGNER_ROLE,
 )
 _OWNER_PASSWORD = "owner-secret"
 _READER_PASSWORD = "reader-secret"
+_SIGNER_PASSWORD = "signer-secret"
 
 
 def _postgres_available() -> bool:
@@ -110,7 +113,8 @@ def test_bootstrap_is_idempotent_and_reader_cannot_bypass_rls() -> None:
             database, username=ENTITY_OWNER_ROLE, password=_OWNER_PASSWORD
         )
         reader_url = _url(database, username=READER_ROLE, password=_READER_PASSWORD)
-        first = run_bootstrap(admin_url, owner_url, reader_url)
+        signer_url = _url(database, username=SIGNER_ROLE, password=_SIGNER_PASSWORD)
+        first = run_bootstrap(admin_url, owner_url, reader_url, signer_url)
         assert first.database == database
         assert first.moved == 0
 
@@ -139,9 +143,9 @@ def test_bootstrap_is_idempotent_and_reader_cannot_bypass_rls() -> None:
         finally:
             admin.dispose()
 
-        second = run_bootstrap(admin_url, owner_url, reader_url)
+        second = run_bootstrap(admin_url, owner_url, reader_url, signer_url)
         assert second.moved == 2
-        third = run_bootstrap(admin_url, owner_url, reader_url)
+        third = run_bootstrap(admin_url, owner_url, reader_url, signer_url)
         assert third.moved == 0
         assert third.secured_tables >= 1
 

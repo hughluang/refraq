@@ -104,14 +104,14 @@ def _transport_security() -> TransportSecuritySettings | None:
 
 
 def ensure_entity_reader_pool_or_abort() -> None:
-    """Start gate: probe the reader pool, or abort before serving.
+    """Start gate: probe the reader and signer pools, or abort before serving.
 
     Probe failures raise Exception. SystemExit is the process close path.
     """
     try:
         open_entity_reader_pool_when_persistent()
     except Exception as exc:  # noqa: BLE001 — process close path must exit
-        print(f"entity reader pool open failed: {exc}", file=sys.stderr)
+        print(f"Entity MCP pool open failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
 

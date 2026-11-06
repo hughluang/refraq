@@ -9,6 +9,7 @@ from backend.admin.user_store import UserRecord
 from backend.core.config import get_settings
 from backend.core.db import map_platform_db_error
 from backend.core.request_id import get_request_id
+from backend.core.runtime import current_process_role
 from backend.core.time import utc_now
 from backend.entity.access.actor_token import current_actor_token_id
 from backend.entity.access.context import KeyRing, issue_context, load_shared_ring
@@ -32,7 +33,7 @@ from backend.entity.access.records import AccessLogRecord
 from backend.entity.access.service import _ensure_generated, _narrow, _person, view_ready
 from backend.entity.access.store import get_access_store
 from backend.entity.ddl import ENTITY_ACCESS_SCHEMA, qualified_table
-from backend.entity.entity_db import get_entity_engine
+from backend.entity.entity_db import get_entity_engine, get_entity_signer_engine
 from backend.entity.data.head import HeadTarget, resolve_head
 from backend.entity.errors import EntityNotFound, EntityRequestInvalid
 from backend.entity.store import get_entity_store
@@ -377,11 +378,18 @@ def _signing_ring() -> KeyRing:
     now = time.monotonic()
     if _ring_cache is not None and now - _ring_cache[0] < _RING_TTL_SEC:
         return _ring_cache[1]
-    with get_entity_engine().connect() as conn:
+    with _signing_engine().connect() as conn:
         ring = load_shared_ring(conn)
         conn.commit()
     _ring_cache = (now, ring)
     return ring
+
+
+def _signing_engine():
+    """Entity MCP signs with the signer pool. API and worker keep the owner pool."""
+    if current_process_role() == "entity_mcp":
+        return get_entity_signer_engine()
+    return get_entity_engine()
 
 
 def reset_signing_ring() -> None:

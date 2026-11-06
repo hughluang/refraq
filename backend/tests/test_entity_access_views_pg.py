@@ -20,6 +20,7 @@ from backend.entity.ddl import (
     ENTITY_OWNER_ROLE,
     EXPOSURE_OWNER_ROLE,
     READER_ROLE,
+    SIGNER_ROLE,
 )
 
 pytestmark = pytest.mark.integration
@@ -35,7 +36,9 @@ _ROLES = (
     EXPOSURE_OWNER_ROLE,
     ACL_OWNER_ROLE,
     READER_ROLE,
+    SIGNER_ROLE,
 )
+_SIGNER_PASSWORD = "signer-secret"
 NOW = datetime.now(timezone.utc)
 
 
@@ -97,7 +100,8 @@ def test_signed_revision_mismatch_returns_no_rows() -> None:
         )
         owner_url = _url(database, username=ENTITY_OWNER_ROLE, password=_OWNER_PASSWORD)
         reader_url = _url(database, username=READER_ROLE, password=_READER_PASSWORD)
-        run_bootstrap(admin_url, owner_url, reader_url)
+        signer_url = _url(database, username=SIGNER_ROLE, password=_SIGNER_PASSWORD)
+        run_bootstrap(admin_url, owner_url, reader_url, signer_url)
         secret = b"k" * 32
         payload = {
             "sub": "user_1",

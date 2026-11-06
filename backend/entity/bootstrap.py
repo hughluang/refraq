@@ -2,9 +2,10 @@
 
 Run with ``python -m backend.entity.bootstrap``. Connects with
 ``ENTITY_ADMIN_DATABASE_URL`` only; runtime processes never read that URL.
-The login roles take their passwords from ``ENTITY_DATABASE_URL`` (owner) and
-``ENTITY_READER_DATABASE_URL`` (reader), so the live ``.env`` holds each secret
-once. Every run converges the database to the same state and is safe to repeat.
+The login roles take their passwords from ``ENTITY_DATABASE_URL`` (owner),
+``ENTITY_READER_DATABASE_URL`` (reader), and ``ENTITY_SIGNER_DATABASE_URL``
+(signer), so the live ``.env`` holds each secret once. Every run converges
+the database to the same state and is safe to repeat.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from backend.entity.ddl import (
     EXPOSURE_POLICY,
     OWNER_POLICY,
     READER_ROLE,
+    SIGNER_ROLE,
     ident,
     qualified_table,
     table_security_statements,
@@ -88,6 +90,9 @@ class BootstrapSettings(BaseSettings):
     reader_url: str | None = Field(
         default=None, validation_alias="ENTITY_READER_DATABASE_URL"
     )
+    signer_url: str | None = Field(
+        default=None, validation_alias="ENTITY_SIGNER_DATABASE_URL"
+    )
 
 
 def _literal(value: str) -> str:
@@ -103,15 +108,21 @@ def role_statements(
     *,
     owner_password: str,
     reader_password: str,
+    signer_password: str,
     existing: frozenset[str],
 ) -> list[str]:
-    """Create or converge the entity roles. Passwords are SQL literals; never log them."""
+    """Create or converge the entity roles. Passwords are SQL literals; never log them.
+
+    The signer is a login that may insert a signing key, so it does not take
+    the reader's read-only default transaction.
+    """
     common = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
     specs = (
         (ENTITY_OWNER_ROLE, f"LOGIN {common} NOINHERIT", owner_password),
         (EXPOSURE_OWNER_ROLE, f"NOLOGIN {common} NOINHERIT", None),
         (ACL_OWNER_ROLE, f"NOLOGIN {common} NOINHERIT", None),
         (READER_ROLE, f"LOGIN {common} NOINHERIT", reader_password),
+        (SIGNER_ROLE, f"LOGIN {common} NOINHERIT", signer_password),
     )
     statements: list[str] = []
     for role, attributes, password in specs:
@@ -145,7 +156,7 @@ def database_statements(database: str, *, has_public_schema: bool) -> list[str]:
     statements = [
         f"REVOKE ALL ON DATABASE {db} FROM PUBLIC",
         f"GRANT CONNECT ON DATABASE {db} TO {ident(ENTITY_OWNER_ROLE)}, "
-        f"{ident(READER_ROLE)}",
+        f"{ident(READER_ROLE)}, {ident(SIGNER_ROLE)}",
     ]
     if has_public_schema:
         statements.append("REVOKE ALL ON SCHEMA public FROM PUBLIC")
@@ -156,6 +167,7 @@ def schema_statements() -> list[str]:
     owner = ident(ENTITY_OWNER_ROLE)
     exposure = ident(EXPOSURE_OWNER_ROLE)
     reader = ident(READER_ROLE)
+    signer = ident(SIGNER_ROLE)
     data = ident(ENTITY_DATA_SCHEMA)
     access = ident(ENTITY_ACCESS_SCHEMA)
     acl = ident(ACL_SCHEMA)
@@ -177,10 +189,13 @@ def schema_statements() -> list[str]:
         f"REVOKE ALL ON SCHEMA {data} FROM {reader}",
         f"REVOKE ALL ON SCHEMA {dataset} FROM {reader}",
         f"REVOKE ALL ON SCHEMA {change_log} FROM {reader}",
+        f"REVOKE ALL ON SCHEMA {data}, {access}, {dataset}, {change_log} FROM {signer}",
         f"GRANT USAGE ON SCHEMA {data} TO {exposure}",
         f"GRANT USAGE, CREATE ON SCHEMA {access} TO {exposure}",
         f"GRANT USAGE ON SCHEMA {access} TO {reader}",
         f"GRANT USAGE ON SCHEMA {acl} TO {owner}, {exposure}, {reader}",
+        f"REVOKE ALL ON SCHEMA {acl} FROM {signer}",
+        f"GRANT USAGE ON SCHEMA {acl} TO {signer}",
     ]
 
 
@@ -456,6 +471,7 @@ def acl_statements(*, pgcrypto_schema: str | None) -> list[str]:
         f"ALTER TABLE acl.signing_keys OWNER TO {acl_owner}",
         f"ALTER TABLE acl.mask_key OWNER TO {acl_owner}",
         f"REVOKE ALL ON ALL TABLES IN SCHEMA {acl} FROM PUBLIC",
+        f"REVOKE ALL ON ALL TABLES IN SCHEMA {acl} FROM {ident(SIGNER_ROLE)}",
         f"REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {acl} FROM PUBLIC",
         f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {acl} TO {acl_owner}",
     ]
@@ -472,6 +488,12 @@ def acl_statements(*, pgcrypto_schema: str | None) -> list[str]:
         statements.append(
             f"GRANT EXECUTE ON FUNCTION {signature} TO {ident(ENTITY_OWNER_ROLE)}"
         )
+    signer = ident(SIGNER_ROLE)
+    statements.append(
+        f"GRANT EXECUTE ON FUNCTION acl.ensure_signing_key() TO {signer}"
+    )
+    for signature in (*_PRIVATE_FUNCTIONS, *_READER_FUNCTIONS, "acl.install_key(text, bytea)"):
+        statements.append(f"REVOKE EXECUTE ON FUNCTION {signature} FROM {signer}")
     statements.append(
         f"ALTER DEFAULT PRIVILEGES FOR ROLE {acl_owner} IN SCHEMA {acl} "
         "REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC"
@@ -916,6 +938,7 @@ def run_bootstrap(
     admin_url: str,
     owner_url: str,
     reader_url: str,
+    signer_url: str,
     *,
     legacy_schema: str = LEGACY_SCHEMA_DEFAULT,
 ) -> BootstrapReport:
@@ -923,9 +946,13 @@ def run_bootstrap(
     reader_password = _login(
         reader_url, role=READER_ROLE, setting="ENTITY_READER_DATABASE_URL"
     )
+    signer_password = _login(
+        signer_url, role=SIGNER_ROLE, setting="ENTITY_SIGNER_DATABASE_URL"
+    )
     for setting, url in (
         ("ENTITY_DATABASE_URL", owner_url),
         ("ENTITY_READER_DATABASE_URL", reader_url),
+        ("ENTITY_SIGNER_DATABASE_URL", signer_url),
     ):
         if not _same_database(admin_url, url):
             raise BootstrapPlanError(
@@ -938,6 +965,7 @@ def run_bootstrap(
                 conn,
                 owner_password=owner_password,
                 reader_password=reader_password,
+                signer_password=signer_password,
                 legacy_schema=legacy_schema,
             )
     finally:
@@ -949,6 +977,7 @@ def _converge(
     *,
     owner_password: str,
     reader_password: str,
+    signer_password: str,
     legacy_schema: str,
 ) -> BootstrapReport:
     conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _ADVISORY_LOCK_KEY})
@@ -972,6 +1001,7 @@ def _converge(
                     EXPOSURE_OWNER_ROLE,
                     ACL_OWNER_ROLE,
                     READER_ROLE,
+                    SIGNER_ROLE,
                     _RETIRED_CHANNEL_READER,
                 ]
             },
@@ -982,6 +1012,7 @@ def _converge(
         role_statements(
             owner_password=owner_password,
             reader_password=reader_password,
+            signer_password=signer_password,
             existing=existing,
         ),
     )
@@ -1101,13 +1132,19 @@ def main(argv: list[str] | None = None) -> int:
             ("ENTITY_ADMIN_DATABASE_URL", settings.admin_url),
             ("ENTITY_DATABASE_URL", settings.owner_url),
             ("ENTITY_READER_DATABASE_URL", settings.reader_url),
+            ("ENTITY_SIGNER_DATABASE_URL", settings.signer_url),
         )
         if not (value or "").strip()
     ]
     if missing:
         print("entity bootstrap requires " + ", ".join(missing), file=sys.stderr)
         return 2
-    assert settings.admin_url and settings.owner_url and settings.reader_url
+    assert (
+        settings.admin_url
+        and settings.owner_url
+        and settings.reader_url
+        and settings.signer_url
+    )
     try:
         if args.create_database and ensure_database(settings.admin_url):
             print("entity bootstrap created database")
@@ -1115,6 +1152,7 @@ def main(argv: list[str] | None = None) -> int:
             settings.admin_url,
             settings.owner_url,
             settings.reader_url,
+            settings.signer_url,
             legacy_schema=args.legacy_schema,
         )
     except BootstrapPlanError as exc:

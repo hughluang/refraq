@@ -149,6 +149,7 @@ def test_reader_role_sql_is_not_a_reset_role_path() -> None:
     statements = role_statements(
         owner_password="owner-secret",
         reader_password="reader-secret",
+        signer_password="signer-secret",
         existing=frozenset(),
     )
     reader = next(line for line in statements if f"ROLE {READER_ROLE}" in line or f"ROLE \"{READER_ROLE}\"" in line)
