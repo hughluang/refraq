@@ -115,11 +115,16 @@ def _jsonrpc_result(response: object) -> dict:
 def test_catalog_names_match_registered_tools() -> None:
     registered = list(asyncio.run(MCPServer.list_tools(mcp)))
     assert {tool.name for tool in registered} == {spec.name for spec in MCP_TOOLS}
-    assert [spec.name for spec in MCP_TOOLS] == ["list_entities"]
-    assert [spec.permission for spec in MCP_TOOLS] == ["entity:data_read"]
-    tool = registered[0]
-    assert tool.annotations is not None
-    assert tool.annotations.read_only_hint is True
+    assert [spec.name for spec in MCP_TOOLS] == [
+        "list_entities",
+        "describe_entity",
+        "list_dictionary_codes",
+        "validate_sql",
+    ]
+    assert [spec.permission for spec in MCP_TOOLS] == ["entity:data_read"] * 4
+    for tool in registered:
+        assert tool.annotations is not None
+        assert tool.annotations.read_only_hint is True
 
 
 def test_server_instructions_describe_the_read_workflow() -> None:
@@ -187,13 +192,19 @@ def test_tools_list_requires_entity_data_read(client: TestClient) -> None:
         response = _tools_list(mcp_client, secret)
         assert response.status_code == 200, response.text
         payload = _jsonrpc_result(response)
-        assert [tool["name"] for tool in payload["tools"]] == ["list_entities"]
+        assert [tool["name"] for tool in payload["tools"]] == [
+            "list_entities",
+            "describe_entity",
+            "list_dictionary_codes",
+            "validate_sql",
+        ]
         assert payload.get("ttlMs") == TOOLS_LIST_TTL_MS
         assert payload.get("cacheScope") == "private"
-        tool = payload["tools"][0]
-        assert tool["annotations"]["readOnlyHint"] is True
-        props = (tool.get("inputSchema") or {}).get("properties") or {}
-        assert "authorization" not in props
+        for tool in payload["tools"]:
+            assert tool["annotations"]["readOnlyHint"] is True
+            props = (tool.get("inputSchema") or {}).get("properties") or {}
+            assert "authorization" not in props
+            assert "narrow" not in props
 
     roles = get_role_store()
     create_role(

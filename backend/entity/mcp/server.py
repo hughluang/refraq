@@ -8,6 +8,7 @@ from typing import Any
 from mcp.server import CacheHint, MCPServer
 from mcp.types import Tool as MCPTool
 from mcp.types import ToolAnnotations
+from pydantic.json_schema import SkipJsonSchema
 
 from backend.admin.deps import resolve_user_permissions
 from backend.admin.errors import AuthForbidden
@@ -17,7 +18,9 @@ from backend.admin.user_store import UserRecord
 from backend.core.errors import AppError
 from backend.core.pagination import ENTITY_LIST
 from backend.entity.access.membership import person_of, readable_entity_ids
+from backend.entity.errors import EntityRequestInvalid
 from backend.entity.mcp.actor import current_actor
+from backend.entity.mcp.describe import describe_for, dictionary_codes
 from backend.entity.mcp.catalog import TOOLS_LIST_TTL_MS, tools_for_permissions
 from backend.entity.mcp.guidance import SERVER_INSTRUCTIONS, TOOL_DESCRIPTIONS
 from backend.entity.records import BusinessEntityRecord
@@ -108,3 +111,60 @@ def list_entities(
         )
     except Exception as exc:  # noqa: BLE001 — tool failures stay in the envelope
         return _err(exc)
+
+
+def _reject_narrow(narrow: Any) -> None:
+    if narrow is not None:
+        raise EntityRequestInvalid("narrow is not accepted")
+
+
+@mcp.tool(
+    description=TOOL_DESCRIPTIONS["describe_entity"],
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+def describe_entity(
+    table_name: str,
+    narrow: SkipJsonSchema[Any] = None,
+) -> str:
+    """Describe one Entity as the caller can read it."""
+    try:
+        user, _token_id = current_actor()
+        _require(user, "entity:data_read")
+        _reject_narrow(narrow)
+        return json.dumps(describe_for(user, table_name))
+    except Exception as exc:  # noqa: BLE001 — tool failures stay in the envelope
+        return _err(exc)
+
+
+@mcp.tool(
+    description=TOOL_DESCRIPTIONS["list_dictionary_codes"],
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+def list_dictionary_codes(
+    table_name: str,
+    attribute: str,
+    query_text: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+    narrow: SkipJsonSchema[Any] = None,
+) -> str:
+    """Page codes of one dictionary attribute in the caller's read shape."""
+    try:
+        user, _token_id = current_actor()
+        _require(user, "entity:data_read")
+        _reject_narrow(narrow)
+        return json.dumps(
+            dictionary_codes(
+                user,
+                table_name,
+                attribute,
+                query_text=query_text,
+                limit=limit,
+                offset=offset,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — tool failures stay in the envelope
+        return _err(exc)
+
+
+import backend.entity.mcp.sql_tools as _entity_sql_tools  # noqa: E402,F401

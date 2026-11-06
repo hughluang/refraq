@@ -26,4 +26,35 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Requires entity:data_read. Next: describe_entity, and join later SQL "
         "on the references that tool declares."
     ),
+    "describe_entity": (
+        "Describe one Business Entity as the current user can read it. "
+        "Returns attributes in that read shape, with types, descriptions, "
+        "the business key, presentation levels, may_be_withheld, and "
+        "withheld_field. Dictionary attributes include up to 50 codes with "
+        "labels and active; codes_truncated is true when more exist. "
+        "references lists each reference attribute's target table_name and "
+        "target business key, or null when that Entity is not visible. "
+        "inbound_references lists visible Entities and attributes that "
+        "reference this one. Unknown and unreadable table_name values fail "
+        "the same way. Does not accept narrow. Requires entity:data_read. "
+        "Join later SQL on these declared references. Next: "
+        "list_dictionary_codes when codes_truncated is true."
+    ),
+    "list_dictionary_codes": (
+        "Page the dictionary codes of one attribute on an Entity the current "
+        "user can read. Codes are the published head snapshot, with current "
+        "labels and active taken from the Dictionary. Each item is code, "
+        "label, and active. query_text is an optional case-insensitive "
+        "substring of code or label. limit defaults to 50 and is at most 200. "
+        "An attribute that is missing, hidden, or not a dictionary is "
+        "REQUEST_INVALID. Does not accept narrow. Requires entity:data_read."
+    ),
+    "validate_sql": (
+        "Check one read-only SQL statement that names Business Entities by "
+        "table_name. Returns entities, the referenced table_name values sorted, "
+        "and partial_columns, the row-varying columns the statement names. "
+        "Does not execute the statement and writes no Entity Access Log record. "
+        "An unknown table_name and a table_name without an effective read grant "
+        "fail with the same error. Requires entity:data_read. Next: run_sql."
+    ),
 }
