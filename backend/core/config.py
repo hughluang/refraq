@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     refraq_api_port: int = Field(default=8000, validation_alias="REFRAQ_API_PORT")
     refraq_mcp_host: str = Field(default="127.0.0.1", validation_alias="REFRAQ_MCP_HOST")
     refraq_mcp_port: int = Field(default=8001, validation_alias="REFRAQ_MCP_PORT")
+    refraq_entity_mcp_host: str = Field(
+        default="127.0.0.1", validation_alias="REFRAQ_ENTITY_MCP_HOST"
+    )
+    refraq_entity_mcp_port: int = Field(
+        default=8002, validation_alias="REFRAQ_ENTITY_MCP_PORT"
+    )
     store_backend: StoreBackend = Field(
         default="persistent",
         validation_alias="REFRAQ_STORE_BACKEND",
@@ -118,15 +124,24 @@ def require_entity_database_url(url: str | None) -> str:
     return cleaned
 
 
-def require_entity_reader_database_url(url: str | None, *, owner_url: str) -> str:
-    """Persistent API reads Entity data as the reader role, in the owner's database."""
+def require_entity_reader_database_url(
+    url: str | None, *, owner_url: str | None
+) -> str:
+    """Persistent API reads Entity data as the reader role, in the owner's database.
+
+    ``owner_url`` None skips the same-database comparison. Entity MCP does that
+    when ``ENTITY_DATABASE_URL`` is unset, so that process does not need the
+    owner credential.
+    """
     cleaned = (url or "").strip()
     if not cleaned:
         raise ValueError(
             "persistent API requires ENTITY_READER_DATABASE_URL "
             "to open the entity reader pool"
         )
-    if _database_target(cleaned) != _database_target(owner_url):
+    if owner_url is not None and _database_target(cleaned) != _database_target(
+        owner_url
+    ):
         raise ValueError(
             "ENTITY_READER_DATABASE_URL must name the same database as "
             "ENTITY_DATABASE_URL"

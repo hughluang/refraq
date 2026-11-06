@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
-ProcessRole = Literal["api", "mcp", "worker"]
+ProcessRole = Literal["api", "mcp", "worker", "entity_mcp"]
 
 _ROLE_ENV = "REFRAQ_PROCESS_ROLE"
 _role: ProcessRole = "api"
@@ -37,7 +37,7 @@ def set_process_role(role: ProcessRole) -> None:
 
 def current_process_role() -> ProcessRole:
     env_role = os.environ.get(_ROLE_ENV, "").strip()
-    if env_role in ("api", "mcp", "worker"):
+    if env_role in ("api", "mcp", "worker", "entity_mcp"):
         return env_role  # type: ignore[return-value]
     return _role
 
@@ -74,11 +74,11 @@ class RuntimeCapacity:
         """Pools opened with the shared ``REFRAQ_ENTITY_DB_*`` quotas.
 
         API opens an owner pool and a reader pool. Worker opens the owner pool.
-        MCP opens none.
+        Entity MCP opens the reader pool. Metadata MCP opens none.
         """
         if self.role == "api":
             return 2
-        if self.role == "worker":
+        if self.role in ("worker", "entity_mcp"):
             return 1
         return 0
 
@@ -91,6 +91,17 @@ class RuntimeCapacity:
 
 
 def _defaults_for(role: ProcessRole) -> dict[str, int]:
+    if role == "entity_mcp":
+        return {
+            "pool_size": 5,
+            "max_overflow": 3,
+            "thread_tokens": 4,
+            "admission_slots": 16,
+            "admission_actor_share": 8,
+            "http_max_inflight": 16,
+            "entity_pool_size": 4,
+            "entity_max_overflow": 0,
+        }
     if role == "mcp":
         return {
             "pool_size": 5,
@@ -181,7 +192,9 @@ def _from_env(role: ProcessRole) -> RuntimeCapacity:
         thread_tokens=thread_tokens,
         admission_slots=admission_slots,
         admission_actor_share=admission_actor_share,
-        uvicorn_limit_concurrency=None if role == "mcp" else http_max_inflight + 32,
+        uvicorn_limit_concurrency=(
+            None if role in ("mcp", "entity_mcp") else http_max_inflight + 32
+        ),
         timeout_keep_alive=5,
         entity_pool_size=entity_pool_size,
         entity_max_overflow=entity_max_overflow,
@@ -228,7 +241,12 @@ def log_capacity_warnings(cap: RuntimeCapacity) -> None:
             cap.thread_tokens,
             cap.pool_max_connections,
         )
-    labels = ("owner", "reader") if cap.role == "api" else ("owner",)
+    if cap.role == "api":
+        labels = ("owner", "reader")
+    elif cap.role == "entity_mcp":
+        labels = ("reader",)
+    else:
+        labels = ("owner",)
     for label in labels[: cap.entity_pool_count]:
         entity_banner = (
             "runtime capacity entity pool=%s+%s which=%s timeout=%ss recycle=%ss"

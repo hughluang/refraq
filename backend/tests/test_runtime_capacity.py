@@ -36,6 +36,7 @@ from backend.core.load_shed import LoadSheddingMiddleware
 from backend.core.db import map_platform_db_error, reset_db_singletons, session_scope
 from backend.core.runtime import (
     get_runtime_capacity,
+    log_capacity_warnings,
     reset_runtime_capacity,
     set_process_role,
 )
@@ -250,7 +251,41 @@ def test_role_defaults_and_actor_share() -> None:
         worker.pool_max_connections + worker.entity_pool_max_connections
     )
 
+    set_process_role("entity_mcp")
+    reset_runtime_capacity()
+    entity_mcp = get_runtime_capacity()
+    assert entity_mcp.role == "entity_mcp"
+    assert entity_mcp.pool_size == 5
+    assert entity_mcp.max_overflow == 3
+    assert entity_mcp.thread_tokens == 4
+    assert entity_mcp.admission_slots == 16
+    assert entity_mcp.admission_actor_share == 8
+    assert entity_mcp.http_max_inflight == 16
+    assert entity_mcp.statement_timeout_ms == 30_000
+    assert entity_mcp.uvicorn_limit_concurrency is None
+    assert entity_mcp.entity_pool_size == 4
+    assert entity_mcp.entity_max_overflow == 0
+    assert entity_mcp.entity_pool_count == 1
+    assert entity_mcp.process_pool_budget == (
+        entity_mcp.pool_max_connections + entity_mcp.entity_pool_max_connections
+    )
+
     set_process_role("api")
+    reset_runtime_capacity()
+
+
+def test_entity_mcp_env_role_labels_reader_pool(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("REFRAQ_PROCESS_ROLE", "entity_mcp")
+    reset_runtime_capacity()
+    cap = get_runtime_capacity()
+    assert cap.role == "entity_mcp"
+    assert cap.entity_pool_count == 1
+    with caplog.at_level(logging.INFO, logger="backend.core.runtime"):
+        log_capacity_warnings(cap)
+    assert "which=reader" in caplog.text
+    assert "which=owner" not in caplog.text
     reset_runtime_capacity()
 
 

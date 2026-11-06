@@ -236,6 +236,15 @@ def test_layout_imports(path: Path) -> None:
                     "(only MCP process entries assemble System Parameters)"
                 )
 
+        if importer_pkg == "entity" and (
+            imported == "worker.parameters" or imported.startswith("worker.parameters.")
+        ):
+            if importer not in {"entity.mcp.http"}:
+                raise AssertionError(
+                    f"{importer} must not import {imported} "
+                    "(only the Entity MCP process entry assembles System Parameters)"
+                )
+
         if importer_pkg == "metadata" and target_pkg == "entity":
             if not _allowlisted(importer, imported):
                 raise AssertionError(

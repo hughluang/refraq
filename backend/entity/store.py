@@ -55,6 +55,7 @@ class EntityStore(Protocol):
         q: str | None,
         statuses: frozenset[EntityListStatus] | None,
         subject_ids: frozenset[str] | None,
+        match_description: bool = False,
     ) -> list[BusinessEntityRecord]: ...
 
     def membership_sources(
@@ -134,6 +135,7 @@ class MemoryEntityStore:
         q: str | None,
         statuses: frozenset[EntityListStatus] | None,
         subject_ids: frozenset[str] | None = None,
+        match_description: bool = False,
     ) -> list[BusinessEntityRecord]:
         with self._lock:
             items = list(self._entities.values())
@@ -143,7 +145,9 @@ class MemoryEntityStore:
             items = [
                 item
                 for item in items
-                if needle in item.table_name.lower() or needle in item.name.lower()
+                if needle in item.table_name.lower()
+                or needle in item.name.lower()
+                or (match_description and needle in (item.description or "").lower())
             ]
         if statuses is not None:
             by_entity: dict[str, list[EntityVersionRecord]] = {}
@@ -346,15 +350,16 @@ def _entity_status_filter(
     return or_(*clauses)
 
 
-def _restrict_entities(stmt, *, q, statuses, subject_ids):
+def _restrict_entities(stmt, *, q, statuses, subject_ids, match_description=False):
     if q and q.strip():
         needle = f"%{_escape_like_literal(q.strip())}%"
-        stmt = stmt.where(
-            or_(
-                BusinessEntityRow.table_name.ilike(needle, escape="\\"),
-                BusinessEntityRow.name.ilike(needle, escape="\\"),
-            )
-        )
+        clauses = [
+            BusinessEntityRow.table_name.ilike(needle, escape="\\"),
+            BusinessEntityRow.name.ilike(needle, escape="\\"),
+        ]
+        if match_description:
+            clauses.append(BusinessEntityRow.description.ilike(needle, escape="\\"))
+        stmt = stmt.where(or_(*clauses))
     if statuses is not None:
         stmt = stmt.where(_entity_status_filter(statuses))
     if subject_ids is not None:
@@ -408,6 +413,7 @@ class SqlEntityStore:
         q: str | None,
         statuses: frozenset[EntityListStatus] | None,
         subject_ids: frozenset[str] | None = None,
+        match_description: bool = False,
     ) -> list[BusinessEntityRecord]:
         with session_scope() as session:
             stmt = _restrict_entities(
@@ -415,6 +421,7 @@ class SqlEntityStore:
                 q=q,
                 statuses=statuses,
                 subject_ids=subject_ids,
+                match_description=match_description,
             )
             rows = (
                 session.execute(
