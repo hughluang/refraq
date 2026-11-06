@@ -10,10 +10,22 @@ import {
   type McpCatalog,
 } from "@/features/account/mcp-api";
 import { apiClient } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 import { copyText } from "@/lib/copy-text";
+import { problemMessage } from "@/lib/problem";
 
-export function McpSection() {
+type McpEndpointCardProps = {
+  catalogPath: string;
+  fallbackPath: string;
+  titleKey: string;
+  descriptionKey: string;
+};
+
+function McpEndpointCard({
+  catalogPath,
+  fallbackPath,
+  titleKey,
+  descriptionKey,
+}: McpEndpointCardProps) {
   const t = useTranslate();
   const { open } = useNotification();
   const [catalog, setCatalog] = useState<McpCatalog | null>(null);
@@ -21,7 +33,7 @@ export function McpSection() {
 
   useEffect(() => {
     let cancelled = false;
-    apiClient<McpCatalog>("/mcp/catalog")
+    apiClient<McpCatalog>(catalogPath)
       .then((data) => {
         if (!cancelled) {
           setCatalog(data);
@@ -30,18 +42,16 @@ export function McpSection() {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setLoadError(
-            problemMessage(t, err, t("account.mcp.error")),
-          );
+          setLoadError(problemMessage(t, err, t("account.mcp.error")));
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [t]);
+  }, [catalogPath, t]);
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;
-  const publicPath = catalog?.public_path ?? "/mcp";
+  const publicPath = catalog?.public_path ?? fallbackPath;
   const configText = useMemo(
     () => (origin ? mcpClientConfig(origin, publicPath) : ""),
     [origin, publicPath],
@@ -65,8 +75,8 @@ export function McpSection() {
   return (
     <Stack gap="sm">
       <SectionHeader
-        title={t("account.mcp.title")}
-        description={t("account.mcp.description")}
+        title={t(titleKey)}
+        description={t(descriptionKey)}
         order={4}
       />
       <Box pos="relative">
@@ -84,7 +94,6 @@ export function McpSection() {
           {t("account.mcp.copy")}
         </Button>
       </Box>
-      <Text size="sm">{t("account.mcp.authHint")}</Text>
       {loadError ? (
         <Text size="sm" c="red">
           {loadError}
@@ -115,6 +124,33 @@ export function McpSection() {
           {t("account.mcp.tools.empty")}
         </Text>
       ) : null}
+    </Stack>
+  );
+}
+
+export function McpSection() {
+  const t = useTranslate();
+
+  return (
+    <Stack gap="lg">
+      <SectionHeader
+        title={t("account.mcp.title")}
+        description={t("account.mcp.description")}
+        order={4}
+      />
+      <Text size="sm">{t("account.mcp.authHint")}</Text>
+      <McpEndpointCard
+        catalogPath="/mcp/catalog"
+        fallbackPath="/mcp"
+        titleKey="account.mcp.metadata.title"
+        descriptionKey="account.mcp.metadata.description"
+      />
+      <McpEndpointCard
+        catalogPath="/mcp/entity/catalog"
+        fallbackPath="/mcp/entity"
+        titleKey="account.mcp.entity.title"
+        descriptionKey="account.mcp.entity.description"
+      />
     </Stack>
   );
 }

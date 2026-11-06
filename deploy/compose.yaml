@@ -49,6 +49,7 @@ services:
       ENTITY_ADMIN_DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq_entity
       ENTITY_DATABASE_URL: postgresql+psycopg://refraq_entity_owner:${ENTITY_OWNER_PASSWORD:?set ENTITY_OWNER_PASSWORD}@postgres:5432/refraq_entity
       ENTITY_READER_DATABASE_URL: postgresql+psycopg://refraq_reader:${ENTITY_READER_PASSWORD:?set ENTITY_READER_PASSWORD}@postgres:5432/refraq_entity
+      ENTITY_SIGNER_DATABASE_URL: postgresql+psycopg://refraq_signer:${ENTITY_SIGNER_PASSWORD:?set ENTITY_SIGNER_PASSWORD}@postgres:5432/refraq_entity
     depends_on:
       postgres:
         condition: service_healthy
@@ -178,6 +179,41 @@ services:
       retries: 12
       start_period: 20s
 
+  entity-mcp:
+    image: ghcr.io/hughluang/refraq-api:__REFRAQ_RELEASE_TAG__
+    command: ["python", "-m", "backend.entity.mcp.http"]
+    environment:
+      REFRAQ_ENV: prod
+      REFRAQ_PROCESS_ROLE: entity_mcp
+      REFRAQ_STORE_BACKEND: persistent
+      REFRAQ_ENTITY_MCP_HOST: 0.0.0.0
+      REFRAQ_ENTITY_MCP_PORT: 8002
+      TZ: UTC
+      DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
+      REDIS_URL: redis://redis:6379/0
+      ENTITY_READER_DATABASE_URL: postgresql+psycopg://refraq_reader:${ENTITY_READER_PASSWORD:?set ENTITY_READER_PASSWORD}@postgres:5432/refraq_entity
+      ENTITY_SIGNER_DATABASE_URL: postgresql+psycopg://refraq_signer:${ENTITY_SIGNER_PASSWORD:?set ENTITY_SIGNER_PASSWORD}@postgres:5432/refraq_entity
+      REFRAQ_SECRETS_MASTER_KEY: ${REFRAQ_SECRETS_MASTER_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ensure-entity-db:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/readyz')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   web:
     image: ghcr.io/hughluang/refraq-web:__REFRAQ_RELEASE_TAG__
     environment:
@@ -185,6 +221,7 @@ services:
       PORT: 3000
       REFRAQ_API_UPSTREAM: http://api:8000
       REFRAQ_MCP_UPSTREAM: http://mcp:8001
+      REFRAQ_ENTITY_MCP_UPSTREAM: http://entity-mcp:8002
       REFRAQ_BROWSER_FACING_PROTO: ${REFRAQ_BROWSER_FACING_PROTO:-http}
       REFRAQ_BROWSER_FACING_HOST: ${REFRAQ_BROWSER_FACING_HOST:-}
     ports:
@@ -193,6 +230,8 @@ services:
       api:
         condition: service_healthy
       mcp:
+        condition: service_healthy
+      entity-mcp:
         condition: service_healthy
 
 volumes:

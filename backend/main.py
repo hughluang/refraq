@@ -82,6 +82,7 @@ from backend.entity.entity_db import (
 from backend.entity.access.reconcile import enqueue_stale_view_jobs
 from backend.entity.routers.access import router as entity_access_router
 from backend.entity.routers.data import router as entity_data_router
+from backend.entity.routers.mcp import router as entity_mcp_router
 from backend.entity.dictionaries.active_codes import DictionaryActiveCodes
 from backend.entity.routers.dictionaries import router as dictionaries_router
 from backend.entity.routers.entities import router as entities_router
@@ -269,6 +270,7 @@ app.include_router(metadata_schedules_router)
 app.include_router(structure_diffs_router)
 app.include_router(metadata_query_router)
 app.include_router(metadata_mcp_router)
+app.include_router(entity_mcp_router)
 app.include_router(entities_router)
 app.include_router(entity_access_router)
 app.include_router(entity_data_router)

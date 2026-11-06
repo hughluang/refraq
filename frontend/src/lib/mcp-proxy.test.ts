@@ -5,10 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import { isConsoleBlockedApiPath } from "@/lib/console-api-gate";
 import {
+  entityMcpProxyTimeoutMs,
+  entityMcpUpstreamUrl,
   guardProxiedBody,
   isMcpPassthroughPath,
   mcpProxyTimeoutMs,
-  mcpUpstreamOrigin,
   mcpUpstreamUrl,
 } from "@/lib/mcp-proxy";
 import { isProtectedPath } from "@/lib/route-scope";
@@ -17,6 +18,8 @@ describe("mcp proxy helpers", () => {
   it("passes the product path and not readyz", () => {
     expect(isMcpPassthroughPath("/mcp")).toBe(true);
     expect(isMcpPassthroughPath("/mcp/")).toBe(true);
+    expect(isMcpPassthroughPath("/mcp/entity")).toBe(true);
+    expect(isProtectedPath("/mcp/entity")).toBe(false);
     expect(isMcpPassthroughPath("/readyz")).toBe(false);
     expect(isMcpPassthroughPath("/metrics")).toBe(false);
     expect(isMcpPassthroughPath("/api/mcp/catalog")).toBe(false);
@@ -30,9 +33,14 @@ describe("mcp proxy helpers", () => {
       resolve(__dirname, "../app/mcp/route.ts"),
       "utf8",
     );
-    expect(route).toContain('duplex?: "half"');
-    expect(route).toContain('init.duplex = "half"');
-    expect(route).toContain("X-Accel-Buffering");
+    const proxy = readFileSync(resolve(__dirname, "./mcp-proxy.ts"), "utf8");
+    expect(proxy).toContain('duplex?: "half"');
+    expect(proxy).toContain('init.duplex = "half"');
+    expect(proxy).toContain("X-Accel-Buffering");
+    expect(proxy).toContain("mcp_upstream_unavailable");
+    expect(route).toContain("proxyMcpPost");
+    expect(route).toContain("mcpUpstreamUrl");
+    expect(route).toContain("mcpProxyTimeoutMs");
     expect(route).toMatch(/export function POST/);
     expect(route).not.toMatch(/export function GET/);
     expect(route).not.toMatch(/export function DELETE/);
@@ -49,14 +57,34 @@ describe("mcp proxy helpers", () => {
   });
 
   it("targets the MCP process /mcp, never readyz", () => {
-    expect(mcpUpstreamOrigin({ REFRAQ_MCP_UPSTREAM: "http://mcp:8001/" })).toBe(
-      "http://mcp:8001",
-    );
     expect(
       mcpUpstreamUrl("https://console.example.com/mcp", {
-        REFRAQ_MCP_UPSTREAM: "http://mcp:8001",
+        REFRAQ_MCP_UPSTREAM: "http://mcp:8001/",
       }),
     ).toBe("http://mcp:8001/mcp");
+  });
+
+  it("targets the entity MCP process /mcp/entity", () => {
+    expect(entityMcpProxyTimeoutMs()).toBe(305_000);
+    expect(mcpProxyTimeoutMs()).toBe(3_605_000);
+    expect(
+      entityMcpUpstreamUrl("https://console.example.com/mcp/entity", {
+        REFRAQ_ENTITY_MCP_UPSTREAM: "http://entity-mcp:8002/",
+      }),
+    ).toBe("http://entity-mcp:8002/mcp/entity");
+    expect(
+      entityMcpUpstreamUrl("https://console.example.com/mcp/entity?x=1", {}),
+    ).toBe("http://127.0.0.1:8002/mcp/entity?x=1");
+    const route = readFileSync(
+      resolve(__dirname, "../app/mcp/entity/route.ts"),
+      "utf8",
+    );
+    expect(route).toMatch(/export function POST/);
+    expect(route).not.toMatch(/export function GET/);
+    expect(route).not.toMatch(/export function DELETE/);
+    expect(route).toContain("entityMcpUpstreamUrl");
+    expect(route).toContain("entityMcpProxyTimeoutMs");
+    expect(route).toContain("proxyMcpPost");
   });
 
   it("logs one line and rejects when the upstream body errors", async () => {

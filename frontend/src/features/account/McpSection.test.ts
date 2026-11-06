@@ -1,9 +1,9 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mcpClientConfig } from "@/features/account/mcp-api";
 
@@ -12,11 +12,32 @@ vi.mock("@refinedev/core", () => ({
   useNotification: () => ({ open: vi.fn() }),
 }));
 
-vi.mock("@/lib/api", () => ({
-  apiClient: vi.fn().mockResolvedValue({
-    public_path: "/mcp",
-    tools: [],
+const { apiClient } = vi.hoisted(() => ({
+  apiClient: vi.fn((path: string) => {
+    if (path === "/mcp/entity/catalog") {
+      return Promise.resolve({
+        public_path: "/mcp/entity",
+        tools: [
+          {
+            name: "list_entities",
+            permission: "entity:data_read",
+            description: "Entities the caller can read",
+          },
+        ],
+      });
+    }
+    if (path === "/mcp/catalog") {
+      return Promise.resolve({
+        public_path: "/mcp",
+        tools: [],
+      });
+    }
+    return Promise.reject(new Error(`unexpected ${path}`));
   }),
+}));
+
+vi.mock("@/lib/api", () => ({
+  apiClient,
   ApiError: class ApiError extends Error {},
 }));
 
@@ -43,24 +64,46 @@ describe("McpSection", () => {
     stubDomApis();
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it("shows client config in the code box with the copy control inside", async () => {
     const { McpSection } = await import("@/features/account/McpSection");
     const { container } = render(
       createElement(MantineProvider, null, createElement(McpSection)),
     );
 
-    const expected = mcpClientConfig(window.location.origin, "/mcp");
-    const code = await waitFor(() => {
-      const el = container.querySelector("pre.mantine-Code-root");
-      expect(el?.textContent).toContain("Bearer <YOUR_TOKEN>");
-      expect(el?.textContent).toContain(`${window.location.origin}/mcp`);
-      return el as HTMLElement;
+    const metadataConfig = mcpClientConfig(window.location.origin, "/mcp");
+    const entityConfig = mcpClientConfig(
+      window.location.origin,
+      "/mcp/entity",
+    );
+    const codes = await waitFor(() => {
+      const nodes = [
+        ...container.querySelectorAll("pre.mantine-Code-root"),
+      ];
+      expect(nodes).toHaveLength(2);
+      expect(screen.getByText("list_entities")).toBeTruthy();
+      return nodes;
     });
-    expect(code.textContent).toBe(expected);
+    expect(codes[0]?.textContent).toBe(metadataConfig);
+    expect(codes[1]?.textContent).toBe(entityConfig);
+    expect(apiClient).toHaveBeenCalledWith("/mcp/catalog");
+    expect(apiClient).toHaveBeenCalledWith("/mcp/entity/catalog");
 
-    const copy = screen.getByRole("button", { name: "account.mcp.copy" });
-    expect(copy.hasAttribute("disabled")).toBe(false);
-    expect(code.parentElement?.contains(copy)).toBe(true);
+    expect(screen.getByText("account.mcp.metadata.title")).toBeTruthy();
+    expect(screen.getByText("account.mcp.metadata.description")).toBeTruthy();
+    expect(screen.getByText("account.mcp.entity.title")).toBeTruthy();
+    expect(screen.getByText("account.mcp.entity.description")).toBeTruthy();
+    expect(screen.getByText("list_entities")).toBeTruthy();
+    expect(screen.getByText("entity:data_read")).toBeTruthy();
+    expect(screen.getAllByText("account.mcp.tools.empty")).toHaveLength(1);
+
+    const copies = screen.getAllByRole("button", { name: "account.mcp.copy" });
+    expect(copies).toHaveLength(2);
+    expect(codes[0]?.parentElement?.contains(copies[0] ?? null)).toBe(true);
+    expect(codes[1]?.parentElement?.contains(copies[1] ?? null)).toBe(true);
     expect(screen.queryByText("account.mcp.urlHint")).toBeNull();
 
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -69,9 +112,11 @@ describe("McpSection", () => {
       value: true,
     });
     Object.assign(navigator, { clipboard: { writeText } });
-    copy.click();
+    copies[0]?.click();
+    copies[1]?.click();
     await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(expected);
+      expect(writeText).toHaveBeenCalledWith(metadataConfig);
+      expect(writeText).toHaveBeenCalledWith(entityConfig);
     });
   });
 });
