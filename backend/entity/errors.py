@@ -30,6 +30,9 @@ __all__ = [
     "EntityRowLimitExceeded",
     "EntityRowNotFound",
     "EntityRowWriteFailed",
+    "EntitySqlFailed",
+    "EntitySqlInvalid",
+    "EntitySqlTimeout",
     "EntityTableInService",
     "EntityTableNameDup",
     "EntityTableNameInvalid",
@@ -304,6 +307,41 @@ class EntityVersionSuperseded(AppError):
 
     def _default_message(self) -> str:
         return "Save and publish target the current version only"
+
+
+class EntitySqlInvalid(AppError):
+    code = "ENTITY_SQL_INVALID"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Entity SQL is invalid"
+
+
+class EntitySqlTimeout(AppError):
+    code = "ENTITY_SQL_TIMEOUT"
+    http_status = 504
+
+    def _default_message(self) -> str:
+        return "Entity SQL exceeded the platform timeout"
+
+
+class EntitySqlFailed(AppError):
+    code = "ENTITY_SQL_FAILED"
+    http_status = 502
+
+    def __init__(self, message: str | None = None, *, sqlstate: str | None = None) -> None:
+        self.sqlstate = sqlstate
+        if message is None and sqlstate:
+            message = f"Entity SQL execution failed (SQLSTATE {sqlstate})"
+        super().__init__(message)
+
+    def extra_members(self) -> dict[str, Any]:
+        if not self.sqlstate:
+            return {}
+        return {"sqlstate": self.sqlstate}
+
+    def _default_message(self) -> str:
+        return "Entity SQL execution failed"
 
 
 class EntityTableInService(AppError):

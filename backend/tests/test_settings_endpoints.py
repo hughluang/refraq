@@ -41,6 +41,8 @@ REGISTERED_KEYS = {
     "query_max_rows",
     "query_timeout_sec",
     "access_log_retention_days",
+    "entity_query_max_rows",
+    "entity_query_timeout_sec",
     "max_profile_combinations",
     "channel_dataset_max_total_gb",
     "channel_dataset_retention_days",
@@ -60,6 +62,8 @@ CATALOG_KEY_ORDER = [
     "query_timeout_sec",
     "access_log_retention_days",
     "max_profile_combinations",
+    "entity_query_max_rows",
+    "entity_query_timeout_sec",
     "channel_dataset_max_total_gb",
     "channel_dataset_retention_days",
     "channel_dataset_success_retention_hours",
@@ -158,6 +162,27 @@ def test_get_settings_catalog_hides_secrets(client: TestClient) -> None:
         assert item["apply_note_key"] == f"settings.parameter.{item['key']}.apply"
     assert "admin_session_secret" not in body
     assert "initial_admin_password" not in str(body)
+
+
+def test_entity_query_parameters_are_seeded_in_the_catalog(client: TestClient) -> None:
+    _login_root(client)
+    body = client.get("/settings").json()
+    timeout = _by_key(body, "entity_query_timeout_sec")
+    assert timeout["value"] == 30
+    assert timeout["seed"] == 30
+    assert timeout["source"] == "seed"
+    assert timeout["group"] == "entity"
+    assert timeout["operator_action_required"] is False
+    assert timeout["constraint"] == {"type": "integer", "minimum": 5, "maximum": 300}
+    rows = _by_key(body, "entity_query_max_rows")
+    assert rows["value"] == 1000
+    assert rows["seed"] == 1000
+    assert rows["source"] == "seed"
+    assert rows["group"] == "entity"
+    assert rows["constraint"] == {"type": "integer", "minimum": 100, "maximum": 10000}
+    keys = [item["key"] for item in body["parameters"]]
+    assert keys.index("max_profile_combinations") < keys.index("entity_query_max_rows")
+    assert keys.index("entity_query_timeout_sec") < keys.index("channel_dataset_max_total_gb")
 
 
 def test_patch_and_reset(client: TestClient) -> None:

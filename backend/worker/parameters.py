@@ -32,7 +32,15 @@ logger = logging.getLogger(__name__)
 BEAT_SYNC_EVERY_SEC = 30
 BEAT_MAX_INTERVAL_SEC = 5
 
-_GROUP_ORDER = ("session", "jobs", "schedules", "query", "entity_access", "data_channel")
+_GROUP_ORDER = (
+    "session",
+    "jobs",
+    "schedules",
+    "query",
+    "entity_access",
+    "entity",
+    "data_channel",
+)
 
 
 def _realign_schedule_timezone() -> None:

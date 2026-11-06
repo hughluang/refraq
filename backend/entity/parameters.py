@@ -11,6 +11,8 @@ from backend.admin.system_parameters import IntConstraint, ParameterSpec, resolv
 __all__ = [
     "ENTITY_PARAMETER_SPECS",
     "access_log_retention_days",
+    "entity_query_max_rows",
+    "entity_query_timeout_sec",
     "max_profile_combinations",
 ]
 
@@ -37,6 +39,28 @@ ENTITY_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
         label_key="settings.parameter.access_log_retention_days.label",
         help_key="settings.parameter.access_log_retention_days.help",
     ),
+    ParameterSpec(
+        key="entity_query_timeout_sec",
+        constraint=IntConstraint(minimum=5, maximum=300),
+        seed=30,
+        owner="entity",
+        group="entity",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.entity_query_timeout_sec.apply",
+        label_key="settings.parameter.entity_query_timeout_sec.label",
+        help_key="settings.parameter.entity_query_timeout_sec.help",
+    ),
+    ParameterSpec(
+        key="entity_query_max_rows",
+        constraint=IntConstraint(minimum=100, maximum=10_000),
+        seed=1000,
+        owner="entity",
+        group="entity",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.entity_query_max_rows.apply",
+        label_key="settings.parameter.entity_query_max_rows.label",
+        help_key="settings.parameter.entity_query_max_rows.help",
+    ),
 )
 
 
@@ -46,3 +70,11 @@ def max_profile_combinations() -> int:
 
 def access_log_retention_days() -> int:
     return resolve_int("access_log_retention_days").value
+
+
+def entity_query_timeout_sec() -> int:
+    return resolve_int("entity_query_timeout_sec").value
+
+
+def entity_query_max_rows() -> int:
+    return resolve_int("entity_query_max_rows").value

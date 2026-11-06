@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
 from pathlib import Path
@@ -14,7 +15,11 @@ from backend.channel.parameters import (
     CHANNEL_PARAMETER_SPECS,
     channel_http_response_max_bytes,
 )
-from backend.entity.parameters import ENTITY_PARAMETER_SPECS
+from backend.entity.parameters import (
+    ENTITY_PARAMETER_SPECS,
+    entity_query_max_rows,
+    entity_query_timeout_sec,
+)
 from backend.metadata.parameters import METADATA_PARAMETER_SPECS
 from backend.admin.system_parameters import (
     JSON_SCHEMA_PROFILE_KEYWORDS,
@@ -237,6 +242,61 @@ def test_constraint_fragment_uses_only_profile_keywords() -> None:
     for spec in list_registered_specs():
         keys = set(spec.constraint.to_json_schema())
         assert keys <= JSON_SCHEMA_PROFILE_KEYWORDS
+
+
+def test_entity_query_parameters_resolve_their_seeds() -> None:
+    assemble_system_parameters()
+    specs = {spec.key: spec for spec in list_registered_specs()}
+    timeout = specs["entity_query_timeout_sec"]
+    rows = specs["entity_query_max_rows"]
+    assert timeout.owner == "entity"
+    assert timeout.group == "entity"
+    assert timeout.seed == 30
+    assert isinstance(timeout.constraint, IntConstraint)
+    assert timeout.constraint.minimum == 5
+    assert timeout.constraint.maximum == 300
+    assert rows.owner == "entity"
+    assert rows.group == "entity"
+    assert rows.seed == 1000
+    assert isinstance(rows.constraint, IntConstraint)
+    assert rows.constraint.minimum == 100
+    assert rows.constraint.maximum == 10_000
+    assert entity_query_timeout_sec() == 30
+    assert entity_query_max_rows() == 1000
+    keys = [spec.key for spec in list_registered_specs()]
+    assert keys.index("max_profile_combinations") < keys.index("entity_query_max_rows")
+    assert keys.index("entity_query_timeout_sec") < keys.index(
+        "channel_dataset_max_total_gb"
+    )
+
+
+_ENTITY_LOCALE_KEYS = (
+    "settings.group.entity",
+    "settings.group.entity_access",
+    "settings.parameter.entity_query_timeout_sec.label",
+    "settings.parameter.entity_query_timeout_sec.help",
+    "settings.parameter.entity_query_timeout_sec.apply",
+    "settings.parameter.entity_query_max_rows.label",
+    "settings.parameter.entity_query_max_rows.help",
+    "settings.parameter.entity_query_max_rows.apply",
+    "settings.parameter.max_profile_combinations.label",
+    "settings.parameter.max_profile_combinations.help",
+    "settings.parameter.max_profile_combinations.apply",
+    "settings.parameter.access_log_retention_days.label",
+    "settings.parameter.access_log_retention_days.help",
+    "settings.parameter.access_log_retention_days.apply",
+    "problems.ENTITY_SQL_INVALID",
+    "problems.ENTITY_SQL_TIMEOUT",
+    "problems.ENTITY_SQL_FAILED",
+)
+
+
+def test_entity_parameter_and_problem_locales_exist() -> None:
+    root = Path(__file__).resolve().parents[2] / "frontend" / "src" / "locales"
+    for locale in ("en-US", "zh-CN"):
+        catalog = json.loads((root / locale / "common.json").read_text(encoding="utf-8"))
+        for key in _ENTITY_LOCALE_KEYS:
+            assert catalog.get(key), f"{locale} missing {key}"
 
 
 def test_registry_parity_across_composition() -> None:
