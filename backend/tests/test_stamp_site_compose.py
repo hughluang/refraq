@@ -17,12 +17,13 @@ ENV_EXAMPLE = REPO_ROOT / "deploy" / ".env.example"
 
 sys.path.insert(0, str(SCRIPT.parent))
 from stamp_site_compose import (  # noqa: E402
-    EXPECTED_SENTINEL_COUNT,
     PRODUCT_IMAGE_RE,
     SENTINEL,
     stamp_compose,
     validate_version,
 )
+
+PRODUCT_IMAGE_COUNT = 7
 
 
 def test_template_restarts_beat_only() -> None:
@@ -38,7 +39,9 @@ def test_template_is_not_a_live_site_pin() -> None:
     assert "REFRAQ_VERSION" not in text
     assert "latest" not in PRODUCT_IMAGE_RE.findall(text)
     tags = PRODUCT_IMAGE_RE.findall(text)
-    assert tags == [SENTINEL] * EXPECTED_SENTINEL_COUNT
+    assert tags == [SENTINEL] * PRODUCT_IMAGE_COUNT
+    entity_mcp = text.split("\n  entity-mcp:\n", 1)[1].split("\n  web:\n", 1)[0]
+    assert f"image: ghcr.io/hughluang/refraq-api:{SENTINEL}" in entity_mcp
     env_text = ENV_EXAMPLE.read_text(encoding="utf-8")
     assert "REFRAQ_VERSION" not in env_text
 
@@ -85,8 +88,15 @@ def test_stamp_writes_one_version_on_all_product_images() -> None:
     assert SENTINEL not in stamped
     assert "REFRAQ_VERSION" not in stamped
     tags = PRODUCT_IMAGE_RE.findall(stamped)
-    assert tags == ["1.2.3"] * EXPECTED_SENTINEL_COUNT
+    assert tags == ["1.2.3"] * PRODUCT_IMAGE_COUNT
     assert "latest" not in tags
+
+
+def test_stamp_rejects_template_with_any_other_sentinel_count() -> None:
+    image = f"    image: ghcr.io/hughluang/refraq-api:{SENTINEL}\n"
+    for count in (6, 8):
+        with pytest.raises(ValueError, match="expected 7 sentinel image tags"):
+            stamp_compose(image * count, "1.2.3")
 
 
 def test_stamp_cli_writes_output(tmp_path: Path) -> None:
@@ -109,7 +119,7 @@ def test_stamp_cli_writes_output(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     tags = PRODUCT_IMAGE_RE.findall(out.read_text(encoding="utf-8"))
-    assert tags == ["1.2.3"] * EXPECTED_SENTINEL_COUNT
+    assert tags == ["1.2.3"] * PRODUCT_IMAGE_COUNT
 
 
 def test_stamped_compose_config_parses(tmp_path: Path) -> None:
