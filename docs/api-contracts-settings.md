@@ -46,13 +46,13 @@ Related: `docs/business-system-parameters.md`, `docs/adr/0028-system-parameters.
 | `seed` | Product default restored by reset |
 | `source` | `seed` or `user` |
 | `constraint` | JSON Schema fragment under a closed profile: only `type`, `minimum`, `maximum`, `enum`, `pattern`, `maxLength`. `title` and `description` are unused. Type lives here; there is no top-level `value_type` |
-| `group` | Console grouping (`session`, `jobs`, `schedules`, `query`) |
+| `group` | Console grouping (`session`, `jobs`, `schedules`, `query`, `entity_access`, `entity`, `data_channel`) |
 | `operator_action_required` | Whether apply needs an action outside this page |
 | `label_key` / `help_key` / `apply_note_key` | i18n keys; the panel does not hard-code English |
 | `updated_at` | Change Instant |
 | `updated_by_user_id` / `updated_by_account` | Acting User; null for product occupy |
 
-Items are ordered by group (`session`, `jobs`, `schedules`, `query`) then `key`. A string parameter uses `"type": "string"` and `enum`. An integer parameter uses `"type": "integer"` and optional `minimum` / `maximum`.
+Items are ordered by group (`session`, `jobs`, `schedules`, `query`, `entity_access`, `entity`, `data_channel`) then `key`. A string parameter uses `"type": "string"` and `enum`. An integer parameter uses `"type": "integer"` and optional `minimum` / `maximum`.
 
 ### Registered keys
 
@@ -63,8 +63,10 @@ Items are ordered by group (`session`, `jobs`, `schedules`, `query`) then `key`.
 | `sso_pending_ttl_days` | 7 | integer 1–30 | No | New pending federated identities only |
 | `job_lost_detection_sec` | 60 | integer 15–3600 | No | Widen live; tighten waits `max(5, previous/3)` s before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from this value |
 | `schedule_timezone` | `UTC` | string enum of current IANA ids; a historical alias is not a member and is not rewritten | No | The write realigns `next_run_at` for enabled cron **Scheduled Task**s before the response and stores that zone on the commitment. Beat sync repeats the realign and is a no-op when commitments already match. Interval schedules are unchanged. A Job already running keeps going. Paused cron rows wait until they are enabled |
-| `query_timeout_sec` | 30 | integer 5–3600 | No | Next Controlled Query, Catalog Sample, and MCP `run_sql` |
-| `query_max_rows` | 1000 | integer 100–10000 | No | Next Controlled Query / `run_sql` `max_rows` and Catalog Sample `offset + limit` |
+| `query_timeout_sec` | 30 | integer 5–3600 | No | Next Controlled Query, Catalog Sample, and Metadata MCP `run_sql` |
+| `query_max_rows` | 1000 | integer 100–10000 | No | Next Controlled Query / Metadata MCP `run_sql` `max_rows` and Catalog Sample `offset + limit` |
+| `entity_query_timeout_sec` | 30 | integer 5–300 | No | Entity MCP `run_sql` statement timeout, in seconds. Group `entity`. Does not replace `query_timeout_sec`. The `/mcp/entity` proxy wait is 305 seconds |
+| `entity_query_max_rows` | 1000 | integer 100–10000 | No | Entity MCP `run_sql` row cap. Omitted `max_rows` uses this value; a supplied value is clamped to 1 through this cap. Group `entity`. Does not replace `query_max_rows` |
 
 ## 4. `GET /settings`
 

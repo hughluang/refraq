@@ -657,7 +657,7 @@ Publish create and drop share one execution lock keyed per Entity (`entity_table
 
 Failures leave Job `result` null and carry `error_code` / `error_message`. Success writes the kind envelope and only then.
 
-The worker opens the entity owner pool for publish, drop, and view regeneration Jobs. Persistent API also opens process-local owner and reader pools for the **Entity Data API** (`docs/api-contracts-entity-data.md`). The Metadata MCP process does not open an entity pool.
+The worker opens the entity owner pool for publish, drop, and view regeneration Jobs. Persistent API also opens process-local owner and reader pools for the **Entity Data API** (`docs/api-contracts-entity-data.md`). The Metadata MCP process does not open an entity pool. The Entity MCP process opens the reader pool and a signer pool, and does not open the owner pool (`docs/api-contracts-entity-mcp.md`).
 
 ### 6.1 `POST /entities/{id}/versions/{version_id}/drop-table`
 
@@ -736,12 +736,13 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 7. Hierarchy or inheritance between Business Entities. An **Inbound Reference** is derived and is not a saved attribute. A many-to-many is not a link table, a relationship-entity subtype, or an extra attribute type. Semantic Type, a unit on `decimal`, a cardinality on `reference`, and a dictionary constraint on `string` or `integer` are not part of this contract.
 8. A Grant × scope control plane for Permissions.
 9. A global `POST /jobs` create path.
-10. Metadata MCP tools for Business Entity or Dictionary. Entity SQL over MCP is a planned, separate surface outside this contract.
+10. Metadata MCP tools for Business Entity or Dictionary. Entity data reads and Entity SQL are the Entity MCP endpoint (`docs/api-contracts-entity-mcp.md`).
 
 ## 10. References
 
 - `docs/business-entity.md`
 - `docs/api-contracts-entity-data.md`
+- `docs/api-contracts-entity-mcp.md`
 - `docs/business-entity-access.md`
 - `docs/api-contracts-entity-access.md`
 - `docs/business-jobs.md`

@@ -184,14 +184,14 @@ Avoid **Schedule Timezone**, worker process timezone, or treating the preference
 
 ### Account Center
 
-The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, User PAT management, and the current User’s Metadata MCP connection.
+The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, User PAT management, and the current User’s MCP connections. One section lists the Metadata **MCP endpoint** and the **Entity MCP endpoint** as two cards.
 Registered in Console Module Identity as identity-only (`routes.list` null; `routes.show` `/console/account`); not a structural Console Module in the side nav.
 Avoid conflating with **Platform Settings** / **System Parameter**, or treating User PAT as a sidebar Administration module.
 
 ### MCP endpoint
 
-The product Metadata MCP port: Console-origin path `/mcp`, User PAT in the HTTP `Authorization` header, Streamable HTTP (2026-07-28). One shared host, not a per-User listen port. Process `readyz` is not this URL.
-Avoid treating it as a second public origin, a Session-authenticated Console API, or a tool argument named `authorization`.
+The product Metadata MCP port: Console-origin path `/mcp`, User PAT in the HTTP `Authorization` header, Streamable HTTP (2026-07-28). One shared host, not a per-User listen port. Process `readyz` is not this URL. Business Entity data is the **Entity MCP endpoint**.
+Avoid treating it as a second public origin, a Session-authenticated Console API, a tool argument named `authorization`, or the Entity MCP endpoint.
 
 ### Backing Service
 
@@ -479,6 +479,11 @@ Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoi
 The HTTP data plane for a published **Business Entity**'s metadata head: outbound schema discovery plus synchronous head-table row create, read, update, delete, query, conditional write, and upsert. Callers hold a User Session or **User PAT**, address by immutable `table_name`, and use permissions `entity:data_read` / `entity:data_write` as master switches; what they see and write comes from their **Access Grant**s and is read through their **Profile View**. Core package `backend/entity/data/`; HTTP `backend/entity/routers/data.py` and shapes `backend/entity/schemas/data.py`. Contract: `docs/api-contracts-entity-data.md`.
 Avoid naming it Entity Consumer API, Entity Row API, a "consume" service, or Serving. Avoid conflating it with the definition API (`entity:read` / `entity:write`), with a **Data Channel**, with ISC `/v1/serving`, or with a **Client** principal. Avoid `entity:consume` / `entity:consume_write` as Permission keys.
 
+### Entity MCP endpoint
+
+The read-only MCP port for **Business Entity** data: Console-origin path `/mcp/entity`, User PAT in the HTTP `Authorization` header, Streamable HTTP, process role `entity_mcp`. Tools require `entity:data_read` and an effective `read` **Access Grant**. The host reads through the caller's **Profile View**, including read-only SQL that names Entities by `table_name`. Contract: `docs/api-contracts-entity-mcp.md`.
+Avoid the Metadata **MCP endpoint** (`/mcp`), a Session-authenticated Console API, a write or authoring surface, and a tool argument named `authorization`.
+
 ### Attribute Type
 
 The closed set of classes that define one attribute of a **Business Entity**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, `reference`, `user`. Each class owns its configuration. `json` is a JSON document with an empty configuration; a JSON array is a value of that type. `user` holds one **User** id. Every attribute also carries a server-assigned `attribute_id` that stays stable across versions while the name is unchanged. `required`, `unique`, `indexed`, and `business_key` are facts of every attribute.
@@ -584,8 +589,8 @@ Avoid impersonation, role switching that adds access, or previewing another subj
 
 ### Entity Access Log
 
-The application-level record of every Entity Data API request that reaches the access decision: who, which grants, which Profile View, which revision, outcome. Retention is a **System Parameter**.
-Avoid **Management Audit Event** for data access, or treating it as a database statement audit.
+The application-level record of Entity data access that reaches the access decision: Entity Data API requests, Data Channel row reads and writes (`channel-read`, `channel-write`), an access preview that returns rows (verb `preview`), and Entity MCP `describe_entity` and `list_dictionary_codes` (verb `schema`), `get_row` and `query_rows` (verbs `get` and `query`), and `run_sql` (verb `sql`, one record per referenced Entity). `validate_sql` writes no record. Each record names who, which grants, which Profile View, which revision, and the outcome. A PAT-authenticated call stores the User PAT id. Verb `sql` also stores `sql_sha256` and a 200-character `statement_summary` of the submitted SQL. Retention is a **System Parameter**.
+Avoid **Management Audit Event** for data access. Avoid treating the log as a full statement store: the summary is bounded, and the bound SQL is not stored.
 
 ## Data Channel
 

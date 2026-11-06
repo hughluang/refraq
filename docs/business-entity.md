@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-This document defines the **Business Entity** definition surface: how a reusable business thing is declared, what meaning its declaration must carry, how an unpublished version is saved, how **Publish** creates that version's **Entity Table**, how a published Entity is locked and iterated, how an Entity is deprecated, and how a never-published definition is deleted. It defines the authorization, Console, and audit rules for that surface. The definition surface is Console HTTP. The Metadata **MCP endpoint** does not expose Business Entity. Who may read or write which rows and attributes of Entity data is **Entity Access Control** (`docs/business-entity-access.md`).
+This document defines the **Business Entity** definition surface: how a reusable business thing is declared, what meaning its declaration must carry, how an unpublished version is saved, how **Publish** creates that version's **Entity Table**, how a published Entity is locked and iterated, how an Entity is deprecated, and how a never-published definition is deleted. It defines the authorization, Console, and audit rules for that surface. The definition surface is Console HTTP. The Metadata **MCP endpoint** does not expose Business Entity. Who may read or write which rows and attributes of Entity data is **Entity Access Control** (`docs/business-entity-access.md`). Read-only consumption of that data, including Entity SQL, is the **Entity MCP endpoint** (`docs/api-contracts-entity-mcp.md`).
 
 Mapping a source column onto an attribute, transforming values, channel load, and recording lineage belong to a **Data Channel**. Synchronous head-table schema discovery and row read/write belong to the **Entity Data API** (`docs/api-contracts-entity-data.md`). Both may write the same head table. The stored row is not tagged with provenance. An equal update does not write. The entity **Change Log**, not the row, carries the source.
 
@@ -12,7 +12,7 @@ Related boundaries:
 - Platform **Job**: `docs/business-jobs.md`. Platform **Scheduled Task**: `docs/business-scheduled-tasks.md`. Publish and table drop use the Job mechanism and do not make Entity a scheduling domain.
 - **Permission** and role grants: `docs/business-login-auth.md`.
 - Row, column, and cell access to Entity data, definition visibility, and the entity database roles that enforce them: `docs/business-entity-access.md`, `docs/api-contracts-entity-access.md`.
-- Definition HTTP contract: `docs/api-contracts-entity.md`. Entity Data API: `docs/api-contracts-entity-data.md`.
+- Definition HTTP contract: `docs/api-contracts-entity.md`. Entity Data API: `docs/api-contracts-entity-data.md`. Entity MCP endpoint: `docs/api-contracts-entity-mcp.md`.
 - Console shell and module registration: `docs/business-management-console.md`.
 - Problem Codes and error envelope: `docs/conventions-errors.md`. List envelopes: `docs/conventions-pagination.md`. **Instant** handling: `docs/conventions-time.md`.
 - Connection settings and variable ownership: `docs/env.md`.
@@ -177,7 +177,7 @@ Deprecate is allowed while the current version is still unpublished (for example
 
 Entity Tables live in an entity database that refraq owns, declared by its own connection setting separate from the metadata database (`docs/env.md` owns the variable). Keeping the two apart keeps the platform connection budget in `docs/business-metadata.md` honest about metadata volume, and leaves the entity database free to grow with business data.
 
-The entity database must be a different database from the metadata database; it may share a server. Startup refuses a configuration where both settings name the same database. Runtime connections to the entity database never use a superuser: the owner connection runs DDL, writes, and Data Channel SQL against the entity database, and a separate read-only reader connection serves **Entity Data API** reads through **Profile View**s (`docs/business-entity-access.md` §15). A bootstrap command, run with admin credentials that runtime processes never hold, creates the roles, schemas, and functions. The worker opens the owner pool for publish, drop, view regeneration, and that SQL. Persistent API opens process-local owner and reader pools for the **Entity Data API**. The Metadata MCP process does not open an entity pool.
+The entity database must be a different database from the metadata database; it may share a server. Startup refuses a configuration where both settings name the same database. Runtime connections to the entity database never use a superuser: the owner connection runs DDL, writes, and Data Channel SQL against the entity database, and a separate read-only reader connection serves **Entity Data API** reads and **Entity MCP endpoint** reads, including Entity SQL, through **Profile View**s (`docs/business-entity-access.md` §15). A bootstrap command, run with admin credentials that runtime processes never hold, creates the roles, schemas, and functions. The worker opens the owner pool for publish, drop, view regeneration, and that SQL. Persistent API opens process-local owner and reader pools for the **Entity Data API**. API and worker sign access contexts with the owner pool. The Entity MCP process opens the reader pool and a signer pool whose login may execute only `acl.ensure_signing_key()`. It does not open the owner pool. The Metadata MCP process does not open an entity pool.
 
 Publish never creates an Entity Table inside a **Source**. Console, MCP, and Catalog Sample send one guarded read (**Controlled Query**, Catalog Sample). A Data Channel SQL node sends the author's statement on the Source connection and returns the driver result (`docs/business-data-channel.md`).
 
@@ -285,7 +285,7 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 7. Collecting Entity Tables as **Catalog Object**s, or registering the entity database as a **Source**.
 8. Creating tables inside a Source, or any write SQL against a Source.
 9. A hierarchy or inheritance between Business Entities. An **Inbound Reference** is not a saved relationship, and a many-to-many is not a link table or a relationship-entity subtype.
-10. Exposing Business Entity definition or the **Entity Data API** as Metadata **MCP endpoint** tools. Entity SQL over MCP is a planned, separate surface outside this document; it reads through the same Profile Views (`docs/business-entity-access.md` §15).
+10. Exposing Business Entity definition or the **Entity Data API** as Metadata **MCP endpoint** tools. Entity data reads and Entity SQL are the **Entity MCP endpoint** (`docs/api-contracts-entity-mcp.md`); they read through the same Profile Views (`docs/business-entity-access.md` §15).
 11. **Semantic Type**, or a JSON Schema or OpenAPI format, as an **Attribute Type**.
 12. A unit or quantity on a `decimal` attribute. A later quantity is a new type or a composite value, not a `decimal` config key.
 13. A multi-value attribute, including a cardinality on `reference` config. A many-to-many stays two **Entity Reference**s on an ordinary Business Entity.
@@ -307,5 +307,6 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 - `docs/env.md`
 - `docs/api-contracts-entity.md`
 - `docs/api-contracts-entity-data.md`
+- `docs/api-contracts-entity-mcp.md`
 - `docs/ui-console-record-form.md`
 - `docs/glossary.md`

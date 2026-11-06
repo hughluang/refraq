@@ -4,7 +4,7 @@
 
 This document defines the **Entity Data API**: the HTTP data plane for a published **Business Entity**'s metadata head. Callers discover an outbound schema and read or write head-table rows under Session or **User PAT** authentication, addressed by immutable `table_name`.
 
-It does not define Business Entity authoring, publish, deprecate, or table-drop Jobs (`docs/api-contracts-entity.md`). It is not a **Data Channel**, not ISC `/v1/serving`, and not an MCP tool surface. Every verb is subject to **Entity Access Control**: what a caller sees and may write is compiled from its **Access Grant**s (`docs/business-entity-access.md`); the access-specific shapes, codes, and narrowing are `docs/api-contracts-entity-access.md` §5.
+It does not define Business Entity authoring, publish, deprecate, or table-drop Jobs (`docs/api-contracts-entity.md`). It is not a **Data Channel** and not ISC `/v1/serving`. The Metadata MCP does not expose this surface. Entity MCP `get_row` and `query_rows` call this service; their arguments and Entity SQL are `docs/api-contracts-entity-mcp.md`. Every verb is subject to **Entity Access Control**: what a caller sees and may write is compiled from its **Access Grant**s (`docs/business-entity-access.md`); the access-specific shapes, codes, and narrowing are `docs/api-contracts-entity-access.md` §5.
 
 Related boundaries:
 
@@ -16,6 +16,7 @@ Related boundaries:
 - Entity Access Control: `docs/business-entity-access.md`, `docs/api-contracts-entity-access.md`
 - User PAT: `docs/business-user-tokens.md`
 - Entity database connection and pool: `docs/env.md`
+- Entity MCP tools that call this service, and Entity SQL: `docs/api-contracts-entity-mcp.md`
 - Terminology: `docs/glossary.md`
 
 ## 2. Positioning And Scale
@@ -31,7 +32,7 @@ Related boundaries:
 1. Not the Console definition / authoring API (that surface addresses by opaque Entity `id`).
 2. Not a **Data Channel**. Channel responsibility is not narrowed. Dual-write of the same head table is allowed. The stored row is not tagged with provenance. An equal update does not write. The entity **Change Log**, not the row, carries the source. Unique constraints arbitrate.
 3. Not an ISC serving drop-in: no opaque `cursor` / `next_cursor`, no `rows:by-keys`, no message queue. Walks use explicit `after_row_id`. Errors use 422 Problem Details, not serving's 400.
-4. Not an MCP tool surface. The Metadata MCP does not expose definition, schema, or row verbs and does not open an entity pool. Entity SQL over MCP is a planned, separate surface that reads through the same Profile Views.
+4. Not the Metadata MCP tool surface. That host does not expose definition, schema, or row verbs and does not open an entity pool. Entity MCP `get_row` and `query_rows` call this service and read through the same Profile Views (`docs/api-contracts-entity-mcp.md`).
 5. Not an authoring surface. The Console data page calls this API to browse rows; Console authoring does not call this API's schema verb.
 6. Not an external entity directory. Integrators learn `table_name` by agreement. Browsing definitions uses `GET /entities?status=serving` and requires `entity:read`; it lists only Entities visible to the caller.
 
@@ -90,7 +91,7 @@ Withdrawn names that must not appear as product Permission keys: `entity:consume
 
 ### 3.4 Entity Database
 
-Persistent API opens process-local entity owner and reader pools separate from the metadata pool (`docs/env.md`). Reads run on the reader connection against the caller's **Profile View** with the signed access context set for the transaction; writes run on the owner connection in one transaction with the attribution check. The Metadata MCP process and Beat do not open those pools. `schema` uses only the metadata engine and the compiled policy. Memory store mode: `schema` succeeds; row verbs that need the entity database return `503 PLATFORM_CAPACITY_EXCEEDED`. Missing `ENTITY_DATABASE_URL` or `ENTITY_READER_DATABASE_URL` on persistent API fails fast at startup. A persistent API or worker also fails fast when `entity_data`, `entity_access`, `acl`, or `channel_dataset` is absent on the entity database. Startup does not create those schemas. `/readyz` does not probe the entity database.
+Persistent API opens process-local entity owner and reader pools separate from the metadata pool (`docs/env.md`). Reads run on the reader connection against the caller's **Profile View** with the signed access context set for the transaction; writes run on the owner connection in one transaction with the attribution check. The Metadata MCP process and Beat do not open those pools. The Entity MCP process opens the reader pool for its row tools and for Entity SQL, and a separate signer pool to sign the context. It does not open the owner pool. `schema` uses only the metadata engine and the compiled policy. Memory store mode: `schema` succeeds; row verbs that need the entity database return `503 PLATFORM_CAPACITY_EXCEEDED`. Missing `ENTITY_DATABASE_URL` or `ENTITY_READER_DATABASE_URL` on persistent API fails fast at startup. A persistent API or worker also fails fast when `entity_data`, `entity_access`, `acl`, or `channel_dataset` is absent on the entity database. Startup does not create those schemas. `/readyz` does not probe the entity database.
 
 ## 4. Verb Table
 
@@ -176,7 +177,7 @@ Rules:
 - `row_id` is separate from `attributes`.
 - Top-level `business_key` is the head attribute name marked `business_key`, or `null` when the head has none.
 - Attribute objects keep the definition attribute keys (`docs/api-contracts-entity.md` §3.1): `name`, `type`, `required`, `unique`, `indexed`, `business_key`, `description`, `config`.
-- Additional keys: `operators`; `upsert_key` (true when `unique` and type is not `number` or `json`, **including** `boolean`); for `dictionary`, `dictionary` plus `codes` as `[{ "code", "label", "writable" }]`; for `reference`, `target` as on definition reads except that `target.business_key` is the attribute name stored in the head reference snapshot, `target` is `null` when the target Entity is not visible to the caller, and `operators` are the operators of the snapshotted target Business Key type (`string` or `integer`).
+- Additional keys: `operators`; `upsert_key` (true when `unique` and type is not `number` or `json`, **including** `boolean`); for `dictionary`, `dictionary` plus `codes` as `[{ "code", "label", "writable" }]`; for `reference`, `target` as on definition reads except that `target.business_key` is the attribute name stored in the head reference snapshot, `target` is `null` when the caller has no effective `read` grant on the target Entity, and `operators` are the operators of the snapshotted target Business Key type (`string` or `integer`). `entity:write` and `entity:access_manage` do not make a target visible. A self-reference is visible, because the caller is already reading that Entity.
 - `limits.row_write_max` is 1000 and is shared by `create-many` and conditional writes.
 
 ## 6. Row Write And Read Bodies
@@ -186,7 +187,7 @@ Rules:
 - `get` / `update` / `delete` address one row by exactly one of `row_id` or `business_key`. Both, or neither, → `422 REQUEST_INVALID`. `business_key` when the head has no Business Key, a value that does not match the Business Key type, or a blank or whitespace-only string, → `422 REQUEST_INVALID`. Malformed `row_id` → `422 REQUEST_INVALID`. Missing row, or a row the caller cannot see → `404 ENTITY_ROW_NOT_FOUND`.
 - `update` and `update-where` must not change the Business Key attribute. A present key for that attribute, including a value equal to the current one, → `422 ENTITY_ROW_INVALID`.
 - Every write is attributed to one **Access Grant** and may write only columns that grant presents in `clear`; otherwise `403 ENTITY_ACCESS_WRITE_DENIED` (`docs/api-contracts-entity-access.md` §5.4).
-- `fields` is query-only and may include `row_id`. Empty `fields` → `422`. Write responses and get always return the full row of the caller's shape, including `__withheld` when the shape carries it.
+- `fields` is query-only and may include `row_id`. Empty `fields` → `422`. Write responses and get return the full row of the caller's shape. Query items return the requested `fields`, or that full row when `fields` is omitted. When the shape's `withheld_field` is `"__withheld"`, get, query, and write rows include `"__withheld": [names]` (an empty array when no cell on that row is withheld), including a query whose `fields` list does not name it. A shape that does not withhold omits the key. Withheld cells are `null`.
 - Write responses do not carry `head.version_id`. Callers that need drift detection call schema again.
 
 ### 6.1 create-many
@@ -292,7 +293,7 @@ During execution, missing relation `42P01` → `ENTITY_NOT_SERVING`. `23505` →
 
 1. Replacing or narrowing **Data Channel** responsibility.
 2. ISC serving wire compatibility (opaque cursor, by-keys, MQ, 400 error style, x-api-key).
-3. Metadata MCP tools or a Metadata MCP entity pool for this surface. Entity SQL over MCP is a planned, separate surface outside this contract.
+3. Metadata MCP tools, or a Metadata MCP entity pool, for this surface. Entity MCP row tools call this service; Entity SQL is `docs/api-contracts-entity-mcp.md`.
 4. Console authoring calling this schema.
 5. An external entity directory or kebab `table_name` aliases.
 6. Soft delete, aggregates, partial success, client sort, composite uniqueness.
@@ -305,6 +306,7 @@ During execution, missing relation `42P01` → `ENTITY_NOT_SERVING`. `23505` →
 - `docs/api-contracts-entity.md`
 - `docs/business-entity-access.md`
 - `docs/api-contracts-entity-access.md`
+- `docs/api-contracts-entity-mcp.md`
 - `docs/business-login-auth.md`
 - `docs/business-user-tokens.md`
 - `docs/conventions-errors.md`

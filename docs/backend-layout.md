@@ -45,11 +45,12 @@ backend/
     models.py errors.py sources/ catalog/ connectors/ structure_jobs/ join_detection_jobs/
     schemas/ routers/     # domain use-case HTTP
     mcp_catalog.py mcp_actor.py mcp_server.py mcp_http.py tasks.py
-  entity/                 # product domain: Business Entity / version / publish and drop Jobs / Entity Data API / access control
+  entity/                 # product domain: Business Entity / version / publish and drop Jobs / Entity Data API / access control / Entity MCP
     models.py errors.py tasks.py parameters.py bootstrap.py
     data/                 # Entity Data API core (not HTTP); routers/schemas stay sibling
     access/               # Entity Access Control: policy store, DSL, compiler, views, signed context, access log
-    schemas/ routers/     # definition + Entity Data API HTTP (published entity.routers.*)
+    mcp/                  # Entity MCP host: catalog, tools, HTTP process entry (not imported by metadata)
+    schemas/ routers/     # definition + Entity Data API + Entity MCP catalog HTTP (published entity.routers.*)
   channel/                # product domain: Data Channel definition / versions / Channel Run / triggers / checkpoints
     models.py errors.py tasks.py parameters.py
     schemas/ routers/     # Data Channel use-case HTTP
@@ -131,13 +132,13 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 ### `entity` published modules
 
-`entity` is a **product domain** package. It owns Business Entity definition, versioning, publish, the Job kinds that create or drop an Entity Table or regenerate Profile Views, the **Entity Data API**, and **Entity Access Control**. Core data-plane logic lives in `entity/data/`; access control is the language unit `entity/access/`; HTTP and request shapes stay in `entity/routers/` and `entity/schemas/` alongside definition (not under `entity/data/` or `entity/access/`). `entity/data/` reaches access control only through `entity/access/` orchestration modules, never its store.
+`entity` is a **product domain** package. It owns Business Entity definition, versioning, publish, the Job kinds that create or drop an Entity Table or regenerate Profile Views, the **Entity Data API**, **Entity Access Control**, and the **Entity MCP endpoint**. Core data-plane logic lives in `entity/data/`; access control is the language unit `entity/access/`; the MCP host is `entity/mcp/`; HTTP and request shapes stay in `entity/routers/` and `entity/schemas/` alongside definition (not under `entity/data/` or `entity/access/`). `entity/data/` reaches access control only through `entity/access/` orchestration modules, never its store. `entity` does not import `metadata`.
 
 | Module | Published for |
 |--------|----------------|
 | `backend.entity.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
 | `backend.entity.tasks` | Job kind handler dispatch (`entity_reconcile`, `entity_table_drop`, `entity_access_views`), access-log retention purge, and the change-log retention purge that `backend.worker.tasks.purge_change_logs` runs; discovered by `worker`. Not registered on `metadata.tasks` |
-| `backend.entity.parameters` | Entity-owned System Parameter specs and typed accessors (`entity_access.max_profile_combinations`, `entity_access.access_log_retention_days`); collected by `worker.parameters` assembly |
+| `backend.entity.parameters` | Entity-owned System Parameter specs and typed accessors (`max_profile_combinations`, `access_log_retention_days`, `entity_query_timeout_sec`, `entity_query_max_rows`; groups `entity_access` and `entity`); collected by `worker.parameters` assembly |
 | `backend.entity.bootstrap` | Entity database bootstrap process entry (`python -m backend.entity.bootstrap`); uses `ENTITY_ADMIN_DATABASE_URL` only |
 | `backend.entity.dictionaries.active_codes` | Active dictionary codes, bound into subject attributes by composition |
 | `backend.entity.heads` | Current published head shape by Entity id (`get_entity_head`): attribute name, type, unique, required, and Business Key. Data Channel validation reads this and does not import Entity stores |
@@ -147,7 +148,8 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.entity.datasets` | Create, read, and drop run-scoped dataset tables in entity-database schema `channel_dataset` (the reader role is not granted): a query that builds the table, a chunked copy from rows, a page or a batch by `_ord`, an existence check, the relation size, and delete. Does not import `channel`. Channel owns the registry and the lifecycle |
 | `backend.entity.publish_confirmation` | Port a Data Channel adapter fills with write nodes a candidate head would make incompatible; bound by composition. Entity HTTP calls it and does not import `channel` |
 | `backend.entity.subject_displays` | Short Entity rows (`id`, `name`, `table_name`, `deprecated_at`, `ever_published`) for ids the caller can open. Missing and hidden ids are omitted. Bound by composition into the Tag subject page. Does not import `channel` or `tags` |
-| `backend.entity.routers.*` | Domain use-case HTTP (definition, access management, and Entity Data API); mounted by `main` |
+| `backend.entity.routers.*` | Domain use-case HTTP (definition, access management, Entity Data API, and `GET /mcp/entity/catalog`); mounted by `main` |
+| `backend.entity.mcp.http` | Entity MCP Streamable HTTP process entry (`python -m backend.entity.mcp.http`). May import `worker.parameters` to assemble System Parameters. Must not import `metadata` |
 
 ### `channel` published modules
 
@@ -294,7 +296,7 @@ Concrete edges:
 | `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` / `subjects`. Must not import `entity` or `tags` |
 | `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver); process entry `job_child` may import `worker.parameters` |
 | `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`; own modules. Must not import `entity` or `channel` |
-| `entity` | `core`; published `admin` (including `admin.subjects`); published `jobs`; published `tags.api`; own modules. Must not import `channel` |
+| `entity` | `core`; published `admin` (including `admin.subjects`); published `jobs`; published `tags.api`; own modules. Process entry `entity.mcp.http` may import `worker.parameters`. Must not import `channel` or `metadata` |
 | `channel` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use; published `tags.api`; own modules |
 | `tags` | `core`; published `admin`. Must not import `entity` or `channel` |
 | `worker` | `core`; published `admin` / `jobs` / `metadata` / `entity` / `channel` for assembly and system tasks |

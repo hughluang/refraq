@@ -27,7 +27,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 - Open-ended join paths stay inside the start Source's graph. The tool calls the visibility check before lookup
 - Catalog column payloads omit `normalized_type`. There is no Type Mapping tool. Agents use native `data_type` (ADR 0024).
 - **Instants** in tool JSON match HTTP: outbound UTC `Z` via `format_instant`. Actor **Display Timezone** is not applied to MCP Instant strings (Console-only formatting). Agents may read `display_timezone` from Current User / Account profile and format locally if needed.
-- Admission for new tools (ADR 0036): Metadata MCP is the agent inquiry and living-registry face. Do not add (1) operations, Job, or Scheduled Task observe/mutate tools, (2) a read-only tool the agent cannot start from locators already on this face, (3) a second aggregate that only renames `get_object`, (4) tools that write ADR 0015-removed fields, or (5) Business Entity tools. Entity SQL over MCP is a planned, separate surface with its own host and contract; it is not part of the Metadata MCP. Cheaper projections of `get_object` are admitted.
+- Admission for new tools (ADR 0036): Metadata MCP is the agent inquiry and living-registry face. Do not add (1) operations, Job, or Scheduled Task observe/mutate tools, (2) a read-only tool the agent cannot start from locators already on this face, (3) a second aggregate that only renames `get_object`, (4) tools that write ADR 0015-removed fields, or (5) Business Entity tools. Entity data tools and Entity SQL are the Entity MCP endpoint (`docs/api-contracts-entity-mcp.md`). They are not tools on this host. Cheaper projections of `get_object` are admitted.
 - Server `instructions` ship on initialize / `server/discover`. Scene `prompts` (`lookup_business`, `analyze_object`, `explore_join_path`, `enrich_semantics`) activate reasoning and do not prescribe tool order. Prompt bodies follow the admitted field set (ADR 0015).
 
 ## 3. Structure (read)
@@ -132,6 +132,6 @@ Success `200`:
 - Arbitrary shell / file tools
 - Client credential management
 - Data Product catalog tools
-- Business Entity tools on this Metadata MCP (`list_entities`, `get_entity`, or writes); Entity SQL is a separate surface (`docs/business-entity-access.md` §20)
+- Business Entity tools on this Metadata MCP (`list_entities`, `get_entity`, or writes). Entity data tools and Entity SQL are the Entity MCP endpoint (`docs/api-contracts-entity-mcp.md`)
 - Dual-read fallback into external `dbmeta`
 - Job / Scheduled Task observe or mutate (`get_job`, list, logs, cancel, enqueue)

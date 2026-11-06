@@ -74,11 +74,13 @@ Kernel codes owned by this contract:
 | `HTTP_METHOD_NOT_ALLOWED` | 405 | Wrong method on a known path |
 | `HTTP_ERROR` | other 4xx from Starlette `HTTPException` | Framework HTTP errors that are not 404/405 |
 | `PLATFORM_CAPACITY_EXCEEDED` | 503 + `Retry-After` | In-flight HTTP cap, metadata or entity pool checkout timeout, the platform database refuses a new connection, or an Entity Data API row verb runs without an entity pool (ADR 0040; `docs/api-contracts-entity-data.md`) |
-| `PLATFORM_TIMEOUT` | 504 | Platform short read or short write canceled by `statement_timeout`, including Entity Data API entity-database statements (ADR 0040). Not `QUERY_TIMEOUT`. |
+| `PLATFORM_TIMEOUT` | 504 | Platform short read or short write canceled by `statement_timeout`, including Entity Data API entity-database statements (ADR 0040). Not `QUERY_TIMEOUT`. Not `ENTITY_SQL_TIMEOUT`. |
 | `ADMISSION_CAPACITY_EXCEEDED` | 503 + `Retry-After` | Admission pool full (ADR 0045) |
 | `ADMISSION_ACTOR_LIMIT_EXCEEDED` | 429 + `Retry-After` | This actor already holds the admission share (ADR 0045) |
 
 Domain codes stay on `AppError` subclasses (`AUTH_*`, `SOURCE_*`, …). A domain contract may define extension members for its own Problem Code and must list them in that contract. An extension member never reuses a frozen member name.
+
+`ENTITY_SQL_TIMEOUT` (504) is the Entity MCP `run_sql` cancel (`SQLSTATE 57014`). It is not `PLATFORM_TIMEOUT` and not `QUERY_TIMEOUT`. `PLATFORM_TIMEOUT` remains the platform short read or short write, including Entity Data API entity-database statements. `QUERY_TIMEOUT` (504) remains the Source Controlled Query and Metadata MCP `run_sql` timeout. `ENTITY_SQL_FAILED` carries the SQLSTATE in its message (`docs/api-contracts-entity-mcp.md` §10).
 
 ### 422 validation
 

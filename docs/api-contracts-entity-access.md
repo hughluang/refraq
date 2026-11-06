@@ -230,7 +230,7 @@ Wrapped single-resource responses use the resource name as key (`{ "ladder": …
 }
 ```
 
-`schema` is the Entity Data API schema the subject would receive (§5.2). `include_rows: true` additionally requires `entity:data_read` and returns `rows` as an **Offset Page** of that subject's rows, each row adding `__sources`: per column, the grant ids that contributed the presented level. A preview with rows appends an Entity Access Log record naming the caller and the subject. Filters and limits follow the Entity Data API query rules.
+`schema` follows §5.2 for the subject, except a reference `target` is still named when that subject has no effective `read` grant on the target Entity. Entity Data API schema and Entity MCP `describe_entity` return `target: null` in that case. `include_rows: true` additionally requires `entity:data_read` and returns `rows` as an **Offset Page** of that subject's rows, each row adding `__sources`: per column, the grant ids that contributed the presented level. When the shape withholds, those rows include `__withheld`. A preview with rows appends an Entity Access Log record naming the caller and the subject. Filters and limits follow the Entity Data API query rules.
 
 ## 5. Entity Data API Behavior Under Access Control
 
@@ -261,11 +261,11 @@ After authentication and the master-switch Permission check, a `table_name` whos
 
 The top level adds `"withheld_field": "__withheld"` when the shape carries the withheld marker, otherwise `null`, and `"access": { "policy_revision": N, "narrowed": false }`.
 
-For a `reference` attribute, `target` is `null` when the target Entity is not visible to the caller; `operators` still follow the snapshotted key type.
+For a `reference` attribute, `target` is `null` when the caller has no effective `read` grant on the target Entity. `entity:write` and `entity:access_manage` do not make a target visible. A self-reference is visible. `operators` still follow the snapshotted key type. Access preview does not apply this null; see §4.4.
 
 ### 5.3 Rows, Fields, And Filters
 
-- Rows carry only shape columns. When the shape carries the marker, every row carries `"__withheld": [names]`, including on writes and get. `__withheld` cannot appear in `fields`, `filters`, `values`, or `set`.
+- Rows carry only shape columns. When the shape's `withheld_field` is `"__withheld"`, every row on get, query, and write responses carries `"__withheld": [names]`, an empty array when no cell on that row is withheld. A shape that does not withhold omits the key. `__withheld` cannot appear in `fields`, `filters`, `values`, or `set`.
 - Masked cells carry the masked value under the attribute's wire type; withheld cells carry `null`.
 - `fields`, filter `field`, `values`, and `set` naming a column outside the shape answer exactly as for an unknown attribute name: the same Problem Code and the same `detail` form.
 - Filters evaluate on presented values (`docs/business-entity-access.md` §9.7).
@@ -283,7 +283,7 @@ For a `reference` attribute, `target` is `null` when the target Entity is not vi
 | Situation | HTTP | Code |
 | --- | --- | --- |
 | Policy committed but views not regenerated, or the caller's combination view is being generated | 503 + `Retry-After` | `ENTITY_ACCESS_PENDING` |
-| The caller's combination exceeds `entity_access.max_profile_combinations` | 409 | `ENTITY_ACCESS_COMBINATION_LIMIT` |
+| The caller's combination exceeds `max_profile_combinations` | 409 | `ENTITY_ACCESS_COMBINATION_LIMIT` |
 
 Both are reported only to callers that have an effective grant on the Entity; other callers receive `404 ENTITY_NOT_FOUND`.
 
@@ -328,7 +328,7 @@ The first successful publish of an Entity that has no published version creates 
 
 ## 8. Non-Goals
 
-1. Entity SQL over MCP and its tools.
+1. Entity MCP tool arguments, the SQL gate, and `run_sql` encodings. Those are `docs/api-contracts-entity-mcp.md`. The data-plane rules in §5 are what those tools read through.
 2. HTTP reads of the Entity Access Log.
 3. Bulk import or export of policy documents.
 4. Optimistic-concurrency tokens on policy writes; concurrent writes serialize per Entity and each bumps `policy_revision`.
@@ -339,6 +339,7 @@ The first successful publish of an Entity that has no published version creates 
 - `docs/business-entity-access.md`
 - `docs/api-contracts-entity.md`
 - `docs/api-contracts-entity-data.md`
+- `docs/api-contracts-entity-mcp.md`
 - `docs/api-contracts-users.md`
 - `docs/business-jobs.md`
 - `docs/conventions-errors.md`

@@ -4,13 +4,14 @@
 
 This document defines **Entity Access Control**: which rows of a published **Business Entity** a person may read or write, which attributes that person sees, and how each visible cell is presented. It defines the subjects that receive access (User, **Role**, **User Group**) and their **Subject Attribute**s, the `user` **Attribute Type**, the per-attribute **Presentation Ladder**, the per-Entity **Access Profile**, the **Access Grant** and **Access Restriction** that bind subjects to profiles and rows, the evaluation and write-attribution rules, definition visibility, residual leakage, audit, upgrade seeding, and the permissions that manage all of it. It also states the enforcement placement inside the entity database that every Entity data surface shares.
 
-It does not define the Business Entity authoring lifecycle (`docs/business-entity.md`), the HTTP shapes (`docs/api-contracts-entity-access.md`, `docs/api-contracts-entity-data.md`, `docs/api-contracts-users.md`), or an Entity SQL surface on MCP.
+It does not define the Business Entity authoring lifecycle (`docs/business-entity.md`), the HTTP shapes (`docs/api-contracts-entity-access.md`, `docs/api-contracts-entity-data.md`, `docs/api-contracts-users.md`), or the Entity MCP tool face (`docs/api-contracts-entity-mcp.md`).
 
 Related boundaries:
 
 - Business Entity definition, versions, publish, and the entity database: `docs/business-entity.md`
 - Access management HTTP and the data-plane behavior that depends on access: `docs/api-contracts-entity-access.md`
 - Entity Data API: `docs/api-contracts-entity-data.md`
+- Entity MCP endpoint, including Entity SQL: `docs/api-contracts-entity-mcp.md`
 - User, Role, and Permission catalog: `docs/business-login-auth.md`; User Group and Subject Attribute HTTP: `docs/api-contracts-users.md`
 - User PAT: `docs/business-user-tokens.md`
 - System Parameters: `docs/business-system-parameters.md`
@@ -216,7 +217,7 @@ Each distinct set of profiles that occurs as a shape is one **Profile View** of 
 
 ### 11.2 Combination Cap
 
-The number of multi-profile combinations per Entity is capped by the System Parameter `entity_access.max_profile_combinations` (seed 64, range 1–1024). Single-profile views do not count. When a new combination would exceed the cap, its view is not generated; a request whose shape needs it is refused with an access-configuration-over-limit error, and the Console warns access managers with the affected subject count.
+The number of multi-profile combinations per Entity is capped by the System Parameter `max_profile_combinations` (seed 64, range 1–1024, group `entity_access`). Single-profile views do not count. When a new combination would exceed the cap, its view is not generated; a request whose shape needs it is refused with an access-configuration-over-limit error, and the Console warns access managers with the affected subject count.
 
 ### 11.3 Revision Fence
 
@@ -255,17 +256,17 @@ Access is enforced by PostgreSQL, not by predicates the application assembles pe
 1. The entity database is a separate database from the metadata database. Runtime connections never use a superuser.
 2. Physical **Entity Table**s and stem views live in a private schema that the runtime reader role cannot read. Each table has row-level security enabled and forced, with policies that admit only the profile-view owner and the write path.
 3. Each Profile View is a `security_barrier` view owned by a dedicated non-login role. Its column list is the shape; its predicates and per-cell guards are compiled from the policy and check, for each grant, whether that grant is active in the request's signed access context.
-4. The application computes the effective grants and the Subject Attribute values the rules need, signs them with the policy revisions and an expiry, and sets the signed context for the transaction. Validation functions in a private schema verify the signature. A forged, expired, or mismatched context makes every guard false and every view empty.
-5. The Entity Data API and the Console read through the same Profile Views with the same signed context. A page ordered by `row_id` executes that view's query text with the page bound in the same query block, so the bound stops on the primary key. The executor is a `SECURITY DEFINER` function owned by the profile-view owner; the reader passes the view, the page bound, and a structured filter, not a SQL string. The view remains `security_barrier`. When the profile predicate depends on the row and the caller's filter is not leakproof, the page is read from the barrier view instead. Writes run in the same transaction as the attribution check, on the owner connection, using the same compiled policy.
+4. The application computes the effective grants and the Subject Attribute values the rules need, signs them with the policy revisions and an expiry, and sets the signed context for the transaction. Validation functions in a private schema verify the signature. A forged, expired, or mismatched context makes every guard false and every view empty. The Entity MCP process signs through a login that may execute only `acl.ensure_signing_key()`. API and worker sign with the owner connection.
+5. The Entity Data API, the Console, and the Entity MCP row tools read through the same Profile Views with the same signed context. A page ordered by `row_id` executes that view's query text with the page bound in the same query block, so the bound stops on the primary key. The executor is a `SECURITY DEFINER` function owned by the profile-view owner; the reader passes the view, the page bound, and a structured filter, not a SQL string. The view remains `security_barrier`. When the profile predicate depends on the row and the caller's filter is not leakproof, the page is read from the barrier view instead. Writes run in the same transaction as the attribution check, on the owner connection, using the same compiled policy. Entity SQL on the Entity MCP endpoint is a separate read: one read-only statement, each unqualified Entity name bound to that caller's Profile View, executed by the reader role, and always rolled back. It does not go through that page function.
 6. A superseded version has no Profile View. Only the head is readable by the runtime reader.
 
 Querying a Profile View other than the one the caller's shape selects never reveals more: guards accept only the caller's own grants, so extra columns are withheld and no extra rows appear.
 
 ## 16. Audit
 
-Every Entity Data API request that reaches the access decision appends one record to the **Entity Access Log** in the metadata database: Instant, User id, User PAT id when present, request id, Entity id, verb, effective grant ids, narrowing identity, Profile View, policy revision, rows returned or affected, and outcome code. Records older than the System Parameter `entity_access.access_log_retention_days` (seed 90, range 7–3650) are deleted by the platform. The log is not a **Management Audit Event** stream.
+An Entity Data API request, a Data Channel row read or write, or an Entity MCP `describe_entity`, `list_dictionary_codes`, `get_row`, `query_rows`, or `run_sql` appends one record to the **Entity Access Log** in the metadata database when it reaches the access decision: Instant, User id, User PAT id when the call is PAT-authenticated, request id, Entity id, verb, effective grant ids, narrowing identity, Profile View, policy revision, rows returned or affected, and outcome code. Data Channel verbs are `channel-read` and `channel-write`. Entity MCP `describe_entity` and `list_dictionary_codes` use verb `schema`. `get_row` and `query_rows` use verbs `get` and `query`. `run_sql` uses verb `sql`, one record per referenced Entity, sharing one request id and one PAT id. Verb `sql` also stores `sql_sha256` (SHA-256 hex of the UTF-8 bytes of the submitted SQL) and `statement_summary` (the submitted SQL truncated to 200 characters). Other verbs store null in both. `validate_sql` writes no record. A gate rejection, an unknown or invisible name, a statement that references no Entity, `PLATFORM_CAPACITY_EXCEEDED`, and an admission rejection write no `sql` record. Reads do not write a **Management Audit Event**. Records older than the System Parameter `access_log_retention_days` (seed 90, range 7–3650, group `entity_access`) are deleted by the platform.
 
-A **Management Audit Event** is written for every create, update, delete, and copy of ladders, profiles, grants, and restrictions, and for every create, update, and delete of User Groups, membership, Subject Attribute definitions, and Subject Attribute values. A preview that returns rows also appends an Entity Access Log record naming both the caller and the previewed subject.
+A **Management Audit Event** is written for every create, update, delete, and copy of ladders, profiles, grants, and restrictions, and for every create, update, and delete of User Groups, membership, Subject Attribute definitions, and Subject Attribute values. A preview that returns rows also appends an Entity Access Log record with verb `preview`, naming both the caller and the previewed subject.
 
 ## 17. Upgrade Seeding
 
@@ -297,20 +298,20 @@ Every Entity that has been published also has one grant for the **System Identit
 
 ## 20. Non-Goals
 
-1. Entity SQL over MCP — the SQL gate, extended-protocol execution, token-bound identity subsets, and database-level statement audit. It is a planned surface with its own contract; the enforcement in §15 is the layer it reads through.
-2. Tag-driven default masks, aggregate-only Entities, and differential privacy.
-3. Per-User views, explicit grant priority ordering, and any data-access bypass for administrators.
-4. A Grant × scope control plane for platform Permissions; `users.role_id` remains the single functional Role.
-5. Synchronizing User Groups or Subject Attributes from an Identity Provider.
-6. PAT scopes that narrow Entity access.
-7. An HTTP read surface for the Entity Access Log.
-8. Profiles shared across Entities by reference, and hiding column names from direct database catalog reads.
+1. Tag-driven default masks, aggregate-only Entities, and differential privacy.
+2. Per-User views, explicit grant priority ordering, and any data-access bypass for administrators.
+3. A Grant × scope control plane for platform Permissions; `users.role_id` remains the single functional Role.
+4. Synchronizing User Groups or Subject Attributes from an Identity Provider.
+5. PAT scopes that narrow Entity access.
+6. An HTTP read surface for the Entity Access Log.
+7. Profiles shared across Entities by reference, and hiding column names from direct database catalog reads. The Entity MCP SQL gate rejects catalog relations for tool callers; the reader role itself can still see them.
 
 ## 21. References
 
 - `docs/business-entity.md`
 - `docs/api-contracts-entity-access.md`
 - `docs/api-contracts-entity-data.md`
+- `docs/api-contracts-entity-mcp.md`
 - `docs/api-contracts-users.md`
 - `docs/business-login-auth.md`
 - `docs/business-user-tokens.md`

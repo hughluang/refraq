@@ -160,22 +160,24 @@ Responsibilities:
 - **Entity Access Control** language unit `entity/access/` (`docs/business-entity-access.md`): presentation ladders, Access Profiles, Access Grants, Access Restrictions, policy revision, and compiled view bindings (ORM and store); row-rule DSL and type checking; the policy compiler; combination computation and the cap; Profile View generation in the entity database; effective-grant resolution, narrowing, and signed-context issuance; write attribution; the Entity Access Log and its retention; upgrade seeding; access management HTTP
 - Entity database bootstrap process entry (`python -m backend.entity.bootstrap`): roles, schemas including `channel_dataset` (the reader role is not granted on it), `pgcrypto`, the `acl` schema, and migration of existing tables, run with admin credentials only
 - Published `backend.entity.datasets`: create a dataset table from a query or from a chunked copy of rows, read a page or a batch by `_ord`, check that the table has a row, read its size, and delete it. The module does not own the dataset registry or the lifecycle and does not import `channel`
-- `entity/parameters.py` (Entity-owned System Parameter specs: `entity_access.max_profile_combinations`, `entity_access.access_log_retention_days`)
+- `entity/parameters.py` (Entity-owned System Parameter specs: `max_profile_combinations`, `access_log_retention_days`, `entity_query_timeout_sec`, `entity_query_max_rows`)
+- Entity MCP host under `entity/mcp/` (`docs/api-contracts-entity-mcp.md`): Streamable HTTP at `/mcp/entity`, tool catalog, and process entry `python -m backend.entity.mcp.http`. The process entry may import `worker.parameters`. The package does not import `metadata`
+- `GET /mcp/entity/catalog` under `entity/routers/` (session or PAT, no extra permission)
 - Domain use-case HTTP under `entity/routers/` (definition plus `routers/data.py`) and shapes under `entity/schemas/` (including `schemas/data.py`)
 - Published API listed in `docs/backend-layout.md` §3
 
 Must not contain:
 
 - Owning the platform Job table (lives in `backend/jobs/`)
-- An entity-database engine or pool in the Metadata MCP process; persistent API opens entity owner and reader pools for Entity Data API; the worker opens the owner pool for publish, drop, view regeneration, Data Channel SQL, and dataset-table operations against the entity database
+- An entity-database engine or pool in the Metadata MCP process. The Entity MCP process opens the entity reader pool and the signer pool, and does not open the owner pool. Persistent API opens entity owner and reader pools for the Entity Data API. The worker opens the owner pool for publish, drop, view regeneration, Data Channel SQL, and dataset-table operations against the entity database
 - A superuser runtime connection, or an entity database that is the metadata database
 - Entity Data API read-path SQL that selects from `entity_data` physical tables or stem views instead of a Profile View
-- Duplicating the **Normalized Type** closed set (import the published `metadata` leaf module)
+- Duplicating the **Normalized Type** closed set, or importing `metadata` to obtain it. Attribute Type does not use Normalized Type
 - Mapping, transform, lineage, or channel write admission (**Data Channel**)
 - Importing `worker.app`
 - Importing `channel`; the Entity publish confirmation reads incompatible write nodes through a port bound by composition
 - Owning the dataset registry, the retention clocks, or the capacity ceiling (**Data Channel** owns those)
-- Metadata MCP tools for Business Entity definition or Entity Data API (Entity SQL over MCP is a separate surface with its own host)
+- Metadata MCP tools for Business Entity definition, the Entity Data API, or Entity SQL. The Entity MCP host in `entity/mcp/` is the surface for those tools (`docs/api-contracts-entity-mcp.md`)
 - `entity/present.py` importing `entity/table_name.py` or `entity/inbound.py`
 - Owning User Group or Subject Attribute storage (lives in `admin/subjects/`)
 
@@ -387,7 +389,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `admin` → `core` (+ own modules)
 - `jobs` → `core`; published `admin` (including System Parameter resolver) when needed; process entry `job_child` may import `worker.parameters`
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
-- `entity` → `core`; published `admin` (including `admin.subjects` and the System Parameter resolver) / `jobs`; published `tags.api`
+- `entity` → `core`; published `admin` (including `admin.subjects` and the System Parameter resolver) / `jobs`; published `tags.api`. Process entry `entity.mcp.http` may import `worker.parameters`. `entity` must not import `metadata`
 - `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use, including `entity.heads` and `entity.datasets` (`docs/backend-layout.md` §3); published `tags.api`
 - `tags` → `core`; published `admin`. Must not import `entity` or `channel`
 - `worker` → `core`; published surfaces for assembly, including `entity.tasks` and `channel.tasks`
@@ -413,7 +415,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - Do not house Job observation UI or `/jobs` HTTP in `features/sources` (belongs in `features/jobs`)
 - Do not import `worker.app` from domain or HTTP adapters
 - Do not subclass concrete `admin.errors` types from product domains or platform primitives (use `core.errors.AppError`)
-- Do not import `entity` from `metadata` domain modules. The coupling direction is `entity` → `metadata` (closed vocabularies only). `metadata` importing an entity job runner would close a package-level cycle.
+- Do not import `entity` from `metadata`, and do not import `metadata` from `entity`. `metadata` importing an entity job runner would close a package-level cycle.
 - Do not import `channel` from `metadata` or `entity`. The coupling direction is `channel` → published `metadata` / `entity`; reverse needs go through ports bound by composition.
 - Do not import `tags` from `admin` or `metadata`. `entity` and `channel` may import published `tags.api` only. `tags` imports `core` and published `admin` only, and does not import `entity` or `channel`.
 
@@ -461,4 +463,4 @@ For the login/permission slice, each concern should land here:
 - Catalog Sample HTTP: `frontend/src/features/sources/api/sample.ts`; Console ACL is identity action `sample` (`catalog:sample`)
 - Structure Diff HTTP: `frontend/src/features/sources/api/structure-diffs.ts`
 - Catalog Object Console logic: `frontend/src/features/sources/catalog-detail/` (`sampleFilters`, `columnDrafts`, `joinEdges`, `catalogStatus`)
-- Account Center MCP section: `frontend/src/features/account/McpSection.tsx` (catalog HTTP + copied `{origin}/mcp` config); same-origin `/mcp` stream: `frontend/src/app/mcp/route.ts`
+- Account Center MCP section: `frontend/src/features/account/McpSection.tsx` (one section, two endpoint cards; catalog HTTP `GET /mcp/catalog` and `GET /mcp/entity/catalog`, copied `{origin}/mcp` and `{origin}/mcp/entity` config). Same-origin streams: `frontend/src/app/mcp/route.ts` and `frontend/src/app/mcp/entity/route.ts`

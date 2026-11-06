@@ -15,14 +15,17 @@ Current `backend/.env.example` defines:
 - `REFRAQ_ENV=dev`
 - `REFRAQ_API_HOST=127.0.0.1`
 - `REFRAQ_API_PORT=8000`
-- `REFRAQ_MCP_HOST=127.0.0.1` (MCP process bind; local default localhost)
+- `REFRAQ_MCP_HOST=127.0.0.1` (Metadata MCP process bind; local default localhost)
 - `REFRAQ_MCP_PORT=8001`
+- `REFRAQ_ENTITY_MCP_HOST=127.0.0.1` (Entity MCP process bind; local default localhost)
+- `REFRAQ_ENTITY_MCP_PORT=8002`
 - `REFRAQ_STORE_BACKEND=persistent`
 - `TZ=UTC` (process timezone default; override via standard `TZ` only)
 - `DATABASE_URL=postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq`
 - `ENTITY_DATABASE_URL=postgresql+psycopg://refraq_entity_owner:change-me@127.0.0.1:5432/refraq_entity` (entity owner connection; not a superuser)
-- `ENTITY_READER_DATABASE_URL=postgresql+psycopg://refraq_reader:change-me@127.0.0.1:5432/refraq_entity` (entity reader connection; API only)
-- `ENTITY_ADMIN_DATABASE_URL=postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq_entity` (entity bootstrap only; never read by api, mcp, worker, or beat)
+- `ENTITY_READER_DATABASE_URL=postgresql+psycopg://refraq_reader:change-me@127.0.0.1:5432/refraq_entity` (entity reader connection; persistent API and Entity MCP)
+- `ENTITY_SIGNER_DATABASE_URL=postgresql+psycopg://refraq_signer:change-me@127.0.0.1:5432/refraq_entity` (entity signer connection; Entity MCP and bootstrap; username `refraq_signer`)
+- `ENTITY_ADMIN_DATABASE_URL=postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq_entity` (entity bootstrap only; never read by api, mcp, entity_mcp, worker, or beat)
 - `REDIS_URL=redis://127.0.0.1:6379/0`
 - `ADMIN_SESSION_SECRET=change-me`
 - `INITIAL_ADMIN_ACCOUNT=root`
@@ -37,33 +40,34 @@ Session TTL, occupancy lost-detection, live-peek timeout, and live-peek row cap 
 
 Worker concurrency is neither. It is owned by the deployment and set on the worker command line (§8); `REFRAQ_JOB_WORKER_CONCURRENCY` is retired and reading it is not implemented anywhere. Beat loop / reload intervals and the reaper poll interval are in-code constants or derived from lost-detection (`docs/business-system-parameters.md` §5.2), not environment variables and not System Parameters.
 
-Runtime capacity (ADR 0040 / 0045) is also deployment env, not System Parameters. Each process declares `REFRAQ_PROCESS_ROLE` (`api` / `mcp` / `worker`) at its entry so import-time pool construction sees the role. Do not put this key in a shared `.env` — API, MCP, and worker would then share one value. Unset keys use process-role defaults (`api` / `mcp` / `worker`):
+Runtime capacity (ADR 0040 / 0045) is also deployment env, not System Parameters. Each process declares `REFRAQ_PROCESS_ROLE` (`api` / `mcp` / `worker` / `entity_mcp`) at its entry so import-time pool construction sees the role. Do not put this key in a shared `.env` — API, Metadata MCP, Entity MCP, and worker would then share one value. Unset keys use process-role defaults (`api` / `mcp` / `worker` / `entity_mcp`):
 
-| Variable | api default | mcp default | worker default |
-| --- | --- | --- | --- |
-| `REFRAQ_DB_POOL_SIZE` | 8 | 5 | 5 |
-| `REFRAQ_DB_MAX_OVERFLOW` | 4 | 3 | 5 |
-| `REFRAQ_DB_POOL_TIMEOUT_SEC` | 5 | 5 | 5 |
-| `REFRAQ_DB_POOL_RECYCLE_SEC` | 1800 | 1800 | 1800 |
-| `REFRAQ_DB_STATEMENT_TIMEOUT_MS` | 30000 | 30000 | unset (no statement_timeout) |
-| `REFRAQ_HTTP_MAX_INFLIGHT` | 32 | 16 | n/a |
-| `REFRAQ_THREAD_TOKENS` | 8 | 4 | n/a |
-| `REFRAQ_ADMISSION_SLOTS` | 32 | 16 | n/a |
-| `REFRAQ_ADMISSION_ACTOR_SHARE` | 8 | 8 | n/a |
+| Variable | api default | mcp default | entity_mcp default | worker default |
+| --- | --- | --- | --- | --- |
+| `REFRAQ_DB_POOL_SIZE` | 8 | 5 | 5 | 5 |
+| `REFRAQ_DB_MAX_OVERFLOW` | 4 | 3 | 3 | 5 |
+| `REFRAQ_DB_POOL_TIMEOUT_SEC` | 5 | 5 | 5 | 5 |
+| `REFRAQ_DB_POOL_RECYCLE_SEC` | 1800 | 1800 | 1800 | 1800 |
+| `REFRAQ_DB_STATEMENT_TIMEOUT_MS` | 30000 | 30000 | 30000 | unset (no statement_timeout) |
+| `REFRAQ_HTTP_MAX_INFLIGHT` | 32 | 16 | 16 | n/a |
+| `REFRAQ_THREAD_TOKENS` | 8 | 4 | 4 | n/a |
+| `REFRAQ_ADMISSION_SLOTS` | 32 | 16 | 16 | n/a |
+| `REFRAQ_ADMISSION_ACTOR_SHARE` | 8 | 8 | 8 | n/a |
 
-`REFRAQ_ADMISSION_SLOTS` is the concurrent-people declaration for work that waits on an external system (ADR 0045). `REFRAQ_ADMISSION_ACTOR_SHARE` is one User's concurrent external waits (agent fan-out); it is clamped to the slot count and is 0 when slots is 0. `REFRAQ_ADMISSION_SLOTS=0` on api/mcp is honored: admitted work is refused immediately (`ADMISSION_CAPACITY_EXCEEDED`). Worker admission stays 0 regardless of the env keys. `REFRAQ_PEEK_SLOTS` is retired; leftover names are ignored and reported at startup. Tune slots from `/metrics` (`refraq_admission_slots_occupied`, `refraq_admission_slots_limit`, `refraq_admission_actor_share_limit`, `refraq_capacity_rejects_total`). Intranet `GET /metrics` (Prometheus text) is on the API and MCP processes, compose-internal and never published. The Console proxy returns 404 for `/api/metrics` so the `/api/:path*` rewrite cannot expose it. `/api/readyz` stays as today. `/healthz`, `/readyz`, and `/metrics` on the process bypass load-shed.
+`REFRAQ_ADMISSION_SLOTS` is the concurrent-people declaration for work that waits on an external system (ADR 0045). `REFRAQ_ADMISSION_ACTOR_SHARE` is one User's concurrent external waits (agent fan-out); it is clamped to the slot count and is 0 when slots is 0. `REFRAQ_ADMISSION_SLOTS=0` on api, mcp, and entity_mcp is honored: admitted work is refused immediately (`ADMISSION_CAPACITY_EXCEEDED`). Worker admission stays 0 regardless of the env keys. `REFRAQ_PEEK_SLOTS` is retired; leftover names are ignored and reported at startup. Tune slots from `/metrics` (`refraq_admission_slots_occupied`, `refraq_admission_slots_limit`, `refraq_admission_actor_share_limit`, `refraq_capacity_rejects_total`). Intranet `GET /metrics` (Prometheus text) is on the API, Metadata MCP, and Entity MCP processes, compose-internal and never published. The Console proxy returns 404 for `/api/metrics` so the `/api/:path*` rewrite cannot expose it. `/api/readyz` stays as today. `/healthz`, `/readyz`, and `/metrics` on the process bypass load-shed.
 
-The entity database is a separate database that the worker and persistent API open. It may share a server with the metadata database, but it must not be the same database: startup of api and worker refuses a configuration where `ENTITY_DATABASE_URL` and `DATABASE_URL` resolve to the same server and database name. Runtime entity connections must not be superusers; api and worker check `rolsuper` on each entity pool at startup and refuse to start otherwise. They also refuse to start when schema `entity_data`, `entity_access`, `acl`, or `channel_dataset` is absent. Startup does not create those schemas. The roles and their rights are `docs/business-entity-access.md` §15:
+The entity database is a separate database that the worker, persistent API, and Entity MCP process open. It may share a server with the metadata database, but it must not be the same database: startup of api and worker refuses a configuration where `ENTITY_DATABASE_URL` and `DATABASE_URL` resolve to the same server and database name. Entity MCP refuses that equality on the reader URL. Runtime entity connections must not be superusers; api and worker check `rolsuper` on each entity pool at startup and refuse to start otherwise. They also refuse to start when schema `entity_data`, `entity_access`, `acl`, or `channel_dataset` is absent. Startup does not create those schemas. Entity MCP checks the reader login and the signer login for superuser and `BYPASSRLS`, and does not open the owner pool, so it does not run that schema check. The roles and their rights are `docs/business-entity-access.md` §15:
 
 | Connection | Role | Used by | Purpose |
 | --- | --- | --- | --- |
-| `ENTITY_DATABASE_URL` | `refraq_entity_owner` (LOGIN, not superuser) | api, worker | Publish and drop DDL, Profile View regeneration, Entity Data API writes, and Data Channel SQL when the node selects the entity database |
-| `ENTITY_READER_DATABASE_URL` | `refraq_reader` (LOGIN, `NOSUPERUSER NOBYPASSRLS NOINHERIT`, read-only by default) | api | Entity Data API reads through Profile Views |
+| `ENTITY_DATABASE_URL` | `refraq_entity_owner` (LOGIN, not superuser) | api, worker | Publish and drop DDL, Profile View regeneration, Entity Data API writes, Data Channel SQL when the node selects the entity database, and access-context signing for API and worker |
+| `ENTITY_READER_DATABASE_URL` | `refraq_reader` (LOGIN, `NOSUPERUSER NOBYPASSRLS NOINHERIT`, read-only by default) | api, entity_mcp | Entity Data API reads and Entity MCP reads, including Entity SQL, through Profile Views |
+| `ENTITY_SIGNER_DATABASE_URL` | `refraq_signer` (LOGIN, `NOSUPERUSER NOBYPASSRLS NOINHERIT`) | entity_mcp | Execute `acl.ensure_signing_key()` only. The function may insert a key. Direct reads of `acl.signing_keys` are denied. User SQL does not run as this role. Bootstrap reads the password from this URL; the username is `refraq_signer` |
 | `ENTITY_ADMIN_DATABASE_URL` | an administrative role able to create roles and extensions | `python -m backend.entity.bootstrap` only | Create roles, schemas `entity_data` / `entity_access` / `acl` / `channel_dataset`, `pgcrypto`, `acl` functions and key table; move existing tables into `entity_data`; enable and force row-level security |
 
-The bootstrap is idempotent. It does not create `refraq_channel_reader`. When that role is present, the bootstrap revokes the privileges it holds in the entity database and drops the role. Runtime processes never read `ENTITY_ADMIN_DATABASE_URL`; do not put it in the api, mcp, worker, or beat environment. Role passwords are site secrets in the live `.env`.
+The bootstrap is idempotent. It does not create `refraq_channel_reader`. When that role is present, the bootstrap revokes the privileges it holds in the entity database and drops the role. Runtime processes never read `ENTITY_ADMIN_DATABASE_URL`; do not put it in the api, mcp, entity_mcp, worker, or beat environment. Role passwords are site secrets in the live `.env`. Bootstrap takes the signer password from `ENTITY_SIGNER_DATABASE_URL`. Compose interpolates `ENTITY_SIGNER_PASSWORD` into that URL for role `refraq_signer`. A site env without that password cannot bootstrap the signer role.
 
-The product always treats each entity connection as a separate engine, a separate pool, and a separate budget line. The Metadata MCP process and Beat hold no entity-database connection. Persistent API uses the owner and reader pools for the **Entity Data API** and applies `REFRAQ_DB_STATEMENT_TIMEOUT_MS` plus `lock_timeout` on those connections (`docs/api-contracts-entity-data.md`); the reader role also carries role-level timeouts set by the bootstrap. The worker opens the owner URL for publish, drop, and view regeneration Jobs; by existing convention the worker sets no statement timeout on entity connections used for long DDL. Entity schemas are fixed (`entity_data`, `entity_access`, `acl`, `channel_dataset`). A persistent api or worker whose entity database is missing any of them refuses to start and names `python -m backend.entity.bootstrap`. `REFRAQ_ENTITY_DB_SCHEMA` is retired; a leftover name is ignored and reported at startup.
+The product always treats each entity connection as a separate engine, a separate pool, and a separate budget line. The Metadata MCP process and Beat hold no entity-database connection. Persistent API uses the owner and reader pools for the **Entity Data API** and applies `REFRAQ_DB_STATEMENT_TIMEOUT_MS` plus `lock_timeout` on those connections (`docs/api-contracts-entity-data.md`); the reader role also carries role-level timeouts set by the bootstrap. The worker opens the owner URL for publish, drop, and view regeneration Jobs; by existing convention the worker sets no statement timeout on entity connections used for long DDL. The Entity MCP process opens the reader pool and a signer pool of size 1 and overflow 0. The signer pool is outside `entity_pool_count` and outside the `REFRAQ_ENTITY_DB_*` line for that process. API and worker sign with the owner pool. Entity schemas are fixed (`entity_data`, `entity_access`, `acl`, `channel_dataset`). A persistent api or worker whose entity database is missing any of them refuses to start and names `python -m backend.entity.bootstrap`. `REFRAQ_ENTITY_DB_SCHEMA` is retired; a leftover name is ignored and reported at startup.
 
 Local `compose.yaml` and `deploy/compose.yaml` default the entity connections to database `refraq_entity` on the same Postgres instance as `DATABASE_URL`. `POSTGRES_DB` only creates `refraq`; a one-shot `ensure-entity-db` service creates `refraq_entity` when missing, including on an already-initialized volume. Site compose runs `python -m backend.entity.bootstrap` in that service before api and worker start. Local compose only creates the database; run the bootstrap from the backend environment before a persistent API or worker. `/readyz` does not probe the entity database.
 
@@ -71,17 +75,18 @@ An entity database that already holds physical tables or stem views in `public` 
 
 Rollback of the entity database, before any Profile View depends on the new layout: stop api and worker; as the admin role, for each table and stem view in `entity_data`, `ALTER ... SET SCHEMA public`, `DROP POLICY`, `DISABLE ROW LEVEL SECURITY`, and `ALTER ... OWNER TO` the previous owner; point `ENTITY_DATABASE_URL` back at that owner. Dropping `refraq_entity_owner`, `refraq_exposure_owner`, `refraq_acl_owner`, or `refraq_reader` requires `REASSIGN OWNED` / `DROP OWNED` in the entity database after the relations have a new owner. Restore the dump instead when the bootstrap moved data and a later step failed. Downgrade `0050_entity_attribute_ids` strips `attribute_id` from stored attribute documents; do that only together with a code rollback that does not read the field.
 
-| Variable | api default | mcp default | worker default |
-| --- | --- | --- | --- |
-| `ENTITY_DATABASE_URL` | required (fail-fast when persistent); must not name the metadata database | n/a (no entity pool) | required; must not name the metadata database |
-| `ENTITY_READER_DATABASE_URL` | required (fail-fast when persistent); same database as `ENTITY_DATABASE_URL` | n/a | n/a |
-| `ENTITY_ADMIN_DATABASE_URL` | n/a | n/a | n/a (bootstrap only) |
-| `REFRAQ_ENTITY_DB_POOL_SIZE` | 4 | n/a | 5 |
-| `REFRAQ_ENTITY_DB_MAX_OVERFLOW` | 0 | n/a | 5 |
-| `REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC` | 5 | n/a | 5 |
-| `REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC` | 1800 | n/a | 1800 |
+| Variable | api default | mcp default | entity_mcp default | worker default |
+| --- | --- | --- | --- | --- |
+| `ENTITY_DATABASE_URL` | required (fail-fast when persistent); must not name the metadata database | n/a (no entity pool) | not opened; when set, the reader database must be that same database | required; must not name the metadata database |
+| `ENTITY_READER_DATABASE_URL` | required (fail-fast when persistent); same database as `ENTITY_DATABASE_URL` | n/a | required (fail-fast when persistent); must not name the metadata database; same database as `ENTITY_DATABASE_URL` when that variable is set; login must not be superuser or `BYPASSRLS` | n/a |
+| `ENTITY_SIGNER_DATABASE_URL` | n/a | n/a | required (fail-fast when persistent); same database as `ENTITY_READER_DATABASE_URL`; login must not be superuser or `BYPASSRLS` | n/a |
+| `ENTITY_ADMIN_DATABASE_URL` | n/a | n/a | n/a | n/a (bootstrap only) |
+| `REFRAQ_ENTITY_DB_POOL_SIZE` | 4 | n/a | 4 (reader pool; signer pool is fixed at 1) | 5 |
+| `REFRAQ_ENTITY_DB_MAX_OVERFLOW` | 0 | n/a | 0 (signer overflow is 0) | 5 |
+| `REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC` | 5 | n/a | 5 | 5 |
+| `REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC` | 1800 | n/a | 1800 | 1800 |
 
-The `REFRAQ_ENTITY_DB_*` sizing applies to each entity pool a process opens.
+The `REFRAQ_ENTITY_DB_*` sizing applies to each entity pool counted in the budget below. The Entity MCP signer pool is size 1 and overflow 0 and does not use those variables.
 
 Pool-budget line items (each line is `pool_size + max_overflow`):
 
@@ -89,10 +94,11 @@ Pool-budget line items (each line is `pool_size + max_overflow`):
 | --- | --- | --- |
 | api | metadata (`REFRAQ_DB_*`), entity owner and entity reader (`REFRAQ_ENTITY_DB_*` each) | the sum of the three pools |
 | mcp | metadata (`REFRAQ_DB_*`) | that pool |
+| entity_mcp | metadata (`REFRAQ_DB_*`) and entity reader (`REFRAQ_ENTITY_DB_*`) | the sum of both pools; the signer pool (size 1, overflow 0) is one connection beside that sum |
 | worker | metadata (`REFRAQ_DB_*`) and entity owner (`REFRAQ_ENTITY_DB_*`) | the sum of both pools |
 | beat | metadata (`REFRAQ_DB_*`) | that pool |
 
-Processes that open several pools (api and worker) print each pool separately; the "this process budget" number is their sum. Deploy constraint: the sum of every process-role budget across API + MCP + worker + Beat should stay at or below `0.8 ×` Postgres `max_connections`. That inequality is a printed deployment constraint, not a startup assertion — no process reads Postgres `max_connections`, and no process can see the other roles' pools. Admission slots are not part of that sum.
+Processes that open several pools (api, entity_mcp, and worker) print each counted pool separately; the "this process budget" number is their sum and does not include the signer connection. Deploy constraint: the sum of every process-role budget across API + Metadata MCP + Entity MCP + worker + Beat, plus the Entity MCP signer connection, should stay at or below `0.8 ×` Postgres `max_connections`. That inequality is a printed deployment constraint, not a startup assertion — no process reads Postgres `max_connections`, and no process can see the other roles' pools. Admission slots are not part of that sum.
 
 Database supply is the other half of ADR 0040. Local `compose.yaml` and `deploy/compose.yaml` set `shm_size: 2gb` and start Postgres with `shared_buffers=1GB`, `effective_cache_size=3GB`, `work_mem=16MB`. These are Compose command flags, not `REFRAQ_*` process env and not System Parameters. Do not leave `shared_buffers` at the 128MB factory default: Catalog embeddings are toast-heavy and neighbor SQL is an exact scan. `effective_cache_size` is a planner hint (it does not allocate). Container `shm_size` must exceed `shared_buffers` or PostgreSQL will not start.
 
@@ -114,6 +120,7 @@ Current `frontend/.env.example` defines:
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL=/api`
 - `REFRAQ_API_UPSTREAM=http://127.0.0.1:8000`
 - `REFRAQ_MCP_UPSTREAM=http://127.0.0.1:8001` (web Route Handler streams `/mcp` here; never expose `readyz`)
+- `REFRAQ_ENTITY_MCP_UPSTREAM=http://127.0.0.1:8002` (web Route Handler streams `/mcp/entity` here; timeout 305s; never expose `readyz`)
 - `NEXT_PUBLIC_DEFAULT_LOCALE=en-US`
 
 `REFRAQ_API_UPSTREAM` has matching build-time and runtime duties. Next.js reads it at build time to compile browser `/api` rewrites. Server-only frontend code reads it at runtime for direct SSR calls such as public Site Branding. Local `next dev` uses the env file. Published web images bake `http://api:8000` as a Docker build argument; the site compose also sets the same runtime value.
@@ -131,6 +138,7 @@ Current Release / `deploy/.env.example` defines:
 - `POSTGRES_PASSWORD` (required; platform Postgres, internal Docker network only)
 - `ENTITY_OWNER_PASSWORD` (required; password for `refraq_entity_owner`; URL-safe characters only)
 - `ENTITY_READER_PASSWORD` (required; password for `refraq_reader`; URL-safe characters only)
+- `ENTITY_SIGNER_PASSWORD` (required; password for `refraq_signer`; URL-safe characters only; Compose interpolates it into `ENTITY_SIGNER_DATABASE_URL`. Bootstrap reads the password from that URL, not from this name)
 - `REFRAQ_WEB_PORT=3001` (host port for the Management Console)
 - `REFRAQ_BROWSER_FACING_PROTO` (optional on web; default `http`; set `https` when TLS terminates in front of the Console)
 - `REFRAQ_BROWSER_FACING_HOST` (optional on web and API; host or `host:port` the browser uses for the Console, without scheme. Required for non-loopback Console URLs so OIDC `redirect_uri` is not taken from request `Host`)
@@ -141,20 +149,23 @@ Image tags live in the stamped Release compose, not in `.env`. A leftover `REFRA
 
 - backend host: `127.0.0.1`
 - backend port: `8000`
-- MCP process: `127.0.0.1:8001` (`python -m backend.metadata.mcp_http`)
+- Metadata MCP process: `127.0.0.1:8001` (`python -m backend.metadata.mcp_http`)
+- Entity MCP process: `127.0.0.1:8002` (`python -m backend.entity.mcp.http`)
 - browser API base URL: `/api` (same-origin)
-- browser MCP URL: `{origin}/mcp` (same-origin; Account Center copies this)
+- browser Metadata MCP URL: `{origin}/mcp` (same-origin; Account Center copies this)
+- browser Entity MCP URL: `{origin}/mcp/entity` (same-origin; Account Center copies this on the second card of the same section)
 - browser OpenAPI UI: `{origin}/docs` (Swagger UI; Next.js rewrite to the API)
 - browser OpenAPI spec: `{origin}/openapi.json` (same-origin rewrite; Swagger loads this path)
 - Next.js rewrite upstream: `http://127.0.0.1:8000` (dev)
 - Next.js `/mcp` stream upstream: `http://127.0.0.1:8001` (`REFRAQ_MCP_UPSTREAM`)
+- Next.js `/mcp/entity` stream upstream: `http://127.0.0.1:8002` (`REFRAQ_ENTITY_MCP_UPSTREAM`); proxy timeout 305s
 - Next.js server-rendering API upstream: `http://127.0.0.1:8000` (dev)
 
 The browser talks to the backend through a Next.js rewrite so the session cookie is set on the frontend origin and `proxy.ts` can see `refraq_sid`. Server-only rendering code calls the same upstream directly through `REFRAQ_API_UPSTREAM`; it does not make a loopback request to the Next.js server. URLs emitted into HTML remain browser-facing same-origin paths and never expose this internal upstream. ReDoc is disabled. `/api/docs` may still reach Swagger via the generic `/api/:path*` rewrite; operators should use `/docs` and `/openapi.json` on the web origin.
 
 Swagger Try it out uses OpenAPI `servers: [{"url": "/api"}]` so browser calls go to `{origin}/api/...` (rewrite strips `/api` before the API process). Protected operations document HTTP Bearer for a User PAT via Authorize (`Authorization: Bearer`). Session cookie auth is unchanged: after Console login on the same origin, Try it out also sends `refraq_sid` on same-origin `/api` requests. Do not paste the HttpOnly session cookie into Authorize.
 
-Site compose exposes only the web service to browsers; the API stays on the internal network and must be named `api`. The MCP process is the same api image with `python -m backend.metadata.mcp_http`; compose names it `mcp` and does **not** publish its port. Web streams `{origin}/mcp` to `REFRAQ_MCP_UPSTREAM` (`http://mcp:8001` on site). Process `readyz` is compose-internal only. The copied Account Center URL is the Console origin plus `/mcp`; there is no second public MCP hostname. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
+Site compose exposes only the web service to browsers; the API stays on the internal network and must be named `api`. The Metadata MCP process is the same api image with `python -m backend.metadata.mcp_http`; compose names it `mcp` and does **not** publish its port. The Entity MCP process is the same image with `python -m backend.entity.mcp.http`; compose names it `entity-mcp` and does **not** publish its port. Web streams `{origin}/mcp` to `REFRAQ_MCP_UPSTREAM` (`http://mcp:8001` on site) and `{origin}/mcp/entity` to `REFRAQ_ENTITY_MCP_UPSTREAM` (`http://entity-mcp:8002` on site, timeout 305s). Process `readyz` is compose-internal only. Account Center copies the Console origin plus `/mcp` and the Console origin plus `/mcp/entity` from one section with two cards. There is no second public hostname. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
 
 Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for `/api` overwrites `X-Forwarded-Proto` from `REFRAQ_BROWSER_FACING_PROTO` (default `http`) and `X-Forwarded-Host` from `REFRAQ_BROWSER_FACING_HOST` when set, otherwise from a loopback request Host; it does not pass through client-supplied public Hosts. The API then reads those stamped headers (then a loopback request Host). `REFRAQ_ENV=prod` does not force `Secure`. HTTP sites must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` on web when TLS terminates in front of the Console. Set `REFRAQ_BROWSER_FACING_HOST` on web and API to the browser-facing Console host when it is not loopback.
 
@@ -165,13 +176,16 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_ENV`
 - `REFRAQ_API_HOST`
 - `REFRAQ_API_PORT`
-- `REFRAQ_MCP_HOST` (MCP process bind; local default `127.0.0.1`)
-- `REFRAQ_MCP_PORT` (MCP process port; default `8001`)
+- `REFRAQ_MCP_HOST` (Metadata MCP process bind; local default `127.0.0.1`)
+- `REFRAQ_MCP_PORT` (Metadata MCP process port; default `8001`)
+- `REFRAQ_ENTITY_MCP_HOST` (Entity MCP process bind; local default `127.0.0.1`)
+- `REFRAQ_ENTITY_MCP_PORT` (Entity MCP process port; default `8002`)
 - `REFRAQ_STORE_BACKEND` (`persistent` default; `memory` tests only)
 - `TZ` (process timezone; default UTC in examples/images; not `APP_TIMEZONE`)
 - `DATABASE_URL` (required when `persistent`)
-- `ENTITY_DATABASE_URL` (entity-database owner connection; unprefixed because it is a connection setting. Required on persistent API and on the worker; must name a database other than the metadata database and a role that is not a superuser. A persistent API or worker without it must fail fast. MCP and Beat do not open an entity pool)
-- `ENTITY_READER_DATABASE_URL` (entity-database reader connection as `refraq_reader`; required on persistent API; fail-fast when missing or when the role is a superuser)
+- `ENTITY_DATABASE_URL` (entity-database owner connection; unprefixed because it is a connection setting. Required on persistent API and on the worker; must name a database other than the metadata database and a role that is not a superuser. A persistent API or worker without it must fail fast. Metadata MCP, Entity MCP, and Beat do not open the owner pool. Entity MCP compares it, when set, to the reader database)
+- `ENTITY_READER_DATABASE_URL` (entity-database reader connection as `refraq_reader`; required on persistent API and on Entity MCP; fail-fast when missing, when the database is the metadata database, or when the role is a superuser or `BYPASSRLS`)
+- `ENTITY_SIGNER_DATABASE_URL` (entity-database signer connection as `refraq_signer`; required on Entity MCP; same database as the reader; fail-fast when missing or when the role is a superuser or `BYPASSRLS`. Bootstrap reads the signer password from this URL. The signer may execute only `acl.ensure_signing_key()`)
 - `ENTITY_ADMIN_DATABASE_URL` (administrative connection used only by `python -m backend.entity.bootstrap`; never set on runtime processes)
 - `REDIS_URL` (required when `persistent`)
 - `ADMIN_SESSION_SECRET` (reserved for future signed-cookie usage; v1 sessions are server-managed)
@@ -185,9 +199,9 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
 - `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
 - `REFRAQ_INTEGRATION_CELERY_BROKER_URL` (integration only; default `redis://127.0.0.1:6379/3`)
-- `REFRAQ_PROCESS_ROLE` (`api` / `mcp` / `worker`; declared per process at the entry, not in a shared `.env`)
+- `REFRAQ_PROCESS_ROLE` (`api` / `mcp` / `worker` / `entity_mcp`; declared per process at the entry, not in a shared `.env`)
 - `REFRAQ_DB_POOL_SIZE`, `REFRAQ_DB_MAX_OVERFLOW`, `REFRAQ_DB_POOL_TIMEOUT_SEC`, `REFRAQ_DB_POOL_RECYCLE_SEC`, `REFRAQ_DB_STATEMENT_TIMEOUT_MS` (SQLAlchemy platform pool; role defaults in §2)
-- `REFRAQ_ENTITY_DB_POOL_SIZE`, `REFRAQ_ENTITY_DB_MAX_OVERFLOW`, `REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC`, `REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC` (entity pool; api and worker; role defaults in §2)
+- `REFRAQ_ENTITY_DB_POOL_SIZE`, `REFRAQ_ENTITY_DB_MAX_OVERFLOW`, `REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC`, `REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC` (entity pool; api, worker, and the Entity MCP reader pool; role defaults in §2. The signer pool does not use these)
 - `REFRAQ_ENTITY_DB_SCHEMA` (retired; entity schemas are fixed; ignored and reported at startup)
 - `REFRAQ_HTTP_MAX_INFLIGHT`, `REFRAQ_THREAD_TOKENS`, `REFRAQ_ADMISSION_SLOTS`, `REFRAQ_ADMISSION_ACTOR_SHARE` (API/MCP runtime capacity; ADR 0040 / 0045)
 - Postgres `shared_buffers` / `effective_cache_size` / `work_mem` / container `shm_size` (database supply; ADR 0040; set on the Compose `postgres` service, not as process env)
@@ -196,7 +210,8 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL` (browser-facing base; default `/api`)
 - `REFRAQ_API_UPSTREAM` (internal backend origin; build-time rewrite target and runtime server-rendering target; never exposed to browser code)
-- `REFRAQ_MCP_UPSTREAM` (internal MCP origin; runtime stream target for `/mcp` only; never `readyz`)
+- `REFRAQ_MCP_UPSTREAM` (internal Metadata MCP origin; runtime stream target for `/mcp` only; never `readyz`)
+- `REFRAQ_ENTITY_MCP_UPSTREAM` (internal Entity MCP origin; runtime stream target for `/mcp/entity` only; default `http://127.0.0.1:8002`; timeout 305s; never `readyz`)
 - `NEXT_PUBLIC_DEFAULT_LOCALE`
 - `REFRAQ_BROWSER_FACING_PROTO` (`http` | `https`; default `http`) — stamped onto `/api` rewrite as `X-Forwarded-Proto` for Session `Secure`; set `https` when TLS terminates in front of the Console
 - `REFRAQ_BROWSER_FACING_HOST` (optional; host or `host:port`, no scheme) — stamped onto `/api` rewrite as `X-Forwarded-Host` for OIDC callback origin; when unset, only a loopback request Host is stamped
@@ -209,6 +224,8 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_BROWSER_FACING_HOST` (optional; forwarded to web and API; browser-facing Console host or `host:port`)
 - `REFRAQ_API_UPSTREAM` (web build argument and web runtime environment; both use the internal API origin `http://api:8000` on a site)
 - `REFRAQ_MCP_UPSTREAM` (web runtime; site value `http://mcp:8001`; not a public origin)
+- `REFRAQ_ENTITY_MCP_UPSTREAM` (web runtime; site value `http://entity-mcp:8002`; not a public origin)
+- `ENTITY_SIGNER_PASSWORD` (Compose interpolation for `refraq_signer`; not read by the process. The process and bootstrap read `ENTITY_SIGNER_DATABASE_URL`)
 
 ## 5. Process timezone (`TZ`)
 
@@ -226,7 +243,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - Do not change API port in code and forget to update frontend env
 - The initial admin password is meant for first-time local development only; rotate it before any non-local site. Site compose reads a live `.env` outside the git tree; do not leave example secrets in a live stack.
 - Missing `DATABASE_URL` / `REDIS_URL` with `persistent` must fail fast; never silently fall back to memory
-- Missing `ENTITY_DATABASE_URL` on a persistent API or persistent worker, or missing `ENTITY_READER_DATABASE_URL` on a persistent API, must fail fast; never silently fall back to an in-process recording table port. An entity URL that names the metadata database, or a superuser role, must fail fast. A persistent API or worker must also fail fast when `entity_data`, `entity_access`, `acl`, or `channel_dataset` is absent on the entity database. MCP and Beat do not open an entity pool and do not require the variables at process start. `/readyz` does not probe the entity database.
+- Missing `ENTITY_DATABASE_URL` on a persistent API or persistent worker, or missing `ENTITY_READER_DATABASE_URL` on a persistent API or on Entity MCP, must fail fast; never silently fall back to an in-process recording table port. An entity URL that names the metadata database, or a superuser role, must fail fast. A persistent API or worker must also fail fast when `entity_data`, `entity_access`, `acl`, or `channel_dataset` is absent on the entity database. Entity MCP must also fail fast when `ENTITY_SIGNER_DATABASE_URL` is missing, names a different database from the reader, or logs in as a superuser or `BYPASSRLS` role. Metadata MCP and Beat do not open an entity pool and do not require the variables at process start. `/readyz` does not probe the entity database.
 - Settings dotenv load order: repo-root `.env` then `backend/.env` (later wins). Prefer `backend/.env` as the local canonical file
 - Integration tests must not reuse interactive `DATABASE_URL` / `REDIS_URL`; they use `REFRAQ_INTEGRATION_*` defaults so Compose live data stays intact
 
@@ -241,7 +258,7 @@ Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 - API process: create durable Job rows and enqueue via Celery after commit (`docs/api-contracts-jobs.md`)
 - Worker: `celery -A backend.worker.app worker` — concurrency is a deployment concern, not a **System Parameter** (`docs/business-system-parameters.md` §5.2). No flag is passed, so Celery's own default (one process per CPU) applies; a deployment that needs to pin capacity passes `--concurrency` on this command line, and sizes it together with the replica count. The local `.vscode` launch configuration pins `--pool=solo --concurrency=1` because a debugger needs a single process; it overrides no stored value
 - Beat (single replica): `celery -A backend.worker.app beat` — reads **Scheduled Task** rows from Postgres; do not run multiple Beat replicas. Loop `max_interval` and schedule reload `sync_every` are in-code constants (`BEAT_MAX_INTERVAL_SEC = 5`, `BEAT_SYNC_EVERY_SEC = 30`; `docs/business-system-parameters.md` §5.2). An overdue in-memory commitment is dispatched **once** until the next reload (or `BEAT_SYNC_EVERY_SEC` retry if the store row is still overdue); Beat does not tight-loop send while the worker consumes the tick. Occupancy lost-detection (`job_lost_detection_sec`, seed 60 → `JOB_WORKER_LOST`) is driven by the system reaper Scheduled Task on this Beat. Beat sync copies that same lost-detection value onto the reaper row's `interval_seconds` and does not recompute `next_run_at`, so tightening may wait for the current tick. If Beat is stopped, that reaping stops — starting only the API does not recover false `RUNNING` Jobs.
-- Worker and Beat share `DATABASE_URL`, `CELERY_BROKER_URL`, and (when decrypting secrets) `REFRAQ_SECRETS_MASTER_KEY`. The worker also opens `ENTITY_DATABASE_URL` as a separate engine and pool. A persistent worker that cannot open that URL is not a healthy executor: startup fails, and `entity_reconcile` / `entity_table_drop` / `entity_access_views` cannot succeed by falling back to an in-process recording port. Persistent API opens the same owner URL plus `ENTITY_READER_DATABASE_URL` for the **Entity Data API**. Beat and MCP do not open an entity pool.
+- Worker and Beat share `DATABASE_URL`, `CELERY_BROKER_URL`, and (when decrypting secrets) `REFRAQ_SECRETS_MASTER_KEY`. The worker also opens `ENTITY_DATABASE_URL` as a separate engine and pool. A persistent worker that cannot open that URL is not a healthy executor: startup fails, and `entity_reconcile` / `entity_table_drop` / `entity_access_views` cannot succeed by falling back to an in-process recording port. Persistent API opens the same owner URL plus `ENTITY_READER_DATABASE_URL` for the **Entity Data API**. Beat and the Metadata MCP process do not open an entity pool. The Entity MCP process opens `ENTITY_READER_DATABASE_URL` and `ENTITY_SIGNER_DATABASE_URL`, and does not open the owner URL. API and worker still sign with the owner pool.
 - After Foundation Upgrade, restart worker and Beat. Code on disk does not change a live process's registered names; a leftover worker after a `task_name` revision yields Beat `NotRegistered` and structure clocks that never mint. Confirm with `celery -A backend.worker.app inspect registered` that registered names match Scheduled Task rows.
 - No Celery result backend; operator-visible status and run logs live on Postgres Job rows (`log_body`; later large attachments if needed)
 - Do not run long collection inside the interactive API request path (`docs/adr/0004-redis-queue-for-ingestion.md`)
