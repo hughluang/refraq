@@ -167,4 +167,5 @@ def list_dictionary_codes(
         return _err(exc)
 
 
+import backend.entity.mcp.rows as _entity_row_tools  # noqa: E402,F401
 import backend.entity.mcp.sql_tools as _entity_sql_tools  # noqa: E402,F401

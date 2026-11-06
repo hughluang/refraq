@@ -119,9 +119,11 @@ def test_catalog_names_match_registered_tools() -> None:
         "list_entities",
         "describe_entity",
         "list_dictionary_codes",
+        "get_row",
+        "query_rows",
         "validate_sql",
     ]
-    assert [spec.permission for spec in MCP_TOOLS] == ["entity:data_read"] * 4
+    assert [spec.permission for spec in MCP_TOOLS] == ["entity:data_read"] * 6
     for tool in registered:
         assert tool.annotations is not None
         assert tool.annotations.read_only_hint is True
@@ -196,6 +198,8 @@ def test_tools_list_requires_entity_data_read(client: TestClient) -> None:
             "list_entities",
             "describe_entity",
             "list_dictionary_codes",
+            "get_row",
+            "query_rows",
             "validate_sql",
         ]
         assert payload.get("ttlMs") == TOOLS_LIST_TTL_MS

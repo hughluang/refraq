@@ -24,6 +24,7 @@ from backend.core.load_shed import LoadSheddingMiddleware
 from backend.core.metrics import metrics_response
 from backend.core.request_id import RequestIdMiddleware
 from backend.core.runtime import get_runtime_capacity, set_process_role
+from backend.entity.access.actor_token import actor_token
 from backend.entity.entity_db import open_entity_reader_pool_when_persistent
 from backend.entity.mcp.actor import (
     actor_from_authorization_header,
@@ -77,7 +78,8 @@ class PatOnlyGate:
 
         token = set_mcp_actor(user, token_id)
         try:
-            await self.app(scope, receive, send)
+            with actor_token(token_id):
+                await self.app(scope, receive, send)
         finally:
             reset_mcp_actor(token)
 

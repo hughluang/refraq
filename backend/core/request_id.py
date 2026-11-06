@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 from uuid import uuid4
@@ -34,6 +36,16 @@ def is_valid_request_id(value: str) -> bool:
 
 def get_request_id() -> str | None:
     return correlation_id.get()
+
+
+@contextmanager
+def bind_request_id(request_id: str | None) -> Iterator[None]:
+    """Bind ``request_id`` on this context, then restore the previous value."""
+    token = correlation_id.set(request_id)
+    try:
+        yield
+    finally:
+        correlation_id.reset(token)
 
 
 class RequestIdLogFilter(logging.Filter):

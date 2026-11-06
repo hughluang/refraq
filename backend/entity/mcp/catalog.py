@@ -35,6 +35,16 @@ MCP_TOOLS: tuple[McpToolSpec, ...] = (
         TOOL_DESCRIPTIONS["list_dictionary_codes"],
     ),
     McpToolSpec(
+        "get_row",
+        "entity:data_read",
+        TOOL_DESCRIPTIONS["get_row"],
+    ),
+    McpToolSpec(
+        "query_rows",
+        "entity:data_read",
+        TOOL_DESCRIPTIONS["query_rows"],
+    ),
+    McpToolSpec(
         "validate_sql",
         "entity:data_read",
         TOOL_DESCRIPTIONS["validate_sql"],
