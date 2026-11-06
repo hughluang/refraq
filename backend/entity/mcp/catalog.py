@@ -49,6 +49,11 @@ MCP_TOOLS: tuple[McpToolSpec, ...] = (
         "entity:data_read",
         TOOL_DESCRIPTIONS["validate_sql"],
     ),
+    McpToolSpec(
+        "run_sql",
+        "entity:data_read",
+        TOOL_DESCRIPTIONS["run_sql"],
+    ),
 )
 
 

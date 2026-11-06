@@ -77,4 +77,13 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "An unknown table_name and a table_name without an effective read grant "
         "fail with the same error. Requires entity:data_read. Next: run_sql."
     ),
+    "run_sql": (
+        "Execute one read-only SQL statement that names Business Entities by "
+        "table_name. max_rows is optional, clamped to between 1 and the site "
+        "cap, and echoed. Returns columns with name and PostgreSQL type, rows, "
+        "row_count, truncated, max_rows, the submitted sql, entities, and "
+        "partial_columns. An unknown table_name and a table_name without an "
+        "effective read grant fail with the same error. A timeout is "
+        "ENTITY_SQL_TIMEOUT. Does not accept narrow. Requires entity:data_read."
+    ),
 }

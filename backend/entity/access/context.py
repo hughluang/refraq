@@ -14,7 +14,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from sqlalchemy import text
 
@@ -30,6 +30,7 @@ __all__ = [
     "effective_grants",
     "load_shared_ring",
     "issue_context",
+    "issue_contexts",
     "sign_payload",
 ]
 
@@ -130,6 +131,53 @@ def issue_context(
         "grants": grants,
         "attrs": context_attrs(policy, person),
         "rev": {policy.entity_id: int(policy.revision)},
+        "exp": int(moment.timestamp()) + int(ttl_sec),
+        "req": request_id,
+        "kid": key.kid,
+    }
+    return sign_payload(payload, key.secret)
+
+
+def issue_contexts(
+    policies: Sequence[tuple[Policy, CompiledPolicy]],
+    person: Person,
+    ring: KeyRing,
+    *,
+    action: str,
+    request_id: str = "",
+    now: datetime | None = None,
+    ttl_sec: int = CONTEXT_TTL_SEC,
+) -> str:
+    """Sign one payload whose grants, attributes, and revisions cover every policy.
+
+    Policies are ordered by ``entity_id``. Grants follow that order, then each
+    policy's own grant order, without duplicates. Attribute keys are the union
+    of each policy's context keys for ``person``. ``rev`` maps every entity id
+    to its revision. One subject, request, key, and expiry are shared. The
+    one-policy payload from :func:`issue_context` is unchanged.
+    """
+
+    moment = now or datetime.now(timezone.utc)
+    key = ring.current()
+    ordered = tuple(sorted(policies, key=lambda item: item[0].entity_id))
+    grants: list[str] = []
+    seen: set[str] = set()
+    for policy, compiled in ordered:
+        for grant in effective_grants(
+            policy, compiled, person, action=action, narrow=None
+        ):
+            if grant.id in seen:
+                continue
+            seen.add(grant.id)
+            grants.append(grant.id)
+    merged: dict[str, Any] = {}
+    for policy, _compiled in ordered:
+        merged.update(context_attrs(policy, person))
+    payload = {
+        "sub": person.user_id,
+        "grants": grants,
+        "attrs": {name: merged[name] for name in sorted(merged)},
+        "rev": {policy.entity_id: int(policy.revision) for policy, _compiled in ordered},
         "exp": int(moment.timestamp()) + int(ttl_sec),
         "req": request_id,
         "kid": key.kid,
