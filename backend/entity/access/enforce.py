@@ -10,6 +10,7 @@ from backend.core.config import get_settings
 from backend.core.db import map_platform_db_error
 from backend.core.request_id import get_request_id
 from backend.core.time import utc_now
+from backend.entity.access.actor_token import current_actor_token_id
 from backend.entity.access.context import KeyRing, issue_context, load_shared_ring
 from backend.entity.access.compiler import (
     CompiledPolicy,
@@ -38,6 +39,7 @@ from backend.entity.store import get_entity_store
 
 __all__ = [
     "DataAccess",
+    "append_sql_log",
     "begin_data",
     "read_context",
     "read_view",
@@ -74,7 +76,7 @@ class DataAccess:
                 id=new_access_log_id(),
                 created_at=utc_now(),
                 user_id=self.user.id,
-                pat_id=None,
+                pat_id=current_actor_token_id(),
                 request_id=get_request_id(),
                 entity_id=self.target.entity.id,
                 verb=verb,
@@ -86,8 +88,52 @@ class DataAccess:
                 outcome_code=outcome_code,
                 preview_subject_user_id=None,
                 duration_ms=elapsed,
+                sql_sha256=None,
+                statement_summary=None,
             )
         )
+
+
+_SQL_SUMMARY_CHARS = 200
+
+
+def append_sql_log(
+    *,
+    user_id: str,
+    request_id: str | None,
+    pat_id: str | None,
+    entity_id: str,
+    effective_grant_ids: list[str],
+    view_name: str | None,
+    policy_revision: int,
+    row_count: int | None,
+    outcome_code: str,
+    duration_ms: int,
+    sql_sha256: str,
+    statement_summary: str,
+) -> None:
+    """Append one verb-sql record. Repeat per referenced Entity, same request id."""
+    get_access_store().append_log(
+        AccessLogRecord(
+            id=new_access_log_id(),
+            created_at=utc_now(),
+            user_id=user_id,
+            pat_id=pat_id,
+            request_id=request_id,
+            entity_id=entity_id,
+            verb="sql",
+            effective_grant_ids=list(effective_grant_ids),
+            narrowing=None,
+            view_name=view_name,
+            policy_revision=policy_revision,
+            row_count=row_count,
+            outcome_code=outcome_code,
+            preview_subject_user_id=None,
+            duration_ms=duration_ms,
+            sql_sha256=sql_sha256,
+            statement_summary=statement_summary[:_SQL_SUMMARY_CHARS],
+        )
+    )
 
 
 def begin_data(
@@ -474,7 +520,7 @@ def _log_pending(
             id=new_access_log_id(),
             created_at=utc_now(),
             user_id=user.id,
-            pat_id=None,
+            pat_id=current_actor_token_id(),
             request_id=get_request_id(),
             entity_id=entity_id,
             verb=verb,
@@ -486,5 +532,7 @@ def _log_pending(
             outcome_code="ENTITY_ACCESS_PENDING",
             preview_subject_user_id=None,
             duration_ms=int((time.perf_counter() - started) * 1000),
+            sql_sha256=None,
+            statement_summary=None,
         )
     )

@@ -364,6 +364,71 @@ def test_conflict_detail_has_no_other_row() -> None:
     assert "row_id" not in error.message
 
 
+def test_http_data_log_records_pat_for_ok_and_pending(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A PAT call stamps that token on ok and pending logs; a session leaves it null."""
+    from backend.core.time import format_instant, utc_now
+
+    monkeypatch.setattr(
+        "backend.entity.access.jobs.dispatch_entity_job", lambda job: job.id
+    )
+    entity_id = _entity()
+    assert seed_entity_entitlements(entity_id) is True
+    _login(client, "admin")
+
+    pending = client.post("/entities/material/schema", json={})
+    assert pending.status_code == 503, pending.text
+    assert pending.json()["code"] == "ENTITY_ACCESS_PENDING"
+    session_pending = get_access_store().logs_for_entity(entity_id)
+    assert len(session_pending) == 1
+    assert session_pending[0].outcome_code == "ENTITY_ACCESS_PENDING"
+    assert session_pending[0].pat_id is None
+    assert session_pending[0].sql_sha256 is None
+    assert session_pending[0].statement_summary is None
+
+    prepare_legacy_entity(entity_id)
+    ok = client.post("/entities/material/schema", json={})
+    assert ok.status_code == 200, ok.text
+    session_logs = get_access_store().logs_for_entity(entity_id)
+    assert [item.outcome_code for item in session_logs] == ["ENTITY_ACCESS_PENDING", "ok"]
+    assert session_logs[1].verb == "schema"
+    assert session_logs[1].pat_id is None
+    assert session_logs[1].sql_sha256 is None
+    assert session_logs[1].statement_summary is None
+
+    expires = format_instant(utc_now() + timedelta(days=1))
+    created = client.post("/tokens", json={"name": "data-pat", "expires_at": expires})
+    assert created.status_code == 201, created.text
+    token_id = created.json()["token"]["id"]
+    secret = created.json()["secret"]
+    logged_out = client.post("/auth/logout")
+    assert logged_out.status_code == 200, logged_out.text
+
+    store = get_access_store()
+    store.set_revision(entity_id, store.revision(entity_id) + 1)
+    headers = {"Authorization": f"Bearer {secret}"}
+    pat_pending = client.post("/entities/material/schema", json={}, headers=headers)
+    assert pat_pending.status_code == 503, pat_pending.text
+    assert pat_pending.json()["code"] == "ENTITY_ACCESS_PENDING"
+    pat_pending_logs = store.logs_for_entity(entity_id)
+    assert pat_pending_logs[-1].outcome_code == "ENTITY_ACCESS_PENDING"
+    assert pat_pending_logs[-1].pat_id == token_id
+    assert pat_pending_logs[-1].sql_sha256 is None
+    assert pat_pending_logs[-1].statement_summary is None
+
+    prepare_legacy_entity(entity_id)
+    pat_ok = client.post("/entities/material/schema", json={}, headers=headers)
+    assert pat_ok.status_code == 200, pat_ok.text
+    pat_logs = store.logs_for_entity(entity_id)
+    assert pat_logs[-1].outcome_code == "ok"
+    assert pat_logs[-1].verb == "schema"
+    assert pat_logs[-1].pat_id == token_id
+    assert pat_logs[-1].user_id == session_logs[1].user_id
+    assert pat_logs[-1].sql_sha256 is None
+    assert pat_logs[-1].statement_summary is None
+
+
 def test_access_log_retention_deletes_old_rows() -> None:
     from backend.entity.access.records import AccessLogRecord
     from backend.entity.ids import new_access_log_id

@@ -129,3 +129,5 @@ class EntityAccessLogRow(Base):
     outcome_code: Mapped[str] = mapped_column(String(64), nullable=False)
     preview_subject_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sql_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    statement_summary: Mapped[str | None] = mapped_column(String(200), nullable=True)

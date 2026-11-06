@@ -787,6 +787,8 @@ def _log(row: EntityAccessLogRow) -> AccessLogRecord:
         outcome_code=row.outcome_code,
         preview_subject_user_id=row.preview_subject_user_id,
         duration_ms=row.duration_ms,
+        sql_sha256=row.sql_sha256,
+        statement_summary=row.statement_summary,
     )
 
 
@@ -807,6 +809,8 @@ def _log_row(record: AccessLogRecord) -> EntityAccessLogRow:
         outcome_code=record.outcome_code,
         preview_subject_user_id=record.preview_subject_user_id,
         duration_ms=record.duration_ms,
+        sql_sha256=record.sql_sha256,
+        statement_summary=record.statement_summary,
     )
 
 

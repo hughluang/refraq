@@ -2,17 +2,31 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
 
-from backend.admin.deps import require_permission
+from backend.admin.deps import get_actor_token_id, get_current_user, require_permission
 from backend.admin.user_store import UserRecord
+from backend.entity.access.actor_token import actor_token
 from backend.entity.data import service as data_service
 from backend.entity.errors import EntityRequestInvalid
 
-router = APIRouter(tags=["entity-data"])
+
+async def _bind_actor_token(
+    request: Request,
+    _user: UserRecord = Depends(get_current_user),
+) -> AsyncIterator[None]:
+    """Carry the request PAT id into data-plane access-log writers."""
+    with actor_token(get_actor_token_id(request)):
+        yield
+
+
+router = APIRouter(
+    tags=["entity-data"],
+    dependencies=[Depends(_bind_actor_token)],
+)
 
 
 async def _json_object(request: Request) -> dict[str, Any]:

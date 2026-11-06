@@ -108,3 +108,5 @@ class AccessLogRecord:
     outcome_code: str
     preview_subject_user_id: str | None
     duration_ms: int | None = None
+    sql_sha256: str | None = None
+    statement_summary: str | None = None
