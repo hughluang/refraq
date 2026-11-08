@@ -337,7 +337,16 @@ def render_shape(
     person: Person | None = None,
     subject_values: dict[str, tuple[Any, ...]] | None = None,
     grant_flags: bool = False,
+    at: datetime | None = None,
+    carry: tuple[str, ...] = (),
+    bind_subject: bool = False,
 ) -> str:
+    """Render one shape. Defaults match profile-view SQL.
+
+    ``at`` fixes ``rel_time`` to one instant. ``carry`` adds source columns to
+    the select list. ``bind_subject`` inlines that person's subject values into
+    restriction rules as well as grants.
+    """
     select = _select_sql(
         shape,
         policy,
@@ -346,6 +355,9 @@ def render_shape(
         person=person,
         subject_values=subject_values or {},
         grant_flags=grant_flags,
+        at=at,
+        carry=carry,
+        bind_subject=bind_subject,
     )
     if not acl:
         return select
@@ -609,8 +621,12 @@ def _select_sql(
     person: Person | None,
     subject_values: dict[str, tuple[Any, ...]],
     grant_flags: bool,
+    at: datetime | None = None,
+    carry: tuple[str, ...] = (),
+    bind_subject: bool = False,
 ) -> str:
     attrs = {item.attribute_id: item for item in policy.attributes}
+    subject_id = person.user_id if bind_subject and person is not None else None
     flags = [
         (
             grant.id,
@@ -621,11 +637,23 @@ def _select_sql(
                 acl=acl,
                 active=active,
                 subject_values=subject_values,
+                subject_id=subject_id,
+                at=at,
             ),
         )
         for grant in shape.grants
     ]
-    predicates = _predicates(shape, policy, attrs, acl=acl, person=person)
+    predicates = _predicates(
+        shape,
+        policy,
+        attrs,
+        acl=acl,
+        person=person,
+        at=at,
+        subject_id=subject_id,
+        subject_values=subject_values,
+        bind_subject=bind_subject,
+    )
     if shape.force_empty:
         predicates.append("FALSE")
     grant_or = "(" + " OR ".join(flag for _gid, flag in flags) + ")" if flags else "FALSE"
@@ -633,10 +661,23 @@ def _select_sql(
         column.row_varying for column in shape.columns
     ):
         return _single_sql(
-            shape, policy, flags, predicates, grant_or, acl=acl, grant_flags=grant_flags
+            shape,
+            policy,
+            flags,
+            predicates,
+            grant_or,
+            acl=acl,
+            grant_flags=grant_flags,
+            carry=carry,
         )
     return _combo_sql(
-        shape, policy, flags, predicates, acl=acl, grant_flags=grant_flags
+        shape,
+        policy,
+        flags,
+        predicates,
+        acl=acl,
+        grant_flags=grant_flags,
+        carry=carry,
     )
 
 
@@ -649,8 +690,9 @@ def _single_sql(
     *,
     acl: bool,
     grant_flags: bool,
+    carry: tuple[str, ...] = (),
 ) -> str:
-    pieces = ["t.row_id"]
+    pieces = [*(f"t.{ident(name)}" for name in carry), "t.row_id"]
     for column in shape.columns:
         mode = column.grant_modes[0][1] if column.grant_modes else CLEAR
         expr = mask_sql(f"t.{ident(column.attr.name)}", mode, column.attr, acl=acl)
@@ -674,14 +716,15 @@ def _combo_sql(
     *,
     acl: bool,
     grant_flags: bool,
+    carry: tuple[str, ...] = (),
 ) -> str:
-    inner_cols = ["t.row_id"]
+    inner_cols = [*(f"t.{ident(name)}" for name in carry), "t.row_id"]
     for column in shape.columns:
         inner_cols.append(f"t.{ident(column.attr.name)} AS {ident(column.attr.name)}")
     for grant_id, flag in flags:
         inner_cols.append(f"{flag} AS {ident(grant_id)}")
     where = " AND ".join(predicates) if predicates else "TRUE"
-    outer = ["m.row_id"]
+    outer = [*(f"m.{ident(name)}" for name in carry), "m.row_id"]
     for column in shape.columns:
         expr = _combo_expr(column, acl=acl)
         outer.append(f"{expr} AS {ident(column.attr.name)}")
@@ -744,6 +787,10 @@ def _predicates(
     *,
     acl: bool,
     person: Person | None,
+    at: datetime | None = None,
+    subject_id: str | None = None,
+    subject_values: dict[str, tuple[Any, ...]] | None = None,
+    bind_subject: bool = False,
 ) -> list[str]:
     rev = (
         f"(SELECT acl.rev_ok('{_escape(policy.entity_id)}', {int(policy.revision)}))"
@@ -752,9 +799,22 @@ def _predicates(
     )
     parts = [rev]
     for rule in shape.row_rules:
-        parts.append(
-            rule_sql(rule, attrs, alias="t", acl=acl, subject_values={})
-        )
+        if bind_subject:
+            parts.append(
+                rule_sql(
+                    rule,
+                    attrs,
+                    alias="t",
+                    acl=acl,
+                    subject_id=subject_id,
+                    subject_values=subject_values or {},
+                    at=at,
+                )
+            )
+        else:
+            parts.append(
+                rule_sql(rule, attrs, alias="t", acl=acl, subject_values={})
+            )
     by_id = {item.id: item for item in policy.restrictions}
     for restriction_id in shape.included_restrictions:
         parts.append(_applies_sql(by_id[restriction_id], acl=acl, person=person))
@@ -773,6 +833,8 @@ def _grant_flag(
     acl: bool,
     active: frozenset[str] | None,
     subject_values: dict[str, tuple[Any, ...]],
+    subject_id: str | None = None,
+    at: datetime | None = None,
 ) -> str:
     if acl:
         gate = f"(SELECT acl.grant_active('{_escape(grant.id)}'))"
@@ -786,6 +848,8 @@ def _grant_flag(
         alias="t",
         acl=acl,
         subject_values=subject_values,
+        subject_id=subject_id,
+        at=at,
     )
     pred = gate if rule == "TRUE" else f"({gate} AND {rule})"
     return f"COALESCE({pred}, false)"

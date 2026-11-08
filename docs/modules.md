@@ -181,7 +181,7 @@ Must not contain:
 - `entity/present.py` importing `entity/table_name.py` or `entity/inbound.py`
 - Owning User Group or Subject Attribute storage (lives in `admin/subjects/`)
 
-Entity owns the entity Change Log. While the effective record has recording on, a trigger on each physical table appends an entry in the same transaction as the row write. The **Entity Data API** and Data Channel write nodes keep their own statements. Neither statement appends the log. `backend.entity.changes` is the published forward read: the greatest commit sequence on that stream when it opened, entries at or below it, and the purge mark. Channel does not read the change-log tables itself.
+Entity owns the entity Change Log. While the effective record has recording on, a trigger on each physical table appends an entry in the same transaction as the row write. The **Entity Data API** and Data Channel write nodes keep their own statements. Neither statement appends the log. `backend.entity.changes` is the published forward read: the greatest commit sequence on that stream when it opened, entries at or below it, and the purge mark. `backend.entity.history.service` is the authorized historical read: interactive history for a resolved subject, and incremental consumption as the System Identity. Channel does not read the change-log tables itself.
 
 ### `backend/channel/`
 
@@ -390,7 +390,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `jobs` → `core`; published `admin` (including System Parameter resolver) when needed; process entry `job_child` may import `worker.parameters`
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
 - `entity` → `core`; published `admin` (including `admin.subjects` and the System Parameter resolver) / `jobs`; published `tags.api`. Process entry `entity.mcp.http` may import `worker.parameters`. `entity` must not import `metadata`
-- `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use, including `entity.heads` and `entity.datasets` (`docs/backend-layout.md` §3); published `tags.api`
+- `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use, including `entity.heads`, `entity.datasets`, and `entity.history.service` (`docs/backend-layout.md` §3); published `tags.api`
 - `tags` → `core`; published `admin`. Must not import `entity` or `channel`
 - `worker` → `core`; published surfaces for assembly, including `entity.tasks` and `channel.tasks`
 - `main` → `core` + package routers / bootstrap via published surfaces

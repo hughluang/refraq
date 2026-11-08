@@ -111,7 +111,12 @@ def rule_sql(
     acl: bool,
     subject_id: str | None = None,
     subject_values: dict[str, tuple[Any, ...]] | None = None,
+    at: datetime | None = None,
 ) -> str:
+    """Compile one rule. ``at`` fixes ``rel_time`` to that instant.
+
+    Omit ``at`` and the clock stays ``CURRENT_TIMESTAMP`` / ``CURRENT_DATE``.
+    """
     if rule is None:
         return "TRUE"
     return _sql_node(
@@ -122,6 +127,7 @@ def rule_sql(
         acl=acl,
         subject_id=subject_id,
         subject_values=subject_values or {},
+        at=at,
     )
 
 
@@ -404,6 +410,7 @@ def _sql_node(
     acl: bool,
     subject_id: str | None,
     subject_values: dict[str, tuple[Any, ...]],
+    at: datetime | None = None,
 ) -> str:
     key = next(iter(node))
     body = node[key]
@@ -417,6 +424,7 @@ def _sql_node(
                 acl=acl,
                 subject_id=subject_id,
                 subject_values=subject_values,
+                at=at,
             )
             for index, item in enumerate(body)
         ]
@@ -431,6 +439,7 @@ def _sql_node(
                 acl=acl,
                 subject_id=subject_id,
                 subject_values=subject_values,
+                at=at,
             )
             for index, item in enumerate(body)
         ]
@@ -444,6 +453,7 @@ def _sql_node(
             acl=acl,
             subject_id=subject_id,
             subject_values=subject_values,
+            at=at,
         )
         # A NULL leaf is false (as in eval_rule), so NOT of it is true.
         return f"(NOT COALESCE({inner}, false))"
@@ -455,6 +465,7 @@ def _sql_node(
         acl=acl,
         subject_id=subject_id,
         subject_values=subject_values,
+        at=at,
     )
 
 
@@ -467,6 +478,7 @@ def _sql_leaf(
     acl: bool,
     subject_id: str | None,
     subject_values: dict[str, tuple[Any, ...]],
+    at: datetime | None = None,
 ) -> str:
     attr = attrs[str(body["attr"])]
     column = f'{alias}."{attr.name}"'
@@ -483,7 +495,7 @@ def _sql_leaf(
         )
     if "rel_time" in body:
         interval = _interval_sql(str(body["rel_time"]))
-        clock = "CURRENT_DATE" if attr.value_type() == "date" else "CURRENT_TIMESTAMP"
+        clock = _clock_sql(attr, at)
         return f"({column} {_SQL_CMP[op]} ({clock} + {interval}))"
     if op == "in":
         encoded = [_encode(item, attr, "$") for item in body["value"]]
@@ -685,6 +697,16 @@ def _parse_duration(raw: Any, path: str, value_type: str) -> re.Match[str]:
     if "T" in raw and not any(match.group(name) for name in ("h", "mi", "s")):
         raise RuleProblem(path, "rel_time must be an ISO 8601 duration")
     return match
+
+
+def _clock_sql(attr: AttrFact, at: datetime | None) -> str:
+    """Clock expression for ``rel_time``. ``at`` is one instant for the batch."""
+    if at is None:
+        return "CURRENT_DATE" if attr.value_type() == "date" else "CURRENT_TIMESTAMP"
+    instant = at.astimezone(timezone.utc)
+    if attr.value_type() == "date":
+        return f"(DATE {_literal(instant.date(), attr)})"
+    return f"({_literal(instant, attr)}::timestamptz)"
 
 
 def _interval_sql(raw: str) -> str:

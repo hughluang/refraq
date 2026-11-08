@@ -85,6 +85,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "entity.heads",
             "entity.rows",
             "entity.changes",
+            "entity.history.service",
             "entity.publish_confirmation",
             "entity.subject_displays",
             "entity.statements",
