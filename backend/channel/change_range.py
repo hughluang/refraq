@@ -6,14 +6,13 @@ Open and read do not propose. The caller proposes after it succeeds.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from backend.channel.checkpoints import CheckpointPosition
 from backend.entity.changes import (
-    ChangeEntry,
     ChangeLogOff,
     ChangePosition,
     purge_mark,
@@ -107,19 +106,27 @@ def open_change_range(
         )
 
 
-def read_change_range(opened: ChangeRange, *, limit: int) -> IncrementalPage:
+def read_change_range(
+    opened: ChangeRange,
+    *,
+    limit: int,
+    after: IncrementalPosition | None = None,
+) -> IncrementalPage:
     """One projected page through ``read_incremental``. Does not propose.
 
     The operation loads the platform System Identity. This function does not
-    take a user. ``volume.changes_dataset`` keeps calling ``read_changes``.
+    take a user. ``after`` none resumes at the opened start, including the
+    beginning of the stream. A later page passes the previous page's progress.
     """
-    after = None
-    if opened.after is not None:
-        after = IncrementalPosition(commit_seq=opened.after.xact, seq=opened.after.seq)
+    cursor = after
+    if cursor is None and opened.after is not None:
+        cursor = IncrementalPosition(
+            commit_seq=opened.after.xact, seq=opened.after.seq
+        )
     with _range_errors():
         return read_incremental(
             opened.entity_id,
-            after=after,
+            after=cursor,
             bound=opened.bound,
             limit=limit,
         )
@@ -128,20 +135,19 @@ def read_change_range(opened: ChangeRange, *, limit: int) -> IncrementalPage:
 def propose_change_range(
     session: CheckpointView,
     opened: ChangeRange,
-    scanned: Sequence[ChangeEntry],
+    progress: IncrementalPosition | None,
 ) -> None:
-    """Propose the last scanned entry. An empty scan proposes nothing.
+    """Propose the operation's evaluated position. An empty scan proposes nothing.
 
-    Call only after the caller has succeeded. Entries a source filter will
-    hide stay in ``scanned`` so the cursor still passes them.
+    Call only after the caller has succeeded. The position is ``progress``,
+    not the last row the caller wrote.
     """
-    if not scanned:
+    if progress is None:
         return
-    last = scanned[-1]
     session.propose(
         opened.node_id,
         opened.entity_id,
-        CheckpointPosition(xact=last.xact, seq=last.sequence),
+        CheckpointPosition(xact=progress.commit_seq, seq=progress.seq),
     )
 
 

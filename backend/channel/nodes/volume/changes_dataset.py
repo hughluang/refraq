@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
 from sqlalchemy.exc import DBAPIError
@@ -12,9 +12,9 @@ from sqlalchemy.exc import DBAPIError
 from backend.channel.change_range import (
     ChangeRange,
     ChangeRangeError,
-    _range_errors,
     open_change_range,
     propose_change_range,
+    read_change_range,
 )
 from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA, dataset_reference
 from backend.channel.dataset_registry import (
@@ -34,11 +34,12 @@ from backend.channel.nodes.spec import (
     object_schema,
 )
 from backend.channel.run_store import get_run_store
-from backend.entity.changes import (
-    ChangeEntry,
-    ChangePosition,
-    purge_mark,
-    read_changes,
+from backend.entity.changes import ChangePosition, purge_mark
+from backend.entity.history.service import (
+    HistorySide,
+    IncrementalEvent,
+    IncrementalPosition,
+    clear_cell,
 )
 
 __all__ = ["NODE_TYPE"]
@@ -69,6 +70,8 @@ _COLUMNS: tuple[DatasetColumnSpec, ...] = (
     DatasetColumnSpec("source", "string", nullable=True),
     DatasetColumnSpec("subject", "string", nullable=True),
     DatasetColumnSpec("physical_table", "string", nullable=False),
+    DatasetColumnSpec("version_id", "string", nullable=False),
+    DatasetColumnSpec("version_number", "integer", nullable=False),
     DatasetColumnSpec("row_id", "integer", nullable=True),
     DatasetColumnSpec("business_key", "json", nullable=True),
     DatasetColumnSpec("before", "json", nullable=True),
@@ -100,7 +103,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     sources = _sources(config.get("sources"))
     session = hooks.checkpoints
     deadline = time.monotonic() + timeout_sec
-    scanned: list[ChangeEntry | None] = [None]
+    evaluated: list[IncrementalPosition | None] = [None]
     try:
         opened = open_change_range(
             entity_id,
@@ -113,7 +116,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             node_id=node_id,
             seq=_execution_seq(node, hooks),
             columns=_COLUMNS,
-            chunks=_pages(opened, hooks, sources, limit, deadline, scanned),
+            chunks=_pages(opened, hooks, sources, limit, deadline, evaluated),
         )
     except _LoadHalted as halted:
         if halted.kind == "timeout":
@@ -127,9 +130,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         return _failed("CHANNEL_NODE_FAILED", _db_message(exc))
     except Exception as exc:  # noqa: BLE001
         return _failed("CHANNEL_NODE_FAILED", str(exc))
-    last = scanned[0]
-    if last is not None:
-        propose_change_range(session, opened, (last,))
+    propose_change_range(session, opened, evaluated[0])
     reference = dataset_reference(
         dataset_id=record.id,
         columns=record.columns,
@@ -147,44 +148,40 @@ def _pages(
     sources: set[str] | None,
     limit: int,
     deadline: float,
-    scanned: list[ChangeEntry | None],
+    evaluated: list[IncrementalPosition | None],
 ) -> Iterator[Sequence[Sequence[Any]]]:
-    """Yield one page of visible rows at a time.
+    """Yield one page of projected rows at a time.
 
-    Each ``read_changes`` call commits its own short transaction. The dataset
-    copy stays the caller's single transaction. Only the last scanned entry is
-    kept, and only after the closing purge check passes.
+    Each ``read_change_range`` call authorizes the platform System Identity
+    and commits its own short transaction. The dataset copy stays the caller's
+    single transaction. The proposal is the last page's progress, and only
+    after the closing purge check passes. A page that scans nothing does not
+    replace that progress.
     """
     start = opened.after
     mark_before = purge_mark(opened.entity_id)
-    after = start
+    cursor: IncrementalPosition | None = None
     seen = 0
-    last: ChangeEntry | None = None
+    progress: IncrementalPosition | None = None
     while seen < limit:
         _halt(hooks, deadline)
         page_limit = min(_PAGE, limit - seen)
-        with _range_errors():
-            page = read_changes(
-                opened.entity_id,
-                after=after,
-                bound=opened.bound,
-                limit=page_limit,
-            )
-        if not page.entries:
+        page = read_change_range(opened, limit=page_limit, after=cursor)
+        if page.progress is None:
             break
-        last = page.entries[-1]
-        seen += len(page.entries)
-        visible = tuple(_row(entry) for entry in page.entries if _kept(entry, sources))
+        progress = page.progress
+        cursor = page.progress
+        visible = tuple(_row(entry) for entry in page.events if _kept(entry, sources))
         if visible:
             yield visible
-        after = ChangePosition(xact=last.xact, seq=last.sequence)
         if not page.has_more:
             break
+        seen += page_limit
     _halt(hooks, deadline)
     mark_after = purge_mark(opened.entity_id)
     if _purge_moved_past_start(start, mark_before, mark_after):
         raise ChangeRangeError("CHANNEL_CHECKPOINT_INVALID", _INVALID)
-    scanned[0] = last
+    evaluated[0] = progress
 
 
 def _purge_moved_past_start(
@@ -222,14 +219,14 @@ def _sources(raw: Any) -> set[str] | None:
     return {str(item) for item in raw}
 
 
-def _kept(entry: ChangeEntry, sources: set[str] | None) -> bool:
+def _kept(entry: IncrementalEvent, sources: set[str] | None) -> bool:
     if sources is None:
         return True
     label = entry.source if entry.source is not None else "unattributed"
     return label in sources
 
 
-def _row(entry: ChangeEntry) -> tuple[Any, ...]:
+def _row(entry: IncrementalEvent) -> tuple[Any, ...]:
     return (
         entry.sequence,
         entry.operation,
@@ -237,11 +234,52 @@ def _row(entry: ChangeEntry) -> tuple[Any, ...]:
         entry.source,
         entry.subject,
         entry.physical_table,
-        entry.row_id,
-        _json_cell(entry.business_key),
-        _json_cell(entry.before),
-        _json_cell(entry.after),
+        entry.version_id,
+        entry.version_number,
+        _agreed(entry, "row_id", _integer_cell),
+        _json_cell(_agreed(entry, entry.business_key_name, clear_cell)),
+        _json_cell(_side(entry.before)),
+        _json_cell(_side(entry.after)),
     )
+
+
+def _side(side: HistorySide) -> dict[str, Any]:
+    if side.state != "visible":
+        return {"state": side.state}
+    return {"state": "visible", "values": side.values}
+
+
+def _integer_cell(side: HistorySide, name: str) -> int | None:
+    """A clear integer on this side. A bool is not a row id."""
+    value = clear_cell(side, name)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _agreed(
+    entry: IncrementalEvent,
+    name: str | None,
+    cell: Callable[[HistorySide, str], Any],
+) -> Any:
+    """One value when every visible side yields that same cell, or none.
+
+    A missing name, a cell the predicate does not yield, or visible sides
+    that disagree leave the dataset cell empty. None of those fail the load.
+    """
+    if not name:
+        return None
+    found: list[Any] = []
+    for side in (entry.before, entry.after):
+        if side.state != "visible":
+            continue
+        value = cell(side, name)
+        if value is None:
+            return None
+        found.append(value)
+    if not found or any(item != found[0] for item in found[1:]):
+        return None
+    return found[0]
 
 
 def _json_cell(value: Any) -> str | None:
@@ -278,10 +316,12 @@ NODE_TYPE = NodeType(
     label="Changes Dataset",
     summary="Lands one bounded Change Log range for a Business Entity as a dataset.",
     description=(
-        "Reads the entity Change Log after this node's checkpoint and up to the "
-        "commit sequence fixed for the run. Visible rows land in one dataset, and "
-        "a checkpoint is proposed only after that dataset is ready. Entries a "
-        "source filter hides stay out of the dataset and still count toward the limit."
+        "Reads the entity Change Log as the platform System Identity after this "
+        "node's checkpoint and up to the commit sequence fixed for the run. "
+        "Projected rows land in one dataset. The checkpoint is proposed only "
+        "after that dataset is ready, at the operation's evaluated position. "
+        "Entries a source filter hides, and events with no visible side, stay "
+        "out of the dataset and still count toward the limit."
     ),
     trigger=False,
     inputs=(MAIN_INPUT,),
@@ -316,7 +356,8 @@ NODE_TYPE = NodeType(
                 "title": "Limit",
                 "description": (
                     "Maximum change-log entries scanned in one execution, "
-                    "including entries the source filter hides. Default 1000000."
+                    "including entries the source filter hides and events with "
+                    "no visible side. Default 1000000."
                 ),
             },
             "statement_timeout_sec": {

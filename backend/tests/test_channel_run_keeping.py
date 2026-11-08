@@ -379,8 +379,8 @@ def _changes_graph(**settings: object) -> dict:
 
 
 def _stub_change_log(monkeypatch: pytest.MonkeyPatch) -> None:
-    from backend.entity.changes import ChangeEntry, ChangePage
     from backend.entity.heads import EntityHeadShape
+    from backend.entity.history.service import IncrementalPage, IncrementalPosition
 
     monkeypatch.setattr(
         "backend.channel.references.get_entity_head",
@@ -396,29 +396,15 @@ def _stub_change_log(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr("backend.entity.changes.capture_bound", lambda _entity_id: 100)
 
-    def read_changes(entity_id: str, *, after: object, bound: int, limit: int) -> ChangePage:
+    def read_incremental(entity_id: str, *, after: object, bound: int, limit: int) -> IncrementalPage:
         del entity_id, after, bound, limit
-        return ChangePage(
-            entries=[
-                ChangeEntry(
-                    sequence=3,
-                    xact=7,
-                    operation="insert",
-                    occurred_at="2026-11-01T00:00:00Z",
-                    source=None,
-                    subject=None,
-                    physical_table="entity_data.orders",
-                    row_id=1,
-                    business_key=None,
-                    has_business_key=False,
-                    before=None,
-                    after={"sku": "a"},
-                )
-            ],
+        return IncrementalPage(
+            events=[],
+            progress=IncrementalPosition(commit_seq=7, seq=3),
             has_more=False,
         )
 
-    monkeypatch.setattr("backend.channel.change_range.read_changes", read_changes)
+    monkeypatch.setattr("backend.channel.change_range.read_incremental", read_incremental)
 
 
 def _failed_published_run(client: TestClient, channel_id: str) -> str:

@@ -21,7 +21,9 @@ from backend.channel.nodes import list_node_types
 from backend.channel.recovery import settle_success
 from backend.channel.run_store import ChannelRunRecord, get_run_store
 from backend.core.time import utc_now
-from backend.entity.changes import ChangePosition, capture_bound, read_changes
+from backend.entity.access.seed import ensure_system_grant
+from backend.entity.changes import capture_bound
+from backend.entity.history.service import IncrementalPosition, read_incremental
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
 from backend.jobs.store import get_job_store
 from backend.tests.channel_hooks_fake import FakeHooks
@@ -198,7 +200,8 @@ def _publish(label: str, *, arm_change_log: bool) -> tuple[str, str]:
     from backend.entity.store import get_entity_store
     from backend.entity.table_name import compose_physical_table_name
     from backend.entity.table_port import PostgresEntityTablePort
-    from backend.tests.entity_access_oracle import prepare_legacy_entity
+    from backend.entity.access.views import rebuild_entity_views
+    from backend.tests.entity_access_oracle import prepare_legacy_entity, stamped_attributes
 
     attrs = _sku_attrs()
     stem = f"cd_{uuid.uuid4().hex[:8]}"
@@ -230,6 +233,8 @@ def _publish(label: str, *, arm_change_log: bool) -> tuple[str, str]:
     port.create_physical_table(ENTITY_DATA_SCHEMA, physical, attrs)
     port.swap_stem_view(ENTITY_DATA_SCHEMA, stem, physical=physical, expected_target=None)
     prepare_legacy_entity(entity.id)
+    ensure_system_grant(entity.id, stamped_attributes(entity.id))
+    rebuild_entity_views(entity.id)
     if arm_change_log:
         with get_entity_engine().begin() as conn:
             ensure_shared_relations(conn)
@@ -286,7 +291,8 @@ def _graph(source_id: str, target_id: str, *, limit: int, batch_size: int) -> di
             {
                 "name": "rows",
                 "value": (
-                    "{{ [{'sku': row['after']['sku'], 'qty': row['after']['qty']} "
+                    "{{ [{'sku': row['after']['values']['sku'], "
+                    "'qty': row['after']['values']['qty']} "
                     "for row in self.batch.output.rows] }}"
                 ),
             }
@@ -353,7 +359,7 @@ def _target_rows(targets: Any) -> list[tuple[str, int | None]]:
 
 
 def _position(entry: Any) -> CheckpointPosition:
-    return CheckpointPosition(xact=entry.xact, seq=entry.sequence)
+    return CheckpointPosition(xact=entry.commit_seq, seq=entry.sequence)
 
 
 def _execute_run(targets: Any, *, limit: int, batch_size: int) -> Any:
@@ -381,13 +387,13 @@ def test_a_3n_backlog_drains_in_three_completed_runs_then_ten_later_updates(
     with get_entity_engine().begin() as conn:
         for index in range(1, _BACKLOG + 1):
             _insert(conn, harness.source_table, _sku(index), index)
-    backlog = read_changes(
+    backlog = read_incremental(
         harness.source_id,
         after=None,
         bound=capture_bound(harness.source_id),
         limit=_BACKLOG + 1,
     )
-    assert len(backlog.entries) == _BACKLOG
+    assert len(backlog.events) == _BACKLOG
     assert backlog.has_more is False
     assert _cursor(harness.source_id) is None
 
@@ -401,20 +407,21 @@ def test_a_3n_backlog_drains_in_three_completed_runs_then_ten_later_updates(
         assert _target_rows(harness) == [
             (_sku(index), index) for index in range(1, step * _LIMIT + 1)
         ]
-        assert _cursor(harness.source_id) == _position(backlog.entries[step * _LIMIT - 1])
+        assert _cursor(harness.source_id) == _position(backlog.events[step * _LIMIT - 1])
 
     with get_entity_engine().begin() as conn:
         for index in range(1, _LATER + 1):
             _update_qty(conn, harness.source_table, _sku(index), 100 + index)
-    later = read_changes(
+    later = read_incremental(
         harness.source_id,
-        after=ChangePosition(
-            xact=backlog.entries[-1].xact, seq=backlog.entries[-1].sequence
+        after=IncrementalPosition(
+            commit_seq=backlog.events[-1].commit_seq,
+            seq=backlog.events[-1].sequence,
         ),
         bound=capture_bound(harness.source_id),
         limit=_LATER + 1,
     )
-    assert len(later.entries) == _LATER
+    assert len(later.events) == _LATER
     assert later.has_more is False
 
     result = _execute_run(harness, limit=_LIMIT, batch_size=_BATCH)
@@ -426,7 +433,7 @@ def test_a_3n_backlog_drains_in_three_completed_runs_then_ten_later_updates(
         (_sku(index), 100 + index if index <= _LATER else index)
         for index in range(1, _BACKLOG + 1)
     ]
-    assert _cursor(harness.source_id) == _position(later.entries[-1])
+    assert _cursor(harness.source_id) == _position(later.events[-1])
 
 
 def test_a_later_batch_write_failure_leaves_the_cursor_and_the_next_run_converges(
@@ -440,14 +447,14 @@ def test_a_later_batch_write_failure_leaves_the_cursor_and_the_next_run_converge
     with get_entity_engine().begin() as conn:
         for index in range(1, _LIMIT + extra + 1):
             _insert(conn, harness.source_table, _sku(index), index)
-    page = read_changes(
+    page = read_incremental(
         harness.source_id,
         after=None,
         bound=capture_bound(harness.source_id),
         limit=_LIMIT + extra + 1,
     )
-    assert len(page.entries) == _LIMIT + extra
-    cut = _position(page.entries[_LIMIT - 1])
+    assert len(page.events) == _LIMIT + extra
+    cut = _position(page.events[_LIMIT - 1])
     assert _cursor(harness.source_id) is None
 
     calls = {"n": 0}

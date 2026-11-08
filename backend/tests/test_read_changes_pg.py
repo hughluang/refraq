@@ -47,7 +47,8 @@ from backend.entity.change_log import (
     read_purge_mark,
     write_effective,
 )
-from backend.entity.changes import capture_bound, purge_mark, read_changes, recording_enabled
+from backend.entity.changes import capture_bound, purge_mark, recording_enabled
+from backend.entity.history.service import read_incremental
 from backend.entity.service import live_change_log
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
 from backend.entity.entity_db import get_entity_engine, reset_entity_engine
@@ -305,8 +306,8 @@ def test_an_open_write_does_not_block_the_checkpoint_read(
         assert purge_mark(entity_id) is None
         assert live_change_log(entity_id) == (True, None)
         bound = capture_bound(entity_id)
-        hidden = read_changes(entity_id, after=None, bound=bound, limit=100)
-        assert [entry.after["sku"] for entry in hidden.entries] == ["later"]
+        hidden = read_incremental(entity_id, after=None, bound=bound, limit=100)
+        assert [entry.after.values["sku"] for entry in hidden.events] == ["later"]
         assert hidden.has_more is False
         result = NODE_TYPE.execute(_node(entity_id), _hooks(bound))
         assert result.status == "succeeded"
@@ -319,8 +320,8 @@ def test_an_open_write_does_not_block_the_checkpoint_read(
         held.close()
         reset_entity_table_port()
     bound = capture_bound(entity_id)
-    visible = read_changes(entity_id, after=None, bound=bound, limit=100)
-    assert [entry.after["sku"] for entry in visible.entries] == ["later", "early"]
+    visible = read_incremental(entity_id, after=None, bound=bound, limit=100)
+    assert [entry.after.values["sku"] for entry in visible.events] == ["later", "early"]
 
 
 def test_a_rolled_back_sequence_does_not_block_the_next_read(
@@ -362,10 +363,10 @@ def test_an_open_xid_does_not_hide_a_committed_row(change_log_database) -> None:
         held.execute(text("SELECT pg_current_xact_id()"))
         with engine.begin() as conn:
             _insert(conn, table, "visible")
-        page = read_changes(
+        page = read_incremental(
             entity_id, after=None, bound=capture_bound(entity_id), limit=100
         )
-        assert [entry.after["sku"] for entry in page.entries] == ["visible"]
+        assert [entry.after.values["sku"] for entry in page.events] == ["visible"]
         held_tx.rollback()
     finally:
         held.close()
