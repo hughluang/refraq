@@ -77,6 +77,8 @@ export function listEntityChangeLog(
     source?: string;
     subject?: string;
     row_identity?: string;
+    version_id?: string;
+    row_id?: string;
     occurred_from?: string;
     occurred_to?: string;
     signal?: AbortSignal;

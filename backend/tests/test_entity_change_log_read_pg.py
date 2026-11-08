@@ -272,72 +272,6 @@ def test_filters_combine_and_a_missing_time_bound_stays_open(
     assert [item.sequence for item in open_both.items] == [5, 3, 2]
 
 
-def test_row_identity_matches_row_id_or_business_key_on_every_table(
-    change_log_database,
-) -> None:
-    del change_log_database
-    engine = get_entity_engine()
-    entity_id = new_entity_id()
-    left = _table("widget__v1__aaaaaaaaaaaaaaaa")
-    right = ChangeLogTable(
-        physical_table='"entity_data"."widget__v2__bbbbbbbbbbbbbbbb"',
-        attributes=(
-            AttributeRecord(
-                name="code",
-                type="string",
-                required=True,
-                unique=True,
-                business_key=True,
-                max_length=32,
-            ),
-        ),
-        reference_snapshots={},
-        business_key="code",
-    )
-    with engine.begin() as conn:
-        ensure_shared_relations(conn)
-        _insert(
-            conn,
-            entity_id,
-            sequence=3,
-            physical=left.physical_table,
-            operation="insert",
-            image={"after": {"row_id": 7, "sku": "LEFT"}},
-        )
-        _insert(
-            conn,
-            entity_id,
-            sequence=2,
-            physical=right.physical_table,
-            operation="insert",
-            image={"after": {"row_id": 7, "code": "RIGHT"}},
-        )
-        _insert(
-            conn,
-            entity_id,
-            sequence=1,
-            physical=left.physical_table,
-            operation="insert",
-            image={"after": {"row_id": 8, "sku": "OTHER"}},
-        )
-        by_row = read_change_log(
-            conn, entity_id, [left, right], row_identity="7"
-        )
-        by_left = read_change_log(
-            conn, entity_id, [left, right], row_identity="LEFT"
-        )
-        by_right = read_change_log(
-            conn, entity_id, [left, right], row_identity="RIGHT"
-        )
-    assert [(item.sequence, item.physical_table) for item in by_row.items] == [
-        (3, left.physical_table),
-        (2, right.physical_table),
-    ]
-    assert [item.sequence for item in by_left.items] == [3]
-    assert [item.physical_table for item in by_left.items] == [left.physical_table]
-    assert [item.sequence for item in by_right.items] == [2]
-
-
 def test_one_entry_rebuilds_the_full_physical_row(change_log_database) -> None:
     del change_log_database
     engine = get_entity_engine()
@@ -689,7 +623,7 @@ def test_list_and_detail_share_the_projected_event(
         )
     listed = client.get(
         f"/entities/{entity['id']}/change-log",
-        params={"row_identity": "7"},
+        params={"version_id": version["id"], "row_id": "7"},
     )
     assert listed.status_code == 200, listed.text
     body = listed.json()
@@ -756,6 +690,107 @@ def test_list_and_detail_share_the_projected_event(
     assert hidden.json()["detail"] == "Business Entity not found"
     assert "equal-secret-token" not in hidden.text
     assert "physical_table" not in hidden.text
+
+
+def test_change_log_lookup_is_a_business_key_or_one_version_row(
+    client: TestClient,
+) -> None:
+    entity = _create_logged(client)
+    version = _publish(client, entity)
+    physical = f'"entity_data"."{version["table_name"]}"'
+    with get_entity_engine().begin() as conn:
+        ensure_shared_relations(conn)
+        for sequence in range(1, 52):
+            _insert(
+                conn,
+                entity["id"],
+                sequence=sequence,
+                physical=physical,
+                operation="insert",
+                image={"after": {"row_id": 7, "sku": "LEFT", "secret": "v"}},
+            )
+        _insert(
+            conn,
+            entity["id"],
+            sequence=60,
+            physical=physical,
+            operation="insert",
+            image={"after": {"row_id": 8, "sku": "OTHER", "secret": "v"}},
+        )
+    by_key = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"row_identity": "LEFT"},
+    )
+    assert by_key.status_code == 200, by_key.text
+    assert [item["sequence"] for item in by_key.json()["items"]] == list(
+        range(51, 1, -1)
+    )
+    cursor = by_key.json()["next_cursor"]
+    assert isinstance(cursor, str) and cursor
+    rebound = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"cursor": cursor},
+    )
+    assert rebound.status_code == 422, rebound.text
+    assert rebound.json()["code"] == "REQUEST_INVALID"
+    assert rebound.json()["detail"] == "Request validation failed"
+    assert "LEFT" not in rebound.text
+    rest = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"cursor": cursor, "row_identity": "LEFT"},
+    )
+    assert rest.status_code == 200, rest.text
+    assert [item["sequence"] for item in rest.json()["items"]] == [1]
+    by_row_text = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"row_identity": "7"},
+    )
+    assert by_row_text.status_code == 200, by_row_text.text
+    assert by_row_text.json()["items"] == []
+    assert by_row_text.json()["next_cursor"] is None
+    by_version_row = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"version_id": version["id"], "row_id": "7"},
+    )
+    assert by_version_row.status_code == 200, by_version_row.text
+    assert by_version_row.json()["items"][0]["sequence"] == 51
+    assert "row_id" not in by_version_row.json()["items"][0]
+    assert "business_key" not in by_version_row.json()["items"][0]
+    other = client.get(f"/entities/{entity['id']}/change-log/60")
+    assert other.status_code == 200, other.text
+    assert other.json()["after"]["values"]["sku"] == "OTHER"
+    lone_row = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"row_id": "7"},
+    )
+    assert lone_row.status_code == 422, lone_row.text
+    assert lone_row.json()["code"] == "ENTITY_CHANGE_LOG_QUERY_UNSUPPORTED"
+    assert lone_row.json()["detail"] == "This change-log query is not supported."
+    assert "LEFT" not in lone_row.text
+    assert "60" not in lone_row.text
+    lone_version = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"version_id": version["id"]},
+    )
+    assert lone_version.status_code == 422, lone_version.text
+    assert lone_version.json()["code"] == "ENTITY_CHANGE_LOG_QUERY_UNSUPPORTED"
+    both = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={
+            "row_identity": "LEFT",
+            "version_id": version["id"],
+            "row_id": "7",
+        },
+    )
+    assert both.status_code == 422, both.text
+    assert both.json()["detail"] == "This change-log query is not supported."
+    bad_row = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"version_id": version["id"], "row_id": "nope"},
+    )
+    assert bad_row.status_code == 422, bad_row.text
+    assert bad_row.json()["code"] == "REQUEST_INVALID"
+    assert bad_row.json()["detail"] == "Request validation failed"
 
 
 def test_dropped_table_entries_stay_on_the_list_and_the_detail(
@@ -970,6 +1005,31 @@ def test_opaque_cursor_pages_and_rejects_a_rebound_token(client: TestClient) -> 
     assert rebound_query.json()["code"] == "REQUEST_INVALID"
     assert rebound_query.json()["detail"] == "Request validation failed"
     assert "items" not in rebound_query.json()
+    rebound_key = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"cursor": cursor, "row_identity": "S1"},
+    )
+    assert rebound_key.status_code == 422, rebound_key.text
+    assert rebound_key.json()["code"] == "REQUEST_INVALID"
+    assert rebound_key.json()["detail"] == "Request validation failed"
+    rebound_row = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"cursor": cursor, "version_id": version["id"], "row_id": "1"},
+    )
+    assert rebound_row.status_code == 422, rebound_row.text
+    assert rebound_row.json()["code"] == "REQUEST_INVALID"
+    blank_lookup = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"cursor": cursor, "row_identity": "", "version_id": "", "row_id": ""},
+    )
+    assert blank_lookup.status_code == 200, blank_lookup.text
+    assert [item["sequence"] for item in blank_lookup.json()["items"]] == [
+        5,
+        4,
+        3,
+        2,
+        1,
+    ]
     other = _create_logged(client)
     _publish(client, other)
     rebound_entity = client.get(

@@ -172,6 +172,8 @@ def http_list_change_log(
     source: Literal["user", "channel_run", "unattributed"] | None = None,
     subject: str | None = None,
     row_identity: str | None = None,
+    version_id: str | None = None,
+    row_id: str | None = None,
     occurred_from: str | None = None,
     occurred_to: str | None = None,
     user: UserRecord = Depends(require_permission("entity:data_read")),
@@ -181,6 +183,8 @@ def http_list_change_log(
         source=source,
         subject=subject,
         row_identity=row_identity,
+        version_id=version_id,
+        row_id=row_id,
         occurred_from=occurred_from,
         occurred_to=occurred_to,
     )
@@ -198,7 +202,9 @@ def http_list_change_log(
         operation=operation,
         source=source,
         subject=subject,
-        row_identity=row_identity,
+        row_identity=query.row_identity,
+        version_id=query.version_id,
+        row_id=query.row_id,
         occurred_from=occurred_from,
         occurred_to=occurred_to,
     )

@@ -69,7 +69,9 @@ const LABELS: Record<string, string> = {
   "entities.changeLog.filter.subjectHint":
     "Matches the stored id. A display name does not match.",
   "entities.changeLog.filter.instantHint": "Interpreted in {{zone}}.",
-  "entities.changeLog.filter.rowIdentity": "Row identity",
+  "entities.changeLog.filter.rowIdentity": "Business key",
+  "entities.changeLog.filter.versionId": "Version id",
+  "entities.changeLog.filter.rowId": "Row id",
   "entities.changeLog.filter.from": "From",
   "entities.changeLog.filter.to": "To",
   "entities.changeLog.operation.insert": "Insert",
@@ -462,7 +464,13 @@ describe("change log tab", () => {
     fireEvent.change(screen.getByLabelText("Subject"), {
       target: { value: "usr_a" },
     });
-    fireEvent.change(screen.getByLabelText("Row identity"), {
+    fireEvent.change(screen.getByLabelText("Business key"), {
+      target: { value: "LEFT" },
+    });
+    fireEvent.change(screen.getByLabelText("Version id"), {
+      target: { value: "ver_1" },
+    });
+    fireEvent.change(screen.getByLabelText("Row id"), {
       target: { value: "7" },
     });
     expect(
@@ -481,7 +489,9 @@ describe("change log tab", () => {
         operation: "update",
         source: "user",
         subject: "usr_a",
-        row_identity: "7",
+        row_identity: "LEFT",
+        version_id: "ver_1",
+        row_id: "7",
         occurred_from: "2026-10-02T00:00:00Z",
         occurred_to: "2026-10-03T00:00:00Z",
       });
@@ -626,6 +636,15 @@ describe("change log tab", () => {
     });
     const view = await renderRecord(entity({ id: "ent_1" }));
     fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
+    fireEvent.change(screen.getByLabelText("Business key"), {
+      target: { value: "LEFT" },
+    });
+    fireEvent.change(screen.getByLabelText("Version id"), {
+      target: { value: "ver_kept" },
+    });
+    fireEvent.change(screen.getByLabelText("Row id"), {
+      target: { value: "4" },
+    });
     fireEvent.click(await screen.findByRole("button", { name: "Older" }));
     await waitFor(() => {
       const last = vi.mocked(listEntityChangeLog).mock.calls.at(-1);
@@ -648,7 +667,19 @@ describe("change log tab", () => {
         .mock.calls.filter((call) => call[0] === "ent_2");
       expect(switched.length).toBeGreaterThan(0);
       expect(switched.every((call) => call[1]?.cursor == null)).toBe(true);
+      expect(switched.at(-1)?.[1]).toMatchObject({
+        row_identity: "LEFT",
+        version_id: "ver_kept",
+        row_id: "4",
+      });
     });
+    expect((screen.getByLabelText("Business key") as HTMLInputElement).value).toBe(
+      "LEFT",
+    );
+    expect((screen.getByLabelText("Version id") as HTMLInputElement).value).toBe(
+      "ver_kept",
+    );
+    expect((screen.getByLabelText("Row id") as HTMLInputElement).value).toBe("4");
     expect(
       screen.queryByText("The request is not valid. Check the fields and try again."),
     ).toBeNull();

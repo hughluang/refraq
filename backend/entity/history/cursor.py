@@ -12,17 +12,59 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from backend.core.time import utc_now
 from backend.entity.access.context import CONTEXT_TTL_SEC, load_shared_ring
 from backend.entity.entity_db import get_entity_engine
-from backend.entity.errors import EntityRequestInvalid
+from backend.entity.errors import EntityChangeLogQueryUnsupported, EntityRequestInvalid
 from backend.entity.history.bounds import _blank
+
+_ROW_ID_TEXT = re.compile(r"-?\d+")
 
 _CURSOR_KEYS = ("sub", "ent", "q", "pos", "exp", "kid")
 _DIGEST_LEN = 64
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryLookup:
+    """One interactive lookup after blank strings are dropped.
+
+    ``row_identity`` is business-key text. ``row_id`` is set only together
+    with ``version_id``.
+    """
+
+    row_identity: str | None
+    version_id: str | None
+    row_id: int | None
+
+
+def resolve_history_lookup(
+    row_identity: str | None,
+    version_id: str | None,
+    row_id: str | None,
+) -> HistoryLookup:
+    """Normalize a lookup. A non-integer row id is ``REQUEST_INVALID``.
+
+    A row id without a version, a version without a row id, or both together
+    with a business key is ``ENTITY_CHANGE_LOG_QUERY_UNSUPPORTED``. The error
+    does not say whether a row or value exists.
+    """
+    identity = _blank(row_identity)
+    version = _blank(version_id)
+    raw_row = _blank(row_id)
+    if raw_row is None:
+        parsed = None
+    elif _ROW_ID_TEXT.fullmatch(raw_row) is None:
+        raise EntityRequestInvalid()
+    else:
+        parsed = int(raw_row)
+    paired = version is not None or parsed is not None
+    if (version is None) != (parsed is None) or (identity is not None and paired):
+        raise EntityChangeLogQueryUnsupported()
+    return HistoryLookup(row_identity=identity, version_id=version, row_id=parsed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +75,8 @@ class HistoryQuery:
     source: str | None = None
     subject: str | None = None
     row_identity: str | None = None
+    version_id: str | None = None
+    row_id: str | None = None
     occurred_from: str | None = None
     occurred_to: str | None = None
 
@@ -40,18 +84,29 @@ class HistoryQuery:
         object.__setattr__(self, "operation", _blank(self.operation))
         object.__setattr__(self, "source", _blank(self.source))
         object.__setattr__(self, "subject", _blank(self.subject))
-        object.__setattr__(self, "row_identity", _blank(self.row_identity))
         object.__setattr__(self, "occurred_from", _blank(self.occurred_from))
         object.__setattr__(self, "occurred_to", _blank(self.occurred_to))
+        lookup = resolve_history_lookup(
+            self.row_identity, self.version_id, self.row_id
+        )
+        object.__setattr__(self, "row_identity", lookup.row_identity)
+        object.__setattr__(self, "version_id", lookup.version_id)
+        object.__setattr__(
+            self,
+            "row_id",
+            None if lookup.row_id is None else str(lookup.row_id),
+        )
 
     def canonical(self) -> str:
         body = {
             "occurred_from": self.occurred_from,
             "occurred_to": self.occurred_to,
             "operation": self.operation,
+            "row_id": self.row_id,
             "row_identity": self.row_identity,
             "source": self.source,
             "subject": self.subject,
+            "version_id": self.version_id,
         }
         return json.dumps(body, separators=(",", ":"), sort_keys=True)
 

@@ -16,6 +16,7 @@ from backend.core.time import format_instant
 from backend.entity.access.compiler import compile_policy, subject_outcome
 from backend.entity.access.errors import EntityAccessCombinationLimit
 from backend.entity.access.facts import Person
+from backend.entity.access.masks import CLEAR
 from backend.entity.access.plan import load_head, load_policy
 from backend.entity.access.service import _ensure_generated
 from backend.entity.access.store import get_access_store
@@ -29,8 +30,9 @@ from backend.entity.change_log import (
 from backend.entity.changes import ChangeLogOff
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
 from backend.entity.entity_db import get_entity_engine
-from backend.entity.errors import EntityNotFound
+from backend.entity.errors import EntityChangeLogQueryUnsupported, EntityNotFound
 from backend.entity.history.bounds import _blank, _bound, _occurred_to_bound
+from backend.entity.history.cursor import HistoryLookup, resolve_history_lookup
 from backend.entity.history.project import SideWork, project_sides
 from backend.entity.lifecycle import PUBLISHED
 from backend.entity.service import change_log_tables
@@ -44,6 +46,7 @@ __all__ = [
     "IncrementalEvent",
     "IncrementalPage",
     "IncrementalPosition",
+    "clear_cell",
     "read_history",
     "read_incremental",
 ]
@@ -146,19 +149,29 @@ def read_history(
     source: str | None = None,
     subject: str | None = None,
     row_identity: str | None = None,
+    version_id: str | None = None,
+    row_id: str | None = None,
     occurred_from: str | None = None,
     occurred_to: str | None = None,
 ) -> HistoryPage:
     """One interactive page for an already resolved subject.
 
     Filters match the change-log list, including a fraction-less ``occurred_to``
-    that covers the rest of that second. ``row_identity`` is only the existing
-    raw candidate predicate. An update whose two visible projections are equal
-    is omitted. The continuation is the last candidate evaluated on the storage
-    page, including a candidate omitted from ``events``.
+    that covers the rest of that second. ``row_identity`` is business-key text.
+    ``version_id`` and ``row_id`` together name one row of one logical version.
+    A hit is an exact comparison on a visible side after projection. An update
+    whose two visible projections are equal is omitted. The continuation is the
+    last candidate evaluated on the storage page, including a candidate omitted
+    from ``events``.
     """
+    lookup = resolve_history_lookup(row_identity, version_id, row_id)
     policy, outcome, person, head_attributes = _authorize(entity_id, user)
     index = _versions(entity_id)
+    if lookup.row_identity is not None and not _key_can_be_clear(index, outcome):
+        raise EntityChangeLogQueryUnsupported()
+    version_row = _version_row(index, lookup)
+    if lookup.row_id is not None and version_row is None:
+        return HistoryPage(events=[], continuation=None)
     with get_entity_engine().begin() as conn:
         page = read_change_log(
             conn,
@@ -168,7 +181,8 @@ def read_history(
             operation=operation,
             source=source,
             subject=_blank(subject),
-            row_identity=_blank(row_identity),
+            key_query=lookup.row_identity,
+            version_row=version_row,
             occurred_from=_bound(occurred_from),
             occurred_to=_occurred_to_bound(occurred_to),
         )
@@ -188,7 +202,15 @@ def read_history(
             after=after,
         )
         for entry, version_id, version_number, before, after in projected
-        if _eligible(before, after) and not _same_update(entry.operation, before, after)
+        if _eligible(before, after)
+        and not _same_update(entry.operation, before, after)
+        and _lookup_hit(
+            index[entry.physical_table],
+            before,
+            after,
+            lookup,
+            policy,
+        )
     ]
     return HistoryPage(events=events, continuation=page.next_before_sequence)
 
@@ -406,3 +428,95 @@ def _same_update(operation: str, before: HistorySide, after: HistorySide) -> boo
         and after.state == "visible"
         and before.values == after.values
     )
+
+
+def _key_can_be_clear(index: dict[str, _Version], outcome: Any) -> bool:
+    """True when some version's Business Key can be a clear cell.
+
+    Always masked, always withheld, and absent from the caller's shape are
+    not clear. A row-varying mask still counts when one grant mode is clear.
+    """
+    for version in index.values():
+        attribute_id = _business_key_id(version)
+        if attribute_id is None:
+            continue
+        for column in outcome.columns:
+            if column.attr.attribute_id != attribute_id:
+                continue
+            if any(mode == CLEAR for _grant_id, mode in column.grant_modes):
+                return True
+    return False
+
+
+def _business_key_id(version: _Version) -> str | None:
+    name = version.table.business_key
+    if not name:
+        return None
+    for attr in version.table.attributes:
+        if attr.name == name and attr.attribute_id:
+            return attr.attribute_id
+    return None
+
+
+def _version_row(
+    index: dict[str, _Version], lookup: HistoryLookup
+) -> tuple[str, str] | None:
+    if lookup.row_id is None:
+        return None
+    for version in index.values():
+        if version.version_id == lookup.version_id:
+            return (version.table.physical_table, str(lookup.row_id))
+    return None
+
+
+def _lookup_hit(
+    version: _Version,
+    before: HistorySide,
+    after: HistorySide,
+    lookup: HistoryLookup,
+    policy: Any,
+) -> bool:
+    if lookup.row_identity is None and lookup.row_id is None:
+        return True
+    if lookup.row_identity is not None:
+        name = _projected_key_name(version, policy)
+        return _key_hit(before, name, lookup.row_identity) or _key_hit(
+            after, name, lookup.row_identity
+        )
+    return _row_hit(before, lookup.row_id) or _row_hit(after, lookup.row_id)
+
+
+def _key_hit(side: HistorySide, name: str | None, query: str) -> bool:
+    if name is None:
+        return False
+    value = clear_cell(side, name)
+    if isinstance(value, bool) or value is None:
+        return False
+    if isinstance(value, str):
+        return value == query
+    if isinstance(value, int):
+        return str(value) == query
+    return False
+
+
+def _row_hit(side: HistorySide, row_id: int | None) -> bool:
+    value = clear_cell(side, "row_id")
+    return isinstance(value, int) and not isinstance(value, bool) and value == row_id
+
+
+def clear_cell(side: HistorySide, name: str) -> Any:
+    """A visible cell that is present, not masked, and not withheld.
+
+    ``None`` means the cell is not a clear value. A stored null is also
+    ``None``.
+    """
+    if side.state != "visible" or side.values is None:
+        return None
+    if name in side.masked:
+        return None
+    if name not in side.values:
+        return None
+    withheld = side.values.get("__withheld")
+    if isinstance(withheld, list) and name in {str(item) for item in withheld}:
+        return None
+    return side.values[name]

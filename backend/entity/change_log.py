@@ -378,17 +378,19 @@ def read_change_log(
     operation: str | None = None,
     source: str | None = None,
     subject: str | None = None,
-    row_identity: str | None = None,
     occurred_from: datetime | None = None,
     occurred_to: datetime | None = None,
+    key_query: str | None = None,
+    version_row: tuple[str, str] | None = None,
 ) -> ChangeLogPage:
     """Matching entries, newest sequence first, at most one sequence page.
 
     ``before_sequence`` is an exclusive upper bound. ``next_before_sequence``
     is the smallest sequence on a full page and null when the page is short.
     A missing time bound does not constrain that side. ``source``
-    ``unattributed`` matches a null source. ``row_identity`` matches ``row_id``
-    or that table's Business Key exactly.
+    ``unattributed`` matches a null source. ``key_query`` and ``version_row``
+    are candidate predicates for the interactive read. They are not the
+    authorized-side decision.
     """
     entity_id = _entity_id(entity_id)
     clauses = ["entity_id = :entity_id"]
@@ -416,10 +418,14 @@ def read_change_log(
     if occurred_to is not None:
         clauses.append("occurred_at <= :occurred_to")
         params["occurred_to"] = occurred_to
-    if row_identity is not None:
-        identity_sql, identity_params = _row_identity_sql(tables, row_identity)
-        clauses.append(identity_sql)
-        params.update(identity_params)
+    if key_query is not None:
+        key_sql, key_params = _key_candidate_sql(tables, key_query)
+        clauses.append(key_sql)
+        params.update(key_params)
+    if version_row is not None:
+        row_sql, row_params = _version_row_sql(version_row[0], version_row[1])
+        clauses.append(row_sql)
+        params.update(row_params)
     rows = list(
         conn.execute(
             text(
@@ -706,27 +712,39 @@ def _target_for(physical: str, tables: Sequence[ChangeLogTable]) -> _ImageTarget
     raise ValueError(f"change-log physical table is not loaded: {physical}")
 
 
-def _row_identity_sql(
+def _key_candidate_sql(
     tables: Sequence[ChangeLogTable], identity: str
 ) -> tuple[str, dict[str, Any]]:
-    params: dict[str, Any] = {"row_identity": identity}
-    parts = [
-        "COALESCE(image->'after'->>'row_id', image->'before'->>'row_id') "
-        "= :row_identity"
-    ]
+    """Either side's stored Business Key text. Not a hit by itself."""
+    params: dict[str, Any] = {"key_query": identity}
+    parts: list[str] = []
     for index, table in enumerate(tables):
         if not table.business_key:
             continue
-        key = f"bk{index}"
-        table_key = f"pt{index}"
+        key = f"kq{index}"
+        table_key = f"kt{index}"
         params[key] = table.business_key
         params[table_key] = table.physical_table
         parts.append(
-            f"(physical_table = :{table_key} AND "
-            f"COALESCE(image->'after'->>:{key}, image->'before'->>:{key}) "
-            "= :row_identity)"
+            f"(physical_table = :{table_key} AND ("
+            f"image->'after'->>:{key} = :key_query OR "
+            f"image->'before'->>:{key} = :key_query OR "
+            f"image->'changed'->>:{key} = :key_query))"
         )
+    if not parts:
+        return "FALSE", {}
     return "(" + " OR ".join(parts) + ")", params
+
+
+def _version_row_sql(physical: str, row_text: str) -> tuple[str, dict[str, Any]]:
+    """One physical table and either side's stored row id text. Not a hit."""
+    return (
+        "(physical_table = :version_table AND ("
+        "image->'after'->>'row_id' = :version_row OR "
+        "image->'before'->>'row_id' = :version_row OR "
+        "image->'changed'->>'row_id' = :version_row))",
+        {"version_table": physical, "version_row": row_text},
+    )
 
 
 def _create_shared_objects(conn: Connection) -> None:

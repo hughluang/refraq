@@ -48,7 +48,11 @@ from backend.entity.ddl import (
     qualified_table,
 )
 from backend.entity.entity_db import get_entity_engine, reset_entity_engine
-from backend.entity.errors import EntityNotFound
+from backend.entity.errors import (
+    EntityChangeLogQueryUnsupported,
+    EntityNotFound,
+    EntityRequestInvalid,
+)
 from backend.entity.history.service import (
     read_history,
     read_incremental,
@@ -1113,6 +1117,224 @@ def test_incremental_limit_does_not_invent_a_time_window(history_db: object) -> 
     assert rest.has_more is False
     assert rest.events[0].physical_table
     assert rest.events[0].version_number == 1
+
+
+def test_lookup_matches_a_clear_business_key_or_one_version_row(
+    history_db: object,
+) -> None:
+    world = _publish([[_sku()], [_sku()]])
+    _clear(world, ["att_sku"])
+    _ready(world.entity_id)
+    left_row = _insert(world.tables[0], {"sku": "LEFT"})
+    right_row = _insert(world.tables[1], {"sku": "RIGHT"})
+    assert left_row == 1
+    assert right_row == 1
+    by_key = read_history(world.entity_id, world.user, row_identity="LEFT")
+    assert [_visible_sku(event) for event in by_key.events] == ["LEFT"]
+    assert by_key.events[0].version_id == world.version_ids[0]
+    by_row_text = read_history(world.entity_id, world.user, row_identity="1")
+    assert by_row_text.events == []
+    assert by_row_text.continuation is None
+    left = read_history(
+        world.entity_id,
+        world.user,
+        version_id=world.version_ids[0],
+        row_id="1",
+    )
+    assert [_visible_sku(event) for event in left.events] == ["LEFT"]
+    right = read_history(
+        world.entity_id,
+        world.user,
+        version_id=world.version_ids[1],
+        row_id="1",
+    )
+    assert [_visible_sku(event) for event in right.events] == ["RIGHT"]
+    opened = read_history(world.entity_id, world.user)
+    assert {_visible_sku(event) for event in opened.events} == {"LEFT", "RIGHT"}
+    blank = read_history(
+        world.entity_id,
+        world.user,
+        row_identity="",
+        version_id="",
+        row_id="",
+    )
+    assert {_visible_sku(event) for event in blank.events} == {"LEFT", "RIGHT"}
+
+
+def test_business_key_lookup_rejects_when_the_key_cannot_be_clear(
+    history_db: object,
+) -> None:
+    masked = _publish([[_sku(), _note()]])
+    _ladder(masked.entity_id, masked.user.id, "att_sku", _MASK_LEVELS)
+    masked_profile = _profile(
+        masked.entity_id, masked.user.id, "masked", [("att_sku", "masked")]
+    )
+    _grant(masked.entity_id, masked.user.id, masked_profile)
+    _ready(masked.entity_id)
+    _insert(masked.tables[0], {"sku": "abcdef", "note": "kept"})
+    with pytest.raises(EntityChangeLogQueryUnsupported) as masked_error:
+        read_history(masked.entity_id, masked.user, row_identity="abcdef")
+    assert masked_error.value.code == "ENTITY_CHANGE_LOG_QUERY_UNSUPPORTED"
+    assert masked_error.value.message == "This change-log query is not supported."
+    assert "abcdef" not in masked_error.value.message
+
+    hidden = _publish([[_sku(), _note()]])
+    note_only = _profile(
+        hidden.entity_id, hidden.user.id, "note", [("att_note", "clear")]
+    )
+    _grant(hidden.entity_id, hidden.user.id, note_only)
+    _ready(hidden.entity_id)
+    _insert(hidden.tables[0], {"sku": "secret-key", "note": "visible"})
+    with pytest.raises(EntityChangeLogQueryUnsupported) as hidden_error:
+        read_history(hidden.entity_id, hidden.user, row_identity="secret-key")
+    assert hidden_error.value.message == "This change-log query is not supported."
+    assert "secret-key" not in hidden_error.value.message
+    listed = read_history(hidden.entity_id, hidden.user)
+    assert listed.events[0].after.values is not None
+    assert "sku" not in listed.events[0].after.values
+    assert listed.events[0].after.values["note"] == "visible"
+
+
+def test_row_varying_mask_matches_only_a_clear_business_key(
+    history_db: object,
+) -> None:
+    world = _publish([[_sku(), _qty()]])
+    _ladder(world.entity_id, world.user.id, "att_sku", _MASK_LEVELS)
+    clear = _profile(
+        world.entity_id,
+        world.user.id,
+        "clear",
+        [("att_sku", "clear"), ("att_qty", "clear")],
+    )
+    masked = _profile(
+        world.entity_id,
+        world.user.id,
+        "masked",
+        [("att_sku", "masked"), ("att_qty", "clear")],
+    )
+    _grant(
+        world.entity_id,
+        world.user.id,
+        clear,
+        row_rule={"eq": {"attr": "att_qty", "value": 1}},
+    )
+    _grant(
+        world.entity_id,
+        world.user.id,
+        masked,
+        row_rule={"eq": {"attr": "att_qty", "value": 2}},
+    )
+    _ready(world.entity_id)
+    _insert(world.tables[0], {"sku": "OPEN", "qty": 1})
+    _insert(world.tables[0], {"sku": "SECRET", "qty": 2})
+    matched = read_history(world.entity_id, world.user, row_identity="OPEN")
+    assert [_visible_sku(event) for event in matched.events] == ["OPEN"]
+    missed = read_history(world.entity_id, world.user, row_identity="SECRET")
+    assert missed.events == []
+    assert missed.continuation is None
+    masked_text = read_history(world.entity_id, world.user, row_identity="S****T")
+    assert masked_text.events == []
+
+
+def test_withheld_business_key_does_not_match_and_does_not_reject_the_query(
+    history_db: object,
+) -> None:
+    world = _publish([[_sku(), _qty()]])
+    shown = _profile(
+        world.entity_id,
+        world.user.id,
+        "shown",
+        [("att_sku", "clear"), ("att_qty", "clear")],
+    )
+    omitted = _profile(
+        world.entity_id, world.user.id, "omitted", [("att_qty", "clear")]
+    )
+    _grant(
+        world.entity_id,
+        world.user.id,
+        shown,
+        row_rule={"eq": {"attr": "att_qty", "value": 1}},
+    )
+    _grant(
+        world.entity_id,
+        world.user.id,
+        omitted,
+        row_rule={"eq": {"attr": "att_qty", "value": 2}},
+    )
+    _ready(world.entity_id)
+    _insert(world.tables[0], {"sku": "SHOWN", "qty": 1})
+    _insert(world.tables[0], {"sku": "HIDDEN", "qty": 2})
+    matched = read_history(world.entity_id, world.user, row_identity="SHOWN")
+    assert [_visible_sku(event) for event in matched.events] == ["SHOWN"]
+    missed = read_history(world.entity_id, world.user, row_identity="HIDDEN")
+    assert missed.events == []
+    assert missed.continuation is None
+    held = read_history(world.entity_id, world.user)
+    withheld = [
+        event.after.values
+        for event in held.events
+        if event.after.values is not None and event.after.values.get("sku") is None
+    ]
+    assert withheld[0] is not None
+    assert "HIDDEN" not in withheld[0].values()
+    assert withheld[0]["__withheld"] == ["sku"]
+
+
+def test_lookup_uses_the_visible_side_and_rejects_an_incomplete_pair(
+    history_db: object,
+) -> None:
+    world = _publish([[_sku(), _qty()]])
+    _clear(
+        world,
+        ["att_sku", "att_qty"],
+        row_rule={"eq": {"attr": "att_qty", "value": 1}},
+    )
+    _ready(world.entity_id)
+    _insert(world.tables[0], {"sku": "START", "qty": 1})
+    _update(world.tables[0], "START", {"sku": "NEXT", "qty": 9})
+    _insert(world.tables[0], {"sku": "SECRET", "qty": 9})
+    visible = read_history(world.entity_id, world.user, row_identity="START")
+    updates = [item for item in visible.events if item.operation == "update"]
+    assert len(updates) == 1
+    assert any(item.operation == "insert" for item in visible.events)
+    event = updates[0]
+    assert event.before.state == "visible"
+    assert event.before.values is not None
+    assert event.before.values["sku"] == "START"
+    assert event.after.state == "unavailable"
+    assert event.after.values is None
+    assert not hasattr(event, "business_key")
+    hidden_after = read_history(world.entity_id, world.user, row_identity="NEXT")
+    assert hidden_after.events == []
+    hidden_row = read_history(world.entity_id, world.user, row_identity="SECRET")
+    assert hidden_row.events == []
+    opened = read_history(world.entity_id, world.user)
+    assert event.sequence in {item.sequence for item in opened.events}
+    assert all(
+        item.after.values is None or item.after.values.get("sku") != "SECRET"
+        for item in opened.events
+    )
+    with pytest.raises(EntityChangeLogQueryUnsupported) as lone_row:
+        read_history(world.entity_id, world.user, row_id="1")
+    assert lone_row.value.message == "This change-log query is not supported."
+    with pytest.raises(EntityChangeLogQueryUnsupported):
+        read_history(world.entity_id, world.user, version_id=world.version_ids[0])
+    with pytest.raises(EntityChangeLogQueryUnsupported):
+        read_history(
+            world.entity_id,
+            world.user,
+            row_identity="START",
+            version_id=world.version_ids[0],
+            row_id="1",
+        )
+    with pytest.raises(EntityRequestInvalid) as bad_row:
+        read_history(
+            world.entity_id,
+            world.user,
+            version_id=world.version_ids[0],
+            row_id="nope",
+        )
+    assert bad_row.value.code == "REQUEST_INVALID"
 
 
 def test_recording_off_raises_for_incremental_consumption(history_db: object) -> None:

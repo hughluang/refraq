@@ -37,6 +37,8 @@ type Filters = {
   source: string;
   subject: string;
   rowIdentity: string;
+  versionId: string;
+  rowId: string;
   occurredFrom: string;
   occurredTo: string;
 };
@@ -46,6 +48,8 @@ const EMPTY_FILTERS: Filters = {
   source: "",
   subject: "",
   rowIdentity: "",
+  versionId: "",
+  rowId: "",
   occurredFrom: "",
   occurredTo: "",
 };
@@ -82,6 +86,8 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
       source: filters.source || undefined,
       subject: filters.subject || undefined,
       row_identity: filters.rowIdentity || undefined,
+      version_id: filters.versionId || undefined,
+      row_id: filters.rowId || undefined,
       occurred_from: wallToInstant(filters.occurredFrom, zone) ?? undefined,
       occurred_to: wallToInstant(filters.occurredTo, zone) ?? undefined,
       signal: controller.signal,
@@ -167,6 +173,18 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
           onChange={(event) =>
             setFilter({ rowIdentity: event.currentTarget.value })
           }
+        />
+        <TextInput
+          label={t("entities.changeLog.filter.versionId")}
+          value={filters.versionId}
+          onChange={(event) =>
+            setFilter({ versionId: event.currentTarget.value })
+          }
+        />
+        <TextInput
+          label={t("entities.changeLog.filter.rowId")}
+          value={filters.rowId}
+          onChange={(event) => setFilter({ rowId: event.currentTarget.value })}
         />
         <TextInput
           type="datetime-local"

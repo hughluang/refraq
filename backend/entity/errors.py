@@ -15,6 +15,7 @@ __all__ = [
     "EntityAlreadyDeprecated",
     "EntityAlreadyPublished",
     "EntityAttributeInvalid",
+    "EntityChangeLogQueryUnsupported",
     "EntityDeprecated",
     "EntityNeverPublished",
     "EntityNotFound",
@@ -88,6 +89,20 @@ class EntityRequestInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Request validation failed"
+
+
+class EntityChangeLogQueryUnsupported(AppError):
+    """A change-log lookup that cannot be answered on authorized cells.
+
+    The message does not name a scan position or say whether a row or value
+    exists.
+    """
+
+    code = "ENTITY_CHANGE_LOG_QUERY_UNSUPPORTED"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "This change-log query is not supported."
 
 
 class EntityNotFound(AppError):
