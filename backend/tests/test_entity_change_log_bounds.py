@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from backend.core.time import format_instant
-from backend.entity.routers.entities import _occurred_to_bound
+from backend.entity.history.bounds import _occurred_to_bound
 
 _HISTORY_SERVICE = (
     Path(__file__).resolve().parents[1] / "entity" / "history" / "service.py"

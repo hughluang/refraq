@@ -18,9 +18,9 @@ import {
   listEntityChangeLog,
 } from "@/features/entities/api";
 import type {
-  ChangeLogEntryDetail,
   ChangeLogEntrySummary,
   ChangeLogPage,
+  ChangeLogSide,
 } from "@/features/entities/types";
 import { useEntryZone } from "@/hooks/useFormatInstant";
 import { problemMessage } from "@/lib/problem";
@@ -54,12 +54,22 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
   const t = useTranslate();
   const zone = useEntryZone();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  const [beforeSequence, setBeforeSequence] = useState<number | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState<ChangeLogPage | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  const [detail, setDetail] = useState<ChangeLogEntryDetail | null>(null);
+  const [detail, setDetail] = useState<ChangeLogEntrySummary | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [boundEntityId, setBoundEntityId] = useState(entityId);
+  // The continuation and the open entry belong to one entity. Adjust them
+  // while rendering so this pass's list effect cannot send the previous cursor.
+  if (entityId !== boundEntityId) {
+    setBoundEntityId(entityId);
+    setCursor(null);
+    setPage(null);
+    setSelected(null);
+    setDetail(null);
+  }
 
   useEffect(() => {
     if (!active) return;
@@ -67,7 +77,7 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
     setBusy(true);
     setMessage(null);
     listEntityChangeLog(entityId, {
-      before_sequence: beforeSequence ?? undefined,
+      cursor: cursor ?? undefined,
       operation: filters.operation || undefined,
       source: filters.source || undefined,
       subject: filters.subject || undefined,
@@ -77,6 +87,7 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
       signal: controller.signal,
     })
       .then((next) => {
+        if (controller.signal.aborted) return;
         setPage(next);
       })
       .catch((err: unknown) => {
@@ -88,7 +99,7 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
         if (!controller.signal.aborted) setBusy(false);
       });
     return () => controller.abort();
-  }, [active, beforeSequence, entityId, filters, t, zone]);
+  }, [active, cursor, entityId, filters, t, zone]);
 
   useEffect(() => {
     if (!active || selected == null) return;
@@ -105,12 +116,13 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
 
   const setFilter = (patch: Partial<Filters>) => {
     setFilters((current) => ({ ...current, ...patch }));
-    setBeforeSequence(null);
+    setCursor(null);
     setSelected(null);
     setDetail(null);
   };
 
   const items = page?.items ?? [];
+  const nextCursor = page?.next_cursor ?? null;
 
   return (
     <Stack>
@@ -179,7 +191,7 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
       {busy && items.length === 0 ? (
         <Text>{t("entities.changeLog.loading")}</Text>
       ) : null}
-      {!busy && items.length === 0 && !message ? (
+      {!busy && items.length === 0 && !message && cursor == null && nextCursor == null ? (
         <EmptyState message={t("entities.changeLog.empty")} />
       ) : null}
       {items.length > 0 ? (
@@ -190,7 +202,7 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
               <Table.Th>{t("entities.changeLog.occurredAt")}</Table.Th>
               <Table.Th>{t("entities.changeLog.operation")}</Table.Th>
               <Table.Th>{t("entities.changeLog.rowIdentity")}</Table.Th>
-              <Table.Th>{t("entities.changeLog.physicalTable")}</Table.Th>
+              <Table.Th>{t("entities.changeLog.version")}</Table.Th>
               <Table.Th>{t("entities.changeLog.source")}</Table.Th>
               <Table.Th>{t("entities.changeLog.subject")}</Table.Th>
             </Table.Tr>
@@ -210,7 +222,14 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
                 <Table.Td>{formatInstant(item.occurred_at)}</Table.Td>
                 <Table.Td>{operationLabel(t, item.operation)}</Table.Td>
                 <Table.Td>{rowIdentity(item)}</Table.Td>
-                <Table.Td>{item.physical_table}</Table.Td>
+                <Table.Td>
+                  <Stack gap={0}>
+                    <Text size="sm">{item.version_number}</Text>
+                    <Text size="xs" c="dimmed" ff="monospace">
+                      {item.version_id}
+                    </Text>
+                  </Stack>
+                </Table.Td>
                 <Table.Td>{sourceLabel(t, item.source)}</Table.Td>
                 <Table.Td>
                   <SubjectCell item={item} />
@@ -220,61 +239,75 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
           </Table.Tbody>
         </Table>
       ) : null}
-      {page?.next_before_sequence != null || beforeSequence != null ? (
+      {nextCursor != null || cursor != null ? (
         <Group>
-          {beforeSequence != null ? (
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => setBeforeSequence(null)}
-            >
+          {cursor != null ? (
+            <Button variant="default" size="sm" onClick={() => setCursor(null)}>
               {t("entities.changeLog.newest")}
             </Button>
           ) : null}
-          {page?.next_before_sequence != null ? (
+          {nextCursor != null ? (
             <Button
               variant="default"
               size="sm"
-              onClick={() => setBeforeSequence(page.next_before_sequence)}
+              onClick={() => setCursor(nextCursor)}
             >
               {t("entities.changeLog.older")}
             </Button>
           ) : null}
         </Group>
       ) : null}
-      {detail ? <ChangeLogImages detail={detail} /> : null}
+      {detail ? (
+        <Stack>
+          <SideBlock name="before" side={detail.before} />
+          <SideBlock name="after" side={detail.after} />
+        </Stack>
+      ) : null}
     </Stack>
   );
 }
 
-function ChangeLogImages({ detail }: { detail: ChangeLogEntryDetail }) {
+function SideBlock({
+  name,
+  side,
+}: {
+  name: "before" | "after";
+  side: ChangeLogSide;
+}) {
   const t = useTranslate();
+  const label = t(
+    name === "before" ? "entities.changeLog.before" : "entities.changeLog.after",
+  );
+  if (side.state === "absent") return null;
   return (
-    <Stack>
-      {detail.before ? (
-        <Stack gap={4} role="region" aria-label={t("entities.changeLog.before")}>
-          <Text fw={600}>{t("entities.changeLog.before")}</Text>
-          <ImageLines image={detail.before} />
-        </Stack>
-      ) : null}
-      {detail.after ? (
-        <Stack gap={4} role="region" aria-label={t("entities.changeLog.after")}>
-          <Text fw={600}>{t("entities.changeLog.after")}</Text>
-          <ImageLines image={detail.after} />
-        </Stack>
-      ) : null}
+    <Stack gap={4} role="region" aria-label={label}>
+      <Text fw={600}>{label}</Text>
+      {side.state === "unavailable" ? (
+        <Text>{t("entities.changeLog.unavailable")}</Text>
+      ) : (
+        <ImageLines image={side.values ?? {}} />
+      )}
     </Stack>
   );
 }
 
 function ImageLines({ image }: { image: Record<string, unknown> }) {
+  const t = useTranslate();
+  const withheld = new Set(
+    Array.isArray(image.__withheld) ? image.__withheld.map(String) : [],
+  );
   return (
     <Stack gap={2}>
-      {Object.entries(image).map(([name, value]) => (
-        <Text key={name}>
-          {name}: {imageCell(value)}
-        </Text>
-      ))}
+      {Object.entries(image)
+        .filter(([name]) => name !== "__withheld")
+        .map(([name, value]) => (
+          <Text key={name}>
+            {name}:{" "}
+            {withheld.has(name)
+              ? t("entities.changeLog.withheld")
+              : imageCell(value)}
+          </Text>
+        ))}
     </Stack>
   );
 }
@@ -303,10 +336,15 @@ function SubjectCell({ item }: { item: ChangeLogEntrySummary }) {
 }
 
 function rowIdentity(item: ChangeLogEntrySummary): string {
-  const key = item.business_key == null ? "" : String(item.business_key);
-  if (item.row_id == null) return key;
-  if (!key) return String(item.row_id);
-  return `${item.row_id} · ${key}`;
+  const ids: string[] = [];
+  for (const side of [item.before, item.after]) {
+    if (side.state !== "visible" || side.values == null) continue;
+    const rowId = side.values.row_id;
+    if (rowId == null) continue;
+    const text = String(rowId);
+    if (!ids.includes(text)) ids.push(text);
+  }
+  return ids.join(" · ");
 }
 
 function operationLabel(

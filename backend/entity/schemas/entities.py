@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -175,18 +175,33 @@ class EffectiveChangeLogOut(BaseModel):
     retention_days: int | None = None
 
 
+class ChangeLogSideOut(BaseModel):
+    """One projected side. Absent and unavailable carry no values."""
+
+    state: Literal["absent", "unavailable", "visible"]
+    values: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_hidden_values(self, handler: Any) -> dict[str, Any]:
+        data = dict(handler(self))
+        if self.state != "visible":
+            data.pop("values", None)
+        return data
+
+
 class ChangeLogEntryOut(BaseModel):
-    """One change-log row without the physical images."""
+    """One eligible event. Identity stays on the visible sides."""
 
     sequence: int
     occurred_at: Instant
     operation: str
-    row_id: int | None = None
-    business_key: str | int | None = None
-    physical_table: str
+    version_id: str
+    version_number: int
     source: str | None = None
     subject: str | None = None
     subject_label: str | None = None
+    before: ChangeLogSideOut
+    after: ChangeLogSideOut
 
 
 class ChangeLogPageOut(BaseModel):
@@ -194,14 +209,7 @@ class ChangeLogPageOut(BaseModel):
 
     items: list[ChangeLogEntryOut]
     limit: int
-    next_before_sequence: int | None = None
-
-
-class ChangeLogDetailOut(ChangeLogEntryOut):
-    """One entry with the rebuilt physical before and after images."""
-
-    before: dict[str, Any] | None = None
-    after: dict[str, Any] | None = None
+    next_cursor: str | None = None
 
 
 class BusinessEntityOut(BaseModel):

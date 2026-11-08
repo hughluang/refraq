@@ -235,6 +235,8 @@ A view answers only requests that carry the revision it was compiled for. Betwee
 
 **Inbound Reference**s list only referring Entities visible to the caller under the same rule. **Dictionaries** stay globally visible to `entity:read` holders. The access management surface is visible only to `entity:access_manage` holders.
 
+Those definition rights are not a data grant. `entity:write` and `entity:access_manage` do not make a **Change Log** event readable. The interactive change-log list and detail require `entity:data_read` and a current effective `read` grant (§15.1).
+
 ## 13. References To Rows The Caller Cannot See
 
 An **Entity Reference** column is presented like any other column: its stored target Business Key appears according to the profile level. Wherever the product resolves a reference to a display label, it resolves the label only when the target row is visible to the caller through the caller's own shape of the target Entity; otherwise the label is "inaccessible record". Discovery surfaces name the target Entity only when the target Entity is visible to the caller.
@@ -262,6 +264,18 @@ Access is enforced by PostgreSQL, not by predicates the application assembles pe
 
 Querying a Profile View other than the one the caller's shape selects never reveals more: guards accept only the caller's own grants, so extra columns are withheld and no extra rows appear.
 
+### 15.1 Interactive Change History
+
+The interactive change-log list and the one-event read use the caller's current access policy: the same effective execution subject, grants, restrictions, subject attributes, and evaluation time as a head read. They apply that policy to reconstructed historical snapshots, including a deleted row and a superseded version whose physical table is gone. They do not read a **Profile View** of a superseded version. They do not return the physical table name or the stored image.
+
+An event is returned only when at least one existing side is authorized. An insert has no before side. A delete has no after side. Each side is `absent` (not part of the operation), `visible` (projected values, including a withheld marker), or `unavailable` (not safely readable). An absent or unavailable side carries no values. The response does not say whether an unavailable side failed a row rule or a historical schema check. An update whose two visible projections are equal, including withheld markers, is omitted. An update with only one visible side is returned. No effective `read` grant, an unknown Entity, an ineligible event, and a presentation-suppressed event are the same not-found result. List and detail share that decision.
+
+Pending regeneration of that Entity's access views refuses the request with the same retryable pending error as a head read. Another Entity is unaffected. A shape over the combination cap uses the same over-limit error as a head read.
+
+The page holds at most 50 visible events, newest sequence first. Continuation is an integrity-protected opaque cursor bound to the caller, the Entity, the query, and a 60-second expiry, the access-context lifetime. The cursor is a position, not a record of the grant decision: every request authorizes again. A full evaluation that still has candidates returns a continuation even when the page shows no events. A null continuation means the requested range is exhausted. A database error, including the platform statement timeout, is an error. It is not a null continuation and not an empty success page. The read does not add an index, a scan budget, or a time window. Omitting occurrence-time bounds does not add a window. Sparse visibility can run until the platform statement timeout.
+
+Residual disclosures remain: how long the read takes, gaps in the visible sequence, and the fact that a continuation exists. The cursor does not remove those channels. The product does not promise noninterference, a measured time window, or a measured scan budget.
+
 ## 16. Audit
 
 An Entity Data API request, a Data Channel row read or write, or an Entity MCP `describe_entity`, `list_dictionary_codes`, `get_row`, `query_rows`, or `run_sql` appends one record to the **Entity Access Log** in the metadata database when it reaches the access decision: Instant, User id, User PAT id when the call is PAT-authenticated, request id, Entity id, verb, effective grant ids, narrowing identity, Profile View, policy revision, rows returned or affected, and outcome code. Data Channel verbs are `channel-read` and `channel-write`. Entity MCP `describe_entity` and `list_dictionary_codes` use verb `schema`. `get_row` and `query_rows` use verbs `get` and `query`. `run_sql` uses verb `sql`, one record per referenced Entity, sharing one request id and one PAT id. Verb `sql` also stores `sql_sha256` (SHA-256 hex of the UTF-8 bytes of the submitted SQL) and `statement_summary` (the submitted SQL truncated to 200 characters). Other verbs store null in both. `validate_sql` writes no record. A gate rejection, an unknown or invisible name, a statement that references no Entity, `PLATFORM_CAPACITY_EXCEEDED`, and an admission rejection write no `sql` record. Reads do not write a **Management Audit Event**. Records older than the System Parameter `access_log_retention_days` (seed 90, range 7–3650, group `entity_access`) are deleted by the platform.
@@ -284,7 +298,7 @@ Every Entity that has been published also has one grant for the **System Identit
 | Permission | Grants |
 | --- | --- |
 | `entity:access_manage` | Read and change ladders, profiles, grants, and restrictions on every Entity; copy profiles; preview a subject's shape; see full definitions (§12) |
-| `entity:data_read` | Master switch for Entity data reads; access additionally requires an effective `read` grant |
+| `entity:data_read` | Master switch for Entity data reads, including the interactive **Change Log**; access additionally requires an effective `read` grant. `entity:write` and `entity:access_manage` are not that grant |
 | `entity:data_write` | Master switch for Entity data writes, always together with `entity:data_read`; access additionally requires an attributing `write` grant |
 | `users:read` / `users:write` | User Groups, membership, Subject Attribute definitions, and values (§2.3) |
 
@@ -294,6 +308,7 @@ Every Entity that has been published also has one grant for the **System Identit
 
 - The Business Entity record has an access control tab for `entity:access_manage` holders: presentation ladders, the profile matrix (attributes by profiles), grants (subject picker, visual row-rule editor, actions, validity), restrictions, copy profile from another Entity, the combination count against the cap with over-limit warnings, and preview by subject with a per-cell source hint.
 - The Business Entity record has a data page for `entity:data_read` holders that calls the Entity Data API, offers "view as" narrowing, shows withheld cells as "no access", marks masked columns, and marks row-varying columns as present on some rows only.
+- The change-log tab is shown when the caller holds `entity:data_read` and recording is on. It lists projected rows, the logical version, and per-side identity taken only from visible sides, and it does not show the physical table name. Detail omits an absent side, shows a visible side as projected cells, and shows an unavailable side with a fixed label and no values or reason. A withheld cell shows no clear value. Older is available when the page carries a continuation, including when that page has no rows. The empty-history sentence is only the first page of a range that is already exhausted. A rejected cursor shows the problem message and does not start another request by itself.
 - Administration adds modules User Groups (`user-groups`) and Subject Attributes (`subject-attributes`) under `users:read` / `users:write`. The User record edits that User's groups and Subject Attribute values.
 
 ## 20. Non-Goals

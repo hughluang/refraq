@@ -11,22 +11,14 @@ from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, get_user_store
 from backend.core.pagination import ENTITY_LIST, PageParams, page_params
 from backend.entity.attribute_type import resolve
-from backend.entity.change_log import (
-    CHANGE_LOG_PAGE_LIMIT,
-    SOURCE_USER,
-    ChangeLogEntry,
-    ChangeLogTable,
-    read_change_log,
-    read_change_log_entry,
-)
-from backend.entity.entity_db import get_entity_engine
+from backend.entity.change_log import CHANGE_LOG_PAGE_LIMIT, SOURCE_USER
 from backend.entity.errors import EntityNotFound, EntityRequestInvalid
-from backend.entity.history.bounds import (
-    _blank,
-    _bound,
-    _occurred_to_bound,
-    _parse_bound,
+from backend.entity.history.cursor import (
+    HistoryQuery,
+    issue_history_cursor,
+    open_history_cursor,
 )
+from backend.entity.history.service import HistoryEvent, HistorySide, read_history
 from backend.entity.jobs import enqueue_drop
 from backend.entity.publish import accept
 from backend.entity.publish_confirmation import (
@@ -39,9 +31,9 @@ from backend.entity.schemas.entities import (
     BusinessEntityListResponse,
     BusinessEntityOut,
     BusinessEntityResponse,
-    ChangeLogDetailOut,
     ChangeLogEntryOut,
     ChangeLogPageOut,
+    ChangeLogSideOut,
     ClassificationOut,
     EntityBulkTagsRequest,
     EntityBulkTagsResponse,
@@ -57,8 +49,6 @@ from backend.entity.schemas.entities import (
 )
 from backend.entity.service import (
     add_entity_tags,
-    change_log_on_entity_database,
-    change_log_tables,
     classify_entity,
     create_entity,
     delete_entity,
@@ -177,7 +167,7 @@ def http_get_entity(
 @router.get("/entities/{entity_id}/change-log", response_model=ChangeLogPageOut)
 def http_list_change_log(
     entity_id: str,
-    before_sequence: int | None = Query(default=None, ge=1),
+    cursor: str | None = None,
     operation: Literal["insert", "update", "delete"] | None = None,
     source: Literal["user", "channel_run", "unattributed"] | None = None,
     subject: str | None = None,
@@ -186,88 +176,84 @@ def http_list_change_log(
     occurred_to: str | None = None,
     user: UserRecord = Depends(require_permission("entity:data_read")),
 ) -> ChangeLogPageOut:
-    tables = _change_log_tables(entity_id, user)
-    if not change_log_on_entity_database():
-        return ChangeLogPageOut(
-            items=[], limit=CHANGE_LOG_PAGE_LIMIT, next_before_sequence=None
+    query = HistoryQuery(
+        operation=operation,
+        source=source,
+        subject=subject,
+        row_identity=row_identity,
+        occurred_from=occurred_from,
+        occurred_to=occurred_to,
+    )
+    before = (
+        None
+        if cursor is None
+        else open_history_cursor(
+            cursor, subject_id=user.id, entity_id=entity_id, query=query
         )
-    with get_entity_engine().begin() as conn:
-        page = read_change_log(
-            conn,
-            entity_id,
-            tables,
-            before_sequence=before_sequence,
-            operation=operation,
-            source=source,
-            subject=_blank(subject),
-            row_identity=_blank(row_identity),
-            occurred_from=_bound(occurred_from),
-            occurred_to=_occurred_to_bound(occurred_to),
+    )
+    page = read_history(
+        entity_id,
+        user,
+        before_sequence=before,
+        operation=operation,
+        source=source,
+        subject=subject,
+        row_identity=row_identity,
+        occurred_from=occurred_from,
+        occurred_to=occurred_to,
+    )
+    next_cursor = None
+    if page.continuation is not None:
+        next_cursor = issue_history_cursor(
+            subject_id=user.id,
+            entity_id=entity_id,
+            query=query,
+            position=page.continuation,
         )
     return ChangeLogPageOut(
-        items=[_change_log_item(entry, tables) for entry in page.items],
-        limit=page.limit,
-        next_before_sequence=page.next_before_sequence,
+        items=[_history_event(event) for event in page.events],
+        limit=CHANGE_LOG_PAGE_LIMIT,
+        next_cursor=next_cursor,
     )
 
 
 @router.get(
     "/entities/{entity_id}/change-log/{sequence}",
-    response_model=ChangeLogDetailOut,
+    response_model=ChangeLogEntryOut,
 )
 def http_get_change_log_entry(
     entity_id: str,
     sequence: int,
     user: UserRecord = Depends(require_permission("entity:data_read")),
-) -> ChangeLogDetailOut:
+) -> ChangeLogEntryOut:
     if sequence < 1:
         raise EntityRequestInvalid("sequence must be at least 1")
-    tables = _change_log_tables(entity_id, user)
-    if not change_log_on_entity_database():
-        raise EntityNotFound("Change log entry not found")
-    with get_entity_engine().begin() as conn:
-        entry = read_change_log_entry(conn, entity_id, tables, sequence)
-    if entry is None:
-        raise EntityNotFound("Change log entry not found")
-    item = _change_log_item(entry, tables)
-    return ChangeLogDetailOut(
-        **item.model_dump(),
-        before=entry.before,
-        after=entry.after,
-    )
+    page = read_history(entity_id, user, before_sequence=sequence + 1)
+    for event in page.events:
+        if event.sequence == sequence:
+            return _history_event(event)
+    raise EntityNotFound()
 
 
-def _change_log_tables(entity_id: str, user: UserRecord) -> list[ChangeLogTable]:
-    """Decode targets for published versions the caller is allowed to open."""
-    get_entity(entity_id, user=user)
-    return change_log_tables(entity_id)
-
-
-def _change_log_item(
-    entry: ChangeLogEntry, tables: list[ChangeLogTable]
-) -> ChangeLogEntryOut:
-    image = entry.after if entry.after is not None else entry.before
-    row: dict[str, Any] = {} if image is None else image
-    key_name = next(
-        (
-            table.business_key
-            for table in tables
-            if table.physical_table == entry.physical_table
-        ),
-        None,
-    )
-    row_id = row.get("row_id")
+def _history_event(event: HistoryEvent) -> ChangeLogEntryOut:
     return ChangeLogEntryOut(
-        sequence=entry.sequence,
-        occurred_at=entry.occurred_at,
-        operation=entry.operation,
-        row_id=None if row_id is None else int(row_id),
-        business_key=None if key_name is None else row.get(key_name),
-        physical_table=entry.physical_table,
-        source=entry.source,
-        subject=entry.subject,
-        subject_label=_subject_label(entry.source, entry.subject),
+        sequence=event.sequence,
+        occurred_at=event.occurred_at,
+        operation=event.operation,
+        version_id=event.version_id,
+        version_number=event.version_number,
+        source=event.source,
+        subject=event.subject,
+        subject_label=_subject_label(event.source, event.subject),
+        before=_history_side(event.before),
+        after=_history_side(event.after),
     )
+
+
+def _history_side(side: HistorySide) -> ChangeLogSideOut:
+    if side.state != "visible":
+        return ChangeLogSideOut(state=side.state)
+    return ChangeLogSideOut(state="visible", values=dict(side.values or {}))
 
 
 def _subject_label(source: str | None, subject: str | None) -> str | None:

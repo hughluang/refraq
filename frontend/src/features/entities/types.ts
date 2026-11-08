@@ -113,27 +113,30 @@ export type ChangeLogOperation = "insert" | "update" | "delete";
 
 export type ChangeLogSource = "user" | "channel_run";
 
+export type ChangeLogSideState = "absent" | "unavailable" | "visible";
+
+export type ChangeLogSide = {
+  state: ChangeLogSideState;
+  values?: Record<string, unknown>;
+};
+
 export type ChangeLogEntrySummary = {
   sequence: number;
   occurred_at: string;
   operation: ChangeLogOperation;
-  row_id: number | null;
-  business_key: string | number | null;
-  physical_table: string;
+  version_id: string;
+  version_number: number;
   source: ChangeLogSource | null;
   subject: string | null;
   subject_label: string | null;
+  before: ChangeLogSide;
+  after: ChangeLogSide;
 };
 
 export type ChangeLogPage = {
   items: ChangeLogEntrySummary[];
   limit: number;
-  next_before_sequence: number | null;
-};
-
-export type ChangeLogEntryDetail = ChangeLogEntrySummary & {
-  before: Record<string, unknown> | null;
-  after: Record<string, unknown> | null;
+  next_cursor: string | null;
 };
 
 export type BusinessEntity = {

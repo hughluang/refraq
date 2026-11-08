@@ -76,9 +76,9 @@ An **Entity Data Keyset Page** is `{ "items": [...], "limit": L, "next_after_row
 
 ### 4.3 Change Log Sequence Page
 
-A **Change Log Sequence Page** is `{ "items": [...], "limit": 50, "next_before_sequence": null | N }`. It has no `total` and no `offset`. `next_before_sequence` is the smallest sequence on a page of 50 and null when the page is shorter. The next request passes that value as `before_sequence`, an exclusive upper bound, and keeps the same filters. Missing sequence numbers are skipped because the bound is the sequence, not a page index.
+A **Change Log Sequence Page** is `{ "items": [...], "limit": 50, "next_cursor": null | "<opaque>" }`. It has no `total` and no `offset`. `limit` is 50 visible events. `next_cursor` is an integrity-protected opaque continuation bound to the caller, the Entity, the query, and an expiry of 60 seconds, the signed access-context lifetime. It is present when further candidates may remain, including when `items` is empty or shorter than 50. Null means the requested range is exhausted. The next request sends it as `cursor` and repeats the same query. A blank, tampered, expired, or rebound cursor is `422 REQUEST_INVALID` and does not reveal a position. A database error, including the platform statement timeout, is an error response, not a null cursor. The envelope does not promise noninterference, a measured time window, or a measured scan budget.
 
-It is admitted only for `GET /entities/{id}/change-log` (`docs/api-contracts-entity.md`, ADR 0067). It is not an **Offset Page**, not a **Cursor Page**, and not an **Entity Data Keyset Page**. New endpoints must not reuse this envelope without an ADR that names the admission.
+It is admitted only for `GET /entities/{id}/change-log` (`docs/api-contracts-entity.md` §4.9). It is not an **Offset Page**, not a **Cursor Page**, and not an **Entity Data Keyset Page**. New endpoints must not reuse this envelope without an ADR that names the admission.
 
 ## 5. Whole-Set Read
 
@@ -103,7 +103,7 @@ Catalog Sample and Controlled Query are row peeks, not collection lists. They ke
 
 ## 7. Console
 
-Paged Management Console tables use one footer: `ListPager` (`frontend/src/components/display/ListPager.tsx`), composed by `ListTable` (`docs/ui-console-layout.md`). Count text always renders; page numbers render only when there is more than one page. `ListTable` disables paging while the first page is loading or existing rows are refreshing. Filter controls stay in the content toolbar. Do not hand-roll prev/next buttons for an Offset Page. Catalog Columns uses the same Console module through an in-memory Offset Page adapter over the object payload; it is not an HTTP Offset Page. The entity change-log list is a **Change Log Sequence Page** (§4.3). It has no total and does not jump to a page number, so it does not use `ListTable` or `ListPager`.
+Paged Management Console tables use one footer: `ListPager` (`frontend/src/components/display/ListPager.tsx`), composed by `ListTable` (`docs/ui-console-layout.md`). Count text always renders; page numbers render only when there is more than one page. `ListTable` disables paging while the first page is loading or existing rows are refreshing. Filter controls stay in the content toolbar. Do not hand-roll prev/next buttons for an Offset Page. Catalog Columns uses the same Console module through an in-memory Offset Page adapter over the object payload; it is not an HTTP Offset Page. The entity change-log list is a **Change Log Sequence Page** (§4.3). It has no total and does not jump to a page number, so it does not use `ListTable` or `ListPager`. Older is shown when `next_cursor` is present, including when `items` is empty. The empty-history sentence is only the first page of an exhausted range. A continuation page that is empty, and a later page that is exhausted and empty, do not use that sentence. A rejected cursor shows the problem message and does not request another page by itself.
 
 Pickers that need a closed option set (role Select, Source Select) fetch one page at that list's documented max `limit`. They are not a second envelope.
 

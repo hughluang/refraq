@@ -12,9 +12,11 @@ import {
   listEntityChangeLog,
   listVersions,
 } from "@/features/entities/api";
+import { ApiError } from "@/lib/api";
 import type {
   BusinessEntity,
   ChangeLogEntrySummary,
+  ChangeLogSide,
   EntityVersion,
 } from "@/features/entities/types";
 
@@ -47,7 +49,7 @@ const LABELS: Record<string, string> = {
   "entities.changeLog.occurredAt": "Time",
   "entities.changeLog.operation": "Operation",
   "entities.changeLog.rowIdentity": "Row",
-  "entities.changeLog.physicalTable": "Physical table",
+  "entities.changeLog.version": "Version",
   "entities.changeLog.source": "Source",
   "entities.changeLog.subject": "Subject",
   "entities.changeLog.older": "Older",
@@ -57,6 +59,9 @@ const LABELS: Record<string, string> = {
   "entities.changeLog.failed": "Could not load changes",
   "entities.changeLog.before": "Before",
   "entities.changeLog.after": "After",
+  "entities.changeLog.unavailable": "Unavailable",
+  "entities.changeLog.withheld": "Withheld",
+  "problems.REQUEST_INVALID": "The request is not valid. Check the fields and try again.",
   "entities.changeLog.filter.any": "Any",
   "entities.changeLog.filter.operation": "Operation",
   "entities.changeLog.filter.source": "Source",
@@ -224,17 +229,22 @@ function versionFor(
   };
 }
 
-function entry(overrides: Partial<ChangeLogEntrySummary>): ChangeLogEntrySummary {
+function side(state: ChangeLogSide["state"], values?: Record<string, unknown>): ChangeLogSide {
+  return values === undefined ? { state } : { state, values };
+}
+
+function entry(overrides: Partial<ChangeLogEntrySummary> = {}): ChangeLogEntrySummary {
   return {
     sequence: 4,
     occurred_at: "2026-10-02T00:00:00Z",
     operation: "insert",
-    row_id: 7,
-    business_key: "LEFT",
-    physical_table: '"entity_data"."material__v1__abcdef0123456789"',
+    version_id: "ver_logical",
+    version_number: 3,
     source: "user",
     subject: "user_ada",
     subject_label: "Ada",
+    before: side("absent"),
+    after: side("visible", { row_id: 7, sku: "LEFT" }),
     ...overrides,
   };
 }
@@ -255,18 +265,19 @@ async function renderRecord(
     version: versionFor(record, changeLogEnabled),
   });
   const { EntityRecord } = await import("@/features/entities/EntityRecord");
-  render(
+  const tree = (next: BusinessEntity, nextMode: typeof mode = mode) =>
     createElement(
       MantineProvider,
       null,
-      mode === "create"
+      nextMode === "create"
         ? createElement(EntityRecord, { mode: "create" })
-        : createElement(EntityRecord, { mode, entityId: record.id }),
-    ),
-  );
+        : createElement(EntityRecord, { mode: nextMode, entityId: next.id }),
+    );
+  const view = render(tree(record));
   if (mode !== "create") {
     await screen.findByText("Material · material");
   }
+  return { ...view, tree };
 }
 
 describe("change log tab", () => {
@@ -278,7 +289,7 @@ describe("change log tab", () => {
     vi.mocked(listEntityChangeLog).mockResolvedValue({
       items: [],
       limit: 50,
-      next_before_sequence: null,
+      next_cursor: null,
     });
   });
 
@@ -351,38 +362,45 @@ describe("change log tab", () => {
     expect(screen.getByText("Record changes")).toBeTruthy();
   });
 
-  it("lists the newest page and asks for a smaller sequence on the next page", async () => {
+  it("lists the newest page and asks for the continuation cursor", async () => {
     permissions.data = ["entity:data_read"];
-    const newer = entry({ sequence: 60, row_id: 1, business_key: "NEW" });
-    const older = entry({ sequence: 11, row_id: 2, business_key: "OLD" });
+    const newer = entry({
+      sequence: 60,
+      before: side("unavailable", { row_id: 99, sku: "HIDDEN" }),
+      after: side("visible", { row_id: 1, sku: "NEW" }),
+    });
+    const older = entry({
+      sequence: 11,
+      after: side("visible", { row_id: 2, sku: "OLD" }),
+    });
     vi.mocked(listEntityChangeLog).mockResolvedValue({
       items: [newer, older],
       limit: 50,
-      next_before_sequence: 11,
+      next_cursor: "cursor-older",
     });
     await renderRecord(entity());
     fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
     const newest = await screen.findByRole("button", { name: "60" });
     const row = newest.closest("tr");
     expect(row).toBeTruthy();
-    expect(within(row as HTMLElement).getByText("1 · NEW")).toBeTruthy();
-    expect(
-      within(row as HTMLElement).getByText(
-        '"entity_data"."material__v1__abcdef0123456789"',
-      ),
-    ).toBeTruthy();
+    expect(within(row as HTMLElement).getByText("1")).toBeTruthy();
+    expect(within(row as HTMLElement).queryByText("99")).toBeNull();
+    expect(within(row as HTMLElement).queryByText("HIDDEN")).toBeNull();
+    expect(screen.queryByText("Physical table")).toBeNull();
+    expect(within(row as HTMLElement).getByText("ver_logical")).toBeTruthy();
+    expect(within(row as HTMLElement).getByText("3")).toBeTruthy();
     expect(within(row as HTMLElement).getByText("Insert")).toBeTruthy();
     expect(within(row as HTMLElement).getByText("Ada")).toBeTruthy();
     expect(within(row as HTMLElement).getByText("user_ada")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Older" }));
     await waitFor(() => {
       const last = vi.mocked(listEntityChangeLog).mock.calls.at(-1);
-      expect(last?.[1]?.before_sequence).toBe(11);
+      expect(last?.[1]?.cursor).toBe("cursor-older");
     });
     fireEvent.click(screen.getByRole("button", { name: "Newest" }));
     await waitFor(() => {
       const last = vi.mocked(listEntityChangeLog).mock.calls.at(-1);
-      expect(last?.[1]?.before_sequence).toBeUndefined();
+      expect(last?.[1]?.cursor).toBeUndefined();
       expect(last?.[1]?.operation).toBeUndefined();
     });
     expect(screen.queryByRole("button", { name: "Newest" })).toBeNull();
@@ -395,8 +413,7 @@ describe("change log tab", () => {
       sequence: 7,
       subject: "usr_missing",
       subject_label: "usr_missing",
-      business_key: null,
-      row_id: 3,
+      after: side("visible", { row_id: 3, sku: "GONE" }),
     });
     const run = entry({
       sequence: 6,
@@ -415,12 +432,12 @@ describe("change log tab", () => {
     vi.mocked(listEntityChangeLog).mockResolvedValue({
       items: [userRow, missing, run, plain],
       limit: 50,
-      next_before_sequence: null,
+      next_cursor: null,
     });
     vi.mocked(getEntityChangeLogEntry).mockResolvedValue({
       ...userRow,
-      before: null,
-      after: { row_id: 7, sku: "LEFT", secret: "hidden" },
+      before: side("absent"),
+      after: side("visible", { row_id: 7, sku: "LEFT", secret: "hidden" }),
     });
     await renderRecord(entity());
     fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
@@ -468,7 +485,7 @@ describe("change log tab", () => {
         occurred_from: "2026-10-02T00:00:00Z",
         occurred_to: "2026-10-03T00:00:00Z",
       });
-      expect(last?.[1]?.before_sequence).toBeUndefined();
+      expect(last?.[1]?.cursor).toBeUndefined();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "8" }));
@@ -485,20 +502,22 @@ describe("change log tab", () => {
     vi.mocked(listEntityChangeLog).mockResolvedValue({
       items: [row],
       limit: 50,
-      next_before_sequence: null,
+      next_cursor: null,
     });
     vi.mocked(getEntityChangeLogEntry).mockResolvedValue({
       ...row,
-      before: null,
-      after: {
+      before: side("unavailable", { sku: "LEAK" }),
+      after: side("visible", {
         row_id: 7,
         sku: "LEFT",
         qty: 3,
         flag: false,
         note: null,
+        secret: "clear-secret",
+        __withheld: ["secret"],
         payload: { code: "A" },
         tags: ["x", 1],
-      },
+      }),
     });
     await renderRecord(entity());
     fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
@@ -510,8 +529,14 @@ describe("change log tab", () => {
     expect(after.textContent).toContain("qty: 3");
     expect(after.textContent).toContain("flag: false");
     expect(after.textContent).toContain("note: ");
+    expect(after.textContent).toContain("secret: Withheld");
+    expect(after.textContent).not.toContain("clear-secret");
+    expect(after.textContent).not.toContain("__withheld");
     expect(after.textContent).not.toContain("[object Object]");
     expect(after.textContent).not.toContain("note: null");
+    const before = screen.getByRole("region", { name: "Before" });
+    expect(before.textContent).toContain("Unavailable");
+    expect(before.textContent).not.toContain("LEAK");
   });
 
   it("keeps the tab when the log is empty", async () => {
@@ -520,5 +545,112 @@ describe("change log tab", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
     expect(await screen.findByText("No changes recorded.")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Change log" })).toBeTruthy();
+  });
+
+  it("keeps older on an empty continuation and does not call that the end", async () => {
+    permissions.data = ["entity:data_read"];
+    vi.mocked(listEntityChangeLog).mockResolvedValue({
+      items: [],
+      limit: 50,
+      next_cursor: "cursor-more",
+    });
+    await renderRecord(entity());
+    fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
+    expect(await screen.findByRole("button", { name: "Older" })).toBeTruthy();
+    expect(screen.queryByText("No changes recorded.")).toBeNull();
+  });
+
+  it("does not call a later exhausted page empty history", async () => {
+    permissions.data = ["entity:data_read"];
+    vi.mocked(listEntityChangeLog).mockImplementation(async (_entityId, query) => {
+      if (query?.cursor === "cursor-last") {
+        return { items: [], limit: 50, next_cursor: null };
+      }
+      return {
+        items: [entry({ sequence: 8 })],
+        limit: 50,
+        next_cursor: "cursor-last",
+      };
+    });
+    await renderRecord(entity());
+    fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Older" }));
+    await waitFor(() => {
+      const last = vi.mocked(listEntityChangeLog).mock.calls.at(-1);
+      expect(last?.[1]?.cursor).toBe("cursor-last");
+    });
+    expect(screen.queryByText("No changes recorded.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Newest" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Older" })).toBeNull();
+  });
+
+  it("shows the problem for a rejected cursor and does not retry", async () => {
+    permissions.data = ["entity:data_read"];
+    vi.mocked(listEntityChangeLog).mockImplementation(async (_entityId, query) => {
+      if (query?.cursor === "cursor-bad") {
+        throw new ApiError(422, "REQUEST_INVALID", "Request validation failed");
+      }
+      return {
+        items: [entry({ sequence: 8 })],
+        limit: 50,
+        next_cursor: "cursor-bad",
+      };
+    });
+    await renderRecord(entity());
+    fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Older" }));
+    expect(
+      await screen.findByText("The request is not valid. Check the fields and try again."),
+    ).toBeTruthy();
+    expect(screen.queryByText("No changes recorded.")).toBeNull();
+    await waitFor(() => {
+      const calls = vi.mocked(listEntityChangeLog).mock.calls;
+      expect(calls.at(-1)?.[1]?.cursor).toBe("cursor-bad");
+    });
+    const seen = vi.mocked(listEntityChangeLog).mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(vi.mocked(listEntityChangeLog)).toHaveBeenCalledTimes(seen);
+  });
+
+  it("reads the first page when the same tab opens another entity", async () => {
+    permissions.data = ["entity:data_read"];
+    const cursor = "cursor-from-ent_1";
+    vi.mocked(listEntityChangeLog).mockImplementation(async (id, query) => {
+      if (id === "ent_2" && query?.cursor) {
+        throw new ApiError(422, "REQUEST_INVALID", "Request validation failed");
+      }
+      if (query?.cursor) {
+        return { items: [entry({ sequence: 1 })], limit: 50, next_cursor: null };
+      }
+      return { items: [entry({ sequence: 8 })], limit: 50, next_cursor: cursor };
+    });
+    const view = await renderRecord(entity({ id: "ent_1" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Older" }));
+    await waitFor(() => {
+      const last = vi.mocked(listEntityChangeLog).mock.calls.at(-1);
+      expect(last?.[0]).toBe("ent_1");
+      expect(last?.[1]?.cursor).toBe(cursor);
+    });
+    const next = entity({ id: "ent_2" });
+    vi.mocked(getEntity).mockResolvedValue({ entity: next });
+    vi.mocked(listVersions).mockResolvedValue({
+      items: [versionFor(next)],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    });
+    vi.mocked(getVersion).mockResolvedValue({ version: versionFor(next) });
+    view.rerender(view.tree(next));
+    await waitFor(() => {
+      const switched = vi
+        .mocked(listEntityChangeLog)
+        .mock.calls.filter((call) => call[0] === "ent_2");
+      expect(switched.length).toBeGreaterThan(0);
+      expect(switched.every((call) => call[1]?.cursor == null)).toBe(true);
+    });
+    expect(
+      screen.queryByText("The request is not valid. Check the fields and try again."),
+    ).toBeNull();
   });
 });

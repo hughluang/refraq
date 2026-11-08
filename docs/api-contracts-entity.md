@@ -432,9 +432,13 @@ Success `200`: `{ "entity": { … } }` with `deprecated_at` set.
 
 ### 4.9 `GET /entities/{id}/change-log`
 
-Permission: `entity:data_read`. A caller without it receives `403` before the id is resolved. An unknown or invisible entity is `404 ENTITY_NOT_FOUND`.
+Permission: `entity:data_read`. A caller without it receives `403 AUTH_FORBIDDEN` before the id is resolved. `entity:write` and `entity:access_manage` do not make the Entity or an event readable.
 
-The list is a **Change Log Sequence Page** (`docs/conventions-pagination.md` §4.3, ADR 0067):
+The caller also needs a current effective `read` grant. No effective `read` grant and an unknown Entity are the same `404 ENTITY_NOT_FOUND`. Pending regeneration of this Entity's access views is `503 ENTITY_ACCESS_PENDING` with `Retry-After`. Another Entity still answers. A shape over the combination cap is `409 ENTITY_ACCESS_COMBINATION_LIMIT`.
+
+List and detail use one eligibility decision. The response projects the caller's current policy onto the stored snapshots, including a deleted row and a superseded version whose physical table is gone. It does not contain `physical_table`, a raw stored image, or an identity taken from an unavailable side.
+
+The list is a **Change Log Sequence Page** (`docs/conventions-pagination.md` §4.3):
 
 ```json
 {
@@ -443,38 +447,54 @@ The list is a **Change Log Sequence Page** (`docs/conventions-pagination.md` §4
       "sequence": 12,
       "occurred_at": "2026-10-02T00:00:00Z",
       "operation": "insert",
-      "row_id": 7,
-      "business_key": "LEFT",
-      "physical_table": "\"entity_data\".\"material__v1__0123456789abcdef\"",
+      "version_id": "ver_0123456789abcdef",
+      "version_number": 1,
       "source": "user",
       "subject": "user_ada",
-      "subject_label": "Ada"
+      "subject_label": "Ada",
+      "before": { "state": "absent" },
+      "after": {
+        "state": "visible",
+        "values": { "row_id": 7, "sku": "LEFT", "secret": null, "__withheld": ["secret"] }
+      }
     }
   ],
   "limit": 50,
-  "next_before_sequence": null
+  "next_cursor": null
 }
 ```
 
-`limit` is always 50. The request does not send `limit`, `offset`, or `total`. Items are the newest matching entries by sequence. `next_before_sequence` is the smallest sequence when `items` has 50 entries, and null when it has fewer. The next page sends that integer as `before_sequence`. The bound is exclusive, so a missing sequence is skipped. A page of exactly 50, including the last page of the log, still returns a bound; the following page is empty and its bound is null.
+`limit` is always 50. The request does not send `limit`, `offset`, or `total`. Items are the newest eligible events by sequence, at most 50. An event is eligible when at least one existing side is authorized. An update whose two visible projections are equal, including withheld markers, is omitted. An update with only one visible side is returned. A presentation-suppressed event is absent from `items`; it is not a separate error on the list.
 
-Query parameters, all optional, combine. An omitted parameter does not constrain that side.
+Each event carries `version_id` and `version_number`, the logical **Entity Version**, not a physical table name. `before` and `after` are sides:
+
+| `state` | Meaning | Payload |
+| --- | --- | --- |
+| `absent` | Not part of the operation. An insert has no before side. A delete has no after side | No `values` |
+| `visible` | Projected with the caller's cell rules | `values`, including a withheld marker |
+| `unavailable` | Not safely readable | No `values`. The response does not say whether the side failed a row rule or a historical schema check |
+
+A visible side's `values` use the projected attribute names. A withheld cell is null and its name is listed in `__withheld`. The clear value is not present. Identity stays on the side that produced it. The envelope has no `row_id` and no `business_key`.
+
+`next_cursor` is an integrity-protected opaque continuation. It is bound to the caller, the Entity, the query, and an expiry of 60 seconds, the same lifetime as a signed access context. It is a position, not a copy of the grant decision: every request authorizes again. The position is the last candidate fully evaluated for that page, including a candidate omitted from `items`. A page with fewer than 50 visible events still returns `next_cursor` when further candidates remain, including when `items` is empty. `next_cursor` null means the requested range is exhausted. The next request sends that cursor as `cursor` and repeats the same query. A missing, tampered, expired, or rebound cursor (a different caller, Entity, or query) is `422 REQUEST_INVALID`. That error does not include a scan position and does not say whether any event exists.
+
+A database error, including the platform statement timeout, is an error response. It is not `next_cursor` null and not an empty `200` page. Sparse visibility can run until that timeout. This list does not add an index, a scan budget, or a time window, and it does not promise noninterference or a measured limit. Residual disclosures remain: how long the read takes, gaps in the visible sequence, and the fact that a continuation exists.
+
+Query parameters, all optional, combine. An omitted parameter does not constrain that side. Omitting both time bounds does not add a window.
 
 | Param | Rule |
 | --- | --- |
-| `before_sequence` | Integer ≥ 1. Exclusive upper bound on `sequence`. Omit it for the newest page |
-| `operation` | `insert`, `update`, or `delete` |
+| `cursor` | Opaque continuation from `next_cursor`. Omit it for the newest page. A blank, tampered, expired, or rebound value is `422 REQUEST_INVALID` |
+| `operation` | `insert`, `update`, or `delete`. A filter does not return an ineligible event |
 | `source` | `user`, `channel_run`, or `unattributed`. `unattributed` matches a null source |
 | `subject` | Exact stored subject id. A display name does not match |
-| `row_identity` | Exact `row_id` or Business Key text, on every physical table of the entity |
+| `row_identity` | Candidate prefilter passed through to the historical read. It is not an authorized-side identity lookup. An event it selects still has to pass the eligibility decision |
 | `occurred_from` | Inclusive **Instant**. Omit it to leave the start open. The bound is that exact Instant, with or without a fractional second |
 | `occurred_to` | Inclusive **Instant**. Omit it to leave the end open. A value with no fractional seconds includes that whole second. A value with a fractional second is that exact Instant |
 
-Any other `operation`, `source`, or `before_sequence`, or an `occurred_from` / `occurred_to` that is not an **Instant**, is `422 REQUEST_INVALID`. The outbound `occurred_at` is a second-precision **Instant**. Using that text as `occurred_to` includes the entry, because a fraction-less upper bound covers the second.
+Any other `operation` or `source`, or an `occurred_from` / `occurred_to` that is not an **Instant**, is `422 REQUEST_INVALID`. The outbound `occurred_at` is a second-precision **Instant**. Using that text as `occurred_to` includes the entry, because a fraction-less upper bound covers the second.
 
-An item does not include `before` or `after`. `row_id` is the physical row's `row_id`. `business_key` is that physical table's version's **Business Key** value, or null when that version has none. The two versions of one `row_id` are separate items, distinguished by `physical_table`. `physical_table` is the quoted qualified name stored on the entry.
-
-A dropped physical table leaves its entries in place. The list still returns them. `row_id` and `business_key` come from the stored image, decoded with that version's attributes. The read does not select from the relation. `row_identity` still matches those entries by `row_id` or by that version's **Business Key**.
+A dropped physical table leaves its entries in place. The list still returns an eligible one, identified by `version_id` and `version_number`. The read does not select from the dropped relation.
 
 `source` is `user`, `channel_run`, or null. The entry stores the subject id. `subject_label` is resolved on read. A user subject uses the user's name when the user exists, and the stored id when it does not. A missing user does not drop the entry. A channel-run subject uses the stored run id. The response has no channel link. An unattributed entry has `source`, `subject`, and `subject_label` null.
 
@@ -482,31 +502,33 @@ This list orders by sequence descending. It is not the checkpoint read. A Data C
 
 Retention cleanup and a delete of an entity's entries record the greatest deleted `(commit_seq, seq)` as that entity's purge mark, in the same statement as the delete. A later delete that removes nothing does not lower the mark. The list does not return the mark. A stored checkpoint strictly behind it fails `read.changes` with `CHANNEL_CHECKPOINT_INVALID`.
 
+The Console change-log tab is shown to a caller who already holds `entity:data_read` while recording is on. It lists projected rows, the logical version, and per-side identity taken only from visible sides. It does not show a physical-table column. Older is available when `next_cursor` is present, including when `items` is empty. The empty-history sentence is only the first page of a range that is already exhausted. An empty page that still has a continuation, and a later page that is exhausted and empty, do not use that sentence. A rejected cursor shows the problem message and does not start another request by itself.
+
 ### 4.10 `GET /entities/{id}/change-log/{sequence}`
 
-Permission: `entity:data_read`. An unknown or invisible entity, or a sequence this entity does not have, is `404 ENTITY_NOT_FOUND`. `sequence` below 1 is `422 REQUEST_INVALID`.
+Permission: `entity:data_read`. The same `403 AUTH_FORBIDDEN` applies before the id is resolved. `entity:write` and `entity:access_manage` do not make the event readable. No effective `read` grant, an unknown Entity, an ineligible event, and a presentation-suppressed event are the same `404 ENTITY_NOT_FOUND`. The detail uses the list's eligibility decision: an event the list would omit is not found. Pending regeneration and the combination cap use the same `503 ENTITY_ACCESS_PENDING` and `409 ENTITY_ACCESS_COMBINATION_LIMIT` as the list. `sequence` below 1 is `422 REQUEST_INVALID`.
 
-Success `200` is one list item plus the rebuilt physical images:
+Success `200` is one list item. It does not add a raw image:
 
 ```json
 {
   "sequence": 12,
   "occurred_at": "2026-10-02T00:00:00Z",
   "operation": "update",
-  "row_id": 7,
-  "business_key": "LEFT",
-  "physical_table": "\"entity_data\".\"material__v1__0123456789abcdef\"",
+  "version_id": "ver_0123456789abcdef",
+  "version_number": 1,
   "source": "user",
   "subject": "user_ada",
   "subject_label": "Ada",
-  "before": { "row_id": 7, "sku": "LEFT", "secret": "old" },
-  "after": { "row_id": 7, "sku": "LEFT", "secret": "new" }
+  "before": { "state": "unavailable" },
+  "after": {
+    "state": "visible",
+    "values": { "row_id": 7, "sku": "LEFT", "secret": "new" }
+  }
 }
 ```
 
-`before` and `after` are the full physical row of that table's version. An insert has `before` null. A delete has `after` null. An update's `before` is rebuilt from the stored after image plus the previous value of each column that differed. The images are not a Profile View and are not passed through an access grant. A column an access grant would hide on the data tab is still present here.
-
-A dropped physical table leaves the entry in place. `before` and `after` are rebuilt from the stored image and that version's attributes. The read does not select from the relation.
+`before` and `after` follow the side rules in §4.9. The body does not contain `physical_table`. A dropped physical table leaves an eligible entry in place, projected from the stored snapshot and named by its logical version. The read does not select from the relation. The not-found body does not include a scan position and does not say whether a stored row exists.
 
 ## 5. Entity Version And Attribute Endpoints
 

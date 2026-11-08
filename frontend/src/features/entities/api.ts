@@ -4,7 +4,7 @@ import type { EntityStatus } from "@/features/entities/publishStatus";
 
 import type {
   BusinessEntity,
-  ChangeLogEntryDetail,
+  ChangeLogEntrySummary,
   ChangeLogPage,
   EntityCreate,
   EntityJobEnqueue,
@@ -72,7 +72,7 @@ export function getEntity(id: string, init?: { signal?: AbortSignal }) {
 export function listEntityChangeLog(
   entityId: string,
   params?: {
-    before_sequence?: number;
+    cursor?: string;
     operation?: string;
     source?: string;
     subject?: string;
@@ -94,7 +94,7 @@ export function getEntityChangeLogEntry(
   sequence: number,
   init?: { signal?: AbortSignal },
 ) {
-  return apiClient<ChangeLogEntryDetail>(
+  return apiClient<ChangeLogEntrySummary>(
     `/entities/${entityId}/change-log/${sequence}`,
     { signal: init?.signal },
   );

@@ -236,7 +236,7 @@ def test_draft_retention_can_return_to_never_expire(client: TestClient) -> None:
     assert version["change_log_retention_days"] is None
 
 
-def test_change_log_list_is_empty_without_an_entity_database(
+def test_change_log_without_a_read_grant_is_not_found(
     client: TestClient,
 ) -> None:
     created = client.post("/entities", json=_create_body(table_name="no_log_db"))
@@ -246,12 +246,19 @@ def test_change_log_list_is_empty_without_an_entity_database(
     assert detail.status_code == 200, detail.text
     assert detail.json()["entity"]["change_log_recording"] is False
     listed = client.get(f"/entities/{entity['id']}/change-log")
-    assert listed.status_code == 200, listed.text
-    assert listed.json() == {
-        "items": [],
-        "limit": 50,
-        "next_before_sequence": None,
-    }
+    assert listed.status_code == 404, listed.text
+    assert listed.json()["code"] == "ENTITY_NOT_FOUND"
+    assert "items" not in listed.json()
+    assert "next_cursor" not in listed.json()
+    assert "physical_table" not in listed.text
     missing = client.get(f"/entities/{entity['id']}/change-log/1")
     assert missing.status_code == 404
     assert missing.json()["code"] == "ENTITY_NOT_FOUND"
+    assert missing.json()["detail"] == listed.json()["detail"]
+    rejected = client.get(
+        f"/entities/{entity['id']}/change-log", params={"cursor": "not-a-cursor"}
+    )
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["code"] == "REQUEST_INVALID"
+    assert rejected.json()["detail"] == "Request validation failed"
+    assert "items" not in rejected.json()
