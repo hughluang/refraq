@@ -56,11 +56,14 @@ class HistorySide:
     """One side of a stored change.
 
     ``absent`` is not part of the operation. ``unavailable`` is not safely
-    readable. Only ``visible`` carries ``values``.
+    readable. Only ``visible`` carries ``values``. ``masked`` names attributes
+    whose effective presentation is not clear. It stays off ``values`` and
+    off the interactive HTTP body.
     """
 
     state: SideState
     values: dict[str, Any] | None = None
+    masked: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +106,8 @@ class IncrementalEvent:
     """One eligible consumption event, in commit order.
 
     ``physical_table`` stays so a later consumer can group the stored version.
+    ``business_key_name`` is the projected name of the Business Key that
+    version declares. It is none when that version declares no Business Key.
     """
 
     sequence: int
@@ -116,6 +121,7 @@ class IncrementalEvent:
     version_number: int
     before: HistorySide
     after: HistorySide
+    business_key_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +244,9 @@ def read_incremental(
                 version_number=version_number,
                 before=before,
                 after=after_side,
+                business_key_name=_projected_key_name(
+                    index[entry.physical_table], policy
+                ),
             )
         )
     progress = None
@@ -349,13 +358,37 @@ def _project(
     ]
 
 
-def _as_side(projected: tuple[str, dict[str, Any] | None]) -> HistorySide:
-    state, values = projected
+def _as_side(
+    projected: tuple[str, dict[str, Any] | None, frozenset[str]],
+) -> HistorySide:
+    state, values, masked = projected
     if state == "visible":
-        return HistorySide(state="visible", values=values)
+        return HistorySide(state="visible", values=values, masked=masked)
     if state == "absent":
         return HistorySide(state="absent")
     return HistorySide(state="unavailable")
+
+
+def _projected_key_name(version: _Version, policy: Any) -> str | None:
+    """Current attribute name of the key that version declares.
+
+    None means the version declares no Business Key. A declared key that has
+    left the head still returns the stored name, so a consumer does not treat
+    the version as unkeyed.
+    """
+    historical = version.table.business_key
+    if not historical:
+        return None
+    attr = next(
+        (item for item in version.table.attributes if item.name == historical),
+        None,
+    )
+    attribute_id = None if attr is None else attr.attribute_id
+    if attribute_id:
+        for fact in policy.attributes:
+            if fact.attribute_id == attribute_id:
+                return str(fact.name)
+    return historical
 
 
 def _key(entry: ChangeLogEntry, side: str) -> str:

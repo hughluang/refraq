@@ -15,11 +15,14 @@ from backend.channel.checkpoints import CheckpointPosition
 from backend.entity.changes import (
     ChangeEntry,
     ChangeLogOff,
-    ChangePage,
     ChangePosition,
     purge_mark,
-    read_changes,
     recording_enabled,
+)
+from backend.entity.history.service import (
+    IncrementalPage,
+    IncrementalPosition,
+    read_incremental,
 )
 from backend.entity.errors import EntityNotFound
 
@@ -104,12 +107,19 @@ def open_change_range(
         )
 
 
-def read_change_range(opened: ChangeRange, *, limit: int) -> ChangePage:
-    """One forward page through ``read_changes``. Does not propose."""
+def read_change_range(opened: ChangeRange, *, limit: int) -> IncrementalPage:
+    """One projected page through ``read_incremental``. Does not propose.
+
+    The operation loads the platform System Identity. This function does not
+    take a user. ``volume.changes_dataset`` keeps calling ``read_changes``.
+    """
+    after = None
+    if opened.after is not None:
+        after = IncrementalPosition(commit_seq=opened.after.xact, seq=opened.after.seq)
     with _range_errors():
-        return read_changes(
+        return read_incremental(
             opened.entity_id,
-            after=opened.after,
+            after=after,
             bound=opened.bound,
             limit=limit,
         )

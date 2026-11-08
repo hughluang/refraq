@@ -356,6 +356,7 @@ describe("frame-rule sentences", () => {
     const cases = [
       ["CHANNEL_CHANGE_LOG_OFF", "Change recording is off for this entity."],
       ["CHANNEL_CHECKPOINT_INVALID", "Checkpoint is behind deleted change-log entries."],
+      ["CHANNEL_CHANGE_LOG_GROUPING_UNSAFE", "Net grouping has no clear projected identity."],
     ] as const;
     for (const [code, message] of cases) {
       const key = `problems.${code}`;

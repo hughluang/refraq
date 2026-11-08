@@ -19,8 +19,11 @@ from backend.core.time import format_instant
 from backend.entity.access.compiler import Outcome, Policy, render_shape
 from backend.entity.access.dsl import validate_rule
 from backend.entity.access.facts import AttrFact, Person
+from backend.entity.access.masks import CLEAR
 from backend.entity.ddl import EXPOSURE_OWNER_ROLE, ident
 from backend.entity.records import AttributeRecord
+
+_Projected = tuple[str, dict[str, Any] | None, frozenset[str]]
 
 _SIDE = "refraq_side"
 
@@ -42,8 +45,12 @@ def project_sides(
     outcome: Outcome,
     person: Person,
     head_attributes: Sequence[AttributeRecord],
-) -> dict[str, tuple[str, dict[str, Any] | None]]:
-    """Project each side. States are ``absent``, ``unavailable``, or ``visible``."""
+) -> dict[str, _Projected]:
+    """Project each side. States are ``absent``, ``unavailable``, or ``visible``.
+
+    The third item names attributes whose effective mask mode is not clear.
+    Those names are not copied into ``values``.
+    """
     if outcome.shape is None:
         raise RuntimeError("historical projection requires a subject shape")
     needed = _needed_ids(policy, outcome)
@@ -51,11 +58,11 @@ def project_sides(
     head_by_id = {
         attr.attribute_id: attr for attr in head_attributes if attr.attribute_id
     }
-    result: dict[str, tuple[str, dict[str, Any] | None]] = {}
+    result: dict[str, _Projected] = {}
     candidates: list[_Candidate] = []
     for side in sides:
         if side.image is None:
-            result[side.key] = ("absent", None)
+            result[side.key] = ("absent", None, frozenset())
             continue
         present, incompatible, values, row_id = _adapt(
             side.image,
@@ -65,7 +72,7 @@ def project_sides(
             side.reference_snapshots,
         )
         if (needed - present) or (incompatible & (needed | cells)):
-            result[side.key] = ("unavailable", None)
+            result[side.key] = ("unavailable", None, frozenset())
             continue
         candidates.append(
             _Candidate(
@@ -81,9 +88,13 @@ def project_sides(
     for item in candidates:
         row = found.get(item.key)
         if row is None:
-            result[item.key] = ("unavailable", None)
+            result[item.key] = ("unavailable", None, frozenset())
             continue
-        result[item.key] = ("visible", _cells(row, outcome, item.present))
+        result[item.key] = (
+            "visible",
+            _cells(row, outcome, item.present),
+            _masked(row, outcome, item.present),
+        )
     return result
 
 
@@ -217,6 +228,7 @@ def _query(
         at=policy.now,
         carry=(_SIDE,),
         bind_subject=True,
+        grant_flags=True,
     )
     conn.exec_driver_sql(f"SET LOCAL ROLE {ident(EXPOSURE_OWNER_ROLE)}")
     try:
@@ -245,6 +257,33 @@ def _cells(
             str(name) for name in list(raw) if str(name) in present_names
         ]
     return values
+
+
+def _masked(row: Any, outcome: Outcome, present: frozenset[str]) -> frozenset[str]:
+    """Attribute names whose winning grant mode is not clear.
+
+    ``grant_modes`` is clearest first, matching the projection CASE. A grant
+    counts only when its flag produced this row, so a clear grant that did
+    not match does not hide a mask, and a mask grant that did not match does
+    not hide a clear value.
+    """
+    flags = {
+        str(key).removeprefix("__g_"): bool(value)
+        for key, value in row.items()
+        if str(key).startswith("__g_")
+    }
+    names: list[str] = []
+    for column in outcome.columns:
+        if column.attr.attribute_id not in present:
+            continue
+        matching = [
+            mode
+            for grant_id, mode in column.grant_modes
+            if flags.get(grant_id)
+        ]
+        if matching and matching[0] != CLEAR:
+            names.append(column.attr.name)
+    return frozenset(names)
 
 
 def _json(value: Any) -> Any:
