@@ -198,7 +198,7 @@ Read Changes configuration (`read.changes`):
 
 | Field | Rule |
 | --- | --- |
-| `entity_id` | Required Business Entity id. `x-refraq-ref` is `entity`. An id that does not resolve fails the execution with `CHANNEL_NODE_FAILED` and the message `Entity does not resolve` |
+| `entity_id` | Required Business Entity id. `x-refraq-ref` is `entity` and `x-refraq-resolve` is `execution`, so publish does not require the id to exist. An id that does not resolve fails the execution with `CHANNEL_NODE_FAILED` and the message `Entity does not resolve` |
 | `limit` | Integer from 1 to 100000. Absent means 1000. It counts change-log entries scanned, not rows returned |
 | `shape` | `entries` or `net`. Absent means `entries` |
 | `sources` | Optional array of `user`, `channel_run`, and `unattributed`, unique. Absent or empty returns every source. A filtered-out entry still advances the cursor |
@@ -315,7 +315,7 @@ Changes Dataset configuration (`volume.changes_dataset`):
 
 | Field | Rule |
 | --- | --- |
-| `entity_id` | Required Business Entity id. `x-refraq-ref` is `entity`. An id that does not resolve fails the execution with `CHANNEL_NODE_FAILED` and the message `Entity does not resolve` |
+| `entity_id` | Required Business Entity id. `x-refraq-ref` is `entity` and `x-refraq-resolve` is `execution`, so publish does not require the id to exist. An id that does not resolve fails the execution with `CHANNEL_NODE_FAILED` and the message `Entity does not resolve` |
 | `sources` | Optional array of `user`, `channel_run`, and `unattributed`, unique. Absent or empty returns every source. A filtered-out entry still advances the cursor and still counts toward `limit` |
 | `limit` | Integer from 1 to 10000000. Absent means 1000000. It counts change-log entries scanned, including an entry the source filter hides and an event with no visible side. There is no unlimited value |
 | `statement_timeout_sec` | Integer seconds from 1 to 3600. Absent means 300. Wall-clock limit of the whole load |
@@ -393,6 +393,8 @@ Ports: input `main`, outputs `main` and `error`. The node may be a direct child 
 | `json` | A JSON object. Used by the Manual trigger payload |
 | `sql_source` | The SQL node's `source` object. The Console renders one control listing the entity database and registered Sources |
 | `source` | A registered Source id. A value that does not resolve is `CHANNEL_REFERENCE_UNRESOLVED` |
+
+`x-refraq-resolve` set to `execution` on a field that also has `x-refraq-ref` keeps the Console picker and skips the publish-time existence check. The node resolves that reference when it runs. `read.changes` and `volume.changes_dataset` set it on `entity_id`. Other entity references, including Write Entity, and every Source reference, stay publish-time checks.
 
 `config_schema` may also carry `x-refraq-template`. It is ignored by JSON Schema validation. Its value is the declared value type as a JSON Schema object, or `{ "from": "entity_attribute" }` when the type is the sibling attribute's **Attribute Type**. The stored value is always the template text. A template that does not parse is `CHANNEL_EXPRESSION_INVALID`. Text with no `{{ }}` that does not match the declared type is `CHANNEL_TEMPLATE_TYPE_MISMATCH`. A `self.<ref>` or `self.nodes["<name>"]` that is missing or not upstream is `CHANNEL_TEMPLATE_REF_INVALID`. A result whose type cannot be known until run time is `CHANNEL_TEMPLATE_TYPE_UNKNOWN` with severity `warning`.
 

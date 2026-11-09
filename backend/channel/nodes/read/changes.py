@@ -269,6 +269,7 @@ NODE_TYPE = NodeType(
                 "title": "Entity",
                 "description": "Business Entity whose Change Log is read.",
                 "x-refraq-ref": "entity",
+                "x-refraq-resolve": "execution",
             },
             "limit": {
                 "type": "integer",

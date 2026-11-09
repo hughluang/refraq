@@ -19,6 +19,7 @@ import {
   listVersions,
   publishVersion,
 } from "@/features/entities/api";
+import { ChangeLogDraftProvider } from "@/features/entities/changeLogDraft";
 import { getJob } from "@/features/jobs/api";
 import type { BusinessEntity, EntityVersion } from "@/features/entities/types";
 
@@ -300,7 +301,11 @@ async function renderRecord(entity: BusinessEntity) {
     createElement(
       MantineProvider,
       null,
-      createElement(EntityRecord, { mode: "show", entityId: entity.id }),
+      createElement(
+        ChangeLogDraftProvider,
+        null,
+        createElement(EntityRecord, { mode: "show", entityId: entity.id }),
+      ),
     ),
   );
   await screen.findByText("Material · material");
@@ -381,7 +386,11 @@ describe("EntityRecord lifecycle confirms", () => {
       createElement(
         MantineProvider,
         null,
-        createElement(EntityRecord, { mode: "show", entityId: "ent_1" }),
+        createElement(
+          ChangeLogDraftProvider,
+          null,
+          createElement(EntityRecord, { mode: "show", entityId: "ent_1" }),
+        ),
       ),
     );
 

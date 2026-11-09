@@ -528,10 +528,8 @@ def _in_subject_sql(
 ) -> str:
     if acl:
         array = f"(SELECT acl.subject_text_array('{_escape(key)}'))"
-        if attr.pg_type() == "text":
-            return f"({column} = ANY ({array}))"
         return (
-            f"({column} = ANY (SELECT v::{attr.pg_type()} "
+            f"({column} = ANY (SELECT v::{resolve(attr.type).physical_sql(attr)} "
             f"FROM unnest({array}) AS u(v)))"
         )
     values = subject_values.get(key, ())

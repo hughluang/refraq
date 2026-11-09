@@ -722,6 +722,82 @@ def test_masked_writer_never_sees_the_raw_value(data_client) -> None:
     assert denied.status_code == 403, denied.text
 
 
+def test_partial_mask_on_a_string_column_returns_the_masked_value(data_client) -> None:
+    client, stem, _physical, entity_id = data_client
+    from backend.admin.roles import create_role
+    from backend.admin.role_store import get_role_store
+    from backend.admin.security import hash_password
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.plan import load_head
+    from backend.entity.access.service import create_grant, create_profile, put_ladder
+    from backend.entity.access.views import rebuild_entity_views
+
+    raw = "ABCDEFGH"
+    created = client.post(f"/entities/{stem}/create", json={"values": {"sku": raw}})
+    assert created.status_code == 201, created.text
+    row_id = created.json()["row"]["row_id"]
+
+    role = create_role(
+        get_role_store(),
+        key="sku_masker",
+        name="SKU masker",
+        permissions=["console:access", "entity:data_read"],
+    )
+    masker = get_user_store().create_user(
+        account="sku_masker",
+        display_name="SKU masker",
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    ids = {attr.name: attr.attribute_id for attr in load_head(entity_id).attributes}
+    put_ladder(
+        entity_id,
+        ids["sku"],
+        [
+            {"key": "clear", "mode": "clear"},
+            {"key": "edges", "mode": {"type": "partial", "keep_first": 1, "keep_last": 1}},
+        ],
+        actor_user_id=masker.id,
+        actor_token_id=None,
+    )
+    profile = create_profile(
+        entity_id,
+        key="masked_sku",
+        name="Masked sku",
+        description=None,
+        columns=[
+            {"attribute_id": ids["sku"], "level": "edges"},
+            {"attribute_id": ids["qty"], "level": "clear"},
+            {"attribute_id": ids["flag"], "level": "clear"},
+            {"attribute_id": ids["note"], "level": "clear"},
+        ],
+        actor_user_id=masker.id,
+        actor_token_id=None,
+    )
+    create_grant(
+        entity_id,
+        subject={"type": "user", "id": masker.id},
+        profile_id=profile["profile"]["id"],
+        row_rule=None,
+        actions=["read"],
+        status="active",
+        valid_until=None,
+        actor_user_id=masker.id,
+        actor_token_id=None,
+    )
+    rebuild_entity_views(entity_id)
+
+    client.post("/auth/logout")
+    login = client.post("/auth/login", json={"account": "sku_masker", "password": "secret"})
+    assert login.status_code == 200, login.text
+    queried = client.post(f"/entities/{stem}/query", json={})
+    assert queried.status_code == 200, queried.text
+    item = next(row for row in queried.json()["items"] if row["row_id"] == row_id)
+    assert item["sku"] == "A******H"
+    assert raw not in queried.text
+
+
 def test_write_rows_upsert_is_idempotent_and_channel_run_writes(data_client) -> None:
     _client, _stem, _physical, entity_id = data_client
     from backend.admin.user_store import get_user_store

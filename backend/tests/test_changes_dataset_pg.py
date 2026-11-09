@@ -411,6 +411,7 @@ def test_changes_dataset_declares_a_bounded_volume_load() -> None:
         "unattributed",
     ]
     assert schema["properties"]["entity_id"]["x-refraq-ref"] == "entity"
+    assert schema["properties"]["entity_id"]["x-refraq-resolve"] == "execution"
 
 
 def test_rows_match_read_changes_entries_in_xact_seq_order(fresh_datasets) -> None:
@@ -622,9 +623,28 @@ def test_a_missing_entity_fails_without_a_proposal(fresh_datasets) -> None:
     assert result.error_message == "Entity does not resolve"
     assert hooks.checkpoints.proposals == {}
     assert set(_relations()) == before
-    records = _job_records("run_missing")
-    assert len(records) == 1
-    assert records[0].status == "dropped"
+    assert _job_records("run_missing") == []
+
+
+def test_an_id_with_no_entity_and_no_log_fails_without_a_proposal(
+    fresh_datasets,
+) -> None:
+    entity_id = new_entity_id()
+    cases = (
+        (NODE_TYPE, "volume.changes_dataset", "run_unknown_dataset"),
+        (READ_CHANGES, "read.changes", "run_unknown_read"),
+    )
+    for node_type, type_id, run_id in cases:
+        hooks = _hooks(0, run_id=run_id)
+        result = node_type.execute(
+            {"id": _NODE_ID, "type": type_id, "config": {"entity_id": entity_id}},
+            hooks,
+        )
+        assert result.status == "failed"
+        assert result.error_code == "CHANNEL_NODE_FAILED"
+        assert result.error_message == "Entity does not resolve"
+        assert hooks.checkpoints.proposals == {}
+        assert _job_records(run_id) == []
 
 
 def test_a_historical_purge_still_lands_the_rows_that_remain(fresh_datasets) -> None:
@@ -866,6 +886,25 @@ def test_a_range_past_one_page_is_scanned_in_pages_of_10000(
     assert position.seq == last[0]["sequence"]
 
 
+def _serve_head(entity_id: str) -> None:
+    """Mark the published version's table present so view generation binds shapes."""
+    from dataclasses import replace
+
+    from backend.entity.records import attribute_to_stored
+    from backend.entity.store import get_entity_store
+
+    version = get_entity_store().current_version(entity_id)
+    assert version is not None
+    get_entity_store().save_version(
+        replace(
+            version,
+            materialized_attributes=[
+                attribute_to_stored(item) for item in version.attributes
+            ],
+        )
+    )
+
+
 def _restrict_system(
     entity_id: str,
     *,
@@ -912,7 +951,31 @@ def test_a_system_restriction_omits_the_event_and_still_advances(
         status="active",
     )
     ensure_creator_grant(entity_id, outsider.id, [_SKU, _QTY])
+    _serve_head(entity_id)
     _restrict_system(entity_id, row_rule={"eq": {"attr": "att_qty", "value": 9}})
+    from backend.admin.subjects import user_group_ids
+    from backend.admin.user_store import SYSTEM_USER_ID
+    from backend.entity.access.compiler import compile_policy, subject_outcome
+    from backend.entity.access.facts import Person
+    from backend.entity.access.plan import load_head, load_policy
+    from backend.entity.access.service import view_ready
+    from backend.entity.access.views import rebuild_entity_views
+
+    rebuild_entity_views(entity_id)
+    head = load_head(entity_id)
+    revision = get_access_store().revision(entity_id)
+    user = get_user_store().get_by_id(SYSTEM_USER_ID)
+    assert user is not None
+    person = Person(
+        user_id=user.id,
+        role_id=user.role_id,
+        group_ids=user_group_ids(user.id),
+    )
+    policy = load_policy(head, revision, people=(person,))
+    outcome = subject_outcome(
+        compile_policy(policy), policy, person, action="read", narrow=None
+    )
+    assert view_ready(head, outcome, revision)
     with engine.begin() as conn:
         _insert(conn, table, "hidden", qty=1)
         _insert(conn, table, "shown", qty=9)
@@ -935,6 +998,53 @@ def test_a_system_restriction_omits_the_event_and_still_advances(
     assert hooks.checkpoints.proposed(_NODE_ID, entity_id) == CheckpointPosition(
         xact=positions[1][0], seq=positions[1][1]
     )
+
+
+def test_a_string_subject_membership_builds_the_view(fresh_datasets) -> None:
+    from backend.admin.subjects.service import create_definition
+    from backend.admin.user_store import SYSTEM_USER_ID
+    from backend.entity.access.service import create_restriction
+    from backend.entity.access.views import rebuild_entity_views
+    from backend.entity.table_port import (
+        PostgresEntityTablePort,
+        bind_entity_table_port,
+        reset_entity_table_port,
+    )
+
+    engine = get_entity_engine()
+    entity_id, _table = _arm(engine)
+    _serve_head(entity_id)
+    key = f"lane_{entity_id[-8:]}"
+    create_definition(
+        key=key,
+        name="Lane",
+        description=None,
+        value_type="string",
+        dictionary_id=None,
+        multi_value=True,
+        actor_user_id=SYSTEM_USER_ID,
+        actor_token_id=None,
+    )
+    create_restriction(
+        entity_id,
+        applies_to={"mode": "all"},
+        row_rule={"in": {"attr": "att_sku", "subject_attr": key}},
+        deny_columns=[],
+        ceilings=[],
+        actions=["read"],
+        actor_user_id=SYSTEM_USER_ID,
+        actor_token_id=None,
+    )
+    bind_entity_table_port(PostgresEntityTablePort())
+    try:
+        result = rebuild_entity_views(entity_id)
+    finally:
+        reset_entity_table_port()
+    assert result["views_created"] >= 1
+    sql = " ".join(item.sql for item in get_access_store().bindings(entity_id))
+    assert "unnest" in sql
+    assert "VARCHAR(32)" in sql
+    assert "= ANY ((SELECT" not in sql
 
 
 def test_an_equal_projected_update_is_written(fresh_datasets) -> None:

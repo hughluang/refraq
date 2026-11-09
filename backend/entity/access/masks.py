@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from backend.entity.access.facts import AttrFact
+from backend.entity.attribute_type import resolve
 
 __all__ = [
     "CLEAR",
@@ -70,10 +71,21 @@ def mask_sql(
     if mode == CLEAR:
         return expr
     assert isinstance(mode, dict)
+    physical = resolve(attr.type).physical_sql(attr)
+    return f"CAST({_mask_expr(expr, mode, attr, acl=acl)} AS {physical})"
+
+
+def _mask_expr(
+    expr: str,
+    mode: dict[str, Any],
+    attr: AttrFact,
+    *,
+    acl: bool,
+) -> str:
     kind = str(mode["type"])
     cast = f"({expr})::text"
     if kind == "null":
-        return f"CAST(NULL AS {attr.pg_type()})"
+        return "NULL"
     if kind == "partial":
         keep_first = int(mode["keep_first"])
         keep_last = int(mode["keep_last"])

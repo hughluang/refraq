@@ -7,6 +7,7 @@ import { PageCanAccess } from "@/components/access/PageCanAccess";
 import { ConsoleShell } from "@/components/layout/ConsoleShell";
 import { LeaveGuardProvider } from "@/components/navigation/leaveGuard";
 import { ModuleIdentityGate } from "@/features/console/module-identity";
+import { ChangeLogDraftProvider } from "@/features/entities/changeLogDraft";
 
 /**
  * Renders ConsoleShell unless check has confirmed unauthenticated.
@@ -31,7 +32,9 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     <LeaveGuardProvider>
       <ConsoleShell>
         <ModuleIdentityGate>
-          <PageCanAccess>{children}</PageCanAccess>
+          <ChangeLogDraftProvider>
+            <PageCanAccess>{children}</PageCanAccess>
+          </ChangeLogDraftProvider>
         </ModuleIdentityGate>
       </ConsoleShell>
     </LeaveGuardProvider>

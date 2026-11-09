@@ -159,8 +159,9 @@ def attribute_fact(attr: AttributeRecord, head: Any) -> AttrFact:
 def load_policy(
     head: Head, revision: int, *, people: tuple[Person, ...] | None = None
 ) -> Policy:
-    """``people=None`` loads every User, which view generation needs to pick combinations.
+    """``people=None`` loads every User the compiler can authorize, including the System Identity.
 
+    View generation needs that population to emit a shape a subject can hold.
     A request passes only its subject: shapes and view names do not depend on the
     rest of the population, but the combination cap does (see ``enforce``).
     """
@@ -297,7 +298,12 @@ def _restriction_spec(item: RestrictionRecord) -> RestrictionSpec:
 
 
 def _population() -> tuple[tuple[Person, ...], dict[str, dict[str, tuple[Any, ...]]]]:
-    users, _total = get_user_store().list_users(limit=None)
+    """Subjects a grant or restriction can name, including the System Identity.
+
+    The directory list hides that identity by default. This population is the
+    set of holders whose shapes must be bound before a summary can say ready.
+    """
+    users, _total = get_user_store().list_users(limit=None, include_system=True)
     people: list[Person] = []
     values: dict[str, dict[str, tuple[Any, ...]]] = {}
     for user in users:

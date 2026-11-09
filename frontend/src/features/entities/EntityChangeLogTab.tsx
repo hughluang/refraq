@@ -17,6 +17,10 @@ import {
   getEntityChangeLogEntry,
   listEntityChangeLog,
 } from "@/features/entities/api";
+import {
+  useChangeLogDraft,
+  type ChangeLogFilters,
+} from "@/features/entities/changeLogDraft";
 import type {
   ChangeLogEntrySummary,
   ChangeLogPage,
@@ -32,32 +36,10 @@ type Props = {
   formatInstant: (value: string | null | undefined) => string;
 };
 
-type Filters = {
-  operation: string;
-  source: string;
-  subject: string;
-  rowIdentity: string;
-  versionId: string;
-  rowId: string;
-  occurredFrom: string;
-  occurredTo: string;
-};
-
-const EMPTY_FILTERS: Filters = {
-  operation: "",
-  source: "",
-  subject: "",
-  rowIdentity: "",
-  versionId: "",
-  rowId: "",
-  occurredFrom: "",
-  occurredTo: "",
-};
-
 export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
   const t = useTranslate();
   const zone = useEntryZone();
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const { filters, setFilters } = useChangeLogDraft();
   const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState<ChangeLogPage | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
@@ -120,7 +102,7 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
     return () => controller.abort();
   }, [active, entityId, selected, t]);
 
-  const setFilter = (patch: Partial<Filters>) => {
+  const setFilter = (patch: Partial<ChangeLogFilters>) => {
     setFilters((current) => ({ ...current, ...patch }));
     setCursor(null);
     setSelected(null);

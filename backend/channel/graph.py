@@ -752,8 +752,12 @@ def _reference_problems(
         spec = by_type.get(str(node["type"]))
         if spec is None or _config_errors(spec.config_schema, node["config"]):
             continue
-        for kind, value, entity_id in _refs(spec.config_schema, node["config"], None):
+        for kind, value, entity_id, resolve_at in _refs(
+            spec.config_schema, node["config"], None
+        ):
             if kind == "entity":
+                if resolve_at == "execution":
+                    continue
                 if resolver.entity_head(value) is None:
                     problems.append(
                         Problem(
@@ -815,15 +819,18 @@ def _refs(
     schema: Mapping[str, Any],
     value: Any,
     entity_id: str | None,
-) -> list[tuple[str, str, str | None]]:
-    found: list[tuple[str, str, str | None]] = []
+) -> list[tuple[str, str, str | None, str | None]]:
+    found: list[tuple[str, str, str | None, str | None]] = []
     ref = schema.get("x-refraq-ref")
     if (
         isinstance(ref, str)
         and isinstance(value, str)
         and ref not in {"match_key", "expression", "json"}
     ):
-        found.append((ref, value, entity_id))
+        resolve_at = schema.get("x-refraq-resolve")
+        found.append(
+            (ref, value, entity_id, resolve_at if isinstance(resolve_at, str) else None)
+        )
     if schema.get("type") == "object" and isinstance(value, dict):
         properties = schema.get("properties")
         if isinstance(properties, dict):

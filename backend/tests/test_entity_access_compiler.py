@@ -27,7 +27,7 @@ from backend.entity.access.facts import (
     RestrictionSpec,
     SubjectAttrFact,
 )
-from backend.entity.access.masks import ModeError, validate_levels
+from backend.entity.access.masks import ModeError, mask_sql, validate_levels
 from backend.tests.entity_access_oracle import project_subject, render_grant_select
 
 NOW = datetime(2026, 10, 7, tzinfo=timezone.utc)
@@ -252,7 +252,8 @@ def test_customer_sql_matches_the_view_template() -> None:
     assert "IS DISTINCT FROM 'TEST'" in sales_sql
     assert "__withheld" not in sales_sql
     assert "COALESCE(" in combo_sql
-    assert "acl.mask_partial(" in combo_sql
+    assert "CAST(acl.mask_partial(" in combo_sql
+    assert "AS VARCHAR(32)" in combo_sql
     assert '__withheld' in combo_sql
     assert "OWNER TO" in combo_sql
     assert "refraq_reader" in combo_sql
@@ -721,6 +722,42 @@ def test_subject_restriction_row_rule_is_in_the_view(with_ceiling: bool) -> None
     projected = project_subject(compiled, policy, target, rows)
     assert projected.rows is not None
     assert [row["row_id"] for row in projected.rows] == [1]
+
+
+def test_mask_and_subject_membership_use_the_physical_type() -> None:
+    name = AttrFact("att_name", "name", "string", max_length=80)
+    assert (
+        mask_sql(
+            't."name"',
+            {"type": "partial", "keep_first": 0, "keep_last": 4},
+            name,
+            acl=True,
+        )
+        == 'CAST(acl.mask_partial((t."name")::text, 0, 4) AS VARCHAR(80))'
+    )
+    assert (
+        mask_sql('t."name"', {"type": "null"}, name, acl=True)
+        == "CAST(NULL AS VARCHAR(80))"
+    )
+    membership = rule_sql(
+        {"in": {"attr": "att_name", "subject_attr": "lanes"}},
+        {"att_name": name},
+        alias="t",
+        acl=True,
+    )
+    assert membership == (
+        '(t."name" = ANY (SELECT v::VARCHAR(80) '
+        "FROM unnest((SELECT acl.subject_text_array('lanes'))) AS u(v)))"
+    )
+    literal = rule_sql(
+        {"in": {"attr": "att_name", "value": ["a", "b"]}},
+        {"att_name": name},
+        alias="t",
+        acl=True,
+    )
+    assert "ARRAY[" in literal
+    assert "::text[]" in literal
+    assert "unnest" not in literal
 
 
 def test_not_over_a_null_leaf_matches_the_python_evaluator() -> None:

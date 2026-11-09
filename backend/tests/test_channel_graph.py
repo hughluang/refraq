@@ -372,6 +372,29 @@ def test_sql_source_must_resolve_and_entity_rejects_an_id() -> None:
     assert "CHANNEL_NODE_CONFIG_INVALID" in _codes(entity_id)
 
 
+def test_change_nodes_resolve_the_entity_when_they_run() -> None:
+    for type_id in ("read.changes", "volume.changes_dataset"):
+        graph = _graph(
+            [
+                _node("nd_trigger", "trigger.manual", "Run"),
+                _node("nd_changes", type_id, "Changes", {"entity_id": "ent_missing"}),
+            ],
+            [_edge("ed_1", "nd_trigger", "nd_changes")],
+        )
+        assert "CHANNEL_REFERENCE_UNRESOLVED" not in _codes(graph)
+    write = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _write("nd_missing", entity_id="ent_missing"),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_missing")],
+    )
+    problems = validate(write, FakeResolver())
+    missing = " ".join(item.detail for item in problems if item.node_id == "nd_missing")
+    assert "CHANNEL_REFERENCE_UNRESOLVED" in _codes(write)
+    assert "ent_missing" in missing
+
+
 def test_dangling_entity_and_attribute() -> None:
     graph = _graph(
         [

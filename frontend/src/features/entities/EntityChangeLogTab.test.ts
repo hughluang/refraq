@@ -12,6 +12,7 @@ import {
   listEntityChangeLog,
   listVersions,
 } from "@/features/entities/api";
+import { ChangeLogDraftProvider } from "@/features/entities/changeLogDraft";
 import { ApiError } from "@/lib/api";
 import type {
   BusinessEntity,
@@ -267,13 +268,15 @@ async function renderRecord(
     version: versionFor(record, changeLogEnabled),
   });
   const { EntityRecord } = await import("@/features/entities/EntityRecord");
+  const page = (next: BusinessEntity, nextMode: typeof mode = mode) =>
+    nextMode === "create"
+      ? createElement(EntityRecord, { mode: "create" })
+      : createElement(EntityRecord, { mode: nextMode, entityId: next.id });
   const tree = (next: BusinessEntity, nextMode: typeof mode = mode) =>
     createElement(
       MantineProvider,
       null,
-      nextMode === "create"
-        ? createElement(EntityRecord, { mode: "create" })
-        : createElement(EntityRecord, { mode: nextMode, entityId: next.id }),
+      createElement(ChangeLogDraftProvider, null, page(next, nextMode)),
     );
   const view = render(tree(record));
   if (mode !== "create") {
@@ -683,5 +686,59 @@ describe("change log tab", () => {
     expect(
       screen.queryByText("The request is not valid. Check the fields and try again."),
     ).toBeNull();
+  });
+
+  it("keeps the filter draft after the page unmounts and drops the continuation", async () => {
+    permissions.data = ["entity:data_read"];
+    const cursor = "cursor-from-ent_1";
+    vi.mocked(listEntityChangeLog).mockImplementation(async (id, query) => {
+      if (query?.cursor) {
+        return { items: [entry({ sequence: 1 })], limit: 50, next_cursor: null };
+      }
+      return { items: [entry({ sequence: 8 })], limit: 50, next_cursor: cursor };
+    });
+    const view = await renderRecord(entity({ id: "ent_1" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Change log" }));
+    fireEvent.change(screen.getByLabelText("Business key"), {
+      target: { value: "LEFT" },
+    });
+    fireEvent.change(screen.getByLabelText("Version id"), {
+      target: { value: "ver_kept" },
+    });
+    fireEvent.change(screen.getByLabelText("Row id"), {
+      target: { value: "4" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Older" }));
+    await waitFor(() => {
+      const last = vi.mocked(listEntityChangeLog).mock.calls.at(-1);
+      expect(last?.[0]).toBe("ent_1");
+      expect(last?.[1]?.cursor).toBe(cursor);
+    });
+    view.rerender(
+      createElement(MantineProvider, null, createElement(ChangeLogDraftProvider, null, null)),
+    );
+    const next = entity({ id: "ent_2" });
+    vi.mocked(getEntity).mockResolvedValue({ entity: next });
+    vi.mocked(listVersions).mockResolvedValue({
+      items: [versionFor(next)],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    });
+    vi.mocked(getVersion).mockResolvedValue({ version: versionFor(next) });
+    view.rerender(view.tree(next));
+    fireEvent.click(await screen.findByRole("tab", { name: "Change log" }));
+    await waitFor(() => {
+      const switched = vi
+        .mocked(listEntityChangeLog)
+        .mock.calls.filter((call) => call[0] === "ent_2");
+      expect(switched.length).toBeGreaterThan(0);
+      expect(switched.every((call) => call[1]?.cursor == null)).toBe(true);
+      expect(switched.at(-1)?.[1]).toMatchObject({
+        row_identity: "LEFT",
+        version_id: "ver_kept",
+        row_id: "4",
+      });
+    });
   });
 });

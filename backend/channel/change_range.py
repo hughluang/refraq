@@ -23,6 +23,7 @@ from backend.entity.history.service import (
     IncrementalPosition,
     read_incremental,
 )
+from backend.entity.access.plan import load_head
 from backend.entity.errors import EntityNotFound
 
 if TYPE_CHECKING:
@@ -76,11 +77,13 @@ def open_change_range(
     *,
     ignore_checkpoints: bool,
 ) -> ChangeRange:
-    """Recording check, purge-mark validity, start, and bound.
+    """Entity existence, recording, purge-mark validity, start, and bound.
 
-    Does not propose and does not read entries.
+    Does not propose and does not read entries. A missing entity fails here,
+    before recording is consulted, so an id with no log row is not "recording off".
     """
     with _range_errors():
+        load_head(entity_id)
         if not recording_enabled(entity_id):
             raise ChangeRangeError("CHANNEL_CHANGE_LOG_OFF", _OFF)
         if not ignore_checkpoints:

@@ -334,6 +334,7 @@ NODE_TYPE = NodeType(
                 "title": "Entity",
                 "description": "Business Entity whose Change Log is loaded.",
                 "x-refraq-ref": "entity",
+                "x-refraq-resolve": "execution",
             },
             "sources": {
                 "type": "array",
