@@ -21,6 +21,30 @@ export type McpToolsListResult =
   | { status: "protocol-error" }
   | { status: "transport-failure" };
 
+export type McpCallPart =
+  | { kind: "text"; text: string }
+  | { kind: "json"; value: unknown };
+
+export type McpCallOutcome =
+  | { status: "http" }
+  | { status: "transport" }
+  | { status: "protocol"; error: unknown }
+  | { status: "sdk"; parts: McpCallPart[]; protocol: unknown }
+  | { status: "domain"; parts: McpCallPart[]; protocol: unknown }
+  | { status: "result"; parts: McpCallPart[]; protocol: unknown };
+
+type Classified =
+  | { status: "unavailable" }
+  | { status: "transport-failure" }
+  | { status: "protocol-error"; error: unknown }
+  | { status: "result"; result: unknown };
+
+type Envelope =
+  | { status: "transport-failure" }
+  | { status: "protocol-error"; error: unknown }
+  | { status: "result"; result: unknown }
+  | { status: "skip" };
+
 function executionClass(tool: Record<string, unknown>): string | null {
   const meta = tool._meta;
   if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
@@ -42,15 +66,7 @@ function readTool(value: unknown): McpListedTool | null {
   };
 }
 
-function fromRpc(message: unknown, id: number): McpToolsListResult | "skip" {
-  if (typeof message !== "object" || message === null || Array.isArray(message)) {
-    return { status: "transport-failure" };
-  }
-  const record = message as Record<string, unknown>;
-  if (record.jsonrpc !== "2.0") return { status: "transport-failure" };
-  if (record.id !== id) return "skip";
-  if ("error" in record && record.error != null) return { status: "protocol-error" };
-  const result = record.result;
+function interpretTools(result: unknown): McpToolsListResult {
   if (typeof result !== "object" || result === null || Array.isArray(result)) {
     return { status: "transport-failure" };
   }
@@ -66,10 +82,24 @@ function fromRpc(message: unknown, id: number): McpToolsListResult | "skip" {
   return { status: "ready", tools: parsed };
 }
 
-function parseSse(body: string, id: number): McpToolsListResult {
+function envelopeOf(message: unknown, id: number): Envelope {
+  if (typeof message !== "object" || message === null || Array.isArray(message)) {
+    return { status: "transport-failure" };
+  }
+  const record = message as Record<string, unknown>;
+  if (record.jsonrpc !== "2.0") return { status: "transport-failure" };
+  if (record.id !== id) return { status: "skip" };
+  if ("error" in record && record.error != null) {
+    return { status: "protocol-error", error: record.error };
+  }
+  if (!("result" in record)) return { status: "transport-failure" };
+  return { status: "result", result: record.result };
+}
+
+function parseSse(body: string, id: number): Envelope {
   const normalized = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (!normalized.endsWith("\n\n")) return { status: "transport-failure" };
-  let matched: McpToolsListResult | null = null;
+  let matched: Envelope | null = null;
   for (const frame of normalized.split("\n\n")) {
     const dataLines: string[] = [];
     for (const line of frame.split("\n")) {
@@ -91,8 +121,8 @@ function parseSse(body: string, id: number): McpToolsListResult {
     } catch {
       return { status: "transport-failure" };
     }
-    const parsed = fromRpc(message, id);
-    if (parsed === "skip") continue;
+    const parsed = envelopeOf(message, id);
+    if (parsed.status === "skip") continue;
     matched = parsed;
   }
   return matched ?? { status: "transport-failure" };
@@ -112,11 +142,59 @@ async function readBody(response: Response): Promise<string> {
   return body;
 }
 
-/** One tools/list POST to a fixed same-origin endpoint. No tools/call. */
-export async function requestToolsList(
+function protocolHeaders(pat: string, method: string, toolName?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "application/json, text/event-stream",
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${pat}`,
+    "mcp-protocol-version": PROTOCOL_VERSION,
+    "mcp-method": method,
+  };
+  if (toolName !== undefined) headers["mcp-name"] = toolName;
+  return headers;
+}
+
+function requestMeta(): Record<string, unknown> {
+  return {
+    [PROTOCOL_VERSION_META]: PROTOCOL_VERSION,
+    [CLIENT_CAPABILITIES_META]: {},
+  };
+}
+
+function classifyBody(response: Response, text: string, id: number): Classified {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("text/event-stream")) {
+    const parsed = parseSse(text, id);
+    if (parsed.status === "protocol-error") return parsed;
+    if (parsed.status === "result" && response.ok) return parsed;
+    if (parsed.status === "result") return { status: "unavailable" };
+    return { status: "transport-failure" };
+  }
+  if (contentType.includes("application/json")) {
+    let message: unknown;
+    try {
+      message = JSON.parse(text);
+    } catch {
+      return { status: "transport-failure" };
+    }
+    const parsed = envelopeOf(message, id);
+    if (parsed.status === "protocol-error") return parsed;
+    if (!response.ok) return { status: "unavailable" };
+    if (parsed.status !== "result") return { status: "transport-failure" };
+    return parsed;
+  }
+  if (!response.ok) return { status: "unavailable" };
+  return { status: "transport-failure" };
+}
+
+/** Shared tools/list and tools/call POST. One header dialect, no session handshake. */
+async function postMcp(
   endpoint: string,
   pat: string,
-): Promise<McpToolsListResult> {
+  method: "tools/list" | "tools/call",
+  params: Record<string, unknown>,
+  toolName?: string,
+): Promise<Classified> {
   if (!ENDPOINTS.has(endpoint)) return { status: "unavailable" };
   const id = nextRequestId;
   nextRequestId += 1;
@@ -125,23 +203,12 @@ export async function requestToolsList(
     response = await fetch(`${window.location.origin}${endpoint}`, {
       method: "POST",
       credentials: "omit",
-      headers: {
-        Accept: "application/json, text/event-stream",
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${pat}`,
-        "mcp-protocol-version": PROTOCOL_VERSION,
-        "mcp-method": "tools/list",
-      },
+      headers: protocolHeaders(pat, method, toolName),
       body: JSON.stringify({
         jsonrpc: "2.0",
         id,
-        method: "tools/list",
-        params: {
-          _meta: {
-            [PROTOCOL_VERSION_META]: PROTOCOL_VERSION,
-            [CLIENT_CAPABILITIES_META]: {},
-          },
-        },
+        method,
+        params,
       }),
     });
   } catch {
@@ -156,31 +223,108 @@ export async function requestToolsList(
   } catch {
     return { status: "transport-failure" };
   }
+  return classifyBody(response, text, id);
+}
 
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("text/event-stream")) {
-    const parsed = parseSse(text, id);
-    // Failed HTTP must not surface a ready or empty catalog. Protocol errors stay.
-    if (!response.ok && (parsed.status === "ready" || parsed.status === "empty")) {
-      return { status: "unavailable" };
-    }
-    return parsed;
+function textParts(result: Record<string, unknown>): string[] {
+  if (!Array.isArray(result.content)) return [];
+  const texts: string[] = [];
+  for (const item of result.content) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    if (record.type !== "text" || typeof record.text !== "string") continue;
+    texts.push(record.text);
   }
+  return texts;
+}
 
-  if (contentType.includes("application/json")) {
-    let message: unknown;
-    try {
-      message = JSON.parse(text);
-    } catch {
-      return { status: "transport-failure" };
-    }
-    const parsed = fromRpc(message, id);
-    if (parsed !== "skip" && parsed.status === "protocol-error") return parsed;
-    if (!response.ok) return { status: "unavailable" };
-    if (parsed === "skip") return { status: "transport-failure" };
-    return parsed;
+function structuredResultText(result: Record<string, unknown>): string | null {
+  const structured = result.structuredContent;
+  if (typeof structured !== "object" || structured === null || Array.isArray(structured)) return null;
+  const value = (structured as Record<string, unknown>).result;
+  return typeof value === "string" ? value : null;
+}
+
+function domainError(text: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
   }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+  const error = (parsed as Record<string, unknown>).error;
+  if (typeof error !== "object" || error === null || Array.isArray(error)) return false;
+  const record = error as Record<string, unknown>;
+  return typeof record.code === "string" && typeof record.message === "string";
+}
 
-  if (!response.ok) return { status: "unavailable" };
-  return { status: "transport-failure" };
+function partFromText(text: string): McpCallPart {
+  try {
+    return { kind: "json", value: JSON.parse(text) };
+  } catch {
+    return { kind: "text", text };
+  }
+}
+
+function callParts(result: Record<string, unknown>): McpCallPart[] {
+  const parts: McpCallPart[] = [];
+  const seen = new Set<string>();
+  for (const text of textParts(result)) {
+    seen.add(text);
+    parts.push(partFromText(text));
+  }
+  const structured = structuredResultText(result);
+  if (structured !== null && !seen.has(structured)) parts.push(partFromText(structured));
+  return parts;
+}
+
+function interpretCall(result: unknown): McpCallOutcome {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) {
+    return { status: "result", parts: [], protocol: result };
+  }
+  const record = result as Record<string, unknown>;
+  const parts = callParts(record);
+  if (record.isError === true) return { status: "sdk", parts, protocol: result };
+  const candidates = textParts(record);
+  const structured = structuredResultText(record);
+  if (structured !== null) candidates.push(structured);
+  if (candidates.some((text) => domainError(text))) return { status: "domain", parts, protocol: result };
+  return { status: "result", parts, protocol: result };
+}
+
+function asCall(classified: Classified): McpCallOutcome {
+  if (classified.status === "unavailable") return { status: "http" };
+  if (classified.status === "transport-failure") return { status: "transport" };
+  if (classified.status === "protocol-error") return { status: "protocol", error: classified.error };
+  return interpretCall(classified.result);
+}
+
+/** One tools/list POST to a fixed same-origin endpoint. No tools/call. */
+export async function requestToolsList(endpoint: string, pat: string): Promise<McpToolsListResult> {
+  const classified = await postMcp(endpoint, pat, "tools/list", { _meta: requestMeta() });
+  if (classified.status === "protocol-error") return { status: "protocol-error" };
+  if (classified.status !== "result") return classified;
+  return interpretTools(classified.result);
+}
+
+/** One explicit tools/call. The arguments value is the editor snapshot. */
+export async function requestToolsCall(
+  endpoint: string,
+  pat: string,
+  toolName: string,
+  args: unknown,
+): Promise<McpCallOutcome> {
+  const classified = await postMcp(
+    endpoint,
+    pat,
+    "tools/call",
+    {
+      name: toolName,
+      arguments: args,
+      _meta: requestMeta(),
+    },
+    toolName,
+  );
+  return asCall(classified);
 }
