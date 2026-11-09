@@ -18,12 +18,12 @@ describe("scrollAccountSection", () => {
 
   it("scrolls the target into view and does not write a hash", () => {
     const target = document.createElement("div");
-    target.id = ACCOUNT_SECTION.mcp;
+    target.id = ACCOUNT_SECTION.tokens;
     document.body.append(target);
     const scrollIntoView = vi.fn();
     target.scrollIntoView = scrollIntoView;
 
-    scrollAccountSection(ACCOUNT_SECTION.mcp);
+    scrollAccountSection(ACCOUNT_SECTION.tokens);
 
     expect(scrollIntoView).toHaveBeenCalledWith({
       behavior: "smooth",
@@ -57,7 +57,7 @@ describe("activeAccountSection", () => {
           top: -40,
         },
         {
-          id: ACCOUNT_SECTION.mcp,
+          id: "lower",
           intersectionRatio: 0.1,
           top: 200,
         },
@@ -91,7 +91,7 @@ describe("activeAccountSection", () => {
           top: -80,
         },
         {
-          id: ACCOUNT_SECTION.mcp,
+          id: "lower",
           intersectionRatio: 0,
           top: 400,
         },

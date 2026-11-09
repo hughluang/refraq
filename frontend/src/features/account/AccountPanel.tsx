@@ -26,6 +26,7 @@ import { TextField } from "@/components/form/TextField";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { AccountSectionNav } from "@/features/account/AccountSectionNav";
 import { ACCOUNT_SECTION } from "@/features/account/account-sections";
 import { patchAccountProfile } from "@/features/account/api";
@@ -33,7 +34,6 @@ import { patchAccountProfile } from "@/features/account/api";
 const PROFILE_FORM_ID = "account-profile-form";
 import { PasswordSection } from "@/features/account/PasswordSection";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { McpSection } from "@/features/account/McpSection";
 import { TokenList } from "@/features/tokens/TokenList";
 import { FOLLOW_BROWSER_TIMEZONE } from "@/providers/display-timezone-catalog";
 import { loadTimeZones, type TimeZoneItem } from "@/providers/time-zones";
@@ -275,11 +275,7 @@ export function AccountPanel() {
             </div>
           </CanAccess>
 
-          <Divider />
-
-          <div id={ACCOUNT_SECTION.mcp}>
-            <McpSection />
-          </div>
+          <ConsoleLink href="/console/mcp">{t("account.openMcp")}</ConsoleLink>
         </Stack>
         <AccountSectionNav />
       </Group>

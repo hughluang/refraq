@@ -463,4 +463,4 @@ For the login/permission slice, each concern should land here:
 - Catalog Sample HTTP: `frontend/src/features/sources/api/sample.ts`; Console ACL is identity action `sample` (`catalog:sample`)
 - Structure Diff HTTP: `frontend/src/features/sources/api/structure-diffs.ts`
 - Catalog Object Console logic: `frontend/src/features/sources/catalog-detail/` (`sampleFilters`, `columnDrafts`, `joinEdges`, `catalogStatus`)
-- Account Center MCP section: `frontend/src/features/account/McpSection.tsx` (one section, two endpoint cards; catalog HTTP `GET /mcp/catalog` and `GET /mcp/entity/catalog`, copied `{origin}/mcp` and `{origin}/mcp/entity` config). Same-origin streams: `frontend/src/app/mcp/route.ts` and `frontend/src/app/mcp/entity/route.ts`
+- MCP workspace: `frontend/src/features/mcp/` (overview `/console/mcp`, Metadata detail `/console/mcp/metadata`, Entity detail `/console/mcp/entity`). Console Module `mcp` is in the workbench group and is not an Account Center section. Same-origin streams: `frontend/src/app/mcp/route.ts` and `frontend/src/app/mcp/entity/route.ts`

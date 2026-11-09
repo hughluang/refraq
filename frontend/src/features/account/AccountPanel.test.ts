@@ -60,11 +60,7 @@ vi.mock("@/features/branding/BrandingProvider", () => ({
 }));
 
 vi.mock("@/features/tokens/TokenList", () => ({
-  TokenList: () => null,
-}));
-
-vi.mock("@/features/account/McpSection", () => ({
-  McpSection: () => null,
+  TokenList: () => createElement("div", null, "tokens-section"),
 }));
 
 vi.mock("@/features/account/AccountSectionNav", () => ({
@@ -183,5 +179,27 @@ describe("AccountPanel failures", () => {
     expect(alerts[0].textContent).toContain("common.requestId");
     expect(alerts[0].textContent).toContain("req-profile");
     expect(screen.queryByRole("button", { name: "common.retry" })).toBeNull();
+  });
+
+  it("links to the MCP workspace and does not load endpoint catalogs", async () => {
+    api.mockImplementation((path: string) => {
+      if (path === "/time-zones") {
+        return Promise.resolve({ items: [{ id: "UTC", aliases: [] }] });
+      }
+      return Promise.reject(new Error(`unexpected ${path}`));
+    });
+    const { AccountPanel } = await import("@/features/account/AccountPanel");
+    render(shell(createElement(AccountPanel)));
+
+    expect(await screen.findByText("tokens-section")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "account.openMcp" }).getAttribute("href"),
+    ).toBe("/console/mcp");
+    expect(document.getElementById("account-mcp")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
+    const paths = api.mock.calls.map((call) => call[0]);
+    expect(paths).not.toContain("/mcp/catalog");
+    expect(paths).not.toContain("/mcp/entity/catalog");
   });
 });

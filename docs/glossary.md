@@ -184,9 +184,9 @@ Avoid **Schedule Timezone**, worker process timezone, or treating the preference
 
 ### Account Center
 
-The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, User PAT management, and the current User’s MCP connections. One section lists the Metadata **MCP endpoint** and the **Entity MCP endpoint** as two cards.
+The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, and User PAT management. One link opens Console Module `mcp` (`/console/mcp`).
 Registered in Console Module Identity as identity-only (`routes.list` null; `routes.show` `/console/account`); not a structural Console Module in the side nav.
-Avoid conflating with **Platform Settings** / **System Parameter**, or treating User PAT as a sidebar Administration module.
+Avoid conflating with **Platform Settings** / **System Parameter**, treating User PAT as a sidebar Administration module, or hosting the Metadata **MCP endpoint** and **Entity MCP endpoint** pages here.
 
 ### MCP endpoint
 

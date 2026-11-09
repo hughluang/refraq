@@ -6,7 +6,7 @@ Self-service endpoints for the current authenticated **User** (Account Center). 
 
 Business rules: `docs/business-account.md`.
 
-Related: `docs/api-contracts-auth.md` (Current User Summary), `docs/api-contracts-tokens.md` (PAT section in the UI), `docs/api-contracts-metadata-mcp.md` (`GET /mcp/catalog` consumed by the MCP section).
+Related: `docs/api-contracts-auth.md` (Current User Summary), `docs/api-contracts-tokens.md` (PAT section in the UI). Account Center links to Console Module `mcp` (`/console/mcp`) and does not call `GET /mcp/catalog` or `GET /mcp/entity/catalog`.
 
 ## 2. Transport
 

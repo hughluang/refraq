@@ -1,4 +1,4 @@
-"""Current-user MCP catalog (Account Center). Same crop as tools/list."""
+"""Current-user Metadata MCP catalog. Same crop as tools/list."""
 
 from __future__ import annotations
 

@@ -1,7 +1,6 @@
 export const ACCOUNT_SECTION = {
   profile: "account-profile",
   tokens: "account-tokens",
-  mcp: "account-mcp",
 } as const;
 
 export type AccountSectionObservation = {

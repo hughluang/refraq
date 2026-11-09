@@ -525,6 +525,24 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=30,
     ),
     ConsoleModuleSeed(
+        id="mcp",
+        group_id="workbench",
+        group_label_key="layout.navGroup.workbench",
+        label_key="mcp.title",
+        icon="plug",
+        routes=ModuleRoutes(
+            list="/console/mcp",
+            show="/console/mcp/metadata",
+            aliases=(RouteAlias(path="/console/mcp/entity", action="show"),),
+        ),
+        actions=ModuleActions(
+            list="console:access",
+            show="console:access",
+        ),
+        group_order=10,
+        module_order=15,
+    ),
+    ConsoleModuleSeed(
         id="account",
         group_id="workbench",
         group_label_key="layout.navGroup.workbench",

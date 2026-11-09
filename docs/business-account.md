@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-This document defines **Account Center** rules: the current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, **User PAT** management, and the current User’s MCP connections.
+This document defines **Account Center** rules: the current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, and **User PAT** management. MCP discovery and endpoint pages belong to Console Module `mcp`, not to Account Center.
 
 Related:
 
@@ -20,8 +20,8 @@ Platform system parameters remain under Console Module `settings` (`docs/api-con
 - It is registered in Console Module Identity as identity-only (`routes.list` null, `routes.show` `/console/account`) and does **not** appear in the sidebar navigation tree.
 - Any authenticated User with Console access may open Account Center; no extra permission is required for the shell, profile, password, locale, or Display Timezone self-service (`actions.show` → `console:access`).
 - **User PAT** create/list/deactivate/restore/soft-delete remains gated by `tokens:read` / `tokens:write` and is embedded as a section inside Account Center (not a sidebar nav item; module `routes.list` is null).
-- One MCP section follows User PAT on the same page. It has two endpoint cards: Metadata MCP (`GET /mcp/catalog`, public path `/mcp`) and Entity MCP (`GET /mcp/entity/catalog`, public path `/mcp/entity`). Any User who can open Account Center (`console:access`) sees, on each card, the same-origin client configuration (URL plus a PAT placeholder) and the tools their Role can call. The primary action copies that configuration; the page never fills a live token. URL-only copy is not sufficient.
-- The page may show an in-page table of contents for three self-service jobs: profile (identity, locale, Display Timezone, and local password change), User PAT, and MCP endpoints. The directory stays visible beside the form, highlights the job in view, and jumps on click. That is findability on one form page, not Account Center secondary navigation and not a Console Navigation item: it does not write a URL hash or History entry, and does not add routes. Refresh returns to the top of `/console/account`. The tokens entry is shown only when the User PAT section is shown (`tokens:read`).
+- Account Center keeps one link to `/console/mcp`. That link does not render endpoint cards, a tool table, or a client configuration, and it does not request `/mcp/catalog` or `/mcp/entity/catalog`. Console Module `mcp` is opened with `console:access` only. It is not gated on `tokens:read` or `tokens:write`.
+- The page may show an in-page table of contents for two self-service jobs: profile (identity, locale, Display Timezone, and local password change) and User PAT. The directory stays visible beside the form, highlights the job in view, and jumps on click. That is findability on one form page, not Account Center secondary navigation and not a Console Navigation item: it does not write a URL hash or History entry, and does not add routes. Refresh returns to the top of `/console/account`. The tokens entry is shown only when the User PAT section is shown (`tokens:read`). The directory is not an MCP section.
 - Self-service mutates **only the caller’s** User; admin `/users` APIs continue to manage other Users via `users:*`.
 - `GET /account/groups` returns only the caller’s own User Group memberships. Authentication is enough; `users:read` is not required. It is not the admin membership editor, it does not accept another User id, and it does not add a section to the Account Center page.
 

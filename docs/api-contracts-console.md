@@ -36,6 +36,11 @@ Purpose: return grouped side-nav entries for the current session.
           "id": "dashboard",
           "label_key": "layout.nav.home",
           "route": "/console"
+        },
+        {
+          "id": "mcp",
+          "label_key": "mcp.title",
+          "route": "/console/mcp"
         }
       ]
     },
@@ -207,6 +212,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | Module id | Group | `icon` | `routes.list` | `actions.list` (nav) | Other routes / actions |
 | --- | --- | --- | --- | --- | --- |
 | `dashboard` | `workbench` | `layout-dashboard` | `/console` | `dashboard:read` | — |
+| `mcp` | `workbench` | `plug` | `/console/mcp` | `console:access` | show `/console/mcp/metadata` → `console:access`; alias `/console/mcp/entity` action `show` → `console:access`; not gated on `tokens:read` or `tokens:write` |
 | `users` | `admin` | `users` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new`; show `/console/users/:id` → `users:read` |
 | `user-groups` | `admin` | `users-group` | `/console/user-groups` | `users:read` | create/edit/delete → `users:write`; show `/console/user-groups/:id` → `users:read` |
 | `subject-attributes` | `admin` | `id-badge` | `/console/subject-attributes` | `users:read` | create/edit/delete → `users:write` |

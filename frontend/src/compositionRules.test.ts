@@ -63,10 +63,6 @@ const STATIC_TABLES: Record<string, { roots: number; reason: string }> = {
     roots: 1,
     reason: "Dictionary entries are edited in place as form fields, not a record collection.",
   },
-  "features/account/McpSection.tsx": {
-    roots: 1,
-    reason: "The MCP tool list is a static display of the fixed tool catalog.",
-  },
   "features/entities/AccessPreviewSection.tsx": {
     roots: 2,
     reason: "Access preview is a fixed sample of marks and cells, not a paged collection.",

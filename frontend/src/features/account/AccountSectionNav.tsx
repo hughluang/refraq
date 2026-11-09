@@ -35,7 +35,6 @@ export function AccountSectionNav() {
     if (canTokens?.can) {
       next.push({ id: ACCOUNT_SECTION.tokens, label: t("tokens.title") });
     }
-    next.push({ id: ACCOUNT_SECTION.mcp, label: t("account.mcp.title") });
     return next;
   }, [canTokens?.can, t]);
 

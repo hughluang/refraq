@@ -26,6 +26,7 @@ export const ModuleId = {
   httpAccounts: "http-accounts",
   inboundCredentials: "inbound-credentials",
   modelServices: "model-services",
+  mcp: "mcp",
   account: "account",
 } as const;
 

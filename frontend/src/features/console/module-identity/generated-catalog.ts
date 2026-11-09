@@ -518,6 +518,31 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "mcp",
+    "label_key": "mcp.title",
+    "icon": "plug",
+    "routes": {
+      "list": "/console/mcp",
+      "create": null,
+      "edit": null,
+      "show": "/console/mcp/metadata",
+      "aliases": [
+        {
+          "path": "/console/mcp/entity",
+          "action": "show"
+        }
+      ]
+    },
+    "actions": {
+      "list": "console:access",
+      "create": null,
+      "edit": null,
+      "delete": null,
+      "show": "console:access",
+      "sample": null
+    }
+  },
+  {
     "id": "account",
     "label_key": "account.title",
     "icon": "user-circle",

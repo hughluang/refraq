@@ -94,7 +94,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "operations",
         "settings",
     }
-    assert [m["id"] for m in groups["workbench"]["modules"]] == ["dashboard"]
+    assert [m["id"] for m in groups["workbench"]["modules"]] == ["dashboard", "mcp"]
     assert [m["id"] for m in groups["admin"]["modules"]] == [
         "users",
         "user-groups",
@@ -149,7 +149,41 @@ def test_operator_omits_admin_and_settings(client: TestClient) -> None:
     groups = response.json()["groups"]
     assert len(groups) == 1
     assert groups[0]["id"] == "workbench"
-    assert [m["id"] for m in groups[0]["modules"]] == ["dashboard"]
+    assert [m["id"] for m in groups[0]["modules"]] == ["dashboard", "mcp"]
+    assert "admin" not in {group["id"] for group in groups}
+    assert "settings" not in {group["id"] for group in groups}
+
+
+def test_console_access_only_sees_mcp_in_workbench(
+    client: TestClient, store_bundle
+) -> None:
+    user_store, role_store, _sessions = store_bundle
+    role = create_role(
+        role_store,
+        key="console_only",
+        name="Console only",
+        permissions=["console:access"],
+    )
+    user_store.create_user(
+        account="guest",
+        display_name="Guest",
+        password_hash=hash_password("s3cret"),
+        role_id=role.id,
+    )
+    assert (
+        client.post(
+            "/auth/login", json={"account": "guest", "password": "s3cret"}
+        ).status_code
+        == 200
+    )
+    response = client.get("/console/navigation")
+    assert response.status_code == 200, response.text
+    groups = response.json()["groups"]
+    assert [group["id"] for group in groups] == ["workbench"]
+    assert [module["id"] for module in groups[0]["modules"]] == ["mcp"]
+    assert "account" not in {
+        module["id"] for group in groups for module in group["modules"]
+    }
 
 
 def test_without_tag_read_entity_is_followed_by_channel(

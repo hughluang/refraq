@@ -101,6 +101,17 @@ describe("evaluateCan", () => {
     ).toEqual({ can: true });
   });
 
+  it("grants mcp list and show with only console:access", () => {
+    const mcp = CATALOG.find((item) => item.id === "mcp");
+    expect(mcp?.actions.show).toBe("console:access");
+    expect(evaluateCan(CATALOG, ["console:access"], "mcp", "list")).toEqual({
+      can: true,
+    });
+    expect(evaluateCan(CATALOG, ["console:access"], "mcp", "show")).toEqual({
+      can: true,
+    });
+  });
+
   it("grants entities show with entity:read", () => {
     expect(
       evaluateCan(CATALOG, ["entity:read"], "entities", "show"),
@@ -255,6 +266,21 @@ describe("matchPath", () => {
     });
     expect(matchPath("/console/account", CATALOG)).toEqual({
       resource: "account",
+      action: "show",
+    });
+  });
+
+  it("maps the mcp overview and both detail paths", () => {
+    expect(matchPath("/console/mcp", CATALOG)).toEqual({
+      resource: "mcp",
+      action: "list",
+    });
+    expect(matchPath("/console/mcp/metadata", CATALOG)).toEqual({
+      resource: "mcp",
+      action: "show",
+    });
+    expect(matchPath("/console/mcp/entity", CATALOG)).toEqual({
+      resource: "mcp",
       action: "show",
     });
   });

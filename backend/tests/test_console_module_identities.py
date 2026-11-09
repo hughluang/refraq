@@ -51,6 +51,7 @@ EXPECTED_ICONS = {
     "http-accounts": "world",
     "inbound-credentials": "lock",
     "model-services": "brain",
+    "mcp": "plug",
     "account": "user-circle",
 }
 
@@ -501,6 +502,26 @@ EXPECTED_IDENTITIES = {
             "sample": None,
         },
     },
+    "mcp": {
+        "label_key": "mcp.title",
+        "routes": {
+            "list": "/console/mcp",
+            "create": None,
+            "edit": None,
+            "show": "/console/mcp/metadata",
+            "aliases": [
+                {"path": "/console/mcp/entity", "action": "show"},
+            ],
+        },
+        "actions": {
+            "list": "console:access",
+            "create": None,
+            "edit": None,
+            "delete": None,
+            "show": "console:access",
+            "sample": None,
+        },
+    },
     "account": {
         "label_key": "account.title",
         "routes": {
@@ -607,7 +628,7 @@ def test_operator_receives_full_unfiltered_identities(client: TestClient) -> Non
         for group in navigation.json()["groups"]
         for module in group["modules"]
     }
-    assert nav_ids == {"dashboard"}
+    assert nav_ids == {"dashboard", "mcp"}
     assert "account" not in nav_ids
 
 
