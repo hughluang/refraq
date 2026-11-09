@@ -2020,3 +2020,170 @@ def test_get_and_query_rows_carry_withheld_on_a_multi_profile_shape(data_client)
     assert rejected_filter.status_code == 422
     assert rejected_filter.json()["code"] == "ENTITY_ROW_INVALID"
 
+
+def test_un_narrowed_combination_pages_the_most_revealing_level(data_client) -> None:
+    """Two effective read grants page together, one level per covered row.
+
+    The grants' row rules are disjoint except one overlap. A row covered by
+    both takes the clearer level. A row covered by neither is absent.
+    Narrowing to one identity reads only that identity's profile.
+    """
+    client, stem, _physical, entity_id = data_client
+    from backend.admin.roles import create_role
+    from backend.admin.role_store import get_role_store
+    from backend.admin.security import hash_password
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.plan import load_head
+    from backend.entity.access.service import create_grant, create_profile, put_ladder
+    from backend.entity.access.views import rebuild_entity_views
+
+    for sku, qty, note in (
+        ("ABCDWXYZ", 5, "secret-note-narrow"),
+        ("BOTHCODE", 10, "shown-both"),
+        ("WIDESKU1", 20, "shown-wide"),
+        ("GONE0001", -1, "secret-gone"),
+    ):
+        response = client.post(
+            f"/entities/{stem}/create",
+            json={"values": {"sku": sku, "qty": qty, "note": note}},
+        )
+        assert response.status_code == 201, response.text
+
+    ids = {attr.name: attr.attribute_id for attr in load_head(entity_id).attributes}
+    role = create_role(
+        get_role_store(),
+        key="span_reader",
+        name="Span reader",
+        permissions=["console:access", "entity:data_read"],
+    )
+    reader = get_user_store().create_user(
+        account="span",
+        display_name="Span",
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    put_ladder(
+        entity_id,
+        ids["sku"],
+        [
+            {"key": "clear", "mode": "clear"},
+            {"key": "last4", "mode": {"type": "partial", "keep_first": 0, "keep_last": 4}},
+        ],
+        actor_user_id=reader.id,
+        actor_token_id=None,
+    )
+    wide_columns = [
+        {"attribute_id": ids["sku"], "level": "clear"},
+        {"attribute_id": ids["qty"], "level": "clear"},
+        {"attribute_id": ids["flag"], "level": "clear"},
+        {"attribute_id": ids["note"], "level": "clear"},
+    ]
+    narrow_columns = [
+        {"attribute_id": ids["sku"], "level": "last4"},
+        {"attribute_id": ids["qty"], "level": "clear"},
+        {"attribute_id": ids["flag"], "level": "clear"},
+    ]
+    wide = create_profile(
+        entity_id,
+        key="wide",
+        name="Wide",
+        description=None,
+        columns=wide_columns,
+        actor_user_id=reader.id,
+        actor_token_id=None,
+    )
+    create_grant(
+        entity_id,
+        subject={"type": "user", "id": reader.id},
+        profile_id=wide["profile"]["id"],
+        row_rule={"gte": {"attr": ids["qty"], "value": 10}},
+        actions=["read"],
+        status="active",
+        valid_until=None,
+        actor_user_id=reader.id,
+        actor_token_id=None,
+    )
+    rebuild_entity_views(entity_id)
+
+    client.post("/auth/logout")
+    login = client.post("/auth/login", json={"account": "span", "password": "secret"})
+    assert login.status_code == 200, login.text
+    alone = client.post(f"/entities/{stem}/query", json={})
+    assert alone.status_code == 200, alone.text
+    alone_skus = {item["sku"] for item in alone.json()["items"]}
+    assert alone_skus == {"BOTHCODE", "WIDESKU1"}
+    assert "ABCDWXYZ" not in alone.text
+    assert "secret-note-narrow" not in alone.text
+
+    narrow = create_profile(
+        entity_id,
+        key="narrow",
+        name="Narrow",
+        description=None,
+        columns=narrow_columns,
+        actor_user_id=reader.id,
+        actor_token_id=None,
+    )
+    create_grant(
+        entity_id,
+        subject={"type": "role", "id": role.id},
+        profile_id=narrow["profile"]["id"],
+        row_rule={
+            "and": [
+                {"gt": {"attr": ids["qty"], "value": 0}},
+                {"lte": {"attr": ids["qty"], "value": 10}},
+            ]
+        },
+        actions=["read"],
+        status="active",
+        valid_until=None,
+        actor_user_id=reader.id,
+        actor_token_id=None,
+    )
+    rebuild_entity_views(entity_id)
+
+    queried = client.post(f"/entities/{stem}/query", json={})
+    assert queried.status_code == 200, queried.text
+    by_qty = {item["qty"]: item for item in queried.json()["items"]}
+    assert set(by_qty) == {5, 10, 20}
+    assert by_qty[5]["sku"] == "****WXYZ"
+    assert by_qty[5]["note"] is None
+    assert by_qty[5]["__withheld"] == ["note"]
+    assert "ABCDWXYZ" not in queried.text
+    assert "secret-note-narrow" not in queried.text
+    assert by_qty[20]["sku"] == "WIDESKU1"
+    assert by_qty[20]["note"] == "shown-wide"
+    assert by_qty[20]["__withheld"] == []
+    assert by_qty[10]["sku"] == "BOTHCODE"
+    assert by_qty[10]["note"] == "shown-both"
+    assert by_qty[10]["__withheld"] == []
+    assert "GONE0001" not in queried.text
+    assert "secret-gone" not in queried.text
+
+    as_user = client.post(
+        f"/entities/{stem}/query", json={"narrow": {"type": "user"}}
+    )
+    assert as_user.status_code == 200, as_user.text
+    user_rows = {item["sku"]: item for item in as_user.json()["items"]}
+    assert set(user_rows) == {"BOTHCODE", "WIDESKU1"}
+    assert user_rows["BOTHCODE"]["sku"] == "BOTHCODE"
+    assert user_rows["BOTHCODE"]["note"] == "shown-both"
+    assert "__withheld" not in user_rows["BOTHCODE"]
+    assert "ABCDWXYZ" not in as_user.text
+
+    as_role = client.post(
+        f"/entities/{stem}/query",
+        json={"narrow": {"type": "role", "id": role.id}},
+    )
+    assert as_role.status_code == 200, as_role.text
+    role_rows = {item["qty"]: item for item in as_role.json()["items"]}
+    assert set(role_rows) == {5, 10}
+    assert role_rows[5]["sku"] == "****WXYZ"
+    assert role_rows[10]["sku"] == "****CODE"
+    assert "note" not in role_rows[10]
+    assert "__withheld" not in role_rows[10]
+    assert "shown-both" not in as_role.text
+    assert "WIDESKU1" not in as_role.text
+    assert "ABCDWXYZ" not in as_role.text
+

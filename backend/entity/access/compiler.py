@@ -39,6 +39,7 @@ from backend.entity.access.facts import (
     SubjectAttrFact,
 )
 from backend.entity.access.masks import CLEAR, mask_sql
+from backend.entity.attribute_type import resolve
 from backend.entity.ddl import (
     ENTITY_ACCESS_SCHEMA,
     EXPOSURE_OWNER_ROLE,
@@ -696,6 +697,7 @@ def _single_sql(
     for column in shape.columns:
         mode = column.grant_modes[0][1] if column.grant_modes else CLEAR
         expr = mask_sql(f"t.{ident(column.attr.name)}", mode, column.attr, acl=acl)
+        expr = _physical_output(expr, column, acl=acl)
         pieces.append(f"{expr} AS {ident(column.attr.name)}")
     if grant_flags:
         for grant_id, flag in flags:
@@ -726,7 +728,7 @@ def _combo_sql(
     where = " AND ".join(predicates) if predicates else "TRUE"
     outer = [*(f"m.{ident(name)}" for name in carry), "m.row_id"]
     for column in shape.columns:
-        expr = _combo_expr(column, acl=acl)
+        expr = _physical_output(_combo_expr(column, acl=acl), column, acl=acl)
         outer.append(f"{expr} AS {ident(column.attr.name)}")
     if shape.withheld:
         outer.append(f"{_withheld_sql(shape)} AS {ident('__withheld')}")
@@ -748,6 +750,19 @@ def _combo_sql(
         + ", ".join(outer)
         + f"\nFROM (\n{inner}\n) AS m\nWHERE {grant_or}"
     )
+
+
+def _physical_output(expr: str, column: ColumnPlan, *, acl: bool) -> str:
+    """Match the record type ``profile_page`` declares for this attribute.
+
+    A ``CASE`` drops ``varchar`` typmod, so a profile view casts every
+    attribute expression to its physical type. History and preview render
+    with ``acl=False`` and keep the source expression.
+    """
+    if not acl:
+        return expr
+    physical = resolve(column.attr.type).physical_sql(column.attr)
+    return f"CAST({expr} AS {physical})"
 
 
 def _combo_expr(column: ColumnPlan, *, acl: bool) -> str:

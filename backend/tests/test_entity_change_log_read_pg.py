@@ -756,6 +756,54 @@ def test_change_log_lookup_is_a_business_key_or_one_version_row(
     assert by_version_row.json()["items"][0]["sequence"] == 51
     assert "row_id" not in by_version_row.json()["items"][0]
     assert "business_key" not in by_version_row.json()["items"][0]
+    bound = by_version_row.json()["next_cursor"]
+    assert isinstance(bound, str) and bound
+    omit_version = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"cursor": bound, "row_id": "7"},
+    )
+    assert omit_version.status_code == 422, omit_version.text
+    assert omit_version.json()["code"] == "REQUEST_INVALID"
+    assert omit_version.json()["detail"] == "Request validation failed"
+    assert "items" not in omit_version.json()
+    omit_row = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"cursor": bound, "version_id": version["id"]},
+    )
+    assert omit_row.status_code == 422, omit_row.text
+    assert omit_row.json()["code"] == "REQUEST_INVALID"
+    assert omit_row.json()["detail"] == "Request validation failed"
+    assert "items" not in omit_row.json()
+    stacked = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={
+            "cursor": bound,
+            "version_id": version["id"],
+            "row_id": "7",
+            "row_identity": "LEFT",
+        },
+    )
+    assert stacked.status_code == 422, stacked.text
+    assert stacked.json()["code"] == "REQUEST_INVALID"
+    assert stacked.json()["detail"] == "Request validation failed"
+    assert "items" not in stacked.json()
+    changed_row = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"cursor": bound, "version_id": version["id"], "row_id": "8"},
+    )
+    assert changed_row.status_code == 422, changed_row.text
+    assert changed_row.json()["code"] == "REQUEST_INVALID"
+    changed_operation = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={
+            "cursor": bound,
+            "version_id": version["id"],
+            "row_id": "7",
+            "operation": "delete",
+        },
+    )
+    assert changed_operation.status_code == 422, changed_operation.text
+    assert changed_operation.json()["code"] == "REQUEST_INVALID"
     other = client.get(f"/entities/{entity['id']}/change-log/60")
     assert other.status_code == 200, other.text
     assert other.json()["after"]["values"]["sku"] == "OTHER"
@@ -1018,6 +1066,14 @@ def test_opaque_cursor_pages_and_rejects_a_rebound_token(client: TestClient) -> 
     )
     assert rebound_row.status_code == 422, rebound_row.text
     assert rebound_row.json()["code"] == "REQUEST_INVALID"
+    half_pair = client.get(
+        f"/entities/{entity['id']}/change-log",
+        params={"cursor": cursor, "row_id": "1"},
+    )
+    assert half_pair.status_code == 422, half_pair.text
+    assert half_pair.json()["code"] == "REQUEST_INVALID"
+    assert half_pair.json()["detail"] == "Request validation failed"
+    assert "items" not in half_pair.json()
     blank_lookup = client.get(
         f"/entities/{entity['id']}/change-log",
         params={"cursor": cursor, "row_identity": "", "version_id": "", "row_id": ""},

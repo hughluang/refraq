@@ -69,7 +69,12 @@ def resolve_history_lookup(
 
 @dataclass(frozen=True, slots=True)
 class HistoryQuery:
-    """Filters that bind a continuation. Blank strings are absent."""
+    """Filters that bind a continuation. Blank strings are absent.
+
+    An unpaired version and row, or a business key together with that pair,
+    still forms a canonical query. Whether the lookup can run is decided
+    after a continuation has been checked against this declaration.
+    """
 
     operation: str | None = None
     source: str | None = None
@@ -86,16 +91,18 @@ class HistoryQuery:
         object.__setattr__(self, "subject", _blank(self.subject))
         object.__setattr__(self, "occurred_from", _blank(self.occurred_from))
         object.__setattr__(self, "occurred_to", _blank(self.occurred_to))
-        lookup = resolve_history_lookup(
-            self.row_identity, self.version_id, self.row_id
-        )
-        object.__setattr__(self, "row_identity", lookup.row_identity)
-        object.__setattr__(self, "version_id", lookup.version_id)
-        object.__setattr__(
-            self,
-            "row_id",
-            None if lookup.row_id is None else str(lookup.row_id),
-        )
+        identity = _blank(self.row_identity)
+        version = _blank(self.version_id)
+        raw_row = _blank(self.row_id)
+        if raw_row is None:
+            parsed = None
+        elif _ROW_ID_TEXT.fullmatch(raw_row) is None:
+            raise EntityRequestInvalid()
+        else:
+            parsed = str(int(raw_row))
+        object.__setattr__(self, "row_identity", identity)
+        object.__setattr__(self, "version_id", version)
+        object.__setattr__(self, "row_id", parsed)
 
     def canonical(self) -> str:
         body = {

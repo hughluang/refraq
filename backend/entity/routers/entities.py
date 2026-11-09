@@ -188,6 +188,8 @@ def http_list_change_log(
         occurred_from=occurred_from,
         occurred_to=occurred_to,
     )
+    # The continuation is checked against the declared query before
+    # read_history rejects a lookup the list cannot run.
     before = (
         None
         if cursor is None

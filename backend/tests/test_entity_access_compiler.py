@@ -231,6 +231,34 @@ def test_customer_service_merge_takes_clearer_mobile() -> None:
     assert "id_card_no" not in by_id[3]
 
 
+def test_profile_view_casts_row_varying_output_to_the_physical_type() -> None:
+    policy, _people = _customer_policy()
+    compiled = compile_policy(policy)
+    combo = next(
+        shape
+        for shape in compiled.shapes
+        if shape.action == "read" and shape.combo_key == "eap_sales,eap_service"
+    )
+    view_sql = render_shape(combo, policy, acl=True)
+    plain_sql = render_shape(combo, policy, acl=False, active=None)
+    wrapped = (
+        'CAST(CASE WHEN m."g_sales_region" THEN m."mobile" '
+        'WHEN m."g_service_all" THEN'
+    )
+    assert wrapped in view_sql
+    assert 'END AS VARCHAR(32)) AS "mobile"' in view_sql
+    assert 'CAST(m."name" AS VARCHAR(64)) AS "name"' in view_sql
+    assert wrapped not in plain_sql
+    assert (
+        'CASE WHEN m."g_sales_region" THEN m."mobile" WHEN m."g_service_all" THEN'
+        in plain_sql
+    )
+    assert 'CAST(m."name" AS VARCHAR(64))' not in plain_sql
+    assert view_sql.index('WHEN m."g_sales_region" THEN m."mobile"') < view_sql.index(
+        'WHEN m."g_service_all" THEN CAST(acl.mask_partial('
+    )
+
+
 def test_customer_sql_matches_the_view_template() -> None:
     policy, _people = _customer_policy()
     compiled = compile_policy(policy)
