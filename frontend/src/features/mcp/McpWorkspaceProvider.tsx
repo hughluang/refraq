@@ -18,6 +18,7 @@ import {
   type McpCallOutcome,
   type McpToolsListResult,
 } from "@/features/mcp/mcp-tools-list";
+import { useConfirmAction } from "@/hooks/useConfirmAction";
 
 export type McpPatOutcome =
   | { status: "unverified" }
@@ -35,11 +36,29 @@ export type McpInvocation = {
   outcome: McpCallOutcome | null;
 };
 
+export type McpWriteConfirm = {
+  endpoint: string;
+  userId: string;
+  toolName: string;
+  argumentsJson: string;
+  sending: boolean;
+};
+
+type WriteDraft = {
+  endpoint: string;
+  userId: string;
+  toolName: string;
+  argumentsText: string;
+  args: unknown;
+  sent: boolean;
+};
+
 type McpWorkspace = {
   pat: string;
   outcome: McpPatOutcome;
   discoveryByEndpoint: Readonly<Record<string, McpEndpointDiscovery>>;
   invocation: McpInvocation | null;
+  writeConfirm: McpWriteConfirm | null;
   setPat: (value: string) => void;
   setOutcome: (submittedPat: string, outcome: McpPatOutcome) => void;
   discover: (endpoint: string) => Promise<void>;
@@ -47,6 +66,9 @@ type McpWorkspace = {
   selectTool: (endpoint: string, toolName: string) => void;
   setArgumentsText: (text: string) => void;
   runSelected: (endpoint: string, toolName: string, argumentsText: string) => Promise<void>;
+  beginWrite: (endpoint: string, toolName: string, argumentsText: string) => void;
+  confirmWrite: () => Promise<void>;
+  dismissWrite: () => void;
 };
 
 const McpWorkspaceContext = createContext<McpWorkspace | null>(null);
@@ -59,23 +81,36 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     Record<string, McpEndpointDiscovery>
   >({});
   const [invocation, setInvocation] = useState<McpInvocation | null>(null);
+  const [writeSending, setWriteSending] = useState(false);
+  const writeAction = useConfirmAction<Omit<McpWriteConfirm, "sending">>();
   const patRef = useRef("");
   const outcomeRef = useRef(outcome);
   const discoveryRef = useRef(discoveryByEndpoint);
+  const invocationRef = useRef<McpInvocation | null>(null);
+  const writeRef = useRef<WriteDraft | null>(null);
   const epochRef = useRef(0);
   const requestGen = useRef<Record<string, number>>({});
   const callGen = useRef(0);
   const detailEndpointRef = useRef<string | null>(null);
   outcomeRef.current = outcome;
   discoveryRef.current = discoveryByEndpoint;
+  invocationRef.current = invocation;
+
+  const dropWriteConfirm = useCallback(() => {
+    writeRef.current = null;
+    setWriteSending(false);
+    writeAction.close();
+  }, [writeAction.close]);
 
   const clearDiscovery = useCallback(() => {
     epochRef.current += 1;
     callGen.current += 1;
     requestGen.current = {};
+    invocationRef.current = null;
+    dropWriteConfirm();
     setDiscoveryByEndpoint({});
     setInvocation(null);
-  }, []);
+  }, [dropWriteConfirm]);
 
   const setPat = useCallback((value: string) => {
     if (patRef.current === value) return;
@@ -100,22 +135,31 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const selectTool = useCallback((endpoint: string, toolName: string) => {
-    setInvocation((prev) => {
-      if (prev && prev.endpoint === endpoint && prev.toolName === toolName) return prev;
-      callGen.current += 1;
-      return {
-        endpoint,
-        toolName,
-        argumentsText: "",
-        localError: null,
-        outcome: null,
-      };
-    });
-  }, []);
+    const prev = invocationRef.current;
+    if (prev && prev.endpoint === endpoint && prev.toolName === toolName) return;
+    callGen.current += 1;
+    const next: McpInvocation = {
+      endpoint,
+      toolName,
+      argumentsText: "",
+      localError: null,
+      outcome: null,
+    };
+    invocationRef.current = next;
+    dropWriteConfirm();
+    setInvocation(next);
+  }, [dropWriteConfirm]);
 
   const setArgumentsText = useCallback((text: string) => {
-    setInvocation((prev) => (prev ? { ...prev, argumentsText: text, localError: null } : prev));
-  }, []);
+    const snap = writeRef.current;
+    if (snap && !snap.sent && snap.argumentsText !== text) dropWriteConfirm();
+    setInvocation((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, argumentsText: text, localError: null };
+      invocationRef.current = next;
+      return next;
+    });
+  }, [dropWriteConfirm]);
 
   const runSelected = useCallback(async (endpoint: string, toolName: string, argumentsText: string) => {
     if (outcomeRef.current.status !== "verified") return;
@@ -135,18 +179,102 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     const generation = callGen.current + 1;
     callGen.current = generation;
     const submittedPat = patRef.current;
-    setInvocation((prev) =>
-      prev && prev.endpoint === endpoint && prev.toolName === toolName
-        ? { ...prev, argumentsText, localError: null, outcome: null }
-        : prev,
-    );
+    setInvocation((prev) => {
+      if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
+      const next = { ...prev, argumentsText, localError: null, outcome: null };
+      invocationRef.current = next;
+      return next;
+    });
     const next = await requestToolsCall(endpoint, submittedPat, toolName, checked.value);
     if (callGen.current !== generation) return;
     setInvocation((prev) => {
       if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
-      return { ...prev, outcome: next };
+      const updated = { ...prev, outcome: next };
+      invocationRef.current = updated;
+      return updated;
     });
   }, []);
+
+  const beginWrite = useCallback((endpoint: string, toolName: string, argumentsText: string) => {
+    if (outcomeRef.current.status !== "verified") return;
+    const discovery = discoveryRef.current[endpoint];
+    if (!discovery || discovery.status !== "ready") return;
+    const tool = discovery.tools.find((item) => item.name === toolName);
+    if (!tool || tool.execution !== "write") return;
+    const current = writeRef.current;
+    if (
+      current &&
+      !current.sent &&
+      current.endpoint === endpoint &&
+      current.toolName === toolName &&
+      current.argumentsText === argumentsText
+    ) {
+      return;
+    }
+    const checked = checkArguments(argumentsText, tool.inputSchema);
+    if (!checked.ok) {
+      dropWriteConfirm();
+      setInvocation((prev) => {
+        if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
+        const next = { ...prev, localError: checked.issue };
+        invocationRef.current = next;
+        return next;
+      });
+      return;
+    }
+    const draft: WriteDraft = {
+      endpoint,
+      userId: outcomeRef.current.userId,
+      toolName,
+      argumentsText,
+      args: checked.value,
+      sent: false,
+    };
+    writeRef.current = draft;
+    setWriteSending(false);
+    writeAction.open({
+      endpoint: draft.endpoint,
+      userId: draft.userId,
+      toolName: draft.toolName,
+      argumentsJson: JSON.stringify(checked.value),
+    });
+    setInvocation((prev) => {
+      if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
+      const next = { ...prev, localError: null };
+      invocationRef.current = next;
+      return next;
+    });
+  }, [dropWriteConfirm, writeAction.open]);
+
+  const confirmWrite = useCallback(async () => {
+    const snap = writeRef.current;
+    if (!snap || snap.sent) return;
+    if (outcomeRef.current.status !== "verified" || outcomeRef.current.userId !== snap.userId) {
+      dropWriteConfirm();
+      return;
+    }
+    snap.sent = true;
+    setWriteSending(true);
+    const generation = callGen.current + 1;
+    callGen.current = generation;
+    const submittedPat = patRef.current;
+    const { endpoint, toolName, args } = snap;
+    setInvocation((prev) => {
+      if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
+      const next = { ...prev, localError: null, outcome: null };
+      invocationRef.current = next;
+      return next;
+    });
+    const next = await requestToolsCall(endpoint, submittedPat, toolName, args);
+    if (callGen.current !== generation) return;
+    setWriteSending(false);
+    setInvocation((prev) => {
+      if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
+      const updated = { ...prev, outcome: next };
+      invocationRef.current = updated;
+      return updated;
+    });
+  }, [dropWriteConfirm]);
 
   const discover = useCallback(async (endpoint: string) => {
     if (outcomeRef.current.status !== "verified") return;
@@ -157,8 +285,13 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     const next = await requestToolsList(endpoint, submittedPat);
     if (epochRef.current !== epoch) return;
     if (requestGen.current[endpoint] !== generation) return;
+    const snap = writeRef.current;
+    if (snap && !snap.sent && snap.endpoint === endpoint && next.status === "ready") {
+      const tool = next.tools.find((item) => item.name === snap.toolName);
+      if (!tool || tool.execution !== "write") dropWriteConfirm();
+    }
     setDiscoveryByEndpoint((current) => ({ ...current, [endpoint]: next }));
-  }, []);
+  }, [dropWriteConfirm]);
 
   useEffect(() => {
     // Logout uses location.assign. The back-forward cache can restore this state.
@@ -170,12 +303,16 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("pageshow", onPageShow);
   }, [setPat]);
 
+  const writeConfirm = writeAction.pending
+    ? { ...writeAction.pending, sending: writeSending }
+    : null;
   const value = useMemo(
     () => ({
       pat,
       outcome,
       discoveryByEndpoint,
       invocation,
+      writeConfirm,
       setPat,
       setOutcome,
       discover,
@@ -183,12 +320,16 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       selectTool,
       setArgumentsText,
       runSelected,
+      beginWrite,
+      confirmWrite,
+      dismissWrite: dropWriteConfirm,
     }),
     [
       pat,
       outcome,
       discoveryByEndpoint,
       invocation,
+      writeConfirm,
       setPat,
       setOutcome,
       discover,
@@ -196,6 +337,9 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       selectTool,
       setArgumentsText,
       runSelected,
+      beginWrite,
+      confirmWrite,
+      dropWriteConfirm,
     ],
   );
   return <McpWorkspaceContext.Provider value={value}>{children}</McpWorkspaceContext.Provider>;

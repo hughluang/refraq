@@ -461,7 +461,6 @@ describe("MCP explicit read invocation", () => {
     await discover();
 
     for (const name of [
-      "/mcp set_object_semantics",
       "/mcp search_sources",
       "/mcp hint_only",
       "/mcp blank_class",
@@ -472,6 +471,13 @@ describe("MCP explicit read invocation", () => {
       expect(screen.queryByRole("dialog")).toBeNull();
     }
     expect(callPosts()).toHaveLength(0);
+
+    await selectTool("/mcp set_object_semantics");
+    typeArguments('{"object_id":"held-write"}');
+    run("/mcp set_object_semantics");
+    expect(callPosts()).toHaveLength(0);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByRole("dialog").textContent).not.toContain(PAT);
 
     await selectTool("/mcp run_sql");
     expect(screen.getByRole("button", { name: "Run /mcp run_sql" })).toBeTruthy();

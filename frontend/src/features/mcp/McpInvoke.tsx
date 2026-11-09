@@ -3,6 +3,7 @@
 import { Button, Code, Stack, Text, Textarea } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import type { McpArgumentIssue } from "@/features/mcp/mcp-arguments";
 import type { McpCallOutcome, McpCallPart, McpListedTool } from "@/features/mcp/mcp-tools-list";
 import { useMcpWorkspace } from "@/features/mcp/McpWorkspaceProvider";
@@ -106,7 +107,15 @@ function OutcomeView({ outcome }: { outcome: McpCallOutcome }) {
 
 export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpListedTool[] }) {
   const t = useTranslate();
-  const { invocation, setArgumentsText, runSelected } = useMcpWorkspace();
+  const {
+    invocation,
+    setArgumentsText,
+    runSelected,
+    writeConfirm,
+    beginWrite,
+    confirmWrite,
+    dismissWrite,
+  } = useMcpWorkspace();
   if (!invocation || invocation.endpoint !== endpoint) return null;
   const tool = tools.find((item) => item.name === invocation.toolName);
   if (!tool) return null;
@@ -128,9 +137,31 @@ export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpLis
               {`${t("mcp.invoke.run")} ${qualified}`}
             </Button>
           ) : null}
+          {tool.execution === "write" ? (
+            <Button type="button" onClick={() => beginWrite(endpoint, tool.name, invocation.argumentsText)}>
+              {`${t("mcp.invoke.run")} ${qualified}`}
+            </Button>
+          ) : null}
         </Stack>
       </div>
       {invocation.outcome ? <OutcomeView outcome={invocation.outcome} /> : null}
+      {writeConfirm ? (
+        <ConfirmActionModal
+          opened
+          onClose={dismissWrite}
+          title={t("mcp.invoke.writeConfirm.title")}
+          body={t("mcp.invoke.writeConfirm.notice")}
+          confirmLabel={t("common.confirm")}
+          cancelDisabled={false}
+          loading={writeConfirm.sending}
+          onConfirm={() => void confirmWrite()}
+        >
+          <Text>{`${t("mcp.invoke.writeConfirm.endpoint")} ${writeConfirm.endpoint}`}</Text>
+          <Text>{`${t("mcp.invoke.writeConfirm.user")} ${writeConfirm.userId}`}</Text>
+          <Text>{`${t("mcp.invoke.writeConfirm.tool")} ${writeConfirm.toolName}`}</Text>
+          <Code block>{writeConfirm.argumentsJson}</Code>
+        </ConfirmActionModal>
+      ) : null}
     </Stack>
   );
 }
