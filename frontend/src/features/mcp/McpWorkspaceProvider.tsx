@@ -26,7 +26,16 @@ export type McpPatOutcome =
   | { status: "rejected" }
   | { status: "auth-error" };
 
-export type McpEndpointDiscovery = McpToolsListResult | { status: "idle" };
+export type McpEndpointDiscovery =
+  | McpToolsListResult
+  | { status: "idle" }
+  | { status: "stopped" };
+
+export type McpCallWait = {
+  endpoint: string;
+  toolName: string;
+  effect: "read" | "write";
+};
 
 export type McpInvocation = {
   endpoint: string;
@@ -69,6 +78,9 @@ type McpWorkspace = {
   beginWrite: (endpoint: string, toolName: string, argumentsText: string) => void;
   confirmWrite: () => Promise<void>;
   dismissWrite: () => void;
+  callWait: McpCallWait | null;
+  discoverWait: string | null;
+  stopWaiting: (kind: "call" | "discover") => void;
 };
 
 const McpWorkspaceContext = createContext<McpWorkspace | null>(null);
@@ -92,6 +104,12 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
   const requestGen = useRef<Record<string, number>>({});
   const callGen = useRef(0);
   const detailEndpointRef = useRef<string | null>(null);
+  const callAbort = useRef<AbortController | null>(null);
+  const discoverAbort = useRef<Record<string, AbortController>>({});
+  const [callWait, setCallWait] = useState<McpCallWait | null>(null);
+  const [discoverWait, setDiscoverWait] = useState<string | null>(null);
+  const callWaitRef = useRef<McpCallWait | null>(null);
+  const discoverWaitRef = useRef<string | null>(null);
   outcomeRef.current = outcome;
   discoveryRef.current = discoveryByEndpoint;
   invocationRef.current = invocation;
@@ -102,15 +120,35 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     writeAction.close();
   }, [writeAction.close]);
 
+  const clearCallWait = useCallback(() => {
+    callWaitRef.current = null;
+    setCallWait(null);
+  }, []);
+
+  const clearDiscoverWait = useCallback(() => {
+    discoverWaitRef.current = null;
+    setDiscoverWait(null);
+  }, []);
+
+  const quietAbortCall = useCallback(() => {
+    callAbort.current?.abort();
+    callAbort.current = null;
+    clearCallWait();
+  }, [clearCallWait]);
+
   const clearDiscovery = useCallback(() => {
     epochRef.current += 1;
     callGen.current += 1;
     requestGen.current = {};
+    quietAbortCall();
+    for (const controller of Object.values(discoverAbort.current)) controller.abort();
+    discoverAbort.current = {};
+    clearDiscoverWait();
     invocationRef.current = null;
     dropWriteConfirm();
     setDiscoveryByEndpoint({});
     setInvocation(null);
-  }, [dropWriteConfirm]);
+  }, [clearDiscoverWait, dropWriteConfirm, quietAbortCall]);
 
   const setPat = useCallback((value: string) => {
     if (patRef.current === value) return;
@@ -138,6 +176,7 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     const prev = invocationRef.current;
     if (prev && prev.endpoint === endpoint && prev.toolName === toolName) return;
     callGen.current += 1;
+    quietAbortCall();
     const next: McpInvocation = {
       endpoint,
       toolName,
@@ -148,7 +187,7 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     invocationRef.current = next;
     dropWriteConfirm();
     setInvocation(next);
-  }, [dropWriteConfirm]);
+  }, [dropWriteConfirm, quietAbortCall]);
 
   const setArgumentsText = useCallback((text: string) => {
     const snap = writeRef.current;
@@ -178,6 +217,12 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     }
     const generation = callGen.current + 1;
     callGen.current = generation;
+    callAbort.current?.abort();
+    const controller = new AbortController();
+    callAbort.current = controller;
+    const wait: McpCallWait = { endpoint, toolName, effect: "read" };
+    callWaitRef.current = wait;
+    setCallWait(wait);
     const submittedPat = patRef.current;
     setInvocation((prev) => {
       if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
@@ -185,8 +230,18 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       invocationRef.current = next;
       return next;
     });
-    const next = await requestToolsCall(endpoint, submittedPat, toolName, checked.value);
+    const next = await requestToolsCall(
+      endpoint,
+      submittedPat,
+      toolName,
+      checked.value,
+      controller.signal,
+      false,
+    );
     if (callGen.current !== generation) return;
+    callAbort.current = null;
+    callWaitRef.current = null;
+    setCallWait(null);
     setInvocation((prev) => {
       if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
       const updated = { ...prev, outcome: next };
@@ -257,6 +312,12 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     setWriteSending(true);
     const generation = callGen.current + 1;
     callGen.current = generation;
+    callAbort.current?.abort();
+    const controller = new AbortController();
+    callAbort.current = controller;
+    const wait: McpCallWait = { endpoint: snap.endpoint, toolName: snap.toolName, effect: "write" };
+    callWaitRef.current = wait;
+    setCallWait(wait);
     const submittedPat = patRef.current;
     const { endpoint, toolName, args } = snap;
     setInvocation((prev) => {
@@ -265,9 +326,13 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       invocationRef.current = next;
       return next;
     });
-    const next = await requestToolsCall(endpoint, submittedPat, toolName, args);
+    const next = await requestToolsCall(endpoint, submittedPat, toolName, args, controller.signal, true);
     if (callGen.current !== generation) return;
-    setWriteSending(false);
+    callAbort.current = null;
+    callWaitRef.current = null;
+    setCallWait(null);
+    if (next.status === "unknown") dropWriteConfirm();
+    else setWriteSending(false);
     setInvocation((prev) => {
       if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
       const updated = { ...prev, outcome: next };
@@ -282,15 +347,69 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     const epoch = epochRef.current;
     const generation = (requestGen.current[endpoint] ?? 0) + 1;
     requestGen.current[endpoint] = generation;
-    const next = await requestToolsList(endpoint, submittedPat);
+    discoverAbort.current[endpoint]?.abort();
+    const controller = new AbortController();
+    discoverAbort.current[endpoint] = controller;
+    discoverWaitRef.current = endpoint;
+    setDiscoverWait(endpoint);
+    setDiscoveryByEndpoint((current) => {
+      if (current[endpoint]?.status !== "stopped") return current;
+      return { ...current, [endpoint]: { status: "idle" } };
+    });
+    const next = await requestToolsList(endpoint, submittedPat, controller.signal);
     if (epochRef.current !== epoch) return;
     if (requestGen.current[endpoint] !== generation) return;
+    delete discoverAbort.current[endpoint];
+    if (discoverWaitRef.current === endpoint) {
+      discoverWaitRef.current = null;
+      setDiscoverWait(null);
+    }
     const snap = writeRef.current;
     if (snap && !snap.sent && snap.endpoint === endpoint && next.status === "ready") {
       const tool = next.tools.find((item) => item.name === snap.toolName);
       if (!tool || tool.execution !== "write") dropWriteConfirm();
     }
     setDiscoveryByEndpoint((current) => ({ ...current, [endpoint]: next }));
+  }, [dropWriteConfirm]);
+
+  const stopWaiting = useCallback((kind: "call" | "discover") => {
+    if (kind === "discover") {
+      const endpoint = discoverWaitRef.current;
+      if (!endpoint) return;
+      requestGen.current[endpoint] = (requestGen.current[endpoint] ?? 0) + 1;
+      discoverAbort.current[endpoint]?.abort();
+      delete discoverAbort.current[endpoint];
+      discoverWaitRef.current = null;
+      setDiscoverWait(null);
+      setDiscoveryByEndpoint((current) => ({ ...current, [endpoint]: { status: "stopped" } }));
+      return;
+    }
+    const wait = callWaitRef.current;
+    if (!wait) return;
+    callGen.current += 1;
+    callAbort.current?.abort();
+    callAbort.current = null;
+    callWaitRef.current = null;
+    setCallWait(null);
+    if (wait.effect === "write") {
+      dropWriteConfirm();
+      setInvocation((prev) => {
+        if (!prev || prev.endpoint !== wait.endpoint || prev.toolName !== wait.toolName) return prev;
+        const next = {
+          ...prev,
+          outcome: { status: "unknown" as const, requestedCancellation: true },
+        };
+        invocationRef.current = next;
+        return next;
+      });
+      return;
+    }
+    setInvocation((prev) => {
+      if (!prev || prev.endpoint !== wait.endpoint || prev.toolName !== wait.toolName) return prev;
+      const next = { ...prev, outcome: { status: "stopped" as const } };
+      invocationRef.current = next;
+      return next;
+    });
   }, [dropWriteConfirm]);
 
   useEffect(() => {
@@ -302,6 +421,16 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     window.addEventListener("pageshow", onPageShow);
     return () => window.removeEventListener("pageshow", onPageShow);
   }, [setPat]);
+
+  useEffect(() => {
+    return () => {
+      epochRef.current += 1;
+      callGen.current += 1;
+      requestGen.current = {};
+      callAbort.current?.abort();
+      for (const controller of Object.values(discoverAbort.current)) controller.abort();
+    };
+  }, []);
 
   const writeConfirm = writeAction.pending
     ? { ...writeAction.pending, sending: writeSending }
@@ -323,6 +452,9 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       beginWrite,
       confirmWrite,
       dismissWrite: dropWriteConfirm,
+      callWait,
+      discoverWait,
+      stopWaiting,
     }),
     [
       pat,
@@ -340,6 +472,9 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       beginWrite,
       confirmWrite,
       dropWriteConfirm,
+      callWait,
+      discoverWait,
+      stopWaiting,
     ],
   );
   return <McpWorkspaceContext.Provider value={value}>{children}</McpWorkspaceContext.Provider>;

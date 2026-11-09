@@ -31,13 +31,18 @@ export type McpCallOutcome =
   | { status: "protocol"; error: unknown }
   | { status: "sdk"; parts: McpCallPart[]; protocol: unknown }
   | { status: "domain"; parts: McpCallPart[]; protocol: unknown }
-  | { status: "result"; parts: McpCallPart[]; protocol: unknown };
+  | { status: "result"; parts: McpCallPart[]; protocol: unknown }
+  | { status: "unknown"; requestedCancellation: boolean }
+  | { status: "stopped" };
 
 type Classified =
   | { status: "unavailable" }
   | { status: "transport-failure" }
   | { status: "protocol-error"; error: unknown }
-  | { status: "result"; result: unknown };
+  | { status: "result"; result: unknown }
+  | { status: "inconclusive" };
+
+type SharedClassified = Exclude<Classified, { status: "inconclusive" }>;
 
 type Envelope =
   | { status: "transport-failure" }
@@ -194,6 +199,26 @@ async function postMcp(
   method: "tools/list" | "tools/call",
   params: Record<string, unknown>,
   toolName?: string,
+  signal?: AbortSignal,
+  write?: false,
+): Promise<SharedClassified>;
+async function postMcp(
+  endpoint: string,
+  pat: string,
+  method: "tools/list" | "tools/call",
+  params: Record<string, unknown>,
+  toolName: string | undefined,
+  signal: AbortSignal | undefined,
+  write: true,
+): Promise<Classified>;
+async function postMcp(
+  endpoint: string,
+  pat: string,
+  method: "tools/list" | "tools/call",
+  params: Record<string, unknown>,
+  toolName?: string,
+  signal?: AbortSignal,
+  write = false,
 ): Promise<Classified> {
   if (!ENDPOINTS.has(endpoint)) return { status: "unavailable" };
   const id = nextRequestId;
@@ -210,17 +235,23 @@ async function postMcp(
         method,
         params,
       }),
+      signal,
     });
   } catch {
+    if (write) return { status: "inconclusive" };
     return { status: "unavailable" };
   }
 
-  if (response.status === 502) return { status: "unavailable" };
+  if (response.status === 502) {
+    if (write) return { status: "inconclusive" };
+    return { status: "unavailable" };
+  }
 
   let text: string;
   try {
     text = await readBody(response);
   } catch {
+    if (write) return { status: "inconclusive" };
     return { status: "transport-failure" };
   }
   return classifyBody(response, text, id);
@@ -294,6 +325,7 @@ function interpretCall(result: unknown): McpCallOutcome {
 }
 
 function asCall(classified: Classified): McpCallOutcome {
+  if (classified.status === "inconclusive") return { status: "unknown", requestedCancellation: false };
   if (classified.status === "unavailable") return { status: "http" };
   if (classified.status === "transport-failure") return { status: "transport" };
   if (classified.status === "protocol-error") return { status: "protocol", error: classified.error };
@@ -301,8 +333,19 @@ function asCall(classified: Classified): McpCallOutcome {
 }
 
 /** One tools/list POST to a fixed same-origin endpoint. No tools/call. */
-export async function requestToolsList(endpoint: string, pat: string): Promise<McpToolsListResult> {
-  const classified = await postMcp(endpoint, pat, "tools/list", { _meta: requestMeta() });
+export async function requestToolsList(
+  endpoint: string,
+  pat: string,
+  signal?: AbortSignal,
+): Promise<McpToolsListResult> {
+  const classified = await postMcp(
+    endpoint,
+    pat,
+    "tools/list",
+    { _meta: requestMeta() },
+    undefined,
+    signal,
+  );
   if (classified.status === "protocol-error") return { status: "protocol-error" };
   if (classified.status !== "result") return classified;
   return interpretTools(classified.result);
@@ -314,17 +357,16 @@ export async function requestToolsCall(
   pat: string,
   toolName: string,
   args: unknown,
+  signal?: AbortSignal,
+  write = false,
 ): Promise<McpCallOutcome> {
-  const classified = await postMcp(
-    endpoint,
-    pat,
-    "tools/call",
-    {
-      name: toolName,
-      arguments: args,
-      _meta: requestMeta(),
-    },
-    toolName,
-  );
+  const params = {
+    name: toolName,
+    arguments: args,
+    _meta: requestMeta(),
+  };
+  const classified = write
+    ? await postMcp(endpoint, pat, "tools/call", params, toolName, signal, true)
+    : await postMcp(endpoint, pat, "tools/call", params, toolName, signal);
   return asCall(classified);
 }

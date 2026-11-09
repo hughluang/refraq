@@ -9,7 +9,8 @@ import { useMcpWorkspace } from "@/features/mcp/McpWorkspaceProvider";
 
 export function McpDiscovery({ endpoint }: { endpoint: string }) {
   const t = useTranslate();
-  const { outcome, discoveryByEndpoint, discover, noteDetailEndpoint, selectTool } = useMcpWorkspace();
+  const { outcome, discoveryByEndpoint, discover, noteDetailEndpoint, selectTool, discoverWait, stopWaiting } =
+    useMcpWorkspace();
   useEffect(() => {
     noteDetailEndpoint(endpoint);
   }, [endpoint, noteDetailEndpoint]);
@@ -21,6 +22,12 @@ export function McpDiscovery({ endpoint }: { endpoint: string }) {
       <Button type="button" onClick={() => void discover(endpoint)}>
         {t("mcp.discovery.action")}
       </Button>
+      {discoverWait === endpoint ? (
+        <Button type="button" onClick={() => stopWaiting("discover")}>
+          {t("mcp.invoke.stop")}
+        </Button>
+      ) : null}
+      {discovery.status === "stopped" ? <Text>{t("mcp.invoke.waitingStopped")}</Text> : null}
       {discovery.status === "empty" ? <Text>{t("mcp.discovery.empty")}</Text> : null}
       {discovery.status === "unavailable" ? <Text>{t("mcp.discovery.unavailable")}</Text> : null}
       {discovery.status === "protocol-error" ? <Text>{t("mcp.discovery.protocolError")}</Text> : null}

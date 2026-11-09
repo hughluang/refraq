@@ -76,6 +76,10 @@ function outcomeLabel(outcome: McpCallOutcome, t: (key: string) => string): stri
       return t("mcp.invoke.domain");
     case "result":
       return t("mcp.invoke.result");
+    case "unknown":
+      return t("mcp.invoke.unknown");
+    case "stopped":
+      return t("mcp.invoke.waitingStopped");
   }
 }
 
@@ -93,6 +97,9 @@ function OutcomeView({ outcome }: { outcome: McpCallOutcome }) {
         : undefined;
   return (
     <div role="region" aria-label={label} style={{ overflow: "auto", maxHeight: "24rem" }}>
+      {outcome.status === "unknown" && outcome.requestedCancellation ? (
+        <Text>{t("mcp.invoke.cancellationRequested")}</Text>
+      ) : null}
       <Text>{label}</Text>
       {parts ? <Parts parts={parts} /> : null}
       {protocol !== undefined ? (
@@ -115,11 +122,15 @@ export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpLis
     beginWrite,
     confirmWrite,
     dismissWrite,
+    callWait,
+    stopWaiting,
   } = useMcpWorkspace();
   if (!invocation || invocation.endpoint !== endpoint) return null;
   const tool = tools.find((item) => item.name === invocation.toolName);
   if (!tool) return null;
   const qualified = `${endpoint} ${tool.name}`;
+  const callWaiting = callWait?.endpoint === endpoint && callWait.toolName === tool.name;
+  const runnable = tool.execution === "read" || tool.execution === "write";
   return (
     <Stack gap="xs">
       <div role="region" aria-label={`${t("mcp.invoke.argumentsFor")} ${qualified}`}>
@@ -142,6 +153,12 @@ export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpLis
               {`${t("mcp.invoke.run")} ${qualified}`}
             </Button>
           ) : null}
+          {callWaiting && !writeConfirm?.sending ? (
+            <Button type="button" onClick={() => stopWaiting("call")}>
+              {t("mcp.invoke.stop")}
+            </Button>
+          ) : null}
+          {runnable ? <Text>{t("mcp.invoke.serverRecord")}</Text> : null}
         </Stack>
       </div>
       {invocation.outcome ? <OutcomeView outcome={invocation.outcome} /> : null}
@@ -160,6 +177,11 @@ export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpLis
           <Text>{`${t("mcp.invoke.writeConfirm.user")} ${writeConfirm.userId}`}</Text>
           <Text>{`${t("mcp.invoke.writeConfirm.tool")} ${writeConfirm.toolName}`}</Text>
           <Code block>{writeConfirm.argumentsJson}</Code>
+          {writeConfirm.sending ? (
+            <Button type="button" onClick={() => stopWaiting("call")}>
+              {t("mcp.invoke.stop")}
+            </Button>
+          ) : null}
         </ConfirmActionModal>
       ) : null}
     </Stack>
