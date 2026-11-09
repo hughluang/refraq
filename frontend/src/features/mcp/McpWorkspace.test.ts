@@ -5,6 +5,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { McpWorkspaceProvider } from "@/features/mcp/McpWorkspaceProvider";
 import en from "@/locales/en-US/common.json";
 
 const copy = en as Record<string, string>;
@@ -62,7 +63,11 @@ function stubDomApis() {
 }
 
 function shell(node: ReactNode) {
-  return createElement(MantineProvider, { env: "test" }, node);
+  return createElement(
+    MantineProvider,
+    { env: "test" },
+    createElement(McpWorkspaceProvider, null, node),
+  );
 }
 
 function expectNoCatalogOrClientConfig(options?: { detail?: boolean }) {
