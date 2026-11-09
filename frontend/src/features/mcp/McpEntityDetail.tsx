@@ -6,6 +6,7 @@ import { useTranslate } from "@refinedev/core";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { McpClientConfiguration } from "@/features/mcp/McpClientConfiguration";
+import { McpDiscovery } from "@/features/mcp/McpDiscovery";
 import { McpPatGate } from "@/features/mcp/McpPatGate";
 import { ENTITY_MCP_PUBLIC_PATH } from "@/features/mcp/mcp-api";
 
@@ -24,6 +25,7 @@ export function McpEntityDetail() {
         <Text>{t("mcp.entity.masks")}</Text>
         <McpClientConfiguration publicPath={ENTITY_MCP_PUBLIC_PATH} />
         <McpPatGate endpoint={ENTITY_MCP_PUBLIC_PATH} />
+        <McpDiscovery endpoint={ENTITY_MCP_PUBLIC_PATH} />
         <ConsoleLink href="/console/mcp">{t("mcp.back")}</ConsoleLink>
       </Stack>
     </PageChrome>
