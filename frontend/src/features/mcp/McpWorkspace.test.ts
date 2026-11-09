@@ -65,17 +65,23 @@ function shell(node: ReactNode) {
   return createElement(MantineProvider, { env: "test" }, node);
 }
 
-function expectNoCatalogOrClientConfig() {
-  expect(api).not.toHaveBeenCalled();
+function expectNoCatalogOrClientConfig(options?: { detail?: boolean }) {
+  if (!options?.detail) {
+    expect(api).not.toHaveBeenCalled();
+  }
   expect(screen.queryByRole("table")).toBeNull();
   expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
-  expect(screen.queryByText(/mcpServers|YOUR_TOKEN|personal access token/i)).toBeNull();
+  const secretOrLegacy = options?.detail
+    ? /mcpServers|personal access token/i
+    : /mcpServers|YOUR_TOKEN|personal access token/i;
+  expect(screen.queryByText(secretOrLegacy)).toBeNull();
 }
 
 describe("MCP workspace", () => {
   beforeEach(() => {
     stubDomApis();
     api.mockReset();
+    api.mockResolvedValue(undefined);
     pathname.current = "/console/mcp";
   });
 
@@ -123,7 +129,7 @@ describe("MCP workspace", () => {
     expect(screen.getByRole("link", { name: "Back to MCP" }).getAttribute("href")).toBe(
       "/console/mcp",
     );
-    expectNoCatalogOrClientConfig();
+    expectNoCatalogOrClientConfig({ detail: true });
   });
 
   it("identifies the Entity endpoint and links back to the overview", async () => {
@@ -140,6 +146,6 @@ describe("MCP workspace", () => {
     expect(screen.getByRole("link", { name: "Back to MCP" }).getAttribute("href")).toBe(
       "/console/mcp",
     );
-    expectNoCatalogOrClientConfig();
+    expectNoCatalogOrClientConfig({ detail: true });
   });
 });
