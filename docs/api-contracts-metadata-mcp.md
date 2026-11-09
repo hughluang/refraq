@@ -6,7 +6,7 @@ Defines the MCP tool face for the metadata foundation. Tools call the same domai
 
 The product port is MCP revision **2026-07-28 Streamable HTTP** at the Console-origin path `/mcp`. Auth is **User PAT** in the HTTP `Authorization: Bearer` header only. Tool arguments do not include `authorization`. Session cookies are not MCP credentials. There is no OAuth discovery document and no well-known metadata.
 
-`GET /mcp/catalog` on the API process (Session or PAT) is the Account Center read of the same cropped tool list.
+`GET /mcp/catalog` on the API process accepts a Session or a User PAT and no extra Permission. It is the cropped Metadata tool list for the Metadata endpoint. The Console surface is `/console/mcp/metadata`. The overview `/console/mcp` only distinguishes the two endpoints. This catalog is not the Entity catalog and is not an MCP connection.
 
 Business rules: `docs/business-metadata.md` §6.1 and §12.
 
@@ -19,6 +19,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 - `/mcp` accepts **POST** only. After authentication, any other method (including GET and DELETE) is **HTTP 405** (`HTTP_METHOD_NOT_ALLOWED`) with `Allow: POST`. The server does not open a listening stream and does not push server-initiated messages
 - Authenticated but lacking permission on a tool that was still invoked → tool error mapped from `403` with required permission named when practical
 - `tools/list` (and `GET /mcp/catalog`) return only tools the caller's Role can invoke, in catalog order, with `ttlMs` / `cacheScope: "private"` on the protocol list. Input schemas do not contain `authorization`
+- Every catalog tool object includes `execution` with value `read` or `write`, beside `name`, `permission`, and `description`. `tools/list` copies that same value onto the tool as `_meta["io.refraq/execution"]`. Absent `_meta`, an absent key, or any other value is not `read`. `readOnlyHint` is not this class. The Metadata writes are `set_object_semantics`, `set_column_semantics`, `upsert_join`, `patch_join`, `reject_join`, `restore_join`, `upsert_joins`, and `delete_join`. Every other Metadata tool is `read`, including `run_sql`. `read` does not mean the tool skips audit
 - Mutations write management audit events
 - No tool returns Source plaintext secrets or PAT secrets
 - Locator formats: `src/{engine|kind}/{source_key}`, `obj/…/{schema}/{object_type}/{name}`, `col/…/column/{column_name}`
@@ -97,13 +98,13 @@ Tool-error codes for process overload and platform time (same identity as HTTP, 
 | --- | --- | --- |
 | `run_sql` | `query:run` | Read-only single statement via `source_locator_key` |
 
-Guards match `docs/api-contracts-metadata.md` §7 (same defaults/caps/timeouts and per-attempt audit). Tool annotation `readOnlyHint` is advisory only and does not replace platform guards. Admission uses the MCP process pool (ADR 0045): `ADMISSION_CAPACITY_EXCEEDED` / `ADMISSION_ACTOR_LIMIT_EXCEEDED` in the tool-error envelope when the pool or this actor's share is full.
+Guards match `docs/api-contracts-metadata.md` §7 (same defaults/caps/timeouts and per-attempt audit). `execution` for this tool is `read`. Tool annotation `readOnlyHint` is advisory only: it does not replace platform guards and it is not the `execution` class. Admission uses the MCP process pool (ADR 0045): `ADMISSION_CAPACITY_EXCEEDED` / `ADMISSION_ACTOR_LIMIT_EXCEEDED` in the tool-error envelope when the pool or this actor's share is full.
 
 There is **no** MCP Catalog Sample tool; agents peek via `run_sql`. HTTP Catalog Sample remains `POST /objects/{id}/sample` (`catalog:sample`).
 
 ## 8. HTTP Catalog (`GET /mcp/catalog`)
 
-Purpose: Account Center (and any authenticated caller) reads the cropped tool list and the public path.
+Purpose: an authenticated caller reads the cropped Metadata tool list and the public path for the Metadata endpoint. The Console surface is `/console/mcp/metadata`. The overview `/console/mcp` only distinguishes the two endpoints. This catalog is not the Entity catalog and is not an MCP connection.
 
 Auth: Session cookie **or** User PAT, same as other protected APIs. No extra Permission beyond authentication.
 
@@ -116,7 +117,8 @@ Success `200`:
     {
       "name": "search_sources",
       "permission": "sources:read",
-      "description": "Search/list Sources (sources:read)."
+      "description": "Search/list Sources (sources:read).",
+      "execution": "read"
     }
   ]
 }

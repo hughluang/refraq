@@ -208,6 +208,10 @@ def test_tools_list_requires_entity_data_read(client: TestClient) -> None:
         assert payload.get("cacheScope") == "private"
         for tool in payload["tools"]:
             assert tool["annotations"]["readOnlyHint"] is True
+            meta = tool.get("_meta")
+            assert isinstance(meta, dict)
+            assert meta.get("io.refraq/execution") == "read"
+            assert tool.get("execution") not in ("read", "write")
             props = (tool.get("inputSchema") or {}).get("properties") or {}
             assert "authorization" not in props
             assert "narrow" not in props

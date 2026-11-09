@@ -21,11 +21,21 @@ from backend.entity.access.membership import person_of, readable_entity_ids
 from backend.entity.errors import EntityRequestInvalid
 from backend.entity.mcp.actor import current_actor
 from backend.entity.mcp.describe import describe_for, dictionary_codes
-from backend.entity.mcp.catalog import TOOLS_LIST_TTL_MS, tools_for_permissions
+from backend.entity.mcp.catalog import Execution, TOOLS_LIST_TTL_MS, tools_for_permissions
 from backend.entity.mcp.guidance import SERVER_INSTRUCTIONS, TOOL_DESCRIPTIONS
 from backend.entity.records import BusinessEntityRecord
 from backend.entity.store import get_entity_store
 from backend.tags.api import KIND_ENTITY, read_assignment
+
+
+_EXECUTION_META_KEY = "io.refraq/execution"
+
+
+def _with_execution(tool: MCPTool, execution: Execution) -> MCPTool:
+    """Copy the catalog class onto `_meta`. Leave protocol `execution` unset."""
+    meta = dict(tool.meta or {})
+    meta[_EXECUTION_META_KEY] = execution
+    return tool.model_copy(update={"meta": meta})
 
 
 class RefraqEntityMcp(MCPServer):
@@ -35,7 +45,10 @@ class RefraqEntityMcp(MCPServer):
         tools = {tool.name: tool for tool in await super().list_tools()}
         user, _token_id = current_actor()
         perms = resolve_user_permissions(user, get_role_store())
-        return [tools[spec.name] for spec in tools_for_permissions(perms)]
+        return [
+            _with_execution(tools[spec.name], spec.execution)
+            for spec in tools_for_permissions(perms)
+        ]
 
 
 mcp = RefraqEntityMcp(

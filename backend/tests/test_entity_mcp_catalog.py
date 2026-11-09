@@ -28,6 +28,17 @@ from backend.main import app  # noqa: E402
 _READER = ["console:access", "tokens:write", "entity:data_read"]
 _NO_DATA = ["console:access", "tokens:write"]
 
+# Name list is the classification. Every current Entity tool is a read.
+_ENTITY_EXECUTION: dict[str, str] = {
+    "list_entities": "read",
+    "describe_entity": "read",
+    "list_dictionary_codes": "read",
+    "get_row": "read",
+    "query_rows": "read",
+    "validate_sql": "read",
+    "run_sql": "read",
+}
+
 
 @pytest.fixture()
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
@@ -94,6 +105,17 @@ def _pat(client: TestClient, name: str) -> str:
 
 def _tool_rows(permissions: list[str]) -> list[dict[str, str]]:
     return [asdict(spec) for spec in tools_for_permissions(permissions)]
+
+
+def test_entity_catalog_publishes_execution_class(client: TestClient) -> None:
+    response = client.get("/mcp/entity/catalog")
+    assert response.status_code == 200, response.text
+    tools = response.json()["tools"]
+    assert [tool["name"] for tool in tools] == list(_ENTITY_EXECUTION)
+    for tool in tools:
+        assert tool["execution"] == _ENTITY_EXECUTION[tool["name"]]
+        assert tool["execution"] == "read"
+        assert tool["permission"] == "entity:data_read"
 
 
 def test_entity_catalog_requires_auth(client: TestClient) -> None:

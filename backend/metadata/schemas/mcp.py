@@ -1,4 +1,7 @@
-"""HTTP shapes for the current User's MCP catalog."""
+"""HTTP shapes for the current User's MCP catalog.
+
+Each tool is a catalog `McpToolSpec`, including `execution` (`read` or `write`).
+"""
 
 from __future__ import annotations
 

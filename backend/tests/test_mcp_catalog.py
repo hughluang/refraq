@@ -72,6 +72,32 @@ def _pat(client: TestClient, name: str = "mcp-pat") -> str:
     return created.json()["secret"]
 
 
+# Name lists are the classification. Do not derive these from permission.
+_METADATA_EXECUTION: dict[str, str] = {
+    "search_sources": "read",
+    "get_source": "read",
+    "list_objects": "read",
+    "get_object": "read",
+    "get_object_semantics": "read",
+    "get_object_columns": "read",
+    "get_object_ddl": "read",
+    "set_object_semantics": "write",
+    "set_column_semantics": "write",
+    "list_semantics_changes": "read",
+    "search_objects": "read",
+    "search_columns": "read",
+    "list_joins": "read",
+    "upsert_join": "write",
+    "patch_join": "write",
+    "reject_join": "write",
+    "restore_join": "write",
+    "upsert_joins": "write",
+    "delete_join": "write",
+    "find_join_path": "read",
+    "run_sql": "read",
+}
+
+
 def test_catalog_names_match_registered_tools() -> None:
     registered = {tool.name for tool in asyncio.run(MCPServer.list_tools(mcp))}
     assert registered == {spec.name for spec in MCP_TOOLS}
@@ -115,6 +141,16 @@ def test_catalog_session_and_pat(client: TestClient) -> None:
     )
     assert pat_only.status_code == 200
     assert [t["name"] for t in pat_only.json()["tools"]] == names
+
+
+def test_metadata_catalog_publishes_execution_class(client: TestClient) -> None:
+    response = client.get("/mcp/catalog")
+    assert response.status_code == 200, response.text
+    tools = response.json()["tools"]
+    assert [tool["name"] for tool in tools] == list(_METADATA_EXECUTION)
+    for tool in tools:
+        assert tool["execution"] == _METADATA_EXECUTION[tool["name"]]
+        assert tool["execution"] in ("read", "write")
 
 
 def test_catalog_and_tools_list_same_crop(client: TestClient) -> None:
@@ -223,6 +259,30 @@ def _tools_list(mcp_client: StarletteTestClient, secret: str):
             },
         },
     )
+
+
+def test_metadata_tools_list_publishes_execution_meta(client: TestClient) -> None:
+    secret = _pat(client)
+    with StarletteTestClient(create_mcp_http_app()) as mcp_client:
+        response = _tools_list(mcp_client, secret)
+    assert response.status_code == 200, response.text
+    tools = _jsonrpc_result(response)["tools"]
+    assert [tool["name"] for tool in tools] == list(_METADATA_EXECUTION)
+    for tool in tools:
+        meta = tool.get("_meta")
+        assert isinstance(meta, dict)
+        published = meta.get("io.refraq/execution")
+        assert published == _METADATA_EXECUTION[tool["name"]]
+        assert published in ("read", "write")
+        assert tool.get("execution") not in ("read", "write")
+        hint = (tool.get("annotations") or {}).get("readOnlyHint")
+        if tool["name"] == "run_sql":
+            assert hint is True
+        if tool["name"] == "search_sources":
+            assert hint is not True
+            assert published == "read"
+        if tool["name"] == "set_object_semantics":
+            assert published == "write"
 
 
 def test_mcp_http_tools_list_respects_pat(client: TestClient) -> None:

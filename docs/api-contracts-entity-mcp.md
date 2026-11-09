@@ -6,7 +6,7 @@ This document defines the **Entity MCP endpoint**: the read-only MCP tool face f
 
 The product port is MCP Streamable HTTP at the Console-origin path `/mcp/entity`. Auth is **User PAT** in the HTTP `Authorization: Bearer` header only. Tool arguments do not include `authorization`. Session cookies are not credentials on this path. There is no OAuth discovery document and no well-known metadata.
 
-`GET /mcp/entity/catalog` on the API process (Session or PAT) is the Account Center read of the same cropped tool list.
+`GET /mcp/entity/catalog` on the API process accepts a Session or a User PAT and no extra Permission. It is the cropped Entity tool list for the Entity endpoint. The Console surface is `/console/mcp/entity`. The overview `/console/mcp` may link here; it does not serve this catalog as if it were Metadata. This catalog is not the Metadata catalog and is not an MCP connection.
 
 The **Entity Data API** remains the HTTP data plane (`docs/api-contracts-entity-data.md`). `get_row` and `query_rows` call that service. This document defines the tool arguments, the SQL gate, the SQL result, and the Problem Codes of this host. It does not define Business Entity authoring (`docs/api-contracts-entity.md`) or access-management HTTP (`docs/api-contracts-entity-access.md`).
 
@@ -59,7 +59,7 @@ Withheld cells are NULL and are listed in __withheld.
 This face does not write Entity data, change definitions, or read the Change Log.
 ```
 
-Account Center keeps one MCP section. That section has two endpoint cards, Metadata MCP and Entity MCP. Each card shows a title, a description, a copyable client configuration (Console origin plus `public_path`, PAT placeholder, no live token), the cropped tool table, and an empty state.
+`GET /mcp/entity/catalog` is the cropped Entity tool list for the Entity endpoint. The Console surface is `/console/mcp/entity`. It is not the Metadata catalog and not an MCP connection. The overview `/console/mcp` may link here; it does not serve this catalog as if it were Metadata.
 
 ### 2.1 `GET /mcp/entity/catalog`
 
@@ -74,13 +74,14 @@ Success `200`:
     {
       "name": "list_entities",
       "permission": "entity:data_read",
-      "description": "…"
+      "description": "…",
+      "execution": "read"
     }
   ]
 }
 ```
 
-`tools` is the caller's cropped catalog, in the order in §4. An empty array is valid. The browser builds `{origin}{public_path}`.
+`tools` is the caller's cropped catalog, in the order in §4. An empty array is valid. Each tool object includes `execution` beside `name`, `permission`, and `description`. The browser builds `{origin}{public_path}`.
 
 ## 3. Authorization
 
@@ -94,7 +95,7 @@ Deprecated, not-serving, pending, and combination-limit states use the Entity Da
 
 `describe_entity`, `list_dictionary_codes`, `get_row`, and `query_rows` do not advertise `narrow`. A non-null `narrow` on those tools is `REQUEST_INVALID` with message `narrow is not accepted`, before admission. The other tools have no `narrow` argument.
 
-All seven tools are read-only (`readOnlyHint` is advisory and does not replace the gate or the read-only transaction).
+All seven tools have `execution` `read`, including `run_sql`. `read` does not mean the tool skips audit or maintenance effects. `tools/list` copies that class onto the tool as `_meta["io.refraq/execution"]`. Absent `_meta`, an absent key, or any other value is not `read`. `readOnlyHint` is advisory and is not this class; it does not replace the gate or the read-only transaction.
 
 ## 4. Tool Catalog
 

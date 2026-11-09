@@ -18,7 +18,7 @@ from backend.admin.permissions import permissions_include
 from backend.admin.role_store import get_role_store
 from backend.admin.user_store import UserRecord
 from backend.metadata.mcp_actor import current_actor, mcp_authorization
-from backend.metadata.mcp_catalog import TOOLS_LIST_TTL_MS, tools_for_permissions
+from backend.metadata.mcp_catalog import Execution, TOOLS_LIST_TTL_MS, tools_for_permissions
 from backend.metadata.mcp_guidance import (
     ANALYZE_OBJECT_BODY,
     ENRICH_SEMANTICS_BODY,
@@ -61,6 +61,16 @@ from backend.metadata.query import service as query_service
 from backend.metadata.sources import service as source_service
 
 
+_EXECUTION_META_KEY = "io.refraq/execution"
+
+
+def _with_execution(tool: MCPTool, execution: Execution) -> MCPTool:
+    """Copy the catalog class onto `_meta`. Leave protocol `execution` unset."""
+    meta = dict(tool.meta or {})
+    meta[_EXECUTION_META_KEY] = execution
+    return tool.model_copy(update={"meta": meta})
+
+
 class RefraqMetadataMcp(MCPServer):
     """Metadata MCP host: tools/list is cropped to the current PAT's Role."""
 
@@ -68,7 +78,10 @@ class RefraqMetadataMcp(MCPServer):
         tools = {tool.name: tool for tool in await super().list_tools()}
         user, _token_id = current_actor()
         perms = resolve_user_permissions(user, get_role_store())
-        return [tools[spec.name] for spec in tools_for_permissions(perms)]
+        return [
+            _with_execution(tools[spec.name], spec.execution)
+            for spec in tools_for_permissions(perms)
+        ]
 
 
 mcp = RefraqMetadataMcp(
