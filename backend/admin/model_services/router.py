@@ -32,6 +32,7 @@ from backend.admin.model_services.service import (
     cleanup_purpose,
     close_purpose,
     create_service,
+    force_generation,
     delete_service,
     index_status,
     open_purpose,
@@ -55,6 +56,7 @@ def _out(record: ModelServiceRecord, *, in_use_id: str | None) -> ModelServiceOu
         url=record.url,
         model=record.model,
         timeout_sec=record.timeout_sec,
+        batch_limit=record.batch_limit,
         has_secret=bool(record.secret),
         in_use=in_use_id == record.id,
         created_at=record.created_at,
@@ -79,6 +81,7 @@ def _purpose_out(state: PurposeState) -> PurposeStateOut:
         ready=state.ready,
         in_use_id=state.in_use_id,
         generation=state.generation,
+        control_revision=state.control_revision,
         index_status=index_status(state.purpose),  # type: ignore[arg-type]
         embed_schedule=embed_schedule,
     )
@@ -103,6 +106,7 @@ def get_spec(
                 {"name": "url", "type": "string", "required": True},
                 {"name": "model", "type": "string", "required": True},
                 {"name": "timeout_sec", "type": "integer", "required": True},
+                {"name": "batch_limit", "type": "integer", "required": False},
                 {"name": "api_key", "type": "secret", "required": False},
             ]
         },
@@ -155,6 +159,7 @@ def post_service(
             url=body.url,
             model=body.model,
             timeout_sec=body.timeout_sec,
+            batch_limit=body.batch_limit,
             api_key=body.api_key,
         actor_user_id=caller.id,
         actor_token_id=actor_token_id,
@@ -190,6 +195,7 @@ async def patch_service_http(
             model=body.model,
             protocol=body.protocol,
             timeout_sec=body.timeout_sec,
+            batch_limit=body.batch_limit,
             api_key=body.api_key,
             clear_api_key=body.clear_api_key,
             actor_user_id=caller.id,
@@ -247,6 +253,21 @@ def delete_service_http(
         service_id=service_id,
         actor_user_id=caller.id,
         actor_token_id=actor_token_id,
+    )
+
+
+@router.post("/purpose/{purpose}/force-generation")
+def force_generation_http(
+    purpose: str,
+    caller: UserRecord = Depends(require_permission("model_services:write")),
+    actor_token_id: str | None = Depends(get_actor_token_id),
+) -> PurposeStateOut:
+    return _purpose_out(
+        force_generation(
+            purpose=purpose,
+            actor_user_id=caller.id,
+            actor_token_id=actor_token_id,
+        )
     )
 
 

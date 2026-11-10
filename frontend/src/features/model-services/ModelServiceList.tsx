@@ -33,6 +33,7 @@ import {
   cleanupEmbeddingPurpose,
   closeEmbeddingPurpose,
   createModelService,
+  forceEmbeddingGeneration,
   deleteModelService,
   getEmbeddingPurpose,
   openEmbeddingPurpose,
@@ -78,6 +79,7 @@ export function ModelServiceList() {
     null,
   );
   const [opening, setOpening] = useState(false);
+  const [forcing, setForcing] = useState(false);
   const [closing, setClosing] = useState(false);
   const [cleaning, setCleaning] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -88,6 +90,7 @@ export function ModelServiceList() {
   );
   const { value: activeTab, setTab } = useConsoleTab(serviceTabs);
   const openConfirm = useConfirmAction<true>();
+  const forceConfirm = useConfirmAction<true>();
   const closeConfirm = useConfirmAction<true>();
   const cleanupConfirm = useConfirmAction<true>();
   const deleteConfirm = useConfirmAction<ModelService>();
@@ -195,6 +198,23 @@ export function ModelServiceList() {
       notifyError(err, t("common.error.loadFailed"));
     } finally {
       setActivatingId(null);
+    }
+  };
+
+  const confirmForce = async () => {
+    setForcing(true);
+    try {
+      await forceEmbeddingGeneration();
+      open?.({
+        type: "success",
+        message: t("modelServices.forceGeneration.success"),
+      });
+      forceConfirm.close();
+      await refreshAll();
+    } catch (err) {
+      notifyError(err, t("common.error.loadFailed"));
+    } finally {
+      setForcing(false);
     }
   };
 
@@ -401,6 +421,15 @@ export function ModelServiceList() {
               </Group>
               {showActions || showScheduleLink ? (
                 <Group gap="xs">
+                  {showActions && purpose?.in_use_id ? (
+                    <Button
+                      size="compact-sm"
+                      variant="light"
+                      onClick={() => forceConfirm.open(true)}
+                    >
+                      {t("modelServices.forceGeneration")}
+                    </Button>
+                  ) : null}
                   {showActions ? (
                     purpose?.closed ? (
                       <Button
@@ -516,6 +545,16 @@ export function ModelServiceList() {
           body={t("modelServices.activate.confirmBody")}
           loading={activatingId !== null}
           onConfirm={() => void confirmActivate()}
+        />
+
+        <ConfirmActionModal
+          stackId="model-service-force-generation"
+          opened={forceConfirm.opened}
+          onClose={forceConfirm.close}
+          title={t("modelServices.forceGeneration.confirmTitle")}
+          body={t("modelServices.forceGeneration.confirmBody")}
+          loading={forcing}
+          onConfirm={() => void confirmForce()}
         />
 
         <ConfirmActionModal

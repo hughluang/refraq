@@ -26,6 +26,7 @@ from backend.admin.model_services.openai_compat import (
 )
 from backend.admin.model_services.ports import catalog_embed_jobs
 from backend.admin.model_services.records import (
+    CURRENT_PROCESSING_CONTRACT,
     SUPPORTED_PROTOCOLS,
     SUPPORTED_PURPOSES,
     EmbeddingRuntime,
@@ -79,6 +80,23 @@ def _clean_timeout(value: int) -> int:
     return value
 
 
+_BATCH_LIMIT_MIN = 1
+_BATCH_LIMIT_MAX = 32
+
+
+def _clean_batch_limit(value: int) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < _BATCH_LIMIT_MIN
+        or value > _BATCH_LIMIT_MAX
+    ):
+        raise ModelServiceInvalidConfig(
+            "batch_limit must be an integer from 1 to 32"
+        )
+    return value
+
+
 def _require(store: ModelServiceStore, service_id: str) -> ModelServiceRecord:
     record = store.get(service_id)
     if record is None:
@@ -114,12 +132,12 @@ def _begin_rebuild(
     actor_token_id: str | None,
 ) -> PurposeState:
     """Advance generation and ask the site schedule to run. Does not manage Jobs."""
-    next_state = PurposeState(
-        purpose=state.purpose,
+    next_state = replace(
+        state,
         in_use_id=record.id,
-        closed=state.closed,
         ready=False,
         generation=state.generation + 1,
+        control_revision=state.control_revision + 1,
     )
     store.save_purpose(next_state)
     catalog_embed_jobs().trigger_run(
@@ -129,9 +147,32 @@ def _begin_rebuild(
     return next_state
 
 
+def _ensure_processing_contract(
+    store: ModelServiceStore, state: PurposeState
+) -> PurposeState:
+    """Advance generation when the stored projection contract is not current.
+
+    Shipping the current contract does not call this path. A mismatch commits
+    the new generation before the Catalog enqueue, so a failed enqueue leaves
+    the rebuild owed to the existing schedule.
+    """
+    if state.processing_contract == CURRENT_PROCESSING_CONTRACT:
+        return state
+    next_state = replace(
+        state,
+        processing_contract=CURRENT_PROCESSING_CONTRACT,
+        ready=False,
+        generation=state.generation + 1,
+        control_revision=state.control_revision + 1,
+    )
+    store.save_purpose(next_state)
+    catalog_embed_jobs().trigger_run(actor_user_id="system", actor_token_id=None)
+    return next_state
+
+
 def get_embedding_runtime() -> EmbeddingRuntime | None:
     store = get_model_service_store()
-    state = store.get_purpose("embedding")
+    state = _ensure_processing_contract(store, store.get_purpose("embedding"))
     if not state.in_use_id:
         return None
     record = store.get(state.in_use_id)
@@ -143,26 +184,31 @@ def get_embedding_runtime() -> EmbeddingRuntime | None:
         model=record.model,
         secret=record.secret,
         timeout_sec=record.timeout_sec,
+        batch_limit=record.batch_limit,
         closed=state.closed,
         ready=state.ready,
         generation=state.generation,
+        control_revision=state.control_revision,
     )
 
 
-def mark_embedding_ready(*, purpose: str, service_id: str, generation: int) -> bool:
+def mark_embedding_ready(
+    *,
+    purpose: str,
+    service_id: str,
+    generation: int,
+    control_revision: int | None = None,
+) -> bool:
     store = get_model_service_store()
     state = store.get_purpose(purpose)
     if state.in_use_id != service_id or state.generation != generation:
         return False
-    store.save_purpose(
-        PurposeState(
-            purpose=state.purpose,
-            in_use_id=state.in_use_id,
-            closed=state.closed,
-            ready=True,
-            generation=state.generation,
-        )
-    )
+    if (
+        control_revision is not None
+        and state.control_revision != control_revision
+    ):
+        return False
+    store.save_purpose(replace(state, ready=True))
     return True
 
 
@@ -187,6 +233,7 @@ def create_service(
     url: str,
     model: str,
     timeout_sec: int,
+    batch_limit: int = 32,
     api_key: str | None,
     actor_user_id: str,
     actor_token_id: str | None,
@@ -201,6 +248,7 @@ def create_service(
         url=_clean_url(url),
         model=_clean_model(model),
         timeout_sec=_clean_timeout(timeout_sec),
+        batch_limit=_clean_batch_limit(batch_limit),
         secret=api_key.strip() if api_key else None,
         created_at=now,
         updated_at=now,
@@ -224,6 +272,7 @@ def patch_service(
     model: str | None,
     protocol: str | None,
     timeout_sec: int | None,
+    batch_limit: int | None,
     api_key: str | None,
     clear_api_key: bool,
     actor_user_id: str,
@@ -236,7 +285,7 @@ def patch_service(
     next_url = _clean_url(url) if url is not None else record.url
     next_model = _clean_model(model) if model is not None else record.model
     next_protocol = _require_protocol(protocol) if protocol is not None else record.protocol
-    if in_use and (next_model != record.model or next_protocol != record.protocol):
+    if in_use and next_protocol != record.protocol:
         raise ModelServiceWireImmutable()
     url_changed = next_url != record.url
     if url_changed and api_key is None and not clear_api_key:
@@ -253,7 +302,13 @@ def patch_service(
     next_timeout = (
         _clean_timeout(timeout_sec) if timeout_sec is not None else record.timeout_sec
     )
-    wire_changed = url_changed or next_secret != record.secret
+    next_batch_limit = (
+        _clean_batch_limit(batch_limit)
+        if batch_limit is not None
+        else record.batch_limit
+    )
+    model_changed = next_model != record.model
+    wire_changed = url_changed or next_secret != record.secret or model_changed
     if wire_changed:
         probe_embeddings(
             url=next_url,
@@ -268,11 +323,12 @@ def patch_service(
         model=next_model,
         protocol=next_protocol,
         timeout_sec=next_timeout,
+        batch_limit=next_batch_limit,
         secret=next_secret,
         updated_at=utc_now(),
     )
     saved = store.save(updated)
-    if in_use and url_changed:
+    if in_use and (url_changed or model_changed):
         _begin_rebuild(
             store,
             state,
@@ -360,15 +416,7 @@ def delete_service(
     was_in_use = state.in_use_id == record.id
     store.delete(service_id)
     if was_in_use:
-        store.save_purpose(
-            PurposeState(
-                purpose=state.purpose,
-                in_use_id=None,
-                closed=state.closed,
-                ready=state.ready,
-                generation=state.generation,
-            )
-        )
+        store.save_purpose(replace(state, in_use_id=None))
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -378,18 +426,45 @@ def delete_service(
     )
 
 
+def force_generation(
+    *, purpose: str, actor_user_id: str, actor_token_id: str | None
+) -> PurposeState:
+    """Bump generation for an undisclosed provider-side model replacement.
+
+    URL, model, and stored vectors stay. Catalog rebuild intent is the purpose
+    commit plus the existing site schedule.
+    """
+    store = get_model_service_store()
+    state = store.get_purpose(_require_purpose(purpose))
+    if not state.in_use_id:
+        raise ModelServiceNotInUse()
+    record = _require(store, state.in_use_id)
+    updated = _begin_rebuild(
+        store,
+        state,
+        record,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+    )
+    _audit(
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        resource_id=purpose,
+        action="force_generation",
+    )
+    return updated
+
+
 def close_purpose(
     *, purpose: str, actor_user_id: str, actor_token_id: str | None
 ) -> PurposeState:
     store = get_model_service_store()
     state = store.get_purpose(_require_purpose(purpose))
     updated = store.save_purpose(
-        PurposeState(
-            purpose=state.purpose,
-            in_use_id=state.in_use_id,
+        replace(
+            state,
             closed=True,
-            ready=state.ready,
-            generation=state.generation,
+            control_revision=state.control_revision + 1,
         )
     )
     _audit(
@@ -419,12 +494,10 @@ def open_purpose(
         timeout=record.timeout_sec,
     )
     opened = store.save_purpose(
-        PurposeState(
-            purpose=state.purpose,
-            in_use_id=state.in_use_id,
+        replace(
+            state,
             closed=False,
-            ready=state.ready,
-            generation=state.generation,
+            control_revision=state.control_revision + 1,
         )
     )
     _audit(
@@ -448,12 +521,10 @@ def cleanup_purpose(
         raise ModelServiceCleanupBusy()
     jobs.clear_index()
     updated = store.save_purpose(
-        PurposeState(
-            purpose=state.purpose,
-            in_use_id=state.in_use_id,
-            closed=state.closed,
+        replace(
+            state,
             ready=False,
-            generation=state.generation,
+            control_revision=state.control_revision + 1,
         )
     )
     _audit(

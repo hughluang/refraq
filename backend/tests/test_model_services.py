@@ -68,10 +68,13 @@ class RecordingJobs(CatalogEmbedJobsPort):
         self.triggered: list[dict[str, object]] = []
         self.clears = 0
         self._status: str | None = None
+        self.fail_trigger = False
 
     def trigger_run(
         self, *, actor_user_id: str, actor_token_id: str | None
     ) -> str:
+        if self.fail_trigger:
+            raise RuntimeError("queue delivery failed")
         self.triggered.append(
             {
                 "actor_user_id": actor_user_id,
@@ -272,6 +275,26 @@ def test_activate_mints_job_clears_ready_and_is_lexical(
     assert embedding_write_enabled() is True
 
 
+def test_batch_limit_defaults_to_32_and_rejects_out_of_range(client: TestClient) -> None:
+    _login(client)
+    created = _create(client)
+    assert created["batch_limit"] == 32
+    shown = client.get(f"/model-services/{created['id']}")
+    assert shown.json()["batch_limit"] == 32
+    for bad in (0, 33, -1):
+        rejected = client.post(
+            "/model-services",
+            json={
+                "display_name": "Office TEI",
+                "url": "http://embed.internal:8080/v1/embeddings",
+                "model": "Qwen3-Embedding-8B",
+                "timeout_sec": 30,
+                "batch_limit": bad,
+            },
+        )
+        assert_problem(rejected, status=400, code="MODEL_SERVICE_INVALID_CONFIG")
+
+
 def test_timeout_sec_is_required_and_bounded(client: TestClient) -> None:
     _login(client)
     missing = client.post(
@@ -294,6 +317,30 @@ def test_timeout_sec_is_required_and_bounded(client: TestClient) -> None:
             },
         )
         assert_problem(rejected, status=400, code="MODEL_SERVICE_INVALID_CONFIG")
+
+
+def test_batch_limit_edit_does_not_advance_generation_or_clear_ready(
+    client: TestClient, jobs: RecordingJobs
+) -> None:
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    jobs.triggered.clear()
+    updated = client.patch(
+        f"/model-services/{created['id']}",
+        json={"batch_limit": 8},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["batch_limit"] == 8
+    purpose = client.get("/model-services/purpose/embedding").json()
+    assert purpose["generation"] == 1
+    assert purpose["ready"] is True
+    assert jobs.triggered == []
+    assert embedding_configured() is True
+    runtime = get_embedding_runtime()
+    assert runtime is not None
+    assert runtime.batch_limit == 8
 
 
 def test_patch_timeout_does_not_rebuild(
@@ -325,20 +372,59 @@ def test_patch_timeout_does_not_rebuild(
     assert runtime.timeout_sec == 120
 
 
-def test_in_use_locks_model_and_protocol(client: TestClient, jobs: RecordingJobs) -> None:
+def test_in_use_model_change_advances_generation_and_keeps_protocol(
+    client: TestClient, jobs: RecordingJobs
+) -> None:
+    _login(client)
+    created = _create(client)
+    draft = _create(client, display_name="Draft")
+    client.post(f"/model-services/{created['id']}/activate")
+    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    jobs.triggered.clear()
+    updated = client.patch(
+        f"/model-services/{created['id']}",
+        json={"model": "other-embed"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["model"] == "other-embed"
+    assert updated.json()["protocol"] == "openai_compat"
+    purpose = client.get("/model-services/purpose/embedding").json()
+    assert purpose["generation"] == 2
+    assert purpose["ready"] is False
+    assert len(jobs.triggered) == 1
+    assert embedding_configured() is False
+    untouched = client.patch(
+        f"/model-services/{draft['id']}",
+        json={"model": "draft-model"},
+    )
+    assert untouched.status_code == 200
+    assert untouched.json()["model"] == "draft-model"
+    after_draft = client.get("/model-services/purpose/embedding").json()
+    assert after_draft["generation"] == 2
+    assert len(jobs.triggered) == 1
+
+
+def test_in_use_protocol_stays_openai_compat(
+    client: TestClient, jobs: RecordingJobs
+) -> None:
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    locked = client.patch(
+    jobs.triggered.clear()
+    rejected = client.patch(
         f"/model-services/{created['id']}",
-        json={"model": "other"},
+        json={"protocol": "vendor_native"},
     )
-    assert_problem(locked, status=409, code="MODEL_SERVICE_WIRE_IMMUTABLE")
-    protocol = client.patch(
+    assert rejected.status_code == 422
+    kept = client.patch(
         f"/model-services/{created['id']}",
-        json={"protocol": "openai_compat", "model": created["model"]},
+        json={"protocol": "openai_compat"},
     )
-    assert protocol.status_code == 200
+    assert kept.status_code == 200
+    assert kept.json()["protocol"] == "openai_compat"
+    purpose = client.get("/model-services/purpose/embedding").json()
+    assert purpose["generation"] == 1
+    assert jobs.triggered == []
 
 
 def test_url_change_requires_secret_and_rebuilds(
@@ -387,6 +473,137 @@ def test_secret_only_keeps_hybrid_without_rebuild(
     purpose = client.get("/model-services/purpose/embedding")
     assert purpose.json()["ready"] is True
     assert purpose.json()["generation"] == 1
+
+
+def test_control_revision_fences_lifecycle_without_joining_generation(
+    client: TestClient, jobs: RecordingJobs
+) -> None:
+    _login(client)
+    created = _create(client)
+    activated = client.post(f"/model-services/{created['id']}/activate")
+    assert activated.status_code == 200
+    after_activate = client.get("/model-services/purpose/embedding").json()
+    assert after_activate["generation"] == 1
+    assert after_activate["control_revision"] == 1
+    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    closed = client.post("/model-services/purpose/embedding/close")
+    assert closed.status_code == 200
+    assert closed.json()["generation"] == 1
+    assert closed.json()["ready"] is True
+    assert closed.json()["control_revision"] == 2
+    opened = client.post("/model-services/purpose/embedding/open")
+    assert opened.json()["generation"] == 1
+    assert opened.json()["ready"] is True
+    assert opened.json()["control_revision"] == 3
+    jobs._status = None
+    client.post("/model-services/purpose/embedding/close")
+    cleaned = client.post("/model-services/purpose/embedding/cleanup")
+    assert cleaned.status_code == 200
+    assert cleaned.json()["generation"] == 1
+    assert cleaned.json()["ready"] is False
+    assert cleaned.json()["control_revision"] == 5
+    assert jobs.clears == 1
+    assert len(jobs.triggered) == 1
+
+
+def test_secret_timeout_and_batch_edits_do_not_bump_control_revision(
+    client: TestClient, jobs: RecordingJobs
+) -> None:
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    jobs.triggered.clear()
+    before = client.get("/model-services/purpose/embedding").json()["control_revision"]
+    for body in (
+        {"api_key": "sk-rotated"},
+        {"timeout_sec": 90},
+        {"batch_limit": 4},
+        {"display_name": "Renamed embedding"},
+    ):
+        patched = client.patch(f"/model-services/{created['id']}", json=body)
+        assert patched.status_code == 200
+    after = client.get("/model-services/purpose/embedding").json()
+    assert after["control_revision"] == before
+    assert after["generation"] == 1
+    assert after["ready"] is True
+    assert jobs.triggered == []
+
+
+def test_failed_enqueue_keeps_catalog_rebuild_for_the_next_sweep(
+    client: TestClient, jobs: RecordingJobs
+) -> None:
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    jobs.triggered.clear()
+    jobs.fail_trigger = True
+    with pytest.raises(RuntimeError, match="queue delivery failed"):
+        client.post("/model-services/purpose/embedding/force-generation")
+    purpose = client.get("/model-services/purpose/embedding").json()
+    assert purpose["generation"] == 2
+    assert purpose["ready"] is False
+    assert purpose["control_revision"] == 2
+    assert jobs.triggered == []
+    assert jobs.clears == 0
+
+    reset_job_store()
+    owed = create_queued_job(kind="catalog_embed", input={})
+    record = _finish_catalog_embed(owed.id)
+    assert record.status == "succeeded"
+    assert record.result is not None
+    assert record.result["generation"] == 2
+    assert record.result["outcome"] == "completed"
+    settled = get_model_service_store().get_purpose("embedding")
+    assert settled.generation == 2
+    assert settled.ready is True
+
+
+def test_force_generation_rebuilds_without_deleting_vectors(
+    client: TestClient, jobs: RecordingJobs
+) -> None:
+    from backend.metadata.catalog.embedding import CatalogEmbeddingRecord
+    from backend.metadata.catalog.store import get_catalog_store
+
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    jobs.triggered.clear()
+    kept = CatalogEmbeddingRecord(
+        id="emb_kept",
+        kind="object",
+        target_id="obj_kept",
+        locator_key="obj/postgresql/embed-src/public/table/kept",
+        content_hash="abc",
+        embedding=[0.1, 0.2],
+        indexed_at=utc_now(),
+        generation=1,
+    )
+    get_catalog_store().upsert_embedding(kept)
+    forced = client.post("/model-services/purpose/embedding/force-generation")
+    assert forced.status_code == 200
+    body = forced.json()
+    assert body["generation"] == 2
+    assert body["ready"] is False
+    assert body["control_revision"] == 2
+    assert body["in_use_id"] == created["id"]
+    assert len(jobs.triggered) == 1
+    assert jobs.clears == 0
+    stored = get_catalog_store().get_embedding(kind="object", target_id="obj_kept")
+    assert stored is not None
+    assert stored.embedding == [0.1, 0.2]
+    shown = client.get(f"/model-services/{created['id']}").json()
+    assert shown["url"] == created["url"]
+    assert shown["model"] == created["model"]
+    missing = client.post("/model-services/purpose/embedding/force-generation")
+    # Still in use, so a second force advances again.
+    assert missing.status_code == 200
+    assert missing.json()["generation"] == 3
+    client.delete(f"/model-services/{created['id']}")
+    denied = client.post("/model-services/purpose/embedding/force-generation")
+    assert_problem(denied, status=409, code="MODEL_SERVICE_NOT_IN_USE")
 
 
 def test_close_is_lexical(

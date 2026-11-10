@@ -44,7 +44,7 @@ class ModelServiceWireImmutable(ModelServiceError):
     http_status = 409
 
     def _default_message(self) -> str:
-        return "Model and protocol cannot change while the service is in use"
+        return "Protocol cannot change while the service is in use"
 
 
 class ModelServiceNotInUse(ModelServiceError):
@@ -69,6 +69,14 @@ class ModelServiceEndpointMissing(ModelServiceError):
 
     def _default_message(self) -> str:
         return "Embeddings URL is not configured"
+
+
+class ModelServiceControlRevisionMismatch(ModelServiceError):
+    code = "MODEL_SERVICE_CONTROL_REVISION_MISMATCH"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Embedding control revision changed during the call"
 
 
 class ModelServiceGenerationMismatch(ModelServiceError):

@@ -28,6 +28,7 @@ export function emptyValues(): ModelServiceFormValues {
     url: "",
     model: "",
     timeout_sec: 30,
+    batch_limit: 32,
     api_key: "",
     clear_api_key: false,
   };
@@ -42,6 +43,7 @@ export function valuesFromService(
     url: service.url,
     model: service.model,
     timeout_sec: service.timeout_sec,
+    batch_limit: service.batch_limit,
     api_key: "",
     clear_api_key: false,
   };
@@ -55,6 +57,7 @@ export function servicePayload(
     url: values.url.trim(),
     model: values.model.trim(),
     timeout_sec: Number(values.timeout_sec),
+    batch_limit: Number(values.batch_limit),
   };
   if (values.clear_api_key) {
     payload.clear_api_key = true;
@@ -87,10 +90,17 @@ export function ModelServiceForm({
         }
         return null;
       },
+      batch_limit: (value) => {
+        const limit = Number(value);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 32) {
+          return t("modelServices.validation.batch_limit");
+        }
+        return null;
+      },
     },
   });
   const urlChanged = service != null && form.values.url.trim() !== service.url;
-  const wireLocked = Boolean(service?.in_use);
+  const inUse = Boolean(service?.in_use);
 
   const close = () => {
     form.reset();
@@ -109,7 +119,11 @@ export function ModelServiceForm({
       onSubmit={() =>
         void form.submit(async (values) => {
           try {
-            await onSubmit(values);
+            await onSubmit({
+              ...values,
+              timeout_sec: Number(values.timeout_sec),
+              batch_limit: Number(values.batch_limit),
+            });
             form.markSaved();
           } catch (error) {
             presentSaveFailure(t, error, form.applyApiError);
@@ -144,11 +158,21 @@ export function ModelServiceForm({
         <TextField
           label={t("modelServices.fields.model")}
           required
-          editable={!wireLocked}
+          editable
           description={
-            wireLocked ? t("modelServices.fields.model.locked") : undefined
+            inUse ? t("modelServices.fields.model.inUse") : undefined
           }
           {...form.fieldProps("model")}
+        />
+        <NumberField
+          label={t("modelServices.fields.batch_limit")}
+          description={t("modelServices.fields.batch_limit.help")}
+          required
+          editable
+          min={1}
+          max={32}
+          allowDecimal={false}
+          {...form.fieldProps("batch_limit")}
         />
         <NumberField
           label={t("modelServices.fields.timeout_sec")}

@@ -18,6 +18,7 @@ export type ModelService = {
   url: string;
   model: string;
   timeout_sec: number;
+  batch_limit: number;
   has_secret: boolean;
   in_use: boolean;
   created_at: string;
@@ -39,6 +40,7 @@ export type ModelServiceFormValues = {
   url: string;
   model: string;
   timeout_sec: number;
+  batch_limit: number;
   api_key: string;
   clear_api_key: boolean;
 };
@@ -50,6 +52,7 @@ export type ModelServiceWrite = {
   url?: string;
   model?: string;
   timeout_sec?: number;
+  batch_limit?: number;
   api_key?: string;
   clear_api_key?: boolean;
 };

@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from functools import lru_cache
 from typing import Protocol
 
 from sqlalchemy import func, select
 
 from backend.admin.models import ModelServicePurposeRow, ModelServiceRow
-from backend.admin.model_services.records import ModelServiceRecord, PurposeState
+from backend.admin.model_services.records import (
+    CURRENT_PROCESSING_CONTRACT,
+    ModelServiceRecord,
+    PurposeState,
+)
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.pagination import apply_offset_page, apply_sql_page
@@ -51,6 +56,8 @@ def _default_purpose(purpose: str) -> PurposeState:
         closed=False,
         ready=False,
         generation=0,
+        control_revision=0,
+        processing_contract=CURRENT_PROCESSING_CONTRACT,
     )
 
 
@@ -84,13 +91,7 @@ class MemoryModelServiceStore:
             self._items.pop(service_id, None)
             for purpose, state in list(self._purposes.items()):
                 if state.in_use_id == service_id:
-                    self._purposes[purpose] = PurposeState(
-                        purpose=state.purpose,
-                        in_use_id=None,
-                        closed=state.closed,
-                        ready=state.ready,
-                        generation=state.generation,
-                    )
+                    self._purposes[purpose] = replace(state, in_use_id=None)
 
     def get_purpose(self, purpose: str) -> PurposeState:
         with self._lock:
@@ -138,6 +139,7 @@ class SqlModelServiceStore:
                         url=record.url,
                         model=record.model,
                         timeout_sec=record.timeout_sec,
+                        batch_limit=record.batch_limit,
                         secret_ciphertext=_encrypt(record.secret),
                         created_at=record.created_at,
                         updated_at=record.updated_at,
@@ -150,6 +152,7 @@ class SqlModelServiceStore:
                 row.url = record.url
                 row.model = record.model
                 row.timeout_sec = record.timeout_sec
+                row.batch_limit = record.batch_limit
                 row.secret_ciphertext = _encrypt(record.secret)
                 row.updated_at = record.updated_at
             session.flush()
@@ -176,6 +179,8 @@ class SqlModelServiceStore:
                 closed=row.closed,
                 ready=row.ready,
                 generation=row.generation,
+                control_revision=row.control_revision,
+                processing_contract=row.processing_contract,
             )
 
     def save_purpose(self, state: PurposeState) -> PurposeState:
@@ -189,6 +194,8 @@ class SqlModelServiceStore:
                         closed=state.closed,
                         ready=state.ready,
                         generation=state.generation,
+                        control_revision=state.control_revision,
+                        processing_contract=state.processing_contract,
                     )
                 )
             else:
@@ -196,6 +203,8 @@ class SqlModelServiceStore:
                 row.closed = state.closed
                 row.ready = state.ready
                 row.generation = state.generation
+                row.control_revision = state.control_revision
+                row.processing_contract = state.processing_contract
             session.flush()
             return state
 
@@ -209,6 +218,7 @@ def _row_to_record(row: ModelServiceRow) -> ModelServiceRecord:
         url=row.url,
         model=row.model,
         timeout_sec=row.timeout_sec,
+        batch_limit=row.batch_limit,
         secret=_decrypt(row.secret_ciphertext),
         created_at=row.created_at,
         updated_at=row.updated_at,

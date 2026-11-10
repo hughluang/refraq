@@ -6,6 +6,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { servicePayload } from "@/features/model-services/ModelServiceForm";
+import type { ModelServiceFormValues } from "@/features/model-services/types";
 import { ApiError } from "@/lib/api";
 import en from "@/locales/en-US/common.json";
 import { ConsoleNotifications } from "@/providers/notification-provider";
@@ -139,5 +141,55 @@ describe("ModelServiceForm save", () => {
       screen.getByRole("dialog", { name: copy["modelServices.create"] }).querySelector("[role='alert']"),
     ).toBeNull();
     expect(screen.queryByText(copy["form.error.details"])).toBeNull();
+  });
+
+  it("edits a batch limit from 1 through 32 and submits that limit", async () => {
+    submit.mockResolvedValue(undefined);
+    await renderForm();
+    const limit = screen.getByRole("textbox", { name: /Batch item limit/ });
+    expect((limit as HTMLInputElement).value).toBe("32");
+    fireEvent.change(limit, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["actions.save"] }));
+    expect(await screen.findByText(copy["modelServices.validation.batch_limit"])).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.change(limit, { target: { value: "8" } });
+    await fillAndSave();
+    const values = submit.mock.calls[0][0] as ModelServiceFormValues;
+    expect(values.batch_limit).toBe(8);
+    expect(servicePayload(values).batch_limit).toBe(8);
+  });
+
+  it("keeps the in-use model editable", async () => {
+    const { ModelServiceForm } = await import("@/features/model-services/ModelServiceForm");
+    render(
+      shell(
+        createElement(ModelServiceForm, {
+          opened: true,
+          service: {
+            id: "svc_1",
+            purpose: "embedding",
+            protocol: "openai_compat",
+            display_name: "Embed",
+            url: "https://embed.example/v1/embeddings",
+            model: "text-embedding",
+            timeout_sec: 30,
+            batch_limit: 16,
+            has_secret: true,
+            in_use: true,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+          onSubmit: (...args: unknown[]) => submit(...args),
+          onClose: () => undefined,
+        }),
+      ),
+    );
+    const model = screen.getByRole("textbox", { name: "Model" });
+    expect(model).not.toHaveProperty("disabled", true);
+    expect((model as HTMLInputElement).readOnly).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Model Description" }));
+    expect(await screen.findByText(copy["modelServices.fields.model.inUse"])).toBeTruthy();
+    expect(screen.queryByText(/cannot change while this service is in use/i)).toBeNull();
   });
 });

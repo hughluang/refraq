@@ -77,6 +77,13 @@ export function openEmbeddingPurpose() {
   });
 }
 
+export function forceEmbeddingGeneration() {
+  return apiClient<PurposeState>(
+    "/model-services/purpose/embedding/force-generation",
+    { method: "POST" },
+  );
+}
+
 export function cleanupEmbeddingPurpose() {
   return apiClient<PurposeState>("/model-services/purpose/embedding/cleanup", {
     method: "POST",

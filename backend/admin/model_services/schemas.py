@@ -21,6 +21,7 @@ class ModelServiceCreateIn(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     model: str = Field(min_length=1, max_length=256)
     timeout_sec: int
+    batch_limit: int = 32
     api_key: str | None = Field(default=None, max_length=4096)
 
 
@@ -30,6 +31,7 @@ class ModelServicePatchIn(BaseModel):
     model: str | None = Field(default=None, min_length=1, max_length=256)
     protocol: ProtocolName | None = None
     timeout_sec: int | None = None
+    batch_limit: int | None = None
     api_key: str | None = Field(default=None, max_length=4096)
     clear_api_key: bool = False
 
@@ -42,6 +44,7 @@ class ModelServiceOut(BaseModel):
     url: str
     model: str
     timeout_sec: int
+    batch_limit: int
     has_secret: bool
     in_use: bool
     created_at: Instant
@@ -62,6 +65,7 @@ class PurposeStateOut(BaseModel):
     ready: bool
     in_use_id: str | None
     generation: int
+    control_revision: int
     index_status: IndexStatus
     embed_schedule: EmbedScheduleOut | None = None
 

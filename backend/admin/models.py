@@ -165,6 +165,7 @@ class ModelServiceRow(Base):
     url: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(String(256), nullable=False)
     timeout_sec: Mapped[int] = mapped_column(Integer, nullable=False)
+    batch_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=32)
     secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
@@ -182,6 +183,10 @@ class ModelServicePurposeRow(Base):
     closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    control_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processing_contract: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="prefix-1024-l2-v1"
+    )
 
 
 class UserGroupRow(Base):

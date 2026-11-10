@@ -127,7 +127,12 @@ def run_catalog_embed_job(job_id: str) -> dict[str, str]:
     if lock is None:
         return _skip(job_id, "already_active", generation=runtime.generation)
     try:
-        return _sweep(job_id, service_id=runtime.service_id, generation=runtime.generation)
+        return _sweep(
+            job_id,
+            service_id=runtime.service_id,
+            generation=runtime.generation,
+            control_revision=runtime.control_revision,
+        )
     except Exception as exc:  # noqa: BLE001
         summary = str(exc)
         if len(summary) > _SUMMARY_MAX:
@@ -144,7 +149,13 @@ def run_catalog_embed_job(job_id: str) -> dict[str, str]:
         lock.release()
 
 
-def _sweep(job_id: str, *, service_id: str, generation: int) -> dict[str, str]:
+def _sweep(
+    job_id: str,
+    *,
+    service_id: str,
+    generation: int,
+    control_revision: int,
+) -> dict[str, str]:
     restarts = 0
     while True:
         append_job_log(job_id, level="info", message=f"indexing generation {generation}")
@@ -166,6 +177,9 @@ def _sweep(job_id: str, *, service_id: str, generation: int) -> dict[str, str]:
                 return True
             if live.generation != generation or live.service_id != service_id:
                 guard["action"] = "restart"
+                return True
+            if live.control_revision != control_revision:
+                guard["action"] = "abort"
                 return True
             running = totals.plus(current)
             if _deadline_stop(running, dominant=progress.dominant_reason()) is not None:
@@ -217,6 +231,7 @@ def _sweep(job_id: str, *, service_id: str, generation: int) -> dict[str, str]:
                 return _skip(job_id, "aborted", generation=generation)
             service_id = live.service_id
             generation = live.generation
+            control_revision = live.control_revision
             continue
 
         orphans = get_catalog_store().delete_orphan_embeddings()
@@ -256,14 +271,19 @@ def _sweep(job_id: str, *, service_id: str, generation: int) -> dict[str, str]:
         live = get_embedding_runtime()
         if (
             live is None
-            or live.closed
             or live.service_id != service_id
             or live.generation != generation
+            or live.control_revision != control_revision
         ):
             return _skip(job_id, "aborted", generation=generation)
-        mark_embedding_ready(
-            purpose="embedding", service_id=service_id, generation=generation
+        ready = mark_embedding_ready(
+            purpose="embedding",
+            service_id=service_id,
+            generation=generation,
+            control_revision=control_revision,
         )
+        if not ready:
+            return _skip(job_id, "aborted", generation=generation)
         mark_succeeded(job_id, result=result)
         indexed = (
             f"indexed {totals.objects_written} objects and "

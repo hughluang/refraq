@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from backend.admin.model_services.errors import (
     ModelServiceClosed,
+    ModelServiceControlRevisionMismatch,
     ModelServiceEndpointMissing,
     ModelServiceGenerationMismatch,
     ModelServiceNotInUse,
@@ -16,10 +17,8 @@ from backend.admin.model_services.openai_compat import (
     EMBEDDING_OUTPUT_DIM,
     post_openai_embeddings,
 )
+from backend.admin.model_services.records import CURRENT_PROCESSING_CONTRACT
 from backend.admin.model_services.service import get_embedding_runtime
-
-PROCESSING_CONTRACT_VERSION = "prefix-1024-l2-v1"
-_BATCH_LIMIT = 32
 
 
 @dataclass(frozen=True)
@@ -52,8 +51,14 @@ def embed_texts(
     texts: list[str],
     *,
     expected_generation: int,
+    expected_control_revision: int | None = None,
 ) -> EmbeddingVectors:
-    """Embed texts for the live generation. Does not return credentials."""
+    """Embed texts for the live generation. Does not return credentials.
+
+    ``expected_control_revision`` is not part of embedding-space identity.
+    When omitted, the call captures the current revision and fails if that
+    revision changes before return.
+    """
     if not texts:
         runtime = get_embedding_runtime()
         service_id = runtime.service_id if runtime is not None else ""
@@ -62,7 +67,7 @@ def embed_texts(
             space=EmbeddingSpace(
                 service_id=service_id,
                 generation=expected_generation,
-                processing_contract=PROCESSING_CONTRACT_VERSION,
+                processing_contract=CURRENT_PROCESSING_CONTRACT,
             ),
         )
     runtime = get_embedding_runtime()
@@ -74,9 +79,16 @@ def embed_texts(
         raise ModelServiceEndpointMissing()
     if runtime.generation != expected_generation:
         raise ModelServiceGenerationMismatch()
+    if (
+        expected_control_revision is not None
+        and runtime.control_revision != expected_control_revision
+    ):
+        raise ModelServiceControlRevisionMismatch()
+    captured_revision = runtime.control_revision
     vectors: list[list[float]] = []
-    for start in range(0, len(texts), _BATCH_LIMIT):
-        chunk = texts[start : start + _BATCH_LIMIT]
+    batch_limit = runtime.batch_limit
+    for start in range(0, len(texts), batch_limit):
+        chunk = texts[start : start + batch_limit]
         vectors.extend(
             post_openai_embeddings(
                 url=runtime.url,
@@ -89,6 +101,8 @@ def embed_texts(
         live = get_embedding_runtime()
         if live is None or live.generation != expected_generation:
             raise ModelServiceGenerationMismatch()
+        if live.control_revision != captured_revision:
+            raise ModelServiceControlRevisionMismatch()
     projected = [project_embedding(vector) for vector in vectors]
     if any(len(vector) != len(projected[0]) for vector in projected):
         raise ModelServiceTestFailed(
@@ -99,6 +113,6 @@ def embed_texts(
         space=EmbeddingSpace(
             service_id=runtime.service_id,
             generation=expected_generation,
-            processing_contract=PROCESSING_CONTRACT_VERSION,
+            processing_contract=CURRENT_PROCESSING_CONTRACT,
         ),
     )

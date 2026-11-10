@@ -10,6 +10,7 @@ import type { PurposeState } from "@/features/model-services/types";
 
 const getEmbeddingPurpose = vi.hoisted(() => vi.fn());
 const listModelServices = vi.hoisted(() => vi.fn());
+const forceEmbeddingGeneration = vi.hoisted(() => vi.fn());
 
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string) => (en as Record<string, string>)[key] ?? key,
@@ -54,6 +55,7 @@ vi.mock("@/features/model-services/api", () => ({
   createModelService: vi.fn(),
   deleteModelService: vi.fn(),
   openEmbeddingPurpose: vi.fn(),
+  forceEmbeddingGeneration,
   patchModelService: vi.fn(),
   testModelService: vi.fn(),
 }));
@@ -135,5 +137,38 @@ describe("ModelServiceList status", () => {
     expect(await screen.findByText(copy["modelServices.status.closed"])).toBeTruthy();
     expect(screen.getByRole("button", { name: copy["modelServices.open"] })).toBeTruthy();
     expect(screen.getByRole("button", { name: copy["modelServices.cleanup"] })).toBeTruthy();
+  });
+
+  it("explains close, reopen, and force-generation", async () => {
+    await openStatusTab(false);
+    fireEvent.click(
+      await screen.findByRole("button", { name: copy["modelServices.forceGeneration"] }),
+    );
+    expect(
+      await screen.findByText(copy["modelServices.forceGeneration.confirmBody"]),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: copy["common.confirm"] }));
+    expect(forceEmbeddingGeneration).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: copy["modelServices.close"] }));
+    expect(screen.getByText(copy["modelServices.close.confirmBody"])).toBeTruthy();
+    expect(copy["modelServices.close.confirmBody"]).toMatch(/Generation does not change/);
+
+    cleanup();
+    await openStatusTab(true);
+    fireEvent.click(screen.getByRole("button", { name: copy["modelServices.open"] }));
+    expect(screen.getByText(copy["modelServices.open.confirmBody"])).toBeTruthy();
+    expect(copy["modelServices.open.confirmBody"]).toMatch(/Generation does not change/);
+  });
+
+  it("keeps cleanup confirmation on the Catalog index", async () => {
+    await openStatusTab(true);
+    fireEvent.click(
+      await screen.findByRole("button", { name: copy["modelServices.cleanup"] }),
+    );
+    const body = copy["modelServices.cleanup.confirmBody"];
+    expect(await screen.findByText(body)).toBeTruthy();
+    expect(body).toMatch(/Catalog/);
+    expect(body).not.toMatch(/entity/i);
   });
 });

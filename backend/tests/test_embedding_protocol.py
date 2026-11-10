@@ -30,11 +30,14 @@ class _Body:
 def _seed(
     *,
     generation: int = 3,
+    control_revision: int = 0,
     ready: bool = False,
     closed: bool = False,
+    processing_contract: str = "prefix-1024-l2-v1",
     url: str = _URL,
     secret: str | None = _SECRET,
     timeout_sec: int = 45,
+    batch_limit: int = 32,
     model: str = "qwen-test",
     service_id: str = "msvc_test",
 ) -> None:
@@ -49,6 +52,7 @@ def _seed(
             url=url,
             model=model,
             timeout_sec=timeout_sec,
+            batch_limit=batch_limit,
             secret=secret,
             created_at=now,
             updated_at=now,
@@ -61,6 +65,8 @@ def _seed(
             closed=closed,
             ready=ready,
             generation=generation,
+            control_revision=control_revision,
+            processing_contract=processing_contract,
         )
     )
 
@@ -146,6 +152,123 @@ def test_closed_service_refuses_before_connect(monkeypatch) -> None:
     assert _SECRET not in message
 
 
+def test_current_processing_contract_does_not_advance_generation(monkeypatch) -> None:
+    from backend.admin.model_services import embed_texts, openai_compat
+
+    _seed(generation=3, ready=True, processing_contract="prefix-1024-l2-v1")
+
+    def _urlopen(_req: object, timeout: int = 0) -> _Body:
+        return _json_body([{"index": 0, "embedding": [0.1, 0.2]}])
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _urlopen)
+    result = embed_texts(["q"], expected_generation=3)
+    purpose = get_model_service_store().get_purpose("embedding")
+    assert result.space.processing_contract == "prefix-1024-l2-v1"
+    assert result.space.generation == 3
+    assert purpose.generation == 3
+    assert purpose.ready is True
+    assert purpose.processing_contract == "prefix-1024-l2-v1"
+
+
+def test_processing_contract_change_advances_generation(monkeypatch) -> None:
+    from backend.admin.model_services import bind_catalog_embed_jobs, embed_texts, openai_compat
+    from backend.admin.model_services.errors import ModelServiceGenerationMismatch
+    from backend.metadata.catalog_embed_jobs import CatalogEmbedJobs
+    from backend.tests.test_model_services import RecordingJobs
+
+    _seed(generation=3, ready=True, processing_contract="legacy-pass-through")
+    jobs = RecordingJobs()
+    bind_catalog_embed_jobs(jobs)
+    calls = {"n": 0}
+
+    def _urlopen(_req: object, timeout: int = 0) -> _Body:
+        calls["n"] += 1
+        return _json_body([{"index": 0, "embedding": [0.1, 0.2]}])
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _urlopen)
+    try:
+        with pytest.raises(ModelServiceGenerationMismatch):
+            embed_texts(["q"], expected_generation=3)
+        assert calls["n"] == 0
+        purpose = get_model_service_store().get_purpose("embedding")
+        assert purpose.generation == 4
+        assert purpose.ready is False
+        assert purpose.processing_contract == "prefix-1024-l2-v1"
+        assert len(jobs.triggered) == 1
+    finally:
+        bind_catalog_embed_jobs(CatalogEmbedJobs())
+
+
+def test_control_revision_change_during_call_returns_no_vectors(monkeypatch) -> None:
+    from dataclasses import replace
+
+    from backend.admin.model_services import embed_texts, openai_compat
+    from backend.admin.model_services.errors import ModelServiceControlRevisionMismatch
+
+    _seed(generation=3, control_revision=4)
+
+    def _urlopen(_req: object, timeout: int = 0) -> _Body:
+        store = get_model_service_store()
+        state = store.get_purpose("embedding")
+        store.save_purpose(replace(state, control_revision=5))
+        return _json_body([{"index": 0, "embedding": [0.1, 0.2]}])
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _urlopen)
+    with pytest.raises(ModelServiceControlRevisionMismatch) as exc_info:
+        embed_texts(["classified-phrase"], expected_generation=3)
+    message = str(exc_info.value)
+    assert "classified-phrase" not in message
+    assert _SECRET not in message
+    assert get_model_service_store().get_purpose("embedding").generation == 3
+
+
+def test_passed_control_revision_mismatch_refuses_before_connect(monkeypatch) -> None:
+    from backend.admin.model_services import embed_texts, openai_compat
+    from backend.admin.model_services.errors import ModelServiceControlRevisionMismatch
+
+    _seed(generation=3, control_revision=4)
+    calls = {"n": 0}
+
+    def _urlopen(_req: object, timeout: int = 0) -> _Body:
+        calls["n"] += 1
+        return _json_body([{"index": 0, "embedding": [0.1, 0.2]}])
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _urlopen)
+    with pytest.raises(ModelServiceControlRevisionMismatch):
+        embed_texts(
+            ["classified-phrase"],
+            expected_generation=3,
+            expected_control_revision=2,
+        )
+    assert calls["n"] == 0
+
+
+def test_matching_control_revision_stays_out_of_embedding_space(monkeypatch) -> None:
+    from dataclasses import fields
+
+    from backend.admin.model_services import embed_texts, openai_compat
+
+    _seed(generation=3, control_revision=4)
+
+    def _urlopen(_req: object, timeout: int = 0) -> _Body:
+        return _json_body([{"index": 0, "embedding": [0.6, 0.8]}])
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _urlopen)
+    result = embed_texts(
+        ["q"],
+        expected_generation=3,
+        expected_control_revision=4,
+    )
+    assert result.vectors == [[0.6, 0.8]]
+    assert [field.name for field in fields(result.space)] == [
+        "service_id",
+        "generation",
+        "processing_contract",
+    ]
+    assert result.space.generation == 3
+    assert result.space.processing_contract == "prefix-1024-l2-v1"
+
+
 def test_generation_mismatch_refuses_before_connect(monkeypatch) -> None:
     from backend.admin.model_services import embed_texts, openai_compat
     from backend.admin.model_services.errors import ModelServiceGenerationMismatch
@@ -204,6 +327,34 @@ def test_no_in_use_service_refuses_before_connect(monkeypatch) -> None:
     message = str(exc_info.value)
     assert "classified-phrase" not in message
     assert _SECRET not in message
+
+
+def test_shared_call_splits_on_the_service_batch_limit(monkeypatch) -> None:
+    from backend.admin.model_services import embed_texts, openai_compat
+
+    _seed(batch_limit=2)
+    seen: list[list[str]] = []
+
+    def _urlopen(req: object, timeout: int = 0) -> _Body:
+        payload = json.loads(req.data.decode("utf-8"))  # type: ignore[attr-defined]
+        chunk = list(payload["input"])
+        seen.append(chunk)
+        return _json_body(
+            [
+                {"index": index, "embedding": [float(index), 1.0]}
+                for index in range(len(chunk))
+            ]
+        )
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _urlopen)
+    texts = ["one", "two", "three", "four", "five"]
+    result = embed_texts(texts, expected_generation=3)
+    assert [len(chunk) for chunk in seen] == [2, 2, 1]
+    assert seen[0] == ["one", "two"]
+    assert seen[2] == ["five"]
+    assert result.vectors[4] == [0.0, 1.0]
+    assert result.space.generation == 3
+    assert result.space.processing_contract == "prefix-1024-l2-v1"
 
 
 def test_inputs_above_32_are_split_and_returned_in_input_order(monkeypatch) -> None:

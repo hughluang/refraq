@@ -256,6 +256,33 @@ def _run_embed(*, embed_fn) -> object:
     return record
 
 
+def test_control_revision_change_stops_the_sweep_before_ready() -> None:
+    from dataclasses import replace
+
+    from backend.admin.model_services.store import get_model_service_store
+
+    _seed_source(object_count=8, columns_per_object=4)
+    calls = {"n": 0}
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            store = get_model_service_store()
+            state = store.get_purpose("embedding")
+            store.save_purpose(replace(state, control_revision=state.control_revision + 1))
+        return [[1.0, 0.0] for _ in texts]
+
+    record = _run_embed(embed_fn=embed)
+    purpose = get_model_service_store().get_purpose("embedding")
+    assert calls["n"] == 1
+    assert purpose.ready is False
+    assert purpose.generation == 1
+    assert record.status == "succeeded"
+    assert record.result is not None
+    assert record.result["outcome"] == "skipped"
+    assert record.result["reason"] == "aborted"
+
+
 def test_catalog_embed_run_log_includes_planned_and_heartbeats() -> None:
     # 8 objects + 32 columns = 40 pending → two batches (32 then 8).
     _seed_source(object_count=8, columns_per_object=4)
