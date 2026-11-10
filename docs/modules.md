@@ -76,7 +76,7 @@ Recommended modules:
 - `admin/security.py`
 - `admin/console_modules.py` (code-seeded Console Module catalog)
 - `admin/branding/` (Site Branding language unit: singleton configuration, packaged seed files, operator overlays, resolution-independent presentation, validation, caching, and HTTP)
-- `admin/model_services/` (Model Service registry, purpose vector state, connectivity test, and HTTP)
+- `admin/model_services/` (Model Service registry, shared embedding call, purpose vector state, connectivity test, and HTTP). Catalog and Entity consume the published call; this package does not own either index
 - `admin/system_parameters/` (System Parameter mechanism: registry, store, resolver, occupy, HTTP)
 - `admin/federation/` (Identity Provider configuration, OIDC validation, binding, pending admission, claim, and unfederation)
 - `admin/subjects/` (User Group, membership, Subject Attribute definition and values, HTTP, and the published subject resolver: a User's groups and effective Subject Attribute values. Dictionary code validation is an injected adapter bound by composition; `admin` never imports `entity`)
@@ -123,7 +123,7 @@ Responsibilities:
 - Connector adapters (PostgreSQL, MSSQL, Oracle) consume `SourceEndpoint`; outbound invocation shell in `connectors/runtime` binds an already-interpreted endpoint
 - Domain facade for structure and join-detection **Jobs** minted via **Scheduled Task** (run-now / Beat) and Source-scoped schedule **facade** (`POST/GET /sources/{id}/schedules`, `owner_ref` withdraw). Does not own the Scheduled Task table
 - Source work Job execution shell in `source_job_runner` (`run_source_work_job`: claim, kind check, **Kind execution lock** with memory / Postgres adapters, Source lookup and usability). `source_jobs` mints; kind bodies live in `structure_jobs/service` (`run_structure_job`: collect → Normalized Type → structure refresh) and `join_detection_jobs/` (parse stored DDL → resolve column endpoints → insert missing joins)
-- Domain Celery work units (`@shared_task`); discovered by `worker`: structure and join-detection minting in `source_jobs`, site `catalog_embed` schedule and runner in `catalog_embed_jobs`, Job kind dispatch in `tasks.py`
+- Domain Celery work units (`@shared_task`); discovered by `worker`: structure and join-detection minting in `source_jobs`, site `catalog_embed` schedule and runner in `catalog_embed_jobs`, Job kind dispatch in `tasks.py`. `entity_embed` is not a metadata kind
 - Catalog object / semantics / join / controlled query / Catalog Sample services (`catalog/service` owns Current catalog reads + Join Path; Object Semantics in `catalog/semantics`; join list/writes in `catalog/join_writes` (human/MCP adapter: validation, audit, contract errors); directed join-pair admission and insert-if-missing persist in `catalog/join_pair` (`pair_state`, writer mapping, `apply_insert_join`); Join Origin attester constants in `catalog/join_origin`; views/refs internal; HTTP/MCP object projection in `catalog/present`; sample compile+run lives under `query/`; structure refresh orchestration in `catalog/structure_refresh` commits Current catalog and Structure Diff in one catalog write unit, then refreshes Catalog Search embeddings; plan merge in `catalog/structure_merge`; Join Change records in `catalog/join_changes` (adapters persist); Semantics Change in `catalog/semantics_changes`; optional Catalog Search vector rank in `catalog/embedding` / `catalog/search_hybrid` / `catalog/index_embeddings`; persist-plan walk in `catalog/structure_persist` (`apply_structure_plan` / `apply_join_detection_plan`; join step calls `join_pair`; adapters translate records); list predicates in `catalog/list_query` (Memory applies the spec in Python; SQL asks the same module for WHERE via a column protocol); search rank/page in `catalog/search_rank`; catalog store exposes narrow Protocols — `CatalogReadStore` / `CatalogSemanticsStore` / `CatalogJoinStore` / `CatalogStructureStore` (+ `CatalogGraphStore` for Join Path BFS) — while memory/SQL adapters remain one class each)
 - Type Mapping registry (global engine + native type → Normalized Type; product seeds via Upgrade)
 - `metadata/parameters.py` (Metadata-owned System Parameter specs and typed accessors: `query_timeout_sec`, `query_max_rows`)
@@ -161,7 +161,9 @@ Responsibilities:
 - Entity database bootstrap process entry (`python -m backend.entity.bootstrap`): roles, schemas including `channel_dataset` (the reader role is not granted on it), `pgcrypto`, the `acl` schema, and migration of existing tables, run with admin credentials only
 - Published `backend.entity.datasets`: create a dataset table from a query or from a chunked copy of rows, read a page or a batch by `_ord`, check that the table has a row, read its size, and delete it. The module does not own the dataset registry or the lifecycle and does not import `channel`
 - `entity/parameters.py` (Entity-owned System Parameter specs: `max_profile_combinations`, `access_log_retention_days`, `entity_query_timeout_sec`, `entity_query_max_rows`)
-- Entity MCP host under `entity/mcp/` (`docs/api-contracts-entity-mcp.md`): Streamable HTTP at `/mcp/entity`, tool catalog, and process entry `python -m backend.entity.mcp.http`. The process entry may import `worker.parameters`. The package does not import `metadata`
+- Entity definition vectors in `entity_embeddings` and Entity index readiness in `entity_index_state`, both on the metadata database. Definition changes delete the projection row immediately. The package calls the published Model Service embedding API and does not import `metadata`
+- Site `entity_embed` schedule and runner under `entity/embed_jobs/`. The kind is dispatched from `entity/tasks.py`
+- Entity MCP host under `entity/mcp/` (`docs/api-contracts-entity-mcp.md`): Streamable HTTP at `/mcp/entity`, tool catalog including `search_entities`, and process entry `python -m backend.entity.mcp.http`. `search_entities` is not an admission-pool tool and is not a Metadata MCP tool. The process entry may import `worker.parameters`. The package does not import `metadata`
 - `GET /mcp/entity/catalog` under `entity/routers/` (session or PAT, no extra permission)
 - Domain use-case HTTP under `entity/routers/` (definition plus `routers/data.py`) and shapes under `entity/schemas/` (including `schemas/data.py`)
 - Published API listed in `docs/backend-layout.md` §3
@@ -177,7 +179,7 @@ Must not contain:
 - Importing `worker.app`
 - Importing `channel`; the Entity publish confirmation reads incompatible write nodes through a port bound by composition
 - Owning the dataset registry, the retention clocks, or the capacity ceiling (**Data Channel** owns those)
-- Metadata MCP tools for Business Entity definition, the Entity Data API, or Entity SQL. The Entity MCP host in `entity/mcp/` is the surface for those tools (`docs/api-contracts-entity-mcp.md`)
+- Metadata MCP tools for Business Entity definition, the Entity Data API, Entity SQL, or `search_entities`. The Entity MCP host in `entity/mcp/` is the surface for those tools (`docs/api-contracts-entity-mcp.md`)
 - `entity/present.py` importing `entity/table_name.py` or `entity/inbound.py`
 - Owning User Group or Subject Attribute storage (lives in `admin/subjects/`)
 

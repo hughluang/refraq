@@ -33,7 +33,7 @@ backend/
   admin/                  # platform kernel (Identity / RBAC / Console foundation)
     federation/           # OIDC provider, binding, pending, and provisioning language unit
     branding/             # Site Branding configuration and asset language unit
-    model_services/       # Model Service registry, purpose state, connectivity test
+    model_services/       # Model Service registry, shared embedding call, purpose state, connectivity test
     subjects/             # User Group, membership, Subject Attribute definitions and values, subject resolver
     # published modules listed in §3
     models.py *_store.py permissions.py …
@@ -90,7 +90,7 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 | `backend.admin.token_store` | Token store ports used by deps/tokens HTTP |
 | `backend.admin.audit_store` | Audit store ports used by audit HTTP / writers |
 | `backend.admin.federation` | Identity Provider, OIDC authorization-code flow, External Subject binding, pending identity, and provisioning APIs |
-| `backend.admin.model_services` | Model Service registry snapshot and purpose state for Catalog Search (`get_embedding_runtime`, `mark_embedding_ready`, bind of catalog-embed job port) |
+| `backend.admin.model_services` | Shared embedding call and Model Service snapshot for Catalog Search and Entity semantic search (`embed_texts`, `get_embedding_runtime`, `mark_embedding_ready`, bind of the catalog-embed and entity-embed job ports). `embed_texts(texts, *, expected_generation, expected_control_revision=None)` does not return credentials. Processing contract `prefix-1024-l2-v1` |
 | `backend.admin.subjects` | Subject resolution for Entity access: a User's group ids and effective Subject Attribute values, the Subject Attribute definition catalog, User Group and User existence for subject pickers; bind of the dictionary-code validation port (composition injects the adapter so `admin` never imports `entity`). HTTP router mounted by `main` |
 | `backend.admin.system_parameters` | System Parameter mechanism (registry, occupy, `read_stored_parameter` / `resolve_int`, store reset). Does not name domain knobs |
 | `backend.admin.parameters` | Admin-owned parameter specs and typed accessors |
@@ -139,7 +139,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 |--------|----------------|
 | `backend.entity.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
 | `backend.entity.embed_jobs` | Site entity-embed schedule seed / run-now, active-job probe, index cleanup, and the Job runner bound into admin |
-| `backend.entity.tasks` | Job kind handler dispatch (`entity_reconcile`, `entity_table_drop`, `entity_access_views`), access-log retention purge, and the change-log retention purge that `backend.worker.tasks.purge_change_logs` runs; discovered by `worker`. Not registered on `metadata.tasks` |
+| `backend.entity.tasks` | Job kind handler dispatch (`entity_reconcile`, `entity_table_drop`, `entity_access_views`, `entity_embed`), access-log retention purge, and the change-log retention purge that `backend.worker.tasks.purge_change_logs` runs; discovered by `worker`. Not registered on `metadata.tasks` |
 | `backend.entity.parameters` | Entity-owned System Parameter specs and typed accessors (`max_profile_combinations`, `access_log_retention_days`, `entity_query_timeout_sec`, `entity_query_max_rows`; groups `entity_access` and `entity`); collected by `worker.parameters` assembly |
 | `backend.entity.bootstrap` | Entity database bootstrap process entry (`python -m backend.entity.bootstrap`); uses `ENTITY_ADMIN_DATABASE_URL` only |
 | `backend.entity.dictionaries.active_codes` | Active dictionary codes, bound into subject attributes by composition |

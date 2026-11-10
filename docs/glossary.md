@@ -416,9 +416,9 @@ Avoid storing Join Origin on `catalog_joins`; treating origin as authority, prec
 
 ### Model Service
 
-A site-wide operator-managed external model endpoint (purpose + protocol). The first purpose is Catalog Search embedding. Not a **System Parameter**, not a **Source**, and not an **Identity Provider**.
+A site-wide operator-managed external model endpoint (purpose + protocol). The embedding purpose is one shared call used by Catalog Search and by Entity semantic search. Generation identifies the embedding space for both. Each domain keeps its own index ready bit: Catalog readiness is `catalog_index_state`, and Entity readiness is `entity_index_state`. The purpose row's `ready` column is still written when a Catalog sweep publishes; Catalog Search does not read it. Not a **System Parameter**, not a **Source**, and not an **Identity Provider**.
 Console operator copy labels set-in-use **Enable**. Status remains **In use**. Enable is not open.
-Avoid env as the embeddings home; treating the URL as a System Parameter; a second object type for LLM; treating Enable as open.
+Avoid env as the embeddings home; treating the URL as a System Parameter; a second object type for LLM; treating Enable as open; treating the purpose `ready` column as Catalog readiness or as Entity readiness.
 
 ### Catalog Search
 
@@ -481,8 +481,8 @@ Avoid naming it Entity Consumer API, Entity Row API, a "consume" service, or Ser
 
 ### Entity MCP endpoint
 
-The read-only MCP port for **Business Entity** data: Console-origin path `/mcp/entity`, User PAT in the HTTP `Authorization` header, Streamable HTTP, process role `entity_mcp`. Tools require `entity:data_read` and an effective `read` **Access Grant**. The host reads through the caller's **Profile View**, including read-only SQL that names Entities by `table_name`. Contract: `docs/api-contracts-entity-mcp.md`.
-Avoid the Metadata **MCP endpoint** (`/mcp`), a Session-authenticated Console API, a write or authoring surface, and a tool argument named `authorization`.
+The read-only MCP port for **Business Entity** data: Console-origin path `/mcp/entity`, User PAT in the HTTP `Authorization` header, Streamable HTTP, process role `entity_mcp`. Eight tools require `entity:data_read` and, where a row or name is read, an effective `read` **Access Grant**. Row tools and read-only SQL read through the caller's **Profile View**. `search_entities` ranks serving definitions the caller can read by cosine similarity and stays outside the admission pool. It is not a Metadata MCP tool. Contract: `docs/api-contracts-entity-mcp.md`.
+Avoid the Metadata **MCP endpoint** (`/mcp`), a Session-authenticated Console API, a write or authoring surface, a tool argument named `authorization`, and natural-language SQL.
 
 ### Attribute Type
 

@@ -95,7 +95,7 @@ Deprecated, not-serving, pending, and combination-limit states use the Entity Da
 
 `describe_entity`, `list_dictionary_codes`, `get_row`, and `query_rows` do not advertise `narrow`. A non-null `narrow` on those tools is `REQUEST_INVALID` with message `narrow is not accepted`, before admission. The other tools have no `narrow` argument.
 
-All seven tools have `execution` `read`, including `run_sql`. `read` does not mean the tool skips audit or maintenance effects. `tools/list` copies that class onto the tool as `_meta["io.refraq/execution"]`. Absent `_meta`, an absent key, or any other value is not `read`. `readOnlyHint` is advisory and is not this class; it does not replace the gate or the read-only transaction.
+All eight tools have `execution` `read`, including `run_sql` and `search_entities`. `read` does not mean the tool skips audit or maintenance effects. `tools/list` copies that class onto the tool as `_meta["io.refraq/execution"]`. Absent `_meta`, an absent key, or any other value is not `read`. `readOnlyHint` is advisory and is not this class; it does not replace the gate or the read-only transaction.
 
 ## 4. Tool Catalog
 
@@ -110,8 +110,9 @@ Order, Permission `entity:data_read` on every row:
 | `query_rows` | Entity Data API query envelope |
 | `validate_sql` | Gate, bind, and access-check one statement; no execution |
 | `run_sql` | Execute that statement on the reader |
+| `search_entities` | Cosine rank of serving Entities the caller can read |
 
-`get_row`, `query_rows`, and `run_sql` run inside platform admission (`await_admitted` on the User id). `ADMISSION_CAPACITY_EXCEEDED` and `ADMISSION_ACTOR_LIMIT_EXCEEDED` are the tool-error envelope. A reader-pool checkout timeout is `PLATFORM_CAPACITY_EXCEEDED`. Discovery tools and `validate_sql` do not enter admission and do not open an entity connection.
+`get_row`, `query_rows`, and `run_sql` run inside platform admission (`await_admitted` on the User id). `ADMISSION_CAPACITY_EXCEEDED` and `ADMISSION_ACTOR_LIMIT_EXCEEDED` are the tool-error envelope. A reader-pool checkout timeout is `PLATFORM_CAPACITY_EXCEEDED`. Discovery tools, `validate_sql`, and `search_entities` do not enter admission and do not open an entity connection.
 
 The admission pool does not copy context. `get_row`, `query_rows`, and `run_sql` bind the PAT id and the calling request id inside the admitted callable. A missing request id stays null. The HTTP gate also binds the PAT id, so `describe_entity` and `list_dictionary_codes` record it on the request thread.
 
@@ -155,6 +156,22 @@ Arguments: `table_name`, `attribute`, optional `query_text`, `limit`, `offset`.
 The attribute must be a dictionary attribute in the caller's read shape. A missing or hidden attribute is `REQUEST_INVALID` with message `Attribute '{name}' was not found`. A visible attribute that is not a dictionary is `REQUEST_INVALID` with message `Attribute '{name}' is not a dictionary`.
 
 Codes come from the head snapshot only, with current labels. `active` is the schema code's `writable`. `query_text` is a case-insensitive substring of `code` or `label`. A whitespace-only `query_text` is not stripped. It matches a `code` or `label` only when that text contains the same whitespace. `limit` defaults to 50. A supplied value is clamped to the integers 1 through 200, and the clamped value is echoed. `offset` below 0 is 0. The result is an Offset Page of `{ "code", "label", "active" }`.
+
+### 5.4 `search_entities`
+
+Arguments: `query_text` (required), `limit` (optional).
+
+`query_text` is trimmed. Empty or whitespace-only text is `REQUEST_INVALID` with message `query_text is required`. Longer than 2000 characters is `REQUEST_INVALID` with message `query_text must be at most 2000 characters`. `limit` defaults to 10. A supplied value must be an integer from 1 through 50. A boolean, a non-integer, or a value outside that range is `REQUEST_INVALID` with message `limit must be an integer from 1 through 50`. Out-of-range limits are not clamped.
+
+The tool requires the same `entity:data_read` gate and an effective `read` grant as `list_entities`. It ranks only serving Entities. Authoring permission and Super Admin status do not add Entities. Deprecated and not-serving Entities are omitted.
+
+Before ranking, the call requires an in-use embedding service with a URL, an open purpose, and an Entity index that is ready on that service's generation. No in-use service is `MODEL_SERVICE_NOT_IN_USE`. A closed purpose is `MODEL_SERVICE_CLOSED`. A missing URL is `MODEL_SERVICE_ENDPOINT_MISSING`. An index that is not ready, or ready on another generation, is `ENTITY_INDEX_NOT_READY`. Those failures are not an empty `items` list.
+
+When the index is ready and no currently readable Entity has a current projection, the result is `{ "items": [] }` and the embedding endpoint is not called.
+
+Otherwise the result is `{ "items": [ … ] }` ordered by `score` descending, then `table_name` ascending. Each item is `{ "table_name", "name", "description", "tags", "score" }`. `tags` is the same `[{ "id", "name" }]` assignment as §5.1. `score` is cosine similarity. It is not a confidence and not a probability. There is no score cutoff, including no distance cutoff, and there is no `offset`, `total`, or further page. A concurrent grant or definition change may return fewer than `limit` items. The tool does not fill the count with a stale row.
+
+A model call that fails, or that does not return one usable vector, is `ENTITY_SEARCH_EMBED_FAILED`. A generation or control revision that changes during the call is `MODEL_SERVICE_GENERATION_MISMATCH` or `MODEL_SERVICE_CONTROL_REVISION_MISMATCH`. The tool does not fall back to `list_entities` or to a lexical rank. A hit does not authorize `describe_entity`, a row read, or SQL.
 
 ## 6. Row Tools
 
@@ -300,7 +317,14 @@ Tool failures use §2's envelope. HTTP status below is the `AppError` status; th
 | `ENTITY_ACCESS_PENDING` | 503 | Views do not match the policy revision, or the combination view is still being generated |
 | `ENTITY_ACCESS_COMBINATION_LIMIT` | 409 | Combination above `max_profile_combinations` |
 | `ENTITY_ROW_NOT_FOUND` | 404 | `get_row` row missing or not visible |
-| `REQUEST_INVALID` | 422 | `narrow`, query bounds, dictionary attribute, or other request-shape failures shared with the Entity Data API |
+| `REQUEST_INVALID` | 422 | `narrow`, query bounds, dictionary attribute, `search_entities` input, or other request-shape failures shared with the Entity Data API |
+| `ENTITY_INDEX_NOT_READY` | 409 | `search_entities` while the Entity index is not ready on the current generation |
+| `ENTITY_SEARCH_EMBED_FAILED` | 503 | `search_entities` query embed failed or returned no usable vector; the message names no provider body |
+| `MODEL_SERVICE_NOT_IN_USE` | 409 | `search_entities` with no in-use embedding service |
+| `MODEL_SERVICE_CLOSED` | 409 | `search_entities` while the embedding purpose is closed |
+| `MODEL_SERVICE_ENDPOINT_MISSING` | 409 | `search_entities` while the in-use service has no URL |
+| `MODEL_SERVICE_GENERATION_MISMATCH` | 409 | Embedding generation changed during `search_entities` |
+| `MODEL_SERVICE_CONTROL_REVISION_MISMATCH` | 409 | Embedding control revision changed during `search_entities` |
 | `AUTH_FORBIDDEN` | 403 | Authenticated caller lacks `entity:data_read` |
 | `AUTH_UNAUTHENTICATED` | 401 | HTTP gate only |
 | `HTTP_METHOD_NOT_ALLOWED` | 405 | HTTP gate only, after authentication |
@@ -319,14 +343,14 @@ Tool failures use §2's envelope. HTTP status below is the `AppError` status; th
 
 `run_sql` appends one record per referenced Entity, all with the same `request_id`, the same PAT id, verb `sql`, that Entity's effective grant ids, Profile View name, and policy revision, the statement's returned `row_count` (null when the statement failed), the outcome code (`ok` or the Problem Code), the duration, `sql_sha256` (SHA-256 hex of the UTF-8 bytes of the submitted SQL), and `statement_summary` (the submitted SQL truncated to 200 characters). Non-SQL verbs store null in both SQL columns.
 
-`validate_sql` writes nothing. A gate rejection, an unknown or invisible name, a statement that references no Entity, `PLATFORM_CAPACITY_EXCEEDED`, and an admission rejection write no `sql` record. Reads do not write a Management Audit Event.
+`validate_sql` writes nothing. A gate rejection, an unknown or invisible name, a statement that references no Entity, `PLATFORM_CAPACITY_EXCEEDED`, and an admission rejection write no `sql` record. `list_entities` and `search_entities` write no Entity Access Log record. Reads do not write a Management Audit Event.
 
 ## 12. Non-Goals
 
 1. Entity writes, Business Entity authoring, versions, access management, and Dictionary management on this host.
 2. The entity Change Log on this host.
 3. An HTTP endpoint for Entity SQL, and a Console SQL workbench.
-4. A semantic layer, metric definitions, saved queries, or natural-language SQL inside the platform. The caller writes the SQL.
+4. A semantic layer, metric definitions, saved queries, or natural-language SQL inside the platform. The caller writes the SQL. `search_entities` ranks definition text; it does not produce SQL.
 5. `EXPLAIN` or any other query plan. The gate rejects the command.
 6. `narrow` on these tools.
 7. Evaluating the `mcp_query` or `export` grant actions. Reachability is an effective `read` grant.

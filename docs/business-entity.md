@@ -2,14 +2,15 @@
 
 ## 1. Scope
 
-This document defines the **Business Entity** definition surface: how a reusable business thing is declared, what meaning its declaration must carry, how an unpublished version is saved, how **Publish** creates that version's **Entity Table**, how a published Entity is locked and iterated, how an Entity is deprecated, and how a never-published definition is deleted. It defines the authorization, Console, and audit rules for that surface. The definition surface is Console HTTP. The Metadata **MCP endpoint** does not expose Business Entity. Who may read or write which rows and attributes of Entity data is **Entity Access Control** (`docs/business-entity-access.md`). Read-only consumption of that data, including Entity SQL, is the **Entity MCP endpoint** (`docs/api-contracts-entity-mcp.md`).
+This document defines the **Business Entity** definition surface: how a reusable business thing is declared, what meaning its declaration must carry, how an unpublished version is saved, how **Publish** creates that version's **Entity Table**, how a published Entity is locked and iterated, how an Entity is deprecated, and how a never-published definition is deleted. It defines the authorization, Console, and audit rules for that surface, and the Entity-owned semantic index used by `search_entities`. The definition surface is Console HTTP. The Metadata **MCP endpoint** does not expose Business Entity. Who may read or write which rows and attributes of Entity data is **Entity Access Control** (`docs/business-entity-access.md`). Read-only consumption of that data, including Entity SQL and `search_entities`, is the **Entity MCP endpoint** (`docs/api-contracts-entity-mcp.md`).
 
 Mapping a source column onto an attribute, transforming values, channel load, and recording lineage belong to a **Data Channel**. Synchronous head-table schema discovery and row read/write belong to the **Entity Data API** (`docs/api-contracts-entity-data.md`). Both may write the same head table. The stored row is not tagged with provenance. An equal update does not write. The entity **Change Log**, not the row, carries the source.
 
 Related boundaries:
 
 - Sources, catalog, **Object Semantics**, **Normalized Type**, and **Controlled Query**: `docs/business-metadata.md`. Console, MCP, and Catalog Sample send a guarded read. A Data Channel SQL node may send the author's statement to a **Source**.
-- Platform **Job**: `docs/business-jobs.md`. Platform **Scheduled Task**: `docs/business-scheduled-tasks.md`. Publish and table drop use the Job mechanism and do not make Entity a scheduling domain.
+- Platform **Job**: `docs/business-jobs.md`. Platform **Scheduled Task**: `docs/business-scheduled-tasks.md`. Publish and table drop use the Job mechanism and do not make Entity a scheduling domain. `entity_embed` is minted only by its site schedule.
+- Shared embedding call and generation: `docs/business-model-services.md`. Catalog ranking is not this index.
 - **Permission** and role grants: `docs/business-login-auth.md`.
 - Row, column, and cell access to Entity data, definition visibility, and the entity database roles that enforce them: `docs/business-entity-access.md`, `docs/api-contracts-entity-access.md`.
 - Definition HTTP contract: `docs/api-contracts-entity.md`. Entity Data API: `docs/api-contracts-entity-data.md`. Entity MCP endpoint: `docs/api-contracts-entity-mcp.md`.
@@ -270,11 +271,27 @@ The record also carries an access control tab and a data page; their rules are `
 
 Where a **Data Channel** module mounts is out of scope for this document.
 
-## 8. Management Audit
+## 8. Semantic Index
+
+Entity owns the text it submits, the rows in `entity_embeddings`, and the ready bit on `entity_index_state`. Both tables live on the platform metadata database. They are not stored in the entity database and they are not Catalog embedding rows. `entity` does not import `metadata`.
+
+The projected text is `table_name`, `name`, `description`, and Tag names, in assignment order `(name_key, id)`. Blank parts are omitted. Attributes, dictionary codes, relation targets, business rows, masked values, and hidden schema are not part of the text. The platform does not generate a summary.
+
+A name change, a description change, a Tag assignment change, a Tag rename, a successful publish that moves the serving head, and deprecation delete that Entity's projection row immediately and enqueue one `entity_embed` sweep. The delete does not call the model. Authoring and publication do not wait for the model. A stale head, content hash, generation, or processing contract cannot become the current row.
+
+`entity_embed` is a Job kind minted only by the site **Scheduled Task** `entity_embed:site`, including run-now from Model Service HTTP and from Operations. It is not created by `POST /jobs` and not by MCP. Summary is `entity_embed`. `trigger_kind` is `schedule`. Input is empty. Default cadence is daily `0 3 * * *`, evaluated in the site `schedule_timezone` (the parameter seed is UTC). The row is undeletable. The sweep and the Catalog `catalog_embed` sweep do not wait for each other.
+
+The runner takes a site-wide lock named `entity_embed`. Contention ends that Job `succeeded` with `outcome=skipped` and `reason=already_active`. No in-use service (`no_service`), a closed purpose (`closed`), a generation change (`generation_changed`), or a control-revision change (`aborted`) is the same skip and does not set ready.
+
+The first sweep of a generation, and every later full sweep while the index is not ready, sets `entity_index_state.ready` only when every current serving target succeeded. An empty current set can succeed and set ready. A failed current target on that initial sweep fails the Job, leaves ready unset, and drops the failed projection. After ready is set, a sweep that fails some current targets stays ready, records the failed and attempted counts, and leaves those targets as a gap. Ready does not mean every incremental target is present. This rule is not Catalog's partial-failure rule.
+
+A Job whose captured generation or control revision is no longer current cannot set the Entity ready bit.
+
+## 9. Management Audit
 
 Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table drop enqueue; and for **Dictionary** create, update, and delete. A committed Tag-set change writes one event with resource type `entity`, action `tags.replace`, and the resulting Tag ids. An inline Tag create also writes the Tag create event. A replacement that does not change the set writes neither. A Tag change does not write a definition-save event. Each event records actor, **Instant**, resource, action, and result. Access policy changes and the Entity Access Log follow `docs/business-entity-access.md` §16.
 
-## 9. Non-Goals
+## 10. Non-Goals
 
 1. Moving rows into an **Entity Table** via channel load — mapping, transform, lineage, cadence, and load runs belong to a **Data Channel**.
 2. Serving delivery targets and Serving-layer delivery contracts.
@@ -285,17 +302,19 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 7. Collecting Entity Tables as **Catalog Object**s, or registering the entity database as a **Source**.
 8. Creating tables inside a Source, or any write SQL against a Source.
 9. A hierarchy or inheritance between Business Entities. An **Inbound Reference** is not a saved relationship, and a many-to-many is not a link table or a relationship-entity subtype.
-10. Exposing Business Entity definition or the **Entity Data API** as Metadata **MCP endpoint** tools. Entity data reads and Entity SQL are the **Entity MCP endpoint** (`docs/api-contracts-entity-mcp.md`); they read through the same Profile Views (`docs/business-entity-access.md` §15).
+10. Exposing Business Entity definition, the **Entity Data API**, or `search_entities` as Metadata **MCP endpoint** tools. Entity data reads, Entity SQL, and `search_entities` are the **Entity MCP endpoint** (`docs/api-contracts-entity-mcp.md`). Row tools and SQL read through the same Profile Views (`docs/business-entity-access.md` §15).
 11. **Semantic Type**, or a JSON Schema or OpenAPI format, as an **Attribute Type**.
 12. A unit or quantity on a `decimal` attribute. A later quantity is a new type or a composite value, not a `decimal` config key.
 13. A multi-value attribute, including a cardinality on `reference` config. A many-to-many stays two **Entity Reference**s on an ordinary Business Entity.
 14. A dictionary as a constraint on a `string` or `integer` attribute, or an integer code kind.
 15. A foreign key from a `user` attribute to the metadata database.
+16. Row-level semantic search, a lexical fallback from `search_entities`, and applying Catalog's partial-failure ready rule to the Entity index.
 
-## 10. References
+## 11. References
 
 - `docs/business-metadata.md`
 - `docs/business-jobs.md`
+- `docs/business-model-services.md`
 - `docs/business-scheduled-tasks.md`
 - `docs/business-login-auth.md`
 - `docs/business-entity-access.md`
