@@ -21,6 +21,7 @@ from backend.core.request_id import connect_celery_request_id, install_request_i
 from backend.core.worker_runtime import init_parent_worker_runtime, mark_worker_process
 from backend.jobs.api import bind_stamp_allowance
 from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
+from backend.entity.embed_jobs.schedule import ensure_entity_embed_schedule
 from backend.metadata.source_access import source_ids_for
 from backend.worker.api import ensure_system_schedules
 from backend.worker.parameters import BEAT_MAX_INTERVAL_SEC, assemble_system_parameters
@@ -31,6 +32,7 @@ bind_stamp_allowance(source_ids_for)
 assemble_system_parameters()
 ensure_system_schedules()
 ensure_catalog_embed_schedule()
+ensure_entity_embed_schedule()
 
 
 def create_celery_app() -> Celery:
@@ -46,6 +48,7 @@ def create_celery_app() -> Celery:
             "backend.metadata.tasks",
             "backend.metadata.source_jobs",
             "backend.metadata.catalog_embed_jobs.schedule",
+            "backend.entity.embed_jobs.schedule",
             "backend.entity.tasks",
             "backend.channel.tasks",
             "backend.channel.schedules",

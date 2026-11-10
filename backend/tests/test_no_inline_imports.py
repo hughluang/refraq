@@ -18,6 +18,8 @@ INLINE_IMPORT_ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
         ("core.entry", "uvicorn"),
         # catalog_embed_jobs.__init__ → jobs → source_jobs → tasks.
         ("metadata.tasks", "backend.metadata.catalog_embed_jobs.runner"),
+        # embed_jobs package init → schedule → entity.jobs → tasks.
+        ("entity.tasks", "backend.entity.embed_jobs.runner"),
     }
 )
 

@@ -7,6 +7,7 @@ from datetime import timedelta
 from celery.beat import ScheduleEntry, Scheduler
 
 from backend.core.time import format_instant
+from backend.entity.embed_jobs.schedule import ensure_entity_embed_schedule
 from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
 from backend.worker.api import ensure_system_schedules, realign_cron_commitments
 from backend.worker.cron import CommitmentSchedule
@@ -39,6 +40,7 @@ class DatabaseScheduler(Scheduler):
     def setup_schedule(self) -> None:
         ensure_system_schedules()
         ensure_catalog_embed_schedule()
+        ensure_entity_embed_schedule()
         realign_cron_commitments()
         super().setup_schedule()
         self.merge_inplace(self._load_entries())
@@ -47,6 +49,7 @@ class DatabaseScheduler(Scheduler):
     def sync(self) -> None:
         ensure_system_schedules()
         ensure_catalog_embed_schedule()
+        ensure_entity_embed_schedule()
         realign_cron_commitments()
         self.merge_inplace(self._load_entries())
         super().sync()

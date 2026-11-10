@@ -11,10 +11,14 @@ from sqlalchemy import text
 from backend.core.config import get_settings
 from backend.core.db import get_engine
 
+ENTITY_EMBED_LOCK = "entity_embed"
+
 __all__ = [
+    "ENTITY_EMBED_LOCK",
     "EntityTableLock",
     "entity_table_lock_name",
     "reset_entity_table_locks_for_tests",
+    "try_acquire_entity_embed_lock",
     "try_acquire_entity_table_lock",
 ]
 
@@ -79,8 +83,17 @@ class EntityTableLock:
             self._conn = None
 
 
+def try_acquire_entity_embed_lock() -> EntityTableLock | None:
+    """Site-wide lock for one Entity generation sweep."""
+
+    return _try_acquire(ENTITY_EMBED_LOCK)
+
+
 def try_acquire_entity_table_lock(entity_id: str) -> EntityTableLock | None:
-    name = entity_table_lock_name(entity_id)
+    return _try_acquire(entity_table_lock_name(entity_id))
+
+
+def _try_acquire(name: str) -> EntityTableLock | None:
     if not _use_postgres_advisory():
         with _memory_guard:
             lock = _memory_locks.setdefault(name, threading.Lock())

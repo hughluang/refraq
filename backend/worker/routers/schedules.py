@@ -10,6 +10,7 @@ from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.channel.schedule_projection import project_channel_schedule
+from backend.entity.embed_jobs.schedule import project_entity_schedule
 from backend.jobs.api import predicate_for
 from backend.metadata.source_access import source_ids_for
 from backend.metadata.source_schedules import (
@@ -41,8 +42,11 @@ router = APIRouter(tags=["schedules"])
 def _schedule_response(record: ScheduledTaskRecord) -> ScheduleResponse:
     recent = recent_jobs_by_schedule([record.id])[record.id]
     return ScheduleResponse(
-        schedule=project_channel_schedule(
-            record, public_schedule(record, recent_jobs=recent)
+        schedule=project_entity_schedule(
+            record,
+            project_channel_schedule(
+                record, public_schedule(record, recent_jobs=recent)
+            ),
         )
     )
 
@@ -62,8 +66,11 @@ def list_platform_schedules(
     recent = recent_jobs_by_schedule([record.id for record in records])
     return ScheduleListResponse(
         items=[
-            project_channel_schedule(
-                record, public_schedule(record, recent_jobs=recent[record.id])
+            project_entity_schedule(
+                record,
+                project_channel_schedule(
+                    record, public_schedule(record, recent_jobs=recent[record.id])
+                ),
             )
             for record in records
         ],

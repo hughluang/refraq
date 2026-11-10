@@ -197,9 +197,11 @@ def test_system_schedules_excluded_and_immutable(client: TestClient) -> None:
     default_list = client.get("/schedules")
     assert default_list.status_code == 200
     visible = default_list.json()["items"]
-    assert [item["work_kind"] for item in visible] == ["catalog_embed"]
-    assert visible[0]["deletable"] is False
-    site_id = visible[0]["id"]
+    assert {item["work_kind"] for item in visible} == {"catalog_embed", "entity_embed"}
+    assert all(item["deletable"] is False for item in visible)
+    site_id = next(
+        item["id"] for item in visible if item["work_kind"] == "catalog_embed"
+    )
 
     assert "entity_change_log_retention" not in {item["key"] for item in visible}
 
@@ -599,7 +601,10 @@ def test_hard_delete_source_cascades_structure_schedules(client: TestClient) -> 
         assert missing.json()["code"] == "SCHEDULE_NOT_FOUND"
     listed = client.get("/schedules")
     assert listed.status_code == 200
-    assert [item["work_kind"] for item in listed.json()["items"]] == ["catalog_embed"]
+    assert {item["work_kind"] for item in listed.json()["items"]} == {
+        "catalog_embed",
+        "entity_embed",
+    }
 
 
 def test_structure_mint_task_lives_on_fire_scheduled_structure() -> None:

@@ -24,7 +24,7 @@ from backend.admin.model_services.openai_compat import (
     TIMEOUT_SEC_MIN,
     probe_embeddings,
 )
-from backend.admin.model_services.ports import catalog_embed_jobs
+from backend.admin.model_services.ports import catalog_embed_jobs, entity_embed_jobs
 from backend.admin.model_services.records import (
     CURRENT_PROCESSING_CONTRACT,
     SUPPORTED_PROTOCOLS,
@@ -140,8 +140,8 @@ def _begin_rebuild(
         control_revision=state.control_revision + 1,
     )
     store.save_purpose(next_state)
-    catalog_embed_jobs().clear_index_ready(rebuild_owed=True)
-    catalog_embed_jobs().trigger_run(
+    _owe_consumer_rebuilds()
+    _enqueue_consumer_rebuilds(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
     )
@@ -167,9 +167,45 @@ def _ensure_processing_contract(
         control_revision=state.control_revision + 1,
     )
     store.save_purpose(next_state)
-    catalog_embed_jobs().clear_index_ready(rebuild_owed=True)
-    catalog_embed_jobs().trigger_run(actor_user_id="system", actor_token_id=None)
+    _owe_consumer_rebuilds()
+    _enqueue_consumer_rebuilds(actor_user_id="system", actor_token_id=None)
     return next_state
+
+
+def _owe_consumer_rebuilds() -> None:
+    """Commit both consumers' rebuild intent before either enqueue."""
+
+    catalog_embed_jobs().clear_index_ready(rebuild_owed=True)
+    entity_embed_jobs().clear_index_ready(rebuild_owed=True)
+
+
+def _enqueue_consumer_rebuilds(
+    *, actor_user_id: str, actor_token_id: str | None
+) -> None:
+    """Ask each site schedule to run. Entity goes first so a Catalog broker
+    failure still leaves Entity's job queued when Entity's own publish worked.
+    Both intents are already committed. If both enqueues fail, the Catalog
+    error is raised with the Entity error as its cause.
+    """
+
+    try:
+        entity_embed_jobs().trigger_run(
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
+    except Exception as entity_error:  # noqa: BLE001 — broker failure must not drop Catalog
+        try:
+            catalog_embed_jobs().trigger_run(
+                actor_user_id=actor_user_id,
+                actor_token_id=actor_token_id,
+            )
+        except Exception as catalog_error:  # noqa: BLE001 — keep the Entity failure visible
+            raise catalog_error from entity_error
+        raise
+    catalog_embed_jobs().trigger_run(
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+    )
 
 
 def get_embedding_runtime() -> EmbeddingRuntime | None:
@@ -536,10 +572,13 @@ def cleanup_purpose(
     if not state.closed and state.in_use_id:
         raise ModelServiceCleanupForbidden()
     jobs = catalog_embed_jobs()
-    if jobs.has_active():
+    entity_jobs = entity_embed_jobs()
+    if jobs.has_active() or entity_jobs.has_active():
         raise ModelServiceCleanupBusy()
     jobs.clear_index()
     jobs.clear_index_ready(rebuild_owed=False)
+    entity_jobs.clear_index()
+    entity_jobs.clear_index_ready(rebuild_owed=False)
     updated = store.save_purpose(
         replace(
             state,

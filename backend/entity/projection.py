@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import logging
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 
 from pgvector.sqlalchemy import VECTOR
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import ForeignKey, Integer, String, delete
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.admin.model_services import embed_texts, get_embedding_runtime
@@ -26,6 +27,17 @@ from backend.tags.api import (
     list_subject_ids,
     read_assignment,
 )
+
+logger = logging.getLogger(__name__)
+
+_after_drop: Callable[[str], None] | None = None
+
+
+def bind_entity_projection_drop_hook(hook: Callable[[str], None] | None) -> None:
+    """Register the asynchronous replacement enqueue. ``None`` clears it."""
+
+    global _after_drop
+    _after_drop = hook
 
 
 def definition_text(
@@ -170,9 +182,7 @@ def _save(record: EntityProjection) -> None:
         session.flush()
 
 
-def drop_entity_projection(entity_id: str) -> None:
-    """Forget the retained vector. Does not call the embedding endpoint."""
-
+def _delete_row(entity_id: str) -> None:
     if not _sql_backend():
         _rows.pop(entity_id, None)
         return
@@ -181,6 +191,48 @@ def drop_entity_projection(entity_id: str) -> None:
         if row is not None:
             session.delete(row)
             session.flush()
+
+
+def delete_entity_projection(entity_id: str) -> None:
+    """Forget the retained vector without enqueueing a replacement."""
+
+    _delete_row(entity_id)
+
+
+def clear_entity_projections() -> None:
+    """Delete every retained Entity vector. Does not enqueue a refill."""
+
+    if not _sql_backend():
+        _rows.clear()
+        return
+    with session_scope() as session:
+        session.execute(delete(EntityEmbeddingRow))
+        session.flush()
+
+
+def drop_entity_projection(entity_id: str) -> None:
+    """Forget the retained vector and enqueue its replacement. Does not call the model."""
+
+    _delete_row(entity_id)
+    hook = _after_drop
+    if hook is None:
+        return
+    try:
+        hook(entity_id)
+    except Exception:
+        logger.exception("entity embed enqueue failed entity_id=%s", entity_id)
+
+
+def serving_entity_ids() -> list[str]:
+    """Current serving targets, in stable id order."""
+
+    found = [
+        entity.id
+        for entity in get_entity_store().list_all_entities()
+        if _serving_head_id(entity.id) is not None
+    ]
+    found.sort()
+    return found
 
 
 def _drop_entities_using_tag(tag_id: str) -> None:
@@ -200,6 +252,7 @@ def retain_projection(
     generation: int,
     processing_contract: str,
     embedding: Sequence[float],
+    control_revision: int | None = None,
 ) -> EntityProjection | None:
     """Store a vector row when its head is the latest published head.
 
@@ -214,6 +267,12 @@ def retain_projection(
         return None
     runtime = get_embedding_runtime()
     if runtime is not None and generation != runtime.generation:
+        return None
+    if (
+        control_revision is not None
+        and runtime is not None
+        and control_revision != runtime.control_revision
+    ):
         return None
     existing = current_projection(entity_id)
     if existing is not None and generation < existing.generation:
@@ -230,7 +289,12 @@ def retain_projection(
     return saved
 
 
-def embed_entity(entity_id: str) -> EntityProjection:
+def embed_entity(
+    entity_id: str,
+    *,
+    expected_generation: int | None = None,
+    expected_control_revision: int | None = None,
+) -> EntityProjection:
     """Submit one serving entity's canonical text and retain the returned vector."""
 
     head_id = _serving_head_id(entity_id)
@@ -238,8 +302,19 @@ def embed_entity(entity_id: str) -> EntityProjection:
         raise EntityNotServing()
     text = canonical_text(entity_id)
     runtime = get_embedding_runtime()
-    generation = runtime.generation if runtime is not None else 0
-    result = embed_texts([text], expected_generation=generation)
+    generation = (
+        expected_generation
+        if expected_generation is not None
+        else (runtime.generation if runtime is not None else 0)
+    )
+    revision = expected_control_revision
+    if revision is None and runtime is not None:
+        revision = runtime.control_revision
+    result = embed_texts(
+        [text],
+        expected_generation=generation,
+        expected_control_revision=revision,
+    )
     saved = retain_projection(
         entity_id=entity_id,
         head_version_id=head_id,
@@ -247,6 +322,7 @@ def embed_entity(entity_id: str) -> EntityProjection:
         generation=result.space.generation,
         processing_contract=result.space.processing_contract,
         embedding=result.vectors[0],
+        control_revision=revision,
     )
     if saved is None:
         raise EntityNotServing()

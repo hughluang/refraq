@@ -19,6 +19,7 @@ from backend.entity.change_log import (
     list_effectives,
 )
 from backend.entity.ddl import qualified_table
+from backend.entity.kinds import KIND_EMBED
 from backend.entity.parameters import access_log_retention_days
 from backend.entity.entity_db import (
     get_entity_engine,
@@ -79,6 +80,12 @@ def init_worker_entity_pool() -> None:
 
 @shared_task(name="backend.entity.tasks.run_job")
 def run_job(job_id: str) -> dict[str, str]:
+    current = get_job_store().get(job_id)
+    if current is not None and current.kind == KIND_EMBED:
+        # Package init imports the schedule, which imports this module.
+        from backend.entity.embed_jobs.runner import run_entity_embed_job
+
+        return run_entity_embed_job(job_id)
     try:
         return supervise(job_id, "backend.entity.align:run_entity_table_job")
     except Exception as exc:  # noqa: BLE001

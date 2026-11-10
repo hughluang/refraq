@@ -138,6 +138,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.entity.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
+| `backend.entity.embed_jobs` | Site entity-embed schedule seed / run-now, active-job probe, index cleanup, and the Job runner bound into admin |
 | `backend.entity.tasks` | Job kind handler dispatch (`entity_reconcile`, `entity_table_drop`, `entity_access_views`), access-log retention purge, and the change-log retention purge that `backend.worker.tasks.purge_change_logs` runs; discovered by `worker`. Not registered on `metadata.tasks` |
 | `backend.entity.parameters` | Entity-owned System Parameter specs and typed accessors (`max_profile_combinations`, `access_log_retention_days`, `entity_query_timeout_sec`, `entity_query_max_rows`; groups `entity_access` and `entity`); collected by `worker.parameters` assembly |
 | `backend.entity.bootstrap` | Entity database bootstrap process entry (`python -m backend.entity.bootstrap`); uses `ENTITY_ADMIN_DATABASE_URL` only |

@@ -20,6 +20,8 @@ from backend.admin.model_services.schemas import (
     CatalogCoverageOut,
     CatalogIndexOut,
     EmbedScheduleOut,
+    EntityCoverageOut,
+    EntityIndexOut,
     ModelServiceCreateIn,
     ModelServiceList,
     ModelServiceOut,
@@ -28,7 +30,7 @@ from backend.admin.model_services.schemas import (
     ModelServiceTestOut,
     PurposeStateOut,
 )
-from backend.admin.model_services.ports import catalog_embed_jobs
+from backend.admin.model_services.ports import catalog_embed_jobs, entity_embed_jobs
 from backend.admin.model_services.service import (
     activate_service,
     cleanup_purpose,
@@ -66,8 +68,19 @@ def _out(record: ModelServiceRecord, *, in_use_id: str | None) -> ModelServiceOu
     )
 
 
+def _index_status_of(*, ready: bool, active: bool, latest: str | None) -> str:
+    if ready:
+        return "ready"
+    if active:
+        return "indexing"
+    if latest == "failed":
+        return "failed"
+    return "none"
+
+
 def _purpose_out(state: PurposeState) -> PurposeStateOut:
     jobs = catalog_embed_jobs()
+    entity_jobs = entity_embed_jobs()
     view = jobs.schedule_view()
     embed_schedule = None
     if view is not None:
@@ -80,6 +93,22 @@ def _purpose_out(state: PurposeState) -> PurposeStateOut:
         )
     index = jobs.index_view()
     status = index_status()
+    entity_view = entity_jobs.index_view()
+    entity_status = _index_status_of(
+        ready=entity_view.ready,
+        active=entity_jobs.has_active(),
+        latest=entity_jobs.latest_sweep_status(),
+    )
+    entity_schedule = entity_jobs.schedule_view()
+    entity_schedule_out = None
+    if entity_schedule is not None:
+        entity_schedule_out = EmbedScheduleOut(
+            id=entity_schedule.id,
+            enabled=entity_schedule.enabled,
+            cron=entity_schedule.cron,
+            interval_seconds=entity_schedule.interval_seconds,
+            next_run_at=entity_schedule.next_run_at,
+        )
     return PurposeStateOut(
         purpose=state.purpose,
         closed=state.closed,
@@ -103,6 +132,20 @@ def _purpose_out(state: PurposeState) -> PurposeStateOut:
             progress=index.progress,
             failure_summary=index.failure_summary,
             rebuild_owed=index.rebuild_owed,
+        ),
+        entity_index=EntityIndexOut(
+            ready=entity_view.ready,
+            generation=entity_view.generation,
+            index_status=entity_status,  # type: ignore[arg-type]
+            coverage=EntityCoverageOut(
+                written=entity_view.written,
+                failed=entity_view.failed,
+                attempted=entity_view.attempted,
+            ),
+            progress=entity_view.progress,
+            failure_summary=entity_view.failure_summary,
+            schedule=entity_schedule_out,
+            rebuild_owed=entity_view.rebuild_owed,
         ),
         embed_schedule=embed_schedule,
     )

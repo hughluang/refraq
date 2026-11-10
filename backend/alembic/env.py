@@ -14,6 +14,7 @@ import backend.jobs.models  # noqa: F401 — register Job tables
 import backend.metadata.models  # noqa: F401 — register Source/Catalog tables
 import backend.entity.models  # noqa: F401 — register Business Entity tables
 import backend.entity.projection  # noqa: F401 — register Entity embedding table
+import backend.entity.embed_jobs.index_state  # noqa: F401 — register Entity index state
 import backend.entity.access.models  # noqa: F401 — register Entity access policy tables
 import backend.channel.models  # noqa: F401 — register Data Channel tables
 import backend.tags.models  # noqa: F401 — register Tag tables

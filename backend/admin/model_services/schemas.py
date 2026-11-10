@@ -68,6 +68,25 @@ class CatalogCoverageOut(BaseModel):
     columns_attempted: int
 
 
+class EntityCoverageOut(BaseModel):
+    written: int
+    failed: int
+    attempted: int
+
+
+class EntityIndexOut(BaseModel):
+    """Entity index. Ready does not mean every incremental target is present."""
+
+    ready: bool
+    generation: int | None
+    index_status: IndexStatus
+    coverage: EntityCoverageOut
+    progress: str | None = None
+    failure_summary: str | None = None
+    schedule: EmbedScheduleOut | None = None
+    rebuild_owed: bool
+
+
 class CatalogIndexOut(BaseModel):
     """Catalog index. Absent Entity status is not this object."""
 
@@ -89,6 +108,7 @@ class PurposeStateOut(BaseModel):
     control_revision: int
     index_status: IndexStatus
     catalog_index: CatalogIndexOut
+    entity_index: EntityIndexOut
     embed_schedule: EmbedScheduleOut | None = None
 
 

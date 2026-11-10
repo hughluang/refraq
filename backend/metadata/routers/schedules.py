@@ -12,7 +12,8 @@ from backend.core.pagination import PageParams, page_params
 from backend.core.time import Instant
 from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.schemas.jobs import JobListResponse, JobResponse
-from backend.jobs.store import JobStatus
+from backend.admin.model_services.ports import entity_embed_jobs, entity_embed_owns
+from backend.jobs.store import JobStatus, get_job_store
 from backend.metadata.catalog_embed_jobs.schedule import (
     is_catalog_embed_schedule,
     run_catalog_embed_schedule_now,
@@ -109,7 +110,16 @@ def run_source_schedule(
     require_stamped_schedule_mutable(user.id, record)
     record = require_runnable_schedule(schedule_id)
     actor_token_id = get_actor_token_id(request)
-    if is_catalog_embed_schedule(record):
+    if entity_embed_owns(record.key):
+        job_id = entity_embed_jobs().trigger_run(
+            actor_user_id=user.id,
+            actor_token_id=actor_token_id,
+        )
+        found = get_job_store().get(job_id)
+        if found is None:
+            raise RuntimeError("entity embed job missing after run-now")
+        job = found
+    elif is_catalog_embed_schedule(record):
         job = run_catalog_embed_schedule_now(
             actor_user_id=user.id,
             actor_token_id=actor_token_id,

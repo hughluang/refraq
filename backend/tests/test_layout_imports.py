@@ -79,6 +79,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
     "entity": frozenset(
         {
             "entity.errors",
+            "entity.embed_jobs",
             "entity.tasks",
             "entity.parameters",
             "entity.dictionaries.active_codes",

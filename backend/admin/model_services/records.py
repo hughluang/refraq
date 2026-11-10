@@ -63,6 +63,20 @@ class CatalogIndexView:
 
 
 @dataclass(frozen=True)
+class EntityIndexView:
+    """Entity-owned index. Ready here is not Catalog readiness."""
+
+    ready: bool = False
+    generation: int | None = None
+    written: int = 0
+    failed: int = 0
+    attempted: int = 0
+    progress: str | None = None
+    failure_summary: str | None = None
+    rebuild_owed: bool = False
+
+
+@dataclass(frozen=True)
 class EmbeddingRuntime:
     service_id: str
     url: str

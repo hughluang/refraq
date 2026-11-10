@@ -44,7 +44,10 @@ from backend.admin.routers.account import router as account_router
 from backend.admin.routers.audit import router as audit_router
 from backend.admin.routers.auth import router as auth_router_instance
 from backend.admin.branding.router import router as branding_router
-from backend.admin.model_services import bind_catalog_embed_jobs
+from backend.admin.model_services import (
+    bind_catalog_embed_jobs,
+    bind_entity_embed_jobs,
+)
 from backend.admin.model_services.router import router as model_services_router
 from backend.admin.routers.console import router as console_router
 from backend.admin.routers.roles import router as roles_router
@@ -61,6 +64,7 @@ from backend.admin.subjects.router import (
 from backend.jobs.api import bind_schedule_name_store
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
 from backend.metadata.catalog_embed_jobs import CatalogEmbedJobs
+from backend.entity.embed_jobs import EntityEmbedJobs
 from backend.worker.routers.schedules import router as schedules_mechanism_router
 from backend.worker.schedules import get_schedule_store
 from backend.metadata.routers.mcp import router as metadata_mcp_router
@@ -101,6 +105,7 @@ from backend.entity.publish_confirmation import bind_write_target_port
 from backend.entity.subject_displays import entity_subject_displays
 from backend.tags.subjects import bind_subject_display_port
 from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
+from backend.entity.embed_jobs.schedule import ensure_entity_embed_schedule
 from backend.worker.api import ensure_system_schedules
 from backend.worker.parameters import assemble_system_parameters
 
@@ -108,6 +113,7 @@ from backend.worker.parameters import assemble_system_parameters
 # Composition injects the Scheduled Task name adapter so jobs never imports worker.
 bind_schedule_name_store(get_schedule_store)
 bind_catalog_embed_jobs(CatalogEmbedJobs())
+bind_entity_embed_jobs(EntityEmbedJobs())
 # Composition injects Dictionary codes so admin never imports entity.
 bind_dictionary_codes(DictionaryActiveCodes())
 # Composition injects Source Access so admin never imports metadata.
@@ -142,6 +148,7 @@ def _bootstrap_site(target_settings: Settings) -> None:
     assemble_system_parameters()
     ensure_system_schedules()
     ensure_catalog_embed_schedule()
+    ensure_entity_embed_schedule()
     if os.getenv("REFRAQ_SKIP_SEED") == "1":
         return
     roles = get_role_store()

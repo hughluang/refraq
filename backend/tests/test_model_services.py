@@ -17,15 +17,20 @@ os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 from backend.admin.audit_store import get_audit_store  # noqa: E402
 from backend.admin.model_services import (  # noqa: E402
     bind_catalog_embed_jobs,
+    bind_entity_embed_jobs,
     get_embedding_runtime,
     mark_embedding_ready,
 )
 from backend.admin.model_services.errors import ModelServiceTimeout  # noqa: E402
 from backend.admin.model_services.ports import (  # noqa: E402
     CatalogEmbedJobsPort,
+    EntityEmbedJobsPort,
     catalog_embed_jobs,
 )
-from backend.admin.model_services.records import CatalogIndexView  # noqa: E402
+from backend.admin.model_services.records import (  # noqa: E402
+    CatalogIndexView,
+    EntityIndexView,
+)
 from backend.admin.model_services.store import get_model_service_store  # noqa: E402
 from backend.admin.permissions import ALL_PERMISSIONS  # noqa: E402
 from backend.admin.role_store import MemoryRoleStore, get_role_store  # noqa: E402
@@ -56,6 +61,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
     reset_catalog_store,
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
+from backend.entity.embed_jobs import EntityEmbedJobs  # noqa: E402
 from backend.metadata.catalog_embed_jobs import CatalogEmbedJobs  # noqa: E402
 from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import (  # noqa: E402
@@ -159,12 +165,47 @@ class RecordingJobs(CatalogEmbedJobsPort):
         )
 
 
+class RecordingEntityJobs(EntityEmbedJobsPort):
+    """Keeps Catalog tests off the Entity sweep."""
+
+    def __init__(self) -> None:
+        self._index = EntityIndexView()
+
+    def owns_schedule(self, key: str) -> bool:
+        return False
+
+    def trigger_run(
+        self, *, actor_user_id: str, actor_token_id: str | None
+    ) -> str:
+        return "job_entity_recorded"
+
+    def has_active(self) -> bool:
+        return False
+
+    def clear_index(self) -> None:
+        return None
+
+    def latest_sweep_status(self) -> str | None:
+        return None
+
+    def schedule_view(self):
+        return None
+
+    def index_view(self) -> EntityIndexView:
+        return self._index
+
+    def clear_index_ready(self, *, rebuild_owed: bool) -> None:
+        self._index = replace(self._index, ready=False, rebuild_owed=rebuild_owed)
+
+
 @pytest.fixture
 def jobs() -> RecordingJobs:
     port = RecordingJobs()
     bind_catalog_embed_jobs(port)
+    bind_entity_embed_jobs(RecordingEntityJobs())
     yield port
     bind_catalog_embed_jobs(CatalogEmbedJobs())
+    bind_entity_embed_jobs(EntityEmbedJobs())
 
 
 @pytest.fixture
@@ -375,7 +416,8 @@ def test_catalog_index_ready_selects_vector_search(
     assert body["catalog_index"]["ready"] is False
     assert body["catalog_index"]["generation_last_swept"] is None
     assert body["catalog_index"]["rebuild_owed"] is True
-    assert "entity_index" not in body
+    assert body["entity_index"]["ready"] is False
+    assert body["entity_index"]["rebuild_owed"] is True
 
     mark_embedding_ready(
         purpose="embedding", service_id=created["id"], generation=1, control_revision=1
@@ -400,7 +442,7 @@ def test_catalog_index_ready_selects_vector_search(
     assert shown["catalog_index"]["generation_last_swept"] == 1
     assert shown["catalog_index"]["rebuild_owed"] is False
     assert shown["catalog_index"]["index_status"] == "ready"
-    assert "entity_index" not in shown
+    assert shown["entity_index"]["ready"] is False
 
     def _boom(_texts: list[str]) -> list[list[float]]:
         raise RuntimeError("embed down")
