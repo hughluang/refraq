@@ -1,10 +1,11 @@
 """Entity-database SQL for Entity Data API action verbs.
 
 A ``row_id`` page executes the profile view's query text with the page bound in
-one block, on the reader connection. A row-dependent profile with a non-leakproof
-filter still selects the security_barrier view. Writes run on the owner connection
-against the physical table and return only ``row_id``; the caller presents written
-rows through its read view.
+one block, on the reader connection. Under that same condition, an offset total
+counts that view text. A row-dependent profile with a non-leakproof filter still
+selects the security_barrier view, and its total counts that view. Writes run on
+the owner connection against the physical table and return only ``row_id``; the
+caller presents written rows through its read view.
 """
 
 from __future__ import annotations
@@ -575,9 +576,12 @@ def query_offset(
         items = [decode_row(fields, tuple(row), target) for row in rows]
     total: int | None = None
     if include_total:
-        where_sql, params = _where(compiled)
-        count_sql = f"SELECT count(*) FROM {_read_from(target)}{where_sql}"
-        total = int(conn.execute(text(count_sql), params).scalar_one())
+        if _page_through_profile(filters, target, row_dependent):
+            total = _profile_count(conn, target, filters)
+        else:
+            where_sql, params = _where(compiled)
+            count_sql = f"SELECT count(*) FROM {_read_from(target)}{where_sql}"
+            total = int(conn.execute(text(count_sql), params).scalar_one())
     return items, total
 
 
@@ -632,6 +636,22 @@ def query_keyset(
 
 def _page_through_profile(filters: Any, target: HeadTarget, row_dependent: bool) -> bool:
     return not row_dependent or filter_is_leakproof(filters, target)
+
+
+def _profile_count(conn: Connection, target: HeadTarget, filters: Any) -> int:
+    """Count the view text. The reader passes the view and a filter, not SQL."""
+    sql = (
+        f"SELECT {qualified_table(ENTITY_ACCESS_SCHEMA, 'profile_count')}("
+        "CAST(:_view AS regclass), CAST(:_filter AS jsonb))"
+    )
+    value = conn.execute(
+        text(sql),
+        {
+            "_view": _read_from(target),
+            "_filter": None if not filters else json.dumps(filters),
+        },
+    ).scalar_one()
+    return int(value)
 
 
 def _profile_page_rows(

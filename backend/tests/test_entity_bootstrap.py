@@ -124,8 +124,16 @@ def test_profile_page_is_definer_and_granted_only_to_the_reader() -> None:
     ]
     assert len(granted) == 1
     assert READER_ROLE in granted[0]
+    granted_count = [
+        stmt
+        for stmt in sql
+        if stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_count(")
+    ]
+    assert len(granted_count) == 1
+    assert READER_ROLE in granted_count[0]
     assert not any(
         stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_page_sql")
+        or stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_count_sql")
         or stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_filter")
         for stmt in sql
     )

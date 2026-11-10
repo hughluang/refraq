@@ -802,6 +802,90 @@ $fn$
 """.strip()
 
 
+_PROFILE_COUNT_SQL_FN = """
+CREATE OR REPLACE FUNCTION entity_access.profile_count_sql(
+  p_view regclass,
+  p_filter jsonb
+) RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+  kind "char";
+  nsp text;
+  rel_owner text;
+  def text;
+  filt text;
+  where_sql text := '';
+  skip_filter boolean;
+BEGIN
+  SELECT c.relkind, n.nspname, r.rolname
+    INTO kind, nsp, rel_owner
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_catalog.pg_roles r ON r.oid = c.relowner
+  WHERE c.oid = p_view;
+  IF kind IS DISTINCT FROM 'v'
+     OR nsp IS DISTINCT FROM 'entity_access'
+     OR rel_owner IS DISTINCT FROM 'refraq_exposure_owner' THEN
+    RAISE EXCEPTION 'count view is not an exposure profile' USING ERRCODE = '42501';
+  END IF;
+  IF NOT pg_catalog.has_table_privilege(session_user, p_view, 'SELECT') THEN
+    RAISE EXCEPTION 'count view is not selectable' USING ERRCODE = '42501';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_attribute a
+    WHERE a.attrelid = p_view AND a.attname = 'row_id' AND a.attnum > 0 AND NOT a.attisdropped
+  ) THEN
+    RAISE EXCEPTION 'count view has no row_id' USING ERRCODE = '22023';
+  END IF;
+  def := btrim(pg_catalog.pg_get_viewdef(p_view, true));
+  def := regexp_replace(def, ';[[:space:]]*$', '');
+  skip_filter := p_filter IS NULL
+    OR jsonb_typeof(p_filter) = 'null'
+    OR p_filter = '{}'::jsonb;
+  IF NOT skip_filter THEN
+    SELECT f.sql INTO filt
+    FROM entity_access.profile_filter(p_view, p_filter, ARRAY[]::text[], 1) AS f;
+    where_sql := ' WHERE ' || filt;
+  END IF;
+  RETURN 'SELECT count(*) FROM (' || def || ') AS page' || where_sql;
+END
+$fn$
+""".strip()
+
+
+_PROFILE_COUNT_FN = """
+CREATE OR REPLACE FUNCTION entity_access.profile_count(
+  p_view regclass,
+  p_filter jsonb
+) RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+SET row_security = on
+AS $fn$
+DECLARE
+  query text;
+  skip_filter boolean;
+  n bigint;
+BEGIN
+  query := entity_access.profile_count_sql(p_view, p_filter);
+  skip_filter := p_filter IS NULL
+    OR jsonb_typeof(p_filter) = 'null'
+    OR p_filter = '{}'::jsonb;
+  IF skip_filter THEN
+    EXECUTE query INTO n;
+  ELSE
+    EXECUTE query INTO n USING p_filter;
+  END IF;
+  RETURN n;
+END
+$fn$
+""".strip()
+
+
 def profile_page_statements() -> list[str]:
     """Exposure-owner page function. The reader passes a view, not a SQL string."""
     body = (
@@ -816,8 +900,10 @@ def profile_page_statements() -> list[str]:
         "entity_access.profile_filter(regclass, jsonb, text[], integer)",
         "entity_access.profile_page_sql(regclass, text[], integer, integer, bigint, jsonb)",
         "entity_access.profile_page(regclass, text[], integer, integer, bigint, jsonb)",
+        "entity_access.profile_count_sql(regclass, jsonb)",
+        "entity_access.profile_count(regclass, jsonb)",
     )
-    statements = [body, sql_fn, _PROFILE_PAGE_FN]
+    statements = [body, sql_fn, _PROFILE_PAGE_FN, _PROFILE_COUNT_SQL_FN, _PROFILE_COUNT_FN]
     for signature in signatures:
         statements.append(f"ALTER FUNCTION {signature} OWNER TO {exposure}")
         statements.append(f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC")
@@ -831,8 +917,16 @@ def profile_page_statements() -> list[str]:
         f"FROM {reader}"
     )
     statements.append(
+        "REVOKE ALL ON FUNCTION entity_access.profile_count_sql(regclass, jsonb) "
+        f"FROM {reader}"
+    )
+    statements.append(
         "GRANT EXECUTE ON FUNCTION entity_access.profile_page"
         "(regclass, text[], integer, integer, bigint, jsonb) "
+        f"TO {reader}"
+    )
+    statements.append(
+        "GRANT EXECUTE ON FUNCTION entity_access.profile_count(regclass, jsonb) "
         f"TO {reader}"
     )
     return statements

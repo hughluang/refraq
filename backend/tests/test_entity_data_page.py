@@ -7,13 +7,70 @@ from datetime import datetime, timezone
 
 from backend.entity.access.compiler import Shape, predicate_depends_on_row
 from backend.entity.access.facts import GrantSpec
-from backend.entity.data.filters import filter_is_leakproof
+from backend.entity.data.filters import CompiledFilter, filter_is_leakproof
+from backend.entity.data.sql import query_offset
 from backend.entity.data.head import HeadTarget
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,
     EntityVersionRecord,
 )
+
+
+class _Result:
+    def all(self) -> list[object]:
+        return []
+
+    def scalar_one(self) -> int:
+        return 0
+
+
+class _Recording:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, statement: object, params: object = None) -> _Result:
+        self.statements.append(str(statement))
+        return _Result()
+
+
+def test_offset_total_uses_the_same_inline_gate() -> None:
+    target = _target()
+    open_conn = _Recording()
+    query_offset(
+        open_conn,  # type: ignore[arg-type]
+        target,
+        fields=["row_id"],
+        compiled=None,
+        filters=None,
+        row_dependent=False,
+        limit=2,
+        offset=0,
+        include_total=True,
+    )
+    open_sql = "\n".join(open_conn.statements)
+    assert '"profile_page"' in open_sql
+    assert '"profile_count"' in open_sql
+    assert not any(sql.startswith("SELECT count(*) FROM") for sql in open_conn.statements)
+
+    closed_conn = _Recording()
+    query_offset(
+        closed_conn,  # type: ignore[arg-type]
+        target,
+        fields=["row_id"],
+        compiled=CompiledFilter(sql=" AND (sku ILIKE :p0)", params={"p0": "%a%"}),
+        filters={"field": "sku", "op": "contains", "value": "a"},
+        row_dependent=True,
+        limit=2,
+        offset=0,
+        include_total=True,
+    )
+    counts = [
+        sql for sql in closed_conn.statements if sql.startswith("SELECT count(*) FROM")
+    ]
+    assert len(counts) == 1
+    assert '"entity_access"."widget_v"' in counts[0]
+    assert "profile_count" not in counts[0]
 
 
 def test_row_rule_marks_the_predicate_row_dependent() -> None:

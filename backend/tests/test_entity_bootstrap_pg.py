@@ -450,7 +450,18 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
                 ).scalars()
             )
             assert "Sort" in barrier, barrier
+            counted = "\n".join(
+                conn.execute(
+                    text(
+                        "EXPLAIN (VERBOSE) SELECT count(*) "
+                        "FROM entity_access.page_probe"
+                    )
+                ).scalars()
+            )
+            assert "NULL::bigint" in counted, counted
+            assert "NULL::text" in counted, counted
             page = _read_page(conn, limit=2, offset=0, after=None, filt=None)
+            assert _read_count(conn, filt=None) == 3
             assert page == [10, 30]
             assert _read_page(conn, limit=2, offset=0, after=10, filt=None) == [30, 40]
             assert _read_page(
@@ -472,6 +483,7 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
                 text("SELECT set_config('app.ctx', :token, true)"), {"token": forged}
             )
             assert _read_page(conn, limit=5, offset=0, after=None, filt=None) == []
+            assert _read_count(conn, filt=None) == 0
         with reader.connect() as conn:
             with pytest.raises(DataError, match="not an identifier"):
                 conn.execute(
@@ -503,12 +515,28 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
                     )
                 )
             conn.rollback()
+            with pytest.raises(ProgrammingError, match="not an exposure profile"):
+                conn.execute(
+                    text(
+                        "SELECT entity_access.profile_count("
+                        "'entity_access.page_foreign'::regclass, NULL)"
+                    )
+                )
+            conn.rollback()
             with pytest.raises(ProgrammingError, match="permission denied"):
                 conn.execute(
                     text(
                         "SELECT entity_access.profile_page_sql("
                         "'entity_access.page_probe'::regclass, ARRAY['row_id'], "
                         "2, 0, NULL, NULL)"
+                    )
+                )
+            conn.rollback()
+            with pytest.raises(ProgrammingError, match="permission denied"):
+                conn.execute(
+                    text(
+                        "SELECT entity_access.profile_count_sql("
+                        "'entity_access.page_probe'::regclass, NULL)"
                     )
                 )
             conn.rollback()
@@ -531,6 +559,19 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
             plan = "\n".join(conn.execute(text("EXPLAIN " + page_sql)).scalars())
             assert "Index" in plan, plan
             assert "Sort" not in plan, plan
+            count_sql = conn.execute(
+                text(
+                    "SELECT entity_access.profile_count_sql("
+                    "'entity_access.page_probe'::regclass, NULL)"
+                )
+            ).scalar_one()
+            assert "count(*)" in count_sql
+            assert "entity_data" in count_sql
+            assert ";" not in count_sql
+            count_plan = "\n".join(
+                conn.execute(text("EXPLAIN (VERBOSE) " + count_sql)).scalars()
+            )
+            assert "NULL::text" not in count_plan, count_plan
             count = conn.execute(
                 text("SELECT count(*) FROM entity_data.page_probe")
             ).scalar_one()
@@ -538,6 +579,17 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
     finally:
         reader.dispose()
         admin.dispose()
+
+
+def _read_count(conn: Connection, *, filt: str | None) -> int:
+    value = conn.execute(
+        text(
+            "SELECT entity_access.profile_count("
+            "CAST(:view AS regclass), CAST(:filt AS jsonb))"
+        ),
+        {"view": "entity_access.page_probe", "filt": filt},
+    ).scalar_one()
+    return int(value)
 
 
 def _read_page(
