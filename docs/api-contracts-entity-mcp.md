@@ -170,7 +170,7 @@ Result: `{ "row": <Entity Data API get object> }`.
 
 Arguments: `table_name`, and the Entity Data API query fields `filters`, `fields`, `limit`, `offset`, `include_total`, `after_row_id`. A null optional field is omitted, so an omitted `after_row_id` stays offset mode. JSON `null` for `after_row_id` is the first keyset page. `after_row_id` together with `offset` or `include_total` is `REQUEST_INVALID`.
 
-`limit` defaults to 50 and must be an integer from 1 through 200. `offset` must be an integer from 0 through 10000. A value outside that range is `REQUEST_INVALID`. These tools do not clamp it.
+`limit` defaults to 50 and must be an integer from 1 through 200. `offset` must be an integer >= 0 and has no maximum. A `limit` outside that range, or an `offset` that is not an integer >= 0, is `REQUEST_INVALID`. These tools do not clamp either value.
 
 The result is the Entity Data envelope unchanged: offset mode `{ "items", "total", "limit", "offset" }`, or keyset mode `{ "items", "limit", "next_after_row_id" }` (`docs/api-contracts-entity-data.md` §7).
 

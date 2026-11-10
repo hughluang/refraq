@@ -64,8 +64,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "total, limit, and offset. Pass after_row_id, including null, for "
         "a keyset page of items, limit, and next_after_row_id; do not "
         "combine it with offset or include_total. limit defaults to 50 "
-        "and must be <= 200. offset must be <= 10000. Out-of-range limits "
-        "are REQUEST_INVALID and are not clamped. Unknown and unreadable "
+        "and must be <= 200. offset is an integer >= 0 and has no maximum. "
+        "Out-of-range limits are REQUEST_INVALID and are not clamped. "
+        "Unknown and unreadable "
         "table_name values fail the same way. Does not accept narrow. "
         "Requires entity:data_read."
     ),

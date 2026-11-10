@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from backend.entity.data.capabilities import (
-    OFFSET_MAX,
     PAGE_LIMIT_DEFAULT,
     PAGE_LIMIT_MAX,
 )
@@ -35,8 +34,6 @@ def resolve_offset_query(body: dict[str, Any]) -> tuple[int, int, bool]:
         offset_raw = 0
     if isinstance(offset_raw, bool) or not isinstance(offset_raw, int) or offset_raw < 0:
         raise EntityRequestInvalid("offset must be an integer >= 0")
-    if offset_raw > OFFSET_MAX:
-        raise EntityRequestInvalid(f"offset must be <= {OFFSET_MAX}")
     include_total = body.get("include_total", True)
     if not isinstance(include_total, bool):
         raise EntityRequestInvalid("include_total must be a boolean")

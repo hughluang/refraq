@@ -161,7 +161,6 @@ Schema is read-only metadata plus Dictionary; it does not open an entity-databas
   "limits": {
     "page_limit_default": 50,
     "page_limit_max": 200,
-    "offset_max": 10000,
     "filter_leaves_max": 20,
     "filter_depth_max": 8,
     "filter_in_values_max": 1000,
@@ -221,7 +220,7 @@ Stable order is `row_id ASC`. Mode is decided by whether the body contains the t
 | Offset (no `after_row_id` key) | `filters?`, `fields?`, `limit?`, `offset?`, `include_total?` | **Offset Page** `{ "items", "total", "limit", "offset" }`. `include_total` defaults to **true**. `false` → `total: null` and skip `COUNT` |
 | Keyset (key `after_row_id` present) | `filters?`, `fields?`, `limit?`, `after_row_id` (`null` = first page; integer = exclusive lower bound) | **Entity Data Keyset Page** `{ "items", "limit", "next_after_row_id" }`. Implementation fetches `limit + 1` to probe |
 
-Bulkheads: `limit` default 50, max 200; `offset` max 10000. Empty `filters` is allowed. Wide filters with exact `total`, or `contains`, may hit `504 PLATFORM_TIMEOUT` on large tables. Offset cannot walk an entire 10M-row table. Entity Data Keyset Page is not the platform **Cursor Page** and not a serving opaque cursor (`docs/conventions-pagination.md`).
+Bulkheads: `limit` default 50, max 200. `offset` is an integer >= 0 and has no maximum. Empty `filters` is allowed. Wide filters with exact `total`, or `contains`, may hit `504 PLATFORM_TIMEOUT` on large tables. A large `offset` may also hit that timeout. Entity Data Keyset Page is not the platform **Cursor Page** and not a serving opaque cursor (`docs/conventions-pagination.md`).
 
 ## 8. Filters
 

@@ -26,7 +26,6 @@ from backend.entity.data.capabilities import (
     FILTER_DEPTH_MAX,
     FILTER_IN_VALUES_MAX,
     FILTER_LEAVES_MAX,
-    OFFSET_MAX,
     PAGE_LIMIT_MAX,
 )
 from backend.entity.ddl import (
@@ -698,7 +697,7 @@ BEGIN
   IF p_limit IS NULL OR p_limit < 1 OR p_limit > __LIMIT_CAP__ THEN
     RAISE EXCEPTION 'page limit out of range' USING ERRCODE = '22023';
   END IF;
-  IF p_offset IS NULL OR p_offset < 0 OR p_offset > __OFFSET_CAP__ THEN
+  IF p_offset IS NULL OR p_offset < 0 THEN
     RAISE EXCEPTION 'page offset out of range' USING ERRCODE = '22023';
   END IF;
   IF p_after IS NOT NULL AND p_after < 1 THEN
@@ -810,10 +809,7 @@ def profile_page_statements() -> list[str]:
         .replace("__LEAVES_CAP__", str(FILTER_LEAVES_MAX))
         .replace("__IN_CAP__", str(FILTER_IN_VALUES_MAX))
     )
-    sql_fn = (
-        _PROFILE_PAGE_SQL_FN.replace("__LIMIT_CAP__", str(_PROFILE_PAGE_LIMIT))
-        .replace("__OFFSET_CAP__", str(OFFSET_MAX))
-    )
+    sql_fn = _PROFILE_PAGE_SQL_FN.replace("__LIMIT_CAP__", str(_PROFILE_PAGE_LIMIT))
     exposure = ident(EXPOSURE_OWNER_ROLE)
     reader = ident(READER_ROLE)
     signatures = (

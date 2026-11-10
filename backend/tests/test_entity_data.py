@@ -324,6 +324,59 @@ def test_create_get_update_delete_query_and_upsert(data_client) -> None:
     assert client.post(f"/entities/{stem}/get", json={"row_id": row_id}).status_code == 404
 
 
+def test_last_and_previous_pages_use_offset_from_total(data_client) -> None:
+    client, stem, _physical, _entity_id = data_client
+    created = client.post(
+        f"/entities/{stem}/create-many",
+        json={
+            "items": [
+                {"values": {"sku": f"P{index}", "flag": True}} for index in range(1, 6)
+            ]
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    listed = client.post(f"/entities/{stem}/query", json={"limit": 50, "offset": 0})
+    assert listed.status_code == 200, listed.text
+    page = listed.json()
+    ordered = [item["sku"] for item in page["items"]]
+    total = page["total"]
+    assert total == 5
+    limit = 2
+    page_count = (total + limit - 1) // limit
+    last_offset = (page_count - 1) * limit
+    previous_offset = (page_count - 2) * limit
+
+    last = client.post(
+        f"/entities/{stem}/query",
+        json={"limit": limit, "offset": last_offset},
+    )
+    assert last.status_code == 200, last.text
+    assert last.json()["offset"] == last_offset
+    assert last.json()["total"] == total
+    assert [item["sku"] for item in last.json()["items"]] == ordered[
+        last_offset : last_offset + limit
+    ]
+
+    previous = client.post(
+        f"/entities/{stem}/query",
+        json={"limit": limit, "offset": previous_offset},
+    )
+    assert previous.status_code == 200, previous.text
+    assert [item["sku"] for item in previous.json()["items"]] == ordered[
+        previous_offset : previous_offset + limit
+    ]
+
+    deep = client.post(
+        f"/entities/{stem}/query",
+        json={"limit": limit, "offset": 10001},
+    )
+    assert deep.status_code == 200, deep.text
+    assert deep.json()["items"] == []
+    assert deep.json()["total"] == total
+    assert deep.json()["offset"] == 10001
+
+
 def test_business_key_addressing_reference_and_upsert_default(data_client) -> None:
     client, _stem, _physical, _entity_id = data_client
     from backend.entity.ids import new_entity_id, new_version_id

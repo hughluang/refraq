@@ -25,7 +25,6 @@ from backend.entity.data.capabilities import (  # noqa: E402
     FILTER_DEPTH_MAX,
     FILTER_IN_VALUES_MAX,
     FILTER_LEAVES_MAX,
-    OFFSET_MAX,
     PAGE_LIMIT_DEFAULT,
     PAGE_LIMIT_MAX,
     ROW_WRITE_LIMIT,
@@ -149,7 +148,6 @@ def test_schema_returns_head_metadata_and_shared_limits(client: TestClient) -> N
     assert body["limits"] == {
         "page_limit_default": PAGE_LIMIT_DEFAULT,
         "page_limit_max": PAGE_LIMIT_MAX,
-        "offset_max": OFFSET_MAX,
         "filter_leaves_max": FILTER_LEAVES_MAX,
         "filter_depth_max": FILTER_DEPTH_MAX,
         "filter_in_values_max": FILTER_IN_VALUES_MAX,

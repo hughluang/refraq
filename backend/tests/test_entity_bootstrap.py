@@ -15,7 +15,7 @@ from backend.entity.bootstrap import (
     schema_statements,
     secure_existing_table_statements,
 )
-from backend.entity.data.capabilities import OFFSET_MAX, PAGE_LIMIT_MAX
+from backend.entity.data.capabilities import PAGE_LIMIT_MAX
 from backend.entity.ddl import (
     ACL_OWNER_ROLE,
     ENTITY_OWNER_ROLE,
@@ -115,7 +115,8 @@ def test_profile_page_is_definer_and_granted_only_to_the_reader() -> None:
     assert "search_path = pg_catalog, pg_temp" in text
     assert f'OWNER TO "{EXPOSURE_OWNER_ROLE}"' in text
     assert f"p_limit > {PAGE_LIMIT_MAX + 1}" in text
-    assert f"p_offset > {OFFSET_MAX}" in text
+    assert "p_offset < 0" in text
+    assert "p_offset >" not in text
     granted = [
         stmt
         for stmt in sql

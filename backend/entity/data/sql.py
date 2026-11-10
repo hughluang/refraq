@@ -22,7 +22,7 @@ from backend.core.config import get_settings
 from backend.core.db import map_platform_db_error
 from backend.core.errors import PlatformCapacityExceeded
 from backend.entity.attribute_type import resolve
-from backend.entity.data.capabilities import OFFSET_MAX, PAGE_LIMIT_MAX, ROW_WRITE_LIMIT
+from backend.entity.data.capabilities import PAGE_LIMIT_MAX, ROW_WRITE_LIMIT
 from backend.entity.data.filters import CompiledFilter, filter_is_leakproof
 from backend.entity.data.head import HeadTarget
 from backend.entity.data.values import decode_row, reference_value_attr
@@ -662,8 +662,6 @@ def _profile_page_rows(
     remaining = limit
     while remaining:
         take = min(_PROFILE_PAGE_LIMIT, remaining)
-        if cursor > OFFSET_MAX:
-            raise EntityRowInvalid()
         batch = _profile_page_once(
             conn,
             target,

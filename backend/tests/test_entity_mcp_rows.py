@@ -209,20 +209,22 @@ def test_query_rows_rejects_limits_outside_the_data_api(
         "error": {"code": "REQUEST_INVALID", "message": "limit must be <= 200"}
     }
     assert "items" not in over_limit
-    over_offset = _call(query_rows, secret, table_name="material", offset=10001)
-    assert over_offset == {
-        "error": {"code": "REQUEST_INVALID", "message": "offset must be <= 10000"}
-    }
     logs = [
         item
         for item in get_access_store().logs_for_entity(entity_id)
         if item.verb == "query"
     ]
-    assert [item.outcome_code for item in logs] == [
-        "REQUEST_INVALID",
-        "REQUEST_INVALID",
-    ]
+    assert [item.outcome_code for item in logs] == ["REQUEST_INVALID"]
     assert {item.pat_id for item in logs} == {token_id}
+
+
+def test_query_offset_has_no_maximum() -> None:
+    from backend.entity.data.paging import resolve_offset_query
+    from backend.entity.errors import EntityRequestInvalid
+
+    assert resolve_offset_query({"offset": 10001, "limit": 50}) == (50, 10001, True)
+    with pytest.raises(EntityRequestInvalid, match="offset must be an integer >= 0"):
+        resolve_offset_query({"offset": -1})
 
 
 def test_get_row_and_query_rows_log_the_calling_request_id(client: TestClient) -> None:
