@@ -6,7 +6,7 @@ from typing import Any
 
 from backend.admin.user_store import UserRecord
 from backend.core.pagination import PageBounds
-from backend.entity.access.compiler import compile_policy, subject_outcome
+from backend.entity.access.compiler import compile_decisions, subject_outcome
 from backend.entity.access.facts import Person
 from backend.entity.access.membership import person_of, readable_entity_ids
 from backend.entity.access.plan import head_from, load_policy
@@ -152,7 +152,7 @@ def _read_shape_names(entity_id: str, person: Person) -> set[str] | None:
     head = head_from(entity, version)
     revision = get_access_store().revision(entity_id)
     policy = load_policy(head, revision, people=(person,))
-    compiled = compile_policy(policy)
+    compiled = compile_decisions(policy)
     outcome = subject_outcome(
         compiled, policy, person, action="read", narrow=None
     )

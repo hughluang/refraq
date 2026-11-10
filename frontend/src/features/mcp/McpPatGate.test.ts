@@ -158,7 +158,7 @@ describe("MCP PAT identity gate", () => {
     const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
     render(shell(createElement(Layout, null, createElement(McpMetadataDetail))));
 
-    const input = screen.getByLabelText("User PAT") as HTMLInputElement;
+    const input = screen.getByLabelText("Personal access token") as HTMLInputElement;
     expect(input.type).toBe("password");
     expect(input.value).toBe("");
     expect(input.autocomplete).toBe("off");
@@ -167,7 +167,7 @@ describe("MCP PAT identity gate", () => {
     pathname.current = "/console/mcp/entity";
     const { McpEntityDetail } = await import("@/features/mcp/McpEntityDetail");
     render(shell(createElement(Layout, null, createElement(McpEntityDetail))));
-    const entityInput = screen.getByLabelText("User PAT") as HTMLInputElement;
+    const entityInput = screen.getByLabelText("Personal access token") as HTMLInputElement;
     expect(entityInput.type).toBe("password");
     expect(entityInput.value).toBe("");
     expect(entityInput.autocomplete).toBe("off");
@@ -201,18 +201,18 @@ describe("MCP PAT identity gate", () => {
 
     expect(
       screen.getByText(
-        "Verification calls GET /auth/me and records last use of this User PAT.",
+        "Verification calls GET /auth/me and records last use of this personal access token.",
       ),
     ).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/side-effect free/i);
     expect(screen.queryByText("Selected endpoint /mcp")).toBeNull();
 
     const before = authMeCalls().length;
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-    fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 
     expect(
-      await screen.findByText("This User PAT belongs to the signed-in user. user-a"),
+      await screen.findByText("This personal access token belongs to the signed-in user. user-a"),
     ).toBeTruthy();
     expect(screen.getByText("Selected endpoint /mcp")).toBeTruthy();
     expect(document.body.textContent).not.toContain("Pat Owner");
@@ -270,10 +270,10 @@ describe("MCP PAT identity gate", () => {
     render(shell(createElement(Layout, null, createElement(McpMetadataDetail))));
 
     const before = vi.mocked(fetch).mock.calls.length;
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-    fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 
-    expect(await screen.findByText("This User PAT belongs to a different user.")).toBeTruthy();
+    expect(await screen.findByText("This personal access token belongs to a different user.")).toBeTruthy();
     expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
     expect(screen.queryByText("user-b")).toBeNull();
     expect(document.body.textContent).not.toContain(PAT);
@@ -308,12 +308,12 @@ describe("MCP PAT identity gate", () => {
     render(shell(createElement(Layout, null, createElement(McpMetadataDetail))));
 
     const before = vi.mocked(fetch).mock.calls.length;
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-    fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 
     expect(
       await screen.findByText(
-        "That User PAT was not accepted. The Console session stays signed in.",
+        "That personal access token was not accepted. The Console session stays signed in.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
@@ -351,12 +351,12 @@ describe("MCP PAT identity gate", () => {
     const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
     render(shell(createElement(Layout, null, createElement(McpMetadataDetail))));
 
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-    fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 
     expect(
       await screen.findByText(
-        "That User PAT was not accepted. The Console session stays signed in.",
+        "That personal access token was not accepted. The Console session stays signed in.",
       ),
     ).toBeTruthy();
     expect(document.body.textContent).not.toContain("Not signed in or session expired");
@@ -388,14 +388,14 @@ describe("MCP PAT identity gate", () => {
     const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
     render(shell(createElement(Layout, null, createElement(McpMetadataDetail))));
 
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-    fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
     expect(
-      await screen.findByText("This User PAT belongs to the signed-in user. user-a"),
+      await screen.findByText("This personal access token belongs to the signed-in user. user-a"),
     ).toBeTruthy();
 
     const callsAfterVerify = authMeCalls().length;
-    fireEvent.change(screen.getByLabelText("User PAT"), {
+    fireEvent.change(screen.getByLabelText("Personal access token"), {
       target: { value: `${PAT}-edited` },
     });
 
@@ -403,7 +403,7 @@ describe("MCP PAT identity gate", () => {
     expect(screen.queryByText("user-a")).toBeNull();
     expect(screen.queryByText("Selected endpoint /mcp")).toBeNull();
     expect(authMeCalls()).toHaveLength(callsAfterVerify);
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(
       `${PAT}-edited`,
     );
   });
@@ -430,18 +430,18 @@ describe("MCP PAT identity gate", () => {
       shell(createElement(Layout, null, createElement(McpMetadataDetail))),
     );
 
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-    fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
     expect(
-      await screen.findByText("This User PAT belongs to the signed-in user. user-a"),
+      await screen.findByText("This personal access token belongs to the signed-in user. user-a"),
     ).toBeTruthy();
 
     pathname.current = "/console/mcp/entity";
     view.rerender(shell(createElement(Layout, null, createElement(McpEntityDetail))));
 
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
     expect(
-      screen.getByText("This User PAT belongs to the signed-in user. user-a"),
+      screen.getByText("This personal access token belongs to the signed-in user. user-a"),
     ).toBeTruthy();
     expect(screen.getByText("Selected endpoint /mcp/entity")).toBeTruthy();
     expect(screen.queryByText("Selected endpoint /mcp")).toBeNull();
@@ -451,7 +451,7 @@ describe("MCP PAT identity gate", () => {
     view.unmount();
     pathname.current = "/console/mcp/metadata";
     render(shell(createElement(Layout, null, createElement(McpMetadataDetail))));
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("");
     expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
     expect(storageDump(sessionStorage)).not.toContain(PAT);
     expect(storageDump(localStorage)).not.toContain(PAT);
@@ -476,21 +476,21 @@ describe("MCP PAT identity gate", () => {
     const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
     render(shell(createElement(Layout, null, createElement(McpMetadataDetail))));
 
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
     act(() => {
       window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: false }));
     });
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
 
-    fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
     expect(
-      await screen.findByText("This User PAT belongs to the signed-in user. user-a"),
+      await screen.findByText("This personal access token belongs to the signed-in user. user-a"),
     ).toBeTruthy();
 
     act(() => {
       window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
     });
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("");
     expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
     expect(screen.queryByText("user-a")).toBeNull();
     expect(screen.queryByText("Selected endpoint /mcp")).toBeNull();

@@ -70,12 +70,14 @@ export function McpClientConfiguration({ publicPath }: { publicPath: string }) {
         <ul>
           {tools.map((tool) => (
             <li key={tool.name}>
-              <span>{tool.name}</span>
-              <span>{tool.permission}</span>
-              <span>{tool.description}</span>
-              {typeof tool.execution === "string" && tool.execution.length > 0 ? (
-                <span>{tool.execution}</span>
-              ) : null}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
+                <span>{tool.name}</span>
+                <span>{tool.permission}</span>
+                <span>{tool.description}</span>
+                {typeof tool.execution === "string" && tool.execution.length > 0 ? (
+                  <span>{tool.execution}</span>
+                ) : null}
+              </div>
             </li>
           ))}
         </ul>

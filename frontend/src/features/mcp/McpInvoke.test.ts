@@ -304,8 +304,8 @@ function callPosts() {
 }
 
 function verifyPat() {
-  fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-  fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+  fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+  fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 }
 
 async function renderMetadata() {
@@ -362,7 +362,7 @@ describe("MCP explicit read invocation", () => {
     expect(callPosts()).toHaveLength(0);
 
     verifyPat();
-    expect(await screen.findByText("This User PAT belongs to the signed-in user. user-a")).toBeTruthy();
+    expect(await screen.findByText("This personal access token belongs to the signed-in user. user-a")).toBeTruthy();
     expect(callPosts()).toHaveLength(0);
     expect(screen.queryByRole("button", { name: /^Select / })).toBeNull();
 
@@ -583,6 +583,30 @@ describe("MCP explicit read invocation", () => {
     };
     expect(bare.params.name).toBe("bare_tool");
     expect(bare.params.arguments).toEqual({ z: true });
+  });
+
+  it("keeps the sent arguments on the result when a later edit fails validation", async () => {
+    callResponder = (_url, body) =>
+      jsonResponse(200, callEnvelope(body.id, JSON.stringify({ rows: ["snap-marker"] })));
+    await renderMetadata();
+    verifyPat();
+    await screen.findByRole("button", { name: "Discover tools" });
+    await discover();
+    await selectTool("/mcp run_sql");
+    typeArguments('{"statement":"select 1"}');
+    run("/mcp run_sql");
+
+    const result = await screen.findByRole("region", { name: "Tool result" });
+    expect(result.textContent).toContain("snap-marker");
+    expect(within(result).getByText('{"statement":"select 1"}')).toBeTruthy();
+
+    typeArguments("{");
+    run("/mcp run_sql");
+    expect(screen.getByText(/Arguments are not valid JSON\./)).toBeTruthy();
+    expect(editor().value).toBe("{");
+    expect(within(result).getByText('{"statement":"select 1"}')).toBeTruthy();
+    expect(result.textContent).not.toContain("position 1");
+    expect(callPosts()).toHaveLength(1);
   });
 
   it("offers decoded JSON and the protocol payload without drawing outputSchema as the business object", async () => {
@@ -904,7 +928,13 @@ describe("MCP explicit read invocation", () => {
 
     unauthenticated = true;
     run("/mcp run_sql");
-    expect(await screen.findByRole("region", { name: HTTP_FAILURE })).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "That personal access token was not accepted. The Console session stays signed in.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("region", { name: HTTP_FAILURE })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Tool result" })).toBeNull();
     expect(document.body.textContent).not.toContain("Not signed in or session expired");
     expect(useSessionStore.getState().user?.id).toBe("user-a");
     expect(useSessionStore.getState().signedOutLocally).toBe(false);
@@ -951,8 +981,8 @@ describe("MCP explicit read invocation", () => {
         ),
       ),
     );
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
-    expect(screen.getByText("This User PAT belongs to the signed-in user. user-a")).toBeTruthy();
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
+    expect(screen.getByText("This personal access token belongs to the signed-in user. user-a")).toBeTruthy();
     expect(screen.getByText("Selected endpoint /mcp/entity")).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Arguments" })).toBeNull();
     expect(document.body.textContent).not.toContain("kept-marker");
@@ -962,7 +992,7 @@ describe("MCP explicit read invocation", () => {
       release(jsonResponse(200, callEnvelope(1, JSON.stringify({ rows: ["late-endpoint-marker"] }))));
     });
     expect(document.body.textContent).not.toContain("late-endpoint-marker");
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
 
     pathname.current = "/console/mcp/metadata";
     const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
@@ -1001,20 +1031,20 @@ describe("MCP explicit read invocation", () => {
       window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: false }));
     });
     expect(document.body.textContent).toContain("pat-marker");
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
 
     hold = true;
     run("/mcp run_sql");
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: `${PAT}-edited` } });
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: `${PAT}-edited` } });
     expect(screen.queryByRole("textbox", { name: "Arguments" })).toBeNull();
     expect(document.body.textContent).not.toContain("pat-marker");
     await act(async () => {
       release(jsonResponse(200, callEnvelope(1, JSON.stringify({ rows: ["late-pat-marker"] }))));
     });
     expect(document.body.textContent).not.toContain("late-pat-marker");
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(`${PAT}-edited`);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(`${PAT}-edited`);
 
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
     verifyPat();
     expect(await screen.findByRole("button", { name: "Discover tools" })).toBeTruthy();
     await discover();
@@ -1030,7 +1060,7 @@ describe("MCP explicit read invocation", () => {
     act(() => {
       window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
     });
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("");
     expect(document.body.textContent).not.toContain("pat-marker");
     expect(document.body.textContent).not.toContain(PAT);
     expect(screen.queryByRole("button", { name: "Discover tools" })).toBeNull();
@@ -1079,7 +1109,7 @@ describe("MCP explicit read invocation", () => {
       "roundtrip-marker",
     );
     expect(editor().value).toBe('{"statement":"select 1"}');
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
     expect(callPosts()).toHaveLength(calls);
     expect(screen.getByRole("listitem", { name: "/mcp run_sql" })).toBeTruthy();
   });
@@ -1120,7 +1150,7 @@ describe("MCP explicit read invocation", () => {
     );
     expect(document.body.textContent).not.toContain("metadata-sql-marker");
     expect(screen.queryByRole("textbox", { name: "Arguments" })).toBeNull();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
     expect(await screen.findByRole("listitem", { name: "/mcp/entity validate_sql" })).toBeTruthy();
     expect(screen.getByRole("listitem", { name: "/mcp/entity run_sql" })).toBeTruthy();

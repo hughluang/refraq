@@ -42,8 +42,9 @@ from backend.entity.access.seed import _ensure_profile, _grant_exists
 from backend.entity.access.store import get_access_store
 from backend.entity.access.views import rebuild_entity_views
 from backend.entity.ids import new_access_grant_id
-from backend.entity.lifecycle import PUBLISHED
+from backend.entity.lifecycle import PUBLISHED, latest_published_of
 from backend.entity.records import AttributeRecord
+from backend.entity.reference_binding import frozen_reference_bindings_cover
 from backend.entity.store import get_entity_store
 from backend.entity.table_name import published_attributes
 
@@ -393,9 +394,27 @@ def seed_entity_entitlements(entity_id: str) -> bool:
 
 
 def prepare_legacy_entity(entity_id: str) -> None:
-    """Give entitled Roles their seed grant and mark that Entity's views ready."""
+    """Give entitled Roles their seed grant and mark views ready when they can render.
+
+    A serving head whose reference snapshots do not cover its reference
+    attributes cannot render profile SQL. The grant still exists. View
+    generation is left for a later rebuild once a snapshot covers the head.
+    """
     seed_entity_entitlements(entity_id)
-    rebuild_entity_views(entity_id)
+    if _reference_snapshots_cover(entity_id):
+        rebuild_entity_views(entity_id)
+
+
+def _reference_snapshots_cover(entity_id: str) -> bool:
+    head = latest_published_of(get_entity_store().list_all_versions(entity_id))
+    if head is None:
+        return False
+    return (
+        frozen_reference_bindings_cover(
+            published_attributes(head), head.reference_snapshots
+        )
+        is not None
+    )
 
 
 def _entitled_roles() -> list[tuple[Any, list[str]]]:

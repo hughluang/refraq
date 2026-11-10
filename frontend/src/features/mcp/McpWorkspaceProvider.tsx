@@ -15,7 +15,7 @@ import { checkArguments, type McpArgumentIssue } from "@/features/mcp/mcp-argume
 import {
   requestToolsCall,
   requestToolsList,
-  type McpCallOutcome,
+  type McpStoredCallOutcome,
   type McpToolsListResult,
 } from "@/features/mcp/mcp-tools-list";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
@@ -42,7 +42,8 @@ export type McpInvocation = {
   toolName: string;
   argumentsText: string;
   localError: McpArgumentIssue | null;
-  outcome: McpCallOutcome | null;
+  outcome: McpStoredCallOutcome | null;
+  submittedArguments: string | null;
 };
 
 export type McpWriteConfirm = {
@@ -158,6 +159,11 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     clearDiscovery();
   }, [clearDiscovery]);
 
+  const rejectCredential = useCallback(() => {
+    setOutcomeState({ status: "auth-error" });
+    clearDiscovery();
+  }, [clearDiscovery]);
+
   const noteDetailEndpoint = useCallback((endpoint: string) => {
     if (endpoint !== "/mcp" && endpoint !== "/mcp/entity") return;
     const previous = detailEndpointRef.current;
@@ -183,6 +189,7 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       argumentsText: "",
       localError: null,
       outcome: null,
+      submittedArguments: null,
     };
     invocationRef.current = next;
     dropWriteConfirm();
@@ -224,9 +231,16 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     callWaitRef.current = wait;
     setCallWait(wait);
     const submittedPat = patRef.current;
+    const submittedArguments = JSON.stringify(checked.value);
     setInvocation((prev) => {
       if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
-      const next = { ...prev, argumentsText, localError: null, outcome: null };
+      const next = {
+        ...prev,
+        argumentsText,
+        localError: null,
+        outcome: null,
+        submittedArguments,
+      };
       invocationRef.current = next;
       return next;
     });
@@ -239,6 +253,10 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       false,
     );
     if (callGen.current !== generation) return;
+    if (next.status === "rejected") {
+      rejectCredential();
+      return;
+    }
     callAbort.current = null;
     callWaitRef.current = null;
     setCallWait(null);
@@ -248,7 +266,7 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       invocationRef.current = updated;
       return updated;
     });
-  }, []);
+  }, [rejectCredential]);
 
   const beginWrite = useCallback((endpoint: string, toolName: string, argumentsText: string) => {
     if (outcomeRef.current.status !== "verified") return;
@@ -320,26 +338,30 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     setCallWait(wait);
     const submittedPat = patRef.current;
     const { endpoint, toolName, args } = snap;
+    const submittedArguments = JSON.stringify(args);
     setInvocation((prev) => {
       if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
-      const next = { ...prev, localError: null, outcome: null };
+      const next = { ...prev, localError: null, outcome: null, submittedArguments };
       invocationRef.current = next;
       return next;
     });
     const next = await requestToolsCall(endpoint, submittedPat, toolName, args, controller.signal, true);
     if (callGen.current !== generation) return;
+    if (next.status === "rejected") {
+      rejectCredential();
+      return;
+    }
     callAbort.current = null;
     callWaitRef.current = null;
     setCallWait(null);
-    if (next.status === "unknown") dropWriteConfirm();
-    else setWriteSending(false);
+    dropWriteConfirm();
     setInvocation((prev) => {
       if (!prev || prev.endpoint !== endpoint || prev.toolName !== toolName) return prev;
       const updated = { ...prev, outcome: next };
       invocationRef.current = updated;
       return updated;
     });
-  }, [dropWriteConfirm]);
+  }, [dropWriteConfirm, rejectCredential]);
 
   const discover = useCallback(async (endpoint: string) => {
     if (outcomeRef.current.status !== "verified") return;
@@ -359,6 +381,10 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
     const next = await requestToolsList(endpoint, submittedPat, controller.signal);
     if (epochRef.current !== epoch) return;
     if (requestGen.current[endpoint] !== generation) return;
+    if (next.status === "rejected") {
+      rejectCredential();
+      return;
+    }
     delete discoverAbort.current[endpoint];
     if (discoverWaitRef.current === endpoint) {
       discoverWaitRef.current = null;
@@ -370,7 +396,7 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       if (!tool || tool.execution !== "write") dropWriteConfirm();
     }
     setDiscoveryByEndpoint((current) => ({ ...current, [endpoint]: next }));
-  }, [dropWriteConfirm]);
+  }, [dropWriteConfirm, rejectCredential]);
 
   const stopWaiting = useCallback((kind: "call" | "discover") => {
     if (kind === "discover") {

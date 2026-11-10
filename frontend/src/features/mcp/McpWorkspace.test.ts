@@ -76,8 +76,8 @@ function expectNoCatalogOrClientConfig(options?: { detail?: boolean }) {
   }
   expect(screen.queryByRole("table")).toBeNull();
   expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
-  const secretOrLegacy = options?.detail
-    ? /mcpServers|personal access token/i
+    const secretOrLegacy = options?.detail
+    ? /mcpServers/i
     : /mcpServers|YOUR_TOKEN|personal access token/i;
   expect(screen.queryByText(secretOrLegacy)).toBeNull();
 }

@@ -5,7 +5,7 @@ import { useTranslate } from "@refinedev/core";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import type { McpArgumentIssue } from "@/features/mcp/mcp-arguments";
-import type { McpCallOutcome, McpCallPart, McpListedTool } from "@/features/mcp/mcp-tools-list";
+import type { McpCallPart, McpListedTool, McpStoredCallOutcome } from "@/features/mcp/mcp-tools-list";
 import { useMcpWorkspace } from "@/features/mcp/McpWorkspaceProvider";
 
 export function schemaText(schema: unknown, missing: string): string {
@@ -62,7 +62,7 @@ function Parts({ parts }: { parts: McpCallPart[] }) {
   );
 }
 
-function outcomeLabel(outcome: McpCallOutcome, t: (key: string) => string): string {
+function outcomeLabel(outcome: McpStoredCallOutcome, t: (key: string) => string): string {
   switch (outcome.status) {
     case "http":
       return t("mcp.invoke.http");
@@ -83,7 +83,13 @@ function outcomeLabel(outcome: McpCallOutcome, t: (key: string) => string): stri
   }
 }
 
-function OutcomeView({ outcome }: { outcome: McpCallOutcome }) {
+function OutcomeView({
+  outcome,
+  submittedArguments,
+}: {
+  outcome: McpStoredCallOutcome;
+  submittedArguments: string | null;
+}) {
   const t = useTranslate();
   const label = outcomeLabel(outcome, t);
   const parts = outcome.status === "sdk" || outcome.status === "domain" || outcome.status === "result"
@@ -101,6 +107,12 @@ function OutcomeView({ outcome }: { outcome: McpCallOutcome }) {
         <Text>{t("mcp.invoke.cancellationRequested")}</Text>
       ) : null}
       <Text>{label}</Text>
+      {submittedArguments ? (
+        <section role="region" aria-label={t("mcp.invoke.sentArguments")}>
+          <Text>{t("mcp.invoke.sentArguments")}</Text>
+          <Code block>{submittedArguments}</Code>
+        </section>
+      ) : null}
       {parts ? <Parts parts={parts} /> : null}
       {protocol !== undefined ? (
         <section role="region" aria-label={t("mcp.invoke.protocolPayload")}>
@@ -161,7 +173,12 @@ export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpLis
           {runnable ? <Text>{t("mcp.invoke.serverRecord")}</Text> : null}
         </Stack>
       </div>
-      {invocation.outcome ? <OutcomeView outcome={invocation.outcome} /> : null}
+      {invocation.outcome ? (
+        <OutcomeView
+          outcome={invocation.outcome}
+          submittedArguments={invocation.submittedArguments}
+        />
+      ) : null}
       {writeConfirm ? (
         <ConfirmActionModal
           opened

@@ -202,6 +202,8 @@ def load_policy(
         cap=max_profile_combinations(),
         existing_combos=existing,
         now=utc_now(),
+        source_attributes=head.attributes,
+        reference_snapshots=_reference_snapshots(head),
     )
 
 
@@ -240,7 +242,17 @@ def policy_for_membership(
         cap=1,
         existing_combos=frozenset(),
         now=now,
+        source_attributes=head.attributes,
+        reference_snapshots=_reference_snapshots(head),
     )
+
+
+def _reference_snapshots(head: Head) -> dict[str, Any]:
+    version = head.version
+    raw = getattr(version, "reference_snapshots", None)
+    if isinstance(raw, dict):
+        return dict(raw)
+    return {}
 
 
 def _ladder_map(

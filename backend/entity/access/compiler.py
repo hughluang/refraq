@@ -9,7 +9,7 @@ caller; this module does not execute DDL.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -46,6 +46,9 @@ from backend.entity.ddl import (
     READER_ROLE,
     ident,
 )
+from backend.entity.errors import EntityNotServing
+from backend.entity.records import AttributeRecord
+from backend.entity.reference_binding import frozen_reference_bindings_cover
 
 __all__ = [
     "Binding",
@@ -54,6 +57,7 @@ __all__ = [
     "Outcome",
     "Policy",
     "Shape",
+    "compile_decisions",
     "compile_policy",
     "context_attribute_keys",
     "predicate_depends_on_row",
@@ -84,6 +88,15 @@ class Policy:
     cap: int
     existing_combos: frozenset[str]
     now: datetime
+    # Head attributes and frozen reference snapshots. Empty attributes make the
+    # render-door cover check pass, so a Policy built without them still renders.
+    source_attributes: tuple[AttributeRecord, ...] = ()
+    reference_snapshots: dict[str, Any] = field(default_factory=dict)
+
+
+_SERVING_HEAD_PREDATES = (
+    "Serving head predates reference snapshots; publish a new version"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +169,8 @@ class Outcome:
     shape: Shape | None
 
 
-def compile_policy(policy: Policy) -> CompiledPolicy:
+def compile_decisions(policy: Policy) -> CompiledPolicy:
+    """Grant and shape decisions. Bindings stay empty: no view SQL is rendered."""
     attrs = {item.attribute_id: item for item in policy.attributes}
     profiles = {item.id: item for item in policy.profiles}
     broken_profiles = {
@@ -221,11 +235,10 @@ def compile_policy(policy: Policy) -> CompiledPolicy:
         emitted,
         holders,
     )
-    bindings = tuple(_binding(policy, shape) for shape in shapes)
     single = len({shape.combo_key for shape in shapes if len(shape.profile_ids) == 1})
     return CompiledPolicy(
         shapes=shapes,
-        bindings=bindings,
+        bindings=(),
         single_profile_views=single,
         combinations=len(emitted),
         subjects_over_limit=len(over_users),
@@ -235,6 +248,13 @@ def compile_policy(policy: Policy) -> CompiledPolicy:
         broken_restrictions=broken_restrictions,
         grant_warnings=warnings,
     )
+
+
+def compile_policy(policy: Policy) -> CompiledPolicy:
+    """Decisions plus one binding per shape. Rendering is the only SQL door."""
+    decided = compile_decisions(policy)
+    bindings = tuple(_binding(policy, shape) for shape in decided.shapes)
+    return replace(decided, bindings=bindings)
 
 
 def context_attribute_keys(policy: Policy) -> frozenset[str]:
@@ -584,6 +604,13 @@ def _columns(
 
 
 def _binding(policy: Policy, shape: Shape) -> Binding:
+    if (
+        frozen_reference_bindings_cover(
+            list(policy.source_attributes), policy.reference_snapshots
+        )
+        is None
+    ):
+        raise EntityNotServing(_SERVING_HEAD_PREDATES)
     sql = render_shape(shape, policy, acl=True)
     view_name = shape.view_name
     columns = tuple(

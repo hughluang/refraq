@@ -190,14 +190,13 @@ describe("MCP endpoint connection guidance", () => {
     render(shell(createElement(McpMetadataDetail)));
     expect(
       screen.getByText(
-        "Create, list, and revoke a User PAT on Account. This page does not.",
+        "Create, list, and revoke a personal access token on Account. This page does not.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open Account" }).getAttribute("href")).toBe(
       "/console/account",
     );
     expect(screen.queryByRole("textbox")).toBeNull();
-    expect(document.body.textContent).not.toMatch(/personal access token/i);
     cleanup();
 
     pathname.current = "/console/mcp/entity";
@@ -229,7 +228,9 @@ describe("MCP endpoint connection guidance", () => {
       ),
     ).toBeTruthy();
     expect(
-      screen.getByText("The supported connection check is a later same-origin browser call."),
+      screen.getByText(
+        "The supported connection check is this page's same-origin verify and discover.",
+      ),
     ).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/Inspector/);
     cleanup();
@@ -279,6 +280,12 @@ describe("MCP endpoint connection guidance", () => {
     expect(screen.getByText("https://console.example.com/mcp")).toBeTruthy();
     expect(document.body.textContent).not.toContain("/catalog-supplied");
     expect(screen.getByText("set_object_semantics")).toBeTruthy();
+    const catalogRow = screen.getByText("set_object_semantics").parentElement;
+    expect(catalogRow?.style.display).toBe("flex");
+    expect(catalogRow?.style.gap).toBe("0.75rem");
+    expect(catalogRow?.textContent).toContain("metadata:write");
+    expect(catalogRow?.textContent).toContain("Write object semantics.");
+    expect(screen.getByText("custom_probe").parentElement?.textContent).toContain("write");
     expect(screen.getByText("metadata:write")).toBeTruthy();
     expect(screen.getByText("Write object semantics.")).toBeTruthy();
     expect(screen.getByText("custom_probe")).toBeTruthy();

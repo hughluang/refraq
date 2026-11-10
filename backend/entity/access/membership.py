@@ -12,7 +12,7 @@ from datetime import datetime
 from backend.admin.subjects import subject_attributes, user_group_ids
 from backend.admin.user_store import UserRecord
 from backend.core.time import utc_now
-from backend.entity.access.compiler import compile_policy, subject_outcome
+from backend.entity.access.compiler import compile_decisions, subject_outcome
 from backend.entity.access.facts import Person, SubjectAttrFact
 from backend.entity.access.plan import Head, head_from, policy_for_membership
 from backend.entity.access.records import MembershipFacts
@@ -87,6 +87,6 @@ def _can_read(
         subject_attrs=subject_attrs,
         now=now,
     )
-    compiled = compile_policy(policy)
+    compiled = compile_decisions(policy)
     outcome = subject_outcome(compiled, policy, person, action="read", narrow=None)
     return bool(outcome.grant_ids)

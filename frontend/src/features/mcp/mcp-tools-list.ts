@@ -18,6 +18,7 @@ export type McpToolsListResult =
   | { status: "empty" }
   | { status: "ready"; tools: McpListedTool[] }
   | { status: "unavailable" }
+  | { status: "rejected" }
   | { status: "protocol-error" }
   | { status: "transport-failure" };
 
@@ -27,6 +28,7 @@ export type McpCallPart =
 
 export type McpCallOutcome =
   | { status: "http" }
+  | { status: "rejected" }
   | { status: "transport" }
   | { status: "protocol"; error: unknown }
   | { status: "sdk"; parts: McpCallPart[]; protocol: unknown }
@@ -35,8 +37,11 @@ export type McpCallOutcome =
   | { status: "unknown"; requestedCancellation: boolean }
   | { status: "stopped" };
 
+export type McpStoredCallOutcome = Exclude<McpCallOutcome, { status: "rejected" }>;
+
 type Classified =
   | { status: "unavailable" }
+  | { status: "rejected" }
   | { status: "transport-failure" }
   | { status: "protocol-error"; error: unknown }
   | { status: "result"; result: unknown }
@@ -166,8 +171,27 @@ function requestMeta(): Record<string, unknown> {
   };
 }
 
+function problemCode(text: string): string | null {
+  let message: unknown;
+  try {
+    message = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof message !== "object" || message === null || Array.isArray(message)) return null;
+  const code = (message as Record<string, unknown>).code;
+  return typeof code === "string" ? code : null;
+}
+
 function classifyBody(response: Response, text: string, id: number): Classified {
   const contentType = response.headers.get("content-type") ?? "";
+  if (
+    response.status === 401 &&
+    contentType.includes("application/problem+json") &&
+    problemCode(text) === "AUTH_UNAUTHENTICATED"
+  ) {
+    return { status: "rejected" };
+  }
   if (contentType.includes("text/event-stream")) {
     const parsed = parseSse(text, id);
     if (parsed.status === "protocol-error") return parsed;
@@ -326,6 +350,7 @@ function interpretCall(result: unknown): McpCallOutcome {
 
 function asCall(classified: Classified): McpCallOutcome {
   if (classified.status === "inconclusive") return { status: "unknown", requestedCancellation: false };
+  if (classified.status === "rejected") return { status: "rejected" };
   if (classified.status === "unavailable") return { status: "http" };
   if (classified.status === "transport-failure") return { status: "transport" };
   if (classified.status === "protocol-error") return { status: "protocol", error: classified.error };
@@ -346,6 +371,7 @@ export async function requestToolsList(
     undefined,
     signal,
   );
+  if (classified.status === "rejected") return { status: "rejected" };
   if (classified.status === "protocol-error") return { status: "protocol-error" };
   if (classified.status !== "result") return classified;
   return interpretTools(classified.result);

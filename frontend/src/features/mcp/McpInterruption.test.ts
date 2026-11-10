@@ -255,8 +255,8 @@ function callSignal(index = 0): AbortSignal {
 }
 
 function verifyPat() {
-  fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-  fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+  fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+  fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 }
 
 async function renderMetadata() {
@@ -766,7 +766,7 @@ describe("MCP interruption and unknown write outcome", () => {
     await readyWrite();
     run("/mcp set_object_semantics");
     expect(screen.getByRole("dialog")).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: `${PAT}-next` } });
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: `${PAT}-next` } });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("region", { name: UNKNOWN })).toBeNull();
     expect(callPosts()).toHaveLength(0);
@@ -781,7 +781,7 @@ describe("MCP interruption and unknown write outcome", () => {
     expect(callPosts()).toHaveLength(1);
     const signal = callSignal();
 
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: `${PAT}-replaced` } });
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: `${PAT}-replaced` } });
     expect(signal.aborted).toBe(true);
     expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
     expect(screen.queryByRole("listitem")).toBeNull();
@@ -798,7 +798,7 @@ describe("MCP interruption and unknown write outcome", () => {
     expect(screen.queryByRole("region", { name: UNKNOWN })).toBeNull();
     expect(screen.queryByText(CANCELLATION)).toBeNull();
     expect(screen.queryByRole("region", { name: "Tool result" })).toBeNull();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(`${PAT}-replaced`);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(`${PAT}-replaced`);
   });
 
   it("clears the User PAT and in-memory results when leaving or restoring a persisted page", async () => {
@@ -816,7 +816,7 @@ describe("MCP interruption and unknown write outcome", () => {
     act(() => {
       window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
     });
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("");
     expect(document.body.textContent).not.toContain("memory-marker");
     expect(screen.queryByRole("region", { name: UNKNOWN })).toBeNull();
     expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
@@ -844,7 +844,7 @@ describe("MCP interruption and unknown write outcome", () => {
     });
 
     await renderMetadata();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("");
     expect(document.body.textContent).not.toContain("stale-leave-marker");
     expect(document.body.textContent).not.toContain("memory-marker");
     expect(screen.queryByRole("region", { name: UNKNOWN })).toBeNull();
@@ -871,7 +871,7 @@ describe("MCP interruption and unknown write outcome", () => {
     expect(await screen.findByText("Selected endpoint /mcp/entity")).toBeTruthy();
     await act(async () => {});
     expect(signal.aborted).toBe(true);
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
 
     await act(async () => {
       release(jsonResponse(200, callEnvelope(1, JSON.stringify({ rows: ["stale-endpoint-marker"] }))));

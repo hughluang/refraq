@@ -200,8 +200,8 @@ function entityRunSql(id: unknown) {
 }
 
 function verifyPat() {
-  fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-  fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+  fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+  fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 }
 
 function toolsListCalls() {
@@ -267,7 +267,7 @@ describe("MCP live tools/list discovery", () => {
 
     verifyPat();
     expect(
-      await screen.findByText("This User PAT belongs to the signed-in user. user-a"),
+      await screen.findByText("This personal access token belongs to the signed-in user. user-a"),
     ).toBeTruthy();
     expect(toolsListCalls()).toHaveLength(0);
     expect(screen.queryByText("Run controlled SQL.")).toBeNull();
@@ -363,7 +363,7 @@ describe("MCP live tools/list discovery", () => {
       ),
     );
 
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
     expect(screen.getByText("Selected endpoint /mcp/entity")).toBeTruthy();
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
     expect(screen.queryByText("Run controlled SQL.")).toBeNull();
@@ -401,7 +401,7 @@ describe("MCP live tools/list discovery", () => {
     expect(screen.queryByText(/"statement"/)).toBeNull();
     expect(screen.queryByRole("listitem", { name: "/mcp/entity run_sql" })).toBeNull();
     expect(screen.queryByText("Run entity SQL.")).toBeNull();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
 
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
     expect(await screen.findByRole("listitem", { name: "/mcp run_sql" })).toBeTruthy();
@@ -428,7 +428,7 @@ describe("MCP live tools/list discovery", () => {
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
     expect(screen.queryByText("Run controlled SQL.")).toBeNull();
     expect(screen.queryByText(/"statement"/)).toBeNull();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
 
     pathname.current = "/console/mcp/metadata";
     const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
@@ -444,7 +444,7 @@ describe("MCP live tools/list discovery", () => {
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
     expect(screen.queryByText("Run controlled SQL.")).toBeNull();
     expect(screen.queryByText(/"statement"/)).toBeNull();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
 
     const listed = toolsListCalls().length;
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
@@ -484,7 +484,7 @@ describe("MCP live tools/list discovery", () => {
       ),
     );
     expect(screen.getByRole("listitem", { name: "/mcp run_sql" })).toBeTruthy();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
     expect(toolsListCalls()).toHaveLength(1);
   });
 
@@ -540,7 +540,7 @@ describe("MCP live tools/list discovery", () => {
     });
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
     expect(screen.queryByText("Run controlled SQL.")).toBeNull();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
   });
 
   it("treats an empty tools/list as an empty catalog", async () => {
@@ -748,6 +748,7 @@ describe("MCP live tools/list discovery", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
     expect(await screen.findByText("This endpoint is unavailable.")).toBeTruthy();
+    expect(screen.getByText(/belongs to the signed-in user/)).toBeTruthy();
     expect(screen.queryByText("mcp_upstream_unavailable")).toBeNull();
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
     expect(
@@ -804,6 +805,44 @@ describe("MCP live tools/list discovery", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
     expect(await screen.findByText("This endpoint is unavailable.")).toBeTruthy();
     expect(screen.queryByText("network down")).toBeNull();
+  });
+
+  it("withdraws a verified token when discovery is refused, and keeps an outage on the endpoint", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).endsWith("/auth/me")) return jsonResponse(200, meBody("user-a"));
+        return jsonResponse(
+          401,
+          {
+            type: "urn:refraq:problem:AUTH_UNAUTHENTICATED",
+            status: 401,
+            detail: "Not signed in or session expired",
+            code: "AUTH_UNAUTHENTICATED",
+          },
+          "application/problem+json",
+        );
+      }),
+    );
+    await renderMetadata();
+    verifyPat();
+    await screen.findByRole("button", { name: "Discover tools" });
+    expect(screen.getByText(/belongs to the signed-in user/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
+
+    expect(
+      await screen.findByText(
+        "That personal access token was not accepted. The Console session stays signed in.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
+    expect(screen.queryByText("This endpoint is unavailable.")).toBeNull();
+    expect(screen.queryByText("AUTH_UNAUTHENTICATED")).toBeNull();
+    expect(screen.queryByText("Not signed in or session expired")).toBeNull();
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
+    expect(screen.queryByRole("button", { name: "Discover tools" })).toBeNull();
+    expect(useSessionStore.getState().user?.id).toBe("user-a");
+    expect(useSessionStore.getState().signedOutLocally).toBe(false);
   });
 
   it("treats a malformed or interrupted stream as a transport failure", async () => {
@@ -934,7 +973,12 @@ describe("MCP live tools/list discovery", () => {
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
 
-    expect(await screen.findByText("This endpoint is unavailable.")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "That personal access token was not accepted. The Console session stays signed in.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("This endpoint is unavailable.")).toBeNull();
     expect(screen.queryByText("Not signed in or session expired")).toBeNull();
     expect(document.body.textContent).not.toContain(PAT);
     expect(useSessionStore.getState().user?.id).toBe("user-a");
@@ -997,7 +1041,7 @@ describe("MCP live tools/list discovery", () => {
 
     holdNextList = true;
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    fireEvent.change(screen.getByLabelText("User PAT"), {
+    fireEvent.change(screen.getByLabelText("Personal access token"), {
       target: { value: `${PAT}-edited` },
     });
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
@@ -1009,7 +1053,7 @@ describe("MCP live tools/list discovery", () => {
     });
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
     expect(screen.queryByText("Run controlled SQL.")).toBeNull();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(`${PAT}-edited`);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(`${PAT}-edited`);
   });
 
   it("drops discovered tools when a persisted page show clears the User PAT", async () => {
@@ -1027,7 +1071,7 @@ describe("MCP live tools/list discovery", () => {
     act(() => {
       window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
     });
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("");
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
     expect(screen.queryByText("Run controlled SQL.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Discover tools" })).toBeNull();
@@ -1044,7 +1088,7 @@ describe("MCP live tools/list discovery", () => {
     );
     await renderMetadata();
     verifyPat();
-    expect(await screen.findByText("This User PAT belongs to a different user.")).toBeTruthy();
+    expect(await screen.findByText("This personal access token belongs to a different user.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Discover tools" })).toBeNull();
     expect(toolsListCalls()).toHaveLength(0);
   });

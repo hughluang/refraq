@@ -40,7 +40,12 @@ from backend.entity.ids import (  # noqa: E402
 )
 from backend.entity.lifecycle import latest_published_of  # noqa: E402
 from backend.entity.mcp.actor import mcp_authorization  # noqa: E402
-from backend.entity.mcp.server import describe_entity, list_dictionary_codes  # noqa: E402
+from backend.entity.errors import EntityNotServing  # noqa: E402
+from backend.entity.mcp.server import (  # noqa: E402
+    describe_entity,
+    list_dictionary_codes,
+    list_entities,
+)
 from backend.entity.records import (  # noqa: E402
     AttributeRecord,
     BusinessEntityRecord,
@@ -375,6 +380,67 @@ def test_describe_entity_marks_withheld_columns(client: TestClient) -> None:
     ]
 
 
+_PREDATES = "Serving head predates reference snapshots; publish a new version"
+
+
+def test_profile_reference_without_a_snapshot_stays_listed(
+    client: TestClient,
+) -> None:
+    supplier = _seed(
+        table_name="supplier",
+        name="Supplier",
+        description="Party",
+        attributes=[
+            AttributeRecord(
+                name="code",
+                type="string",
+                required=True,
+                unique=True,
+                business_key=True,
+                max_length=16,
+            )
+        ],
+    )
+    _seed(
+        table_name="material",
+        name="Material",
+        description="Stock",
+        attributes=[
+            AttributeRecord(
+                name="sku",
+                type="string",
+                required=True,
+                unique=True,
+                business_key=True,
+                max_length=32,
+            ),
+            _reference("supplier_id", supplier.id),
+        ],
+    )
+    secret = _secret(client, name="listed-pat")
+    listed = _call(list_entities, secret)
+    assert "error" not in listed, listed
+    assert {item["table_name"] for item in listed["items"]} >= {
+        "material",
+        "supplier",
+    }
+
+    described = _describe(secret, table_name="material")
+    assert described["error"]["code"] == "ENTITY_NOT_SERVING"
+    assert described["error"]["message"] == _PREDATES
+
+    target = _describe(secret, table_name="supplier")
+    assert "error" not in target, target
+    assert {"table_name": "material", "attribute": "supplier_id"} in target[
+        "inbound_references"
+    ]
+
+    material_id = _entity_id("material")
+    with pytest.raises(EntityNotServing) as raised:
+        rebuild_entity_views(material_id)
+    assert raised.value.message == _PREDATES
+
+
 def test_lifecycle_errors_match_the_data_api(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -628,7 +694,7 @@ def test_inbound_references_use_visible_serving_heads(client: TestClient) -> Non
         (part.id, ["seen_ref"]),
         (old.id, ["buyer"]),
     ):
-        _grant(entity_id, user_id, names)
+        _grant(entity_id, user_id, names, rebuild=False)
 
     body = _describe(secret, table_name="customer")
     assert body["inbound_references"] == [

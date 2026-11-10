@@ -291,8 +291,8 @@ function callPosts() {
 }
 
 function verifyPat() {
-  fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: PAT } });
-  fireEvent.click(screen.getByRole("button", { name: "Verify User PAT" }));
+  fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+  fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 }
 
 async function renderMetadata() {
@@ -376,7 +376,7 @@ describe("MCP metadata write confirmation", () => {
   it("shows the exact write snapshot and dispatches that body only after confirm", async () => {
     await renderMetadata();
     verifyPat();
-    expect(await screen.findByText("This User PAT belongs to the signed-in user. user-a")).toBeTruthy();
+    expect(await screen.findByText("This personal access token belongs to the signed-in user. user-a")).toBeTruthy();
     await discover();
     await selectTool("/mcp set_object_semantics");
     expect(callPosts()).toHaveLength(0);
@@ -482,9 +482,10 @@ describe("MCP metadata write confirmation", () => {
     await act(async () => {
       release(jsonResponse(200, callEnvelope(capturedId, JSON.stringify({ rows: ["once-marker"] }))));
     });
-    expect(await screen.findByRole("region", { name: "Tool result" })).toBeTruthy();
-    expect(document.body.textContent).toContain("once-marker");
-    confirmWrite();
+    const result = await screen.findByRole("region", { name: "Tool result" });
+    expect(result.textContent).toContain("once-marker");
+    expect(within(result).getByText('{"object_id":"obj-7"}')).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(callPosts()).toHaveLength(1);
 
     await act(async () => {
@@ -540,7 +541,11 @@ describe("MCP metadata write confirmation", () => {
     await act(async () => {
       release(jsonResponse(200, callEnvelope(capturedId, JSON.stringify({ rows: ["kept-snapshot-marker"] }))));
     });
-    expect(document.body.textContent).toContain("kept-snapshot-marker");
+    const result = await screen.findByRole("region", { name: "Tool result" });
+    expect(result.textContent).toContain("kept-snapshot-marker");
+    expect(within(result).getByText('{"object_id":"obj-7"}')).toBeTruthy();
+    expect(result.textContent).not.toContain("obj-8");
+    expect(editor().value).toBe('{"object_id":"obj-8"}');
     expect(callPosts()).toHaveLength(1);
     expect(document.body.textContent).not.toMatch(/unknown outcome|rolled back|write was cancelled|write was canceled/i);
   });
@@ -580,7 +585,7 @@ describe("MCP metadata write confirmation", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("textbox", { name: "Arguments" })).toBeNull();
     expect(callPosts()).toHaveLength(0);
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(PAT);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
 
     pathname.current = "/console/mcp/metadata";
     view.rerender(
@@ -601,11 +606,11 @@ describe("MCP metadata write confirmation", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(callPosts()).toHaveLength(0);
 
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: `${PAT}-edited` } });
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: `${PAT}-edited` } });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("textbox", { name: "Arguments" })).toBeNull();
     expect(callPosts()).toHaveLength(0);
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe(`${PAT}-edited`);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(`${PAT}-edited`);
   });
 
   it("does not apply a late write after the endpoint or User PAT changes", async () => {
@@ -659,7 +664,7 @@ describe("MCP metadata write confirmation", () => {
     confirmWrite();
     expect(callPosts()).toHaveLength(2);
 
-    fireEvent.change(screen.getByLabelText("User PAT"), { target: { value: `${PAT}-next` } });
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: `${PAT}-next` } });
     await act(async () => {
       release(jsonResponse(200, callEnvelope(capturedId, JSON.stringify({ rows: ["late-pat-marker"] }))));
     });
@@ -807,7 +812,7 @@ describe("MCP metadata write confirmation", () => {
     await renderMetadata();
     expect(callPosts()).toHaveLength(1);
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect((screen.getByLabelText("User PAT") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("");
     expect(document.body.textContent).not.toContain("obj-7");
     expect(screen.queryByRole("button", { name: "Discover tools" })).toBeNull();
 
@@ -836,11 +841,20 @@ describe("MCP metadata write confirmation", () => {
     run("/mcp set_object_semantics");
     confirmWrite();
     expect(
-      await screen.findByRole("region", {
+      await screen.findByText(
+        "That personal access token was not accepted. The Console session stays signed in.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.queryByRole("region", {
         name: "The call failed in HTTP or the proxy, before a tool result.",
       }),
-    ).toBeTruthy();
+    ).toBeNull();
+    expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
     expect(document.body.textContent).not.toContain("Not signed in or session expired");
+    expect(document.body.textContent).not.toContain("AUTH_UNAUTHENTICATED");
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
     expect(useSessionStore.getState().user?.id).toBe("user-a");
     expect(useSessionStore.getState().signedOutLocally).toBe(false);
     expect(window.location.pathname).toBe("/console/mcp/metadata");
