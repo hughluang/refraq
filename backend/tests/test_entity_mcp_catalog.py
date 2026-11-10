@@ -37,6 +37,7 @@ _ENTITY_EXECUTION: dict[str, str] = {
     "query_rows": "read",
     "validate_sql": "read",
     "run_sql": "read",
+    "search_entities": "read",
 }
 
 

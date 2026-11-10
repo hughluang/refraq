@@ -65,6 +65,12 @@ MCP_TOOLS: tuple[McpToolSpec, ...] = (
         TOOL_DESCRIPTIONS["run_sql"],
         "read",
     ),
+    McpToolSpec(
+        "search_entities",
+        "entity:data_read",
+        TOOL_DESCRIPTIONS["search_entities"],
+        "read",
+    ),
 )
 
 

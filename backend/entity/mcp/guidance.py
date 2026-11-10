@@ -87,4 +87,16 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "effective read grant fail with the same error. A timeout is "
         "ENTITY_SQL_TIMEOUT. Does not accept narrow. Requires entity:data_read."
     ),
+    "search_entities": (
+        "Rank Business Entities the current user can read that are serving "
+        "by cosine similarity to query_text. query_text is required, trimmed, "
+        "and at most 2000 characters. limit defaults to 10 and must be an "
+        "integer from 1 through 50. Out-of-range limits are REQUEST_INVALID "
+        "and are not clamped. Each item has table_name, name, description, "
+        "tags, and score. score is cosine similarity. Results are ordered by "
+        "score descending, then table_name ascending. There is no threshold, "
+        "offset, total, or pagination. Entities without an effective read "
+        "grant are omitted. A result does not authorize describe_entity, "
+        "row reads, or SQL. Requires entity:data_read."
+    ),
 }

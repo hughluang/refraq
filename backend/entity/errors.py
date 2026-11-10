@@ -17,6 +17,8 @@ __all__ = [
     "EntityAttributeInvalid",
     "EntityChangeLogQueryUnsupported",
     "EntityDeprecated",
+    "EntityIndexNotReady",
+    "EntitySearchEmbedFailed",
     "EntityNeverPublished",
     "EntityNotFound",
     "EntityNotPublished",
@@ -89,6 +91,26 @@ class EntityRequestInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Request validation failed"
+
+
+class EntityIndexNotReady(AppError):
+    """Entity vectors cannot be ranked until the current index is ready."""
+
+    code = "ENTITY_INDEX_NOT_READY"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Entity index is not ready"
+
+
+class EntitySearchEmbedFailed(AppError):
+    """The query vector was not produced. The message names no provider detail."""
+
+    code = "ENTITY_SEARCH_EMBED_FAILED"
+    http_status = 503
+
+    def _default_message(self) -> str:
+        return "Entity search query embed failed"
 
 
 class EntityChangeLogQueryUnsupported(AppError):
