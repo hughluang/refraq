@@ -271,7 +271,7 @@ def _upsert_many(
             texts.append(text)
     if texts:
         try:
-            vectors = embed_texts(texts)
+            vectors = embed_texts(texts, expected_generation=generation)
         except Exception as exc:
             logger.warning(
                 "embedding refresh batch failed n=%s", len(texts), exc_info=True

@@ -9,10 +9,9 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Any
 
-from backend.admin.model_services import get_embedding_runtime
-from backend.admin.model_services.openai_compat import (
-    EMBEDDING_OUTPUT_DIM,
-    post_openai_embeddings,
+from backend.admin.model_services import (
+    embed_texts as request_embeddings,
+    get_embedding_runtime,
 )
 
 EmbedFn = Callable[[list[str]], list[list[float]]]
@@ -100,38 +99,17 @@ def column_embedding_text(col: Any, *, object_name: str | None = None) -> str:
     )
 
 
-def project_embedding(
-    vec: list[float], *, dim: int = EMBEDDING_OUTPUT_DIM
-) -> list[float]:
-    """Truncate a longer vector to `dim` and L2-normalize. Shorter vectors pass through."""
-    if len(vec) <= dim:
-        return vec
-    truncated = vec[:dim]
-    norm = math.sqrt(sum(n * n for n in truncated))
-    if norm <= 0.0:
-        return truncated
-    return [n / norm for n in truncated]
-
-
-def embed_texts(texts: list[str]) -> list[list[float]]:
+def embed_texts(
+    texts: list[str], *, expected_generation: int | None = None
+) -> list[list[float]]:
     if not texts:
         return []
     if _override_embed is not None:
         return _override_embed(texts)
-    runtime = get_embedding_runtime()
-    if runtime is None or not runtime.url:
-        raise RuntimeError("embedding URL is not configured")
-    # Native width may exceed EMBEDDING_OUTPUT_DIM. The in-use Qwen3
-    # endpoint accepts `dimensions` but still returns 4096; project locally
-    # so index writes and query embeds share one width.
-    vectors = post_openai_embeddings(
-        url=runtime.url,
-        model=runtime.model,
-        api_key=runtime.secret,
-        texts=texts,
-        timeout=runtime.timeout_sec,
+    generation = (
+        current_generation() if expected_generation is None else expected_generation
     )
-    return [project_embedding(vec, dim=EMBEDDING_OUTPUT_DIM) for vec in vectors]
+    return request_embeddings(texts, expected_generation=generation).vectors
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float | None:

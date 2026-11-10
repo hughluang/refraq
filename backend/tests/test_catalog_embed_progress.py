@@ -304,6 +304,48 @@ def test_catalog_embed_loading_throttles_before_planned() -> None:
     assert messages.index(done) < messages.index(planned)
 
 
+def test_real_embed_failure_omits_submitted_text_and_provider_body(
+    monkeypatch,
+    caplog,
+) -> None:
+    import io
+    import logging
+    import urllib.error
+
+    from backend.admin.model_services import openai_compat
+
+    _seed_source(object_count=1, columns_per_object=0)
+    _seed_embedding_runtime()
+
+    def _urlopen(_req: object, timeout: int = 0) -> object:
+        raise urllib.error.HTTPError(
+            "http://embed.test/v1/embeddings",
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b"provider-secret-blob classified-phrase"),
+        )
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _urlopen)
+    set_embed_fn_for_tests(None)
+    job = create_queued_job(kind="catalog_embed", input={})
+    try:
+        with caplog.at_level(logging.WARNING):
+            run_catalog_embed_job(job.id)
+    finally:
+        set_embed_fn_for_tests(None)
+    record = get_job_store().get(job.id)
+    assert record is not None
+    assert record.status == "failed"
+    visible = "\n".join(
+        [caplog.text, record.error_summary or "", *_messages(record.id)]
+    )
+    assert "provider-secret-blob" not in visible
+    assert "classified-phrase" not in visible
+    assert "obj/postgresql/embed-src/public/table/t0" not in visible
+    assert "http://embed.test/v1/embeddings" in visible
+
+
 def test_repeated_embed_error_dedupes_and_fails_zero_writes() -> None:
     _seed_source(object_count=8, columns_per_object=4)
     reason = "Embeddings HTTP 400 at http://embed: bad"

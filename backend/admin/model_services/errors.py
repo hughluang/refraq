@@ -55,6 +55,30 @@ class ModelServiceNotInUse(ModelServiceError):
         return "This purpose has no in-use Model Service"
 
 
+class ModelServiceClosed(ModelServiceError):
+    code = "MODEL_SERVICE_CLOSED"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Model Service is closed"
+
+
+class ModelServiceEndpointMissing(ModelServiceError):
+    code = "MODEL_SERVICE_ENDPOINT_MISSING"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Embeddings URL is not configured"
+
+
+class ModelServiceGenerationMismatch(ModelServiceError):
+    code = "MODEL_SERVICE_GENERATION_MISMATCH"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Embedding generation does not match the in-use model"
+
+
 class ModelServiceCleanupForbidden(ModelServiceError):
     code = "MODEL_SERVICE_CLEANUP_FORBIDDEN"
     http_status = 409

@@ -702,7 +702,7 @@ def test_vector_page_records_vector_outcome(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_project_embedding_truncates_and_passes_short() -> None:
-    from backend.metadata.catalog.embedding import project_embedding
+    from backend.admin.model_services.embeddings import project_embedding
 
     short = [0.3, 0.4]
     assert project_embedding(short, dim=4) == short
@@ -714,33 +714,81 @@ def test_project_embedding_truncates_and_passes_short() -> None:
 def test_embed_texts_projects_long_native_vectors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from backend.admin.model_services import openai_compat
+    from backend.admin.model_services.records import ModelServiceRecord, PurposeState
+    from backend.admin.model_services.store import get_model_service_store
+    from backend.core.time import utc_now
     from backend.metadata.catalog import embedding as embedding_mod
 
+    now = utc_now()
+    store = get_model_service_store()
+    store.save(
+        ModelServiceRecord(
+            id="msvc_catalog",
+            purpose="embedding",
+            protocol="openai_compat",
+            display_name="test",
+            url="http://embed.test/v1/embeddings",
+            model="m",
+            timeout_sec=45,
+            secret="sk-test-credential",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    store.save_purpose(
+        PurposeState(
+            purpose="embedding",
+            in_use_id="msvc_catalog",
+            closed=False,
+            ready=False,
+            generation=1,
+        )
+    )
     captured: dict[str, object] = {}
 
-    def _post(**kw: object) -> list[list[float]]:
-        captured["timeout"] = kw.get("timeout")
-        return [[3.0, 4.0] + [0.0] * 20]
+    class _Resp:
+        def __enter__(self) -> "_Resp":
+            return self
 
-    monkeypatch.setattr(embedding_mod, "post_openai_embeddings", _post)
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            native = [3.0, 4.0] + [0.0] * 1022 + [9.0]
+            return json.dumps({"data": [{"index": 0, "embedding": native}]}).encode(
+                "utf-8"
+            )
+
+    def _urlopen(req: object, timeout: int = 0) -> _Resp:
+        captured["timeout"] = timeout
+        captured["payload"] = json.loads(req.data.decode("utf-8"))  # type: ignore[attr-defined]
+        captured["authorization"] = req.get_header("Authorization")  # type: ignore[attr-defined]
+        return _Resp()
+
+    def _catalog_post(**_kw: object) -> list[list[float]]:
+        raise AssertionError("catalog called post_openai_embeddings")
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _urlopen)
     monkeypatch.setattr(
-        embedding_mod,
-        "get_embedding_runtime",
-        lambda: type(
-            "R",
-            (),
-            {
-                "url": "http://embed.test",
-                "model": "m",
-                "secret": None,
-                "timeout_sec": 45,
-            },
-        )(),
+        embedding_mod, "post_openai_embeddings", _catalog_post, raising=False
     )
     embedding_mod.set_embed_fn_for_tests(None)
-    monkeypatch.setattr(embedding_mod, "EMBEDDING_OUTPUT_DIM", 2)
-    assert embedding_mod.embed_texts(["q"]) == [[0.6, 0.8]]
+    assert embedding_mod.embed_texts(["q"]) == [[0.6, 0.8] + [0.0] * 1022]
     assert captured["timeout"] == 45
+    assert captured["payload"] == {"model": "m", "input": ["q"]}
+    assert captured["authorization"] == "Bearer sk-test-credential"
+    assert "sk-test-credential" not in repr(embedding_mod.embed_texts(["q"]))
+
+    def _refuse(_req: object, timeout: int = 0) -> _Resp:
+        raise AssertionError("override opened a connection")
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _refuse)
+    embedding_mod.set_embed_fn_for_tests(lambda _texts: [[0.1, 0.2]])
+    try:
+        assert embedding_mod.embed_texts(["q"]) == [[0.1, 0.2]]
+    finally:
+        embedding_mod.set_embed_fn_for_tests(None)
 
 
 def test_post_openai_embeddings_posts_model_and_input_only(
