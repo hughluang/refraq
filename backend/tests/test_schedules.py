@@ -175,7 +175,7 @@ def test_post_inserts_multiple_structure_schedules(client: TestClient) -> None:
     listed = client.get("/schedules")
     assert listed.status_code == 200
     items = listed.json()["items"]
-    assert len(items) == 5
+    assert len(items) == 6
     related = client.get(f"/sources/{source['id']}/schedules")
     assert related.status_code == 200
     assert len(related.json()["items"]) == 4

@@ -242,7 +242,8 @@ def test_unpublished_reencode_migration_removed() -> None:
 def test_revision_ids_fit_alembic_version_column() -> None:
     root = Path(__file__).resolve().parents[1] / "alembic"
     revisions = ScriptDirectory(str(root)).walk_revisions()
-    too_long = [item.revision for item in revisions if len(item.revision) > 32]
+    # 0087 widens alembic_version.version_num to varchar(64) before its stamp.
+    too_long = [item.revision for item in revisions if len(item.revision) > 64]
     assert too_long == []
 
 
