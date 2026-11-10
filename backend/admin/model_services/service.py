@@ -140,6 +140,7 @@ def _begin_rebuild(
         control_revision=state.control_revision + 1,
     )
     store.save_purpose(next_state)
+    catalog_embed_jobs().clear_index_ready(rebuild_owed=True)
     catalog_embed_jobs().trigger_run(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -166,6 +167,7 @@ def _ensure_processing_contract(
         control_revision=state.control_revision + 1,
     )
     store.save_purpose(next_state)
+    catalog_embed_jobs().clear_index_ready(rebuild_owed=True)
     catalog_embed_jobs().trigger_run(actor_user_id="system", actor_token_id=None)
     return next_state
 
@@ -198,6 +200,14 @@ def mark_embedding_ready(
     service_id: str,
     generation: int,
     control_revision: int | None = None,
+    objects_written: int = 0,
+    columns_written: int = 0,
+    objects_failed: int = 0,
+    columns_failed: int = 0,
+    objects_attempted: int = 0,
+    columns_attempted: int = 0,
+    progress: str | None = None,
+    failure_summary: str | None = None,
 ) -> bool:
     store = get_model_service_store()
     state = store.get_purpose(purpose)
@@ -208,16 +218,25 @@ def mark_embedding_ready(
         and state.control_revision != control_revision
     ):
         return False
+    catalog_embed_jobs().publish_index(
+        generation=generation,
+        objects_written=objects_written,
+        columns_written=columns_written,
+        objects_failed=objects_failed,
+        columns_failed=columns_failed,
+        objects_attempted=objects_attempted,
+        columns_attempted=columns_attempted,
+        progress=progress,
+        failure_summary=failure_summary,
+    )
     store.save_purpose(replace(state, ready=True))
     return True
 
 
-def index_status(purpose: str) -> str:
-    store = get_model_service_store()
-    state = store.get_purpose(purpose)
-    if state.ready:
-        return "ready"
+def index_status() -> str:
     jobs = catalog_embed_jobs()
+    if jobs.index_view().ready:
+        return "ready"
     if jobs.has_active():
         return "indexing"
     if jobs.latest_sweep_status() == "failed":
@@ -520,6 +539,7 @@ def cleanup_purpose(
     if jobs.has_active():
         raise ModelServiceCleanupBusy()
     jobs.clear_index()
+    jobs.clear_index_ready(rebuild_owed=False)
     updated = store.save_purpose(
         replace(
             state,

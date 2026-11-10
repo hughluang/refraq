@@ -323,3 +323,22 @@ class SourceMembershipRow(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
+
+class CatalogIndexStateRow(Base):
+    """One Catalog index. Ready is not shared-model health and not Entity ready."""
+
+    __tablename__ = "catalog_index_state"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    ready: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    generation_last_swept: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    objects_written: Mapped[int] = mapped_column(Integer, nullable=False)
+    columns_written: Mapped[int] = mapped_column(Integer, nullable=False)
+    objects_failed: Mapped[int] = mapped_column(Integer, nullable=False)
+    columns_failed: Mapped[int] = mapped_column(Integer, nullable=False)
+    objects_attempted: Mapped[int] = mapped_column(Integer, nullable=False)
+    columns_attempted: Mapped[int] = mapped_column(Integer, nullable=False)
+    progress: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rebuild_owed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+

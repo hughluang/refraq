@@ -415,8 +415,16 @@ export function ModelServiceList() {
                   labelKey={presentModelServiceOpen(Boolean(purpose?.closed)).labelKey}
                 />
                 <StatusBadge
-                  tone={presentIndexStatus(purpose?.index_status ?? "none").tone}
-                  labelKey={presentIndexStatus(purpose?.index_status ?? "none").labelKey}
+                  tone={
+                    presentIndexStatus(
+                      purpose?.catalog_index?.index_status ?? "none",
+                    ).tone
+                  }
+                  labelKey={
+                    presentIndexStatus(
+                      purpose?.catalog_index?.index_status ?? "none",
+                    ).labelKey
+                  }
                 />
               </Group>
               {showActions || showScheduleLink ? (

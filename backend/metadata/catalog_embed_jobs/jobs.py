@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from backend.admin.model_services.records import CatalogIndexView
 from backend.jobs.store import TERMINAL, get_job_store
+from backend.metadata.catalog.index_state import (
+    clear_catalog_index_ready,
+    get_catalog_index_store,
+    note_catalog_index_failure,
+    publish_catalog_index,
+)
 from backend.metadata.catalog.store import get_catalog_store
 
 CATALOG_EMBED_KIND = "catalog_embed"
@@ -61,6 +68,60 @@ class CatalogEmbedJobs:
         if sweep is None:
             return None
         return sweep.status
+
+    def index_view(self) -> CatalogIndexView:
+        return get_catalog_index_store().get()
+
+    def publish_index(
+        self,
+        *,
+        generation: int,
+        objects_written: int = 0,
+        columns_written: int = 0,
+        objects_failed: int = 0,
+        columns_failed: int = 0,
+        objects_attempted: int = 0,
+        columns_attempted: int = 0,
+        progress: str | None = None,
+        failure_summary: str | None = None,
+    ) -> None:
+        publish_catalog_index(
+            generation=generation,
+            objects_written=objects_written,
+            columns_written=columns_written,
+            objects_failed=objects_failed,
+            columns_failed=columns_failed,
+            objects_attempted=objects_attempted,
+            columns_attempted=columns_attempted,
+            progress=progress,
+            failure_summary=failure_summary,
+        )
+
+    def clear_index_ready(self, *, rebuild_owed: bool) -> None:
+        clear_catalog_index_ready(rebuild_owed=rebuild_owed)
+
+    def note_index_failure(
+        self,
+        *,
+        failure_summary: str,
+        objects_written: int = 0,
+        columns_written: int = 0,
+        objects_failed: int = 0,
+        columns_failed: int = 0,
+        objects_attempted: int = 0,
+        columns_attempted: int = 0,
+        progress: str | None = None,
+    ) -> None:
+        note_catalog_index_failure(
+            failure_summary=failure_summary,
+            objects_written=objects_written,
+            columns_written=columns_written,
+            objects_failed=objects_failed,
+            columns_failed=columns_failed,
+            objects_attempted=objects_attempted,
+            columns_attempted=columns_attempted,
+            progress=progress,
+        )
 
     def schedule_view(self):
         from backend.admin.model_services.records import EmbedScheduleView

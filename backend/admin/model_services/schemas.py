@@ -59,6 +59,27 @@ class EmbedScheduleOut(BaseModel):
     next_run_at: Instant | None
 
 
+class CatalogCoverageOut(BaseModel):
+    objects_written: int
+    columns_written: int
+    objects_failed: int
+    columns_failed: int
+    objects_attempted: int
+    columns_attempted: int
+
+
+class CatalogIndexOut(BaseModel):
+    """Catalog index. Absent Entity status is not this object."""
+
+    ready: bool
+    generation_last_swept: int | None
+    index_status: IndexStatus
+    coverage: CatalogCoverageOut
+    progress: str | None = None
+    failure_summary: str | None = None
+    rebuild_owed: bool
+
+
 class PurposeStateOut(BaseModel):
     purpose: str
     closed: bool
@@ -67,6 +88,7 @@ class PurposeStateOut(BaseModel):
     generation: int
     control_revision: int
     index_status: IndexStatus
+    catalog_index: CatalogIndexOut
     embed_schedule: EmbedScheduleOut | None = None
 
 

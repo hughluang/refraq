@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from celery import current_task
 
-from backend.admin.model_services import get_embedding_runtime, mark_embedding_ready
+from backend.admin.model_services import (
+    get_embedding_runtime,
+    mark_embedding_ready,
+)
+from backend.admin.model_services.ports import catalog_embed_jobs
 from backend.jobs.store import (
     TERMINAL,
     append_job_log,
@@ -210,10 +214,21 @@ def _sweep(
                 return _skip(job_id, "aborted", generation=generation)
             if guard["action"] == "deadline":
                 progress.flush_reason_counts()
+                running = totals.plus(source_counts)
                 summary = _deadline_stop(
-                    totals.plus(source_counts), dominant=progress.dominant_reason()
+                    running, dominant=progress.dominant_reason()
                 )
                 assert summary is not None
+                catalog_embed_jobs().note_index_failure(
+                    failure_summary=summary,
+                    objects_written=running.objects_written,
+                    columns_written=running.columns_written,
+                    objects_failed=running.objects_failed,
+                    columns_failed=running.columns_failed,
+                    objects_attempted=running.objects_attempted,
+                    columns_attempted=running.columns_attempted,
+                    progress=summary,
+                )
                 return _fail(
                     job_id,
                     error_code="JOB_EXECUTION_FAILED",
@@ -263,6 +278,16 @@ def _sweep(
                 summary = f"{summary}: {dominant}"
             if len(summary) > _SUMMARY_MAX:
                 summary = summary[:_SUMMARY_MAX] + "…"
+            catalog_embed_jobs().note_index_failure(
+                failure_summary=summary,
+                objects_written=totals.objects_written,
+                columns_written=totals.columns_written,
+                objects_failed=totals.objects_failed,
+                columns_failed=totals.columns_failed,
+                objects_attempted=totals.objects_attempted,
+                columns_attempted=totals.columns_attempted,
+                progress=summary,
+            )
             return _fail(
                 job_id,
                 error_code="JOB_EXECUTION_FAILED",
@@ -276,15 +301,6 @@ def _sweep(
             or live.control_revision != control_revision
         ):
             return _skip(job_id, "aborted", generation=generation)
-        ready = mark_embedding_ready(
-            purpose="embedding",
-            service_id=service_id,
-            generation=generation,
-            control_revision=control_revision,
-        )
-        if not ready:
-            return _skip(job_id, "aborted", generation=generation)
-        mark_succeeded(job_id, result=result)
         indexed = (
             f"indexed {totals.objects_written} objects and "
             f"{totals.columns_written} columns "
@@ -296,5 +312,22 @@ def _sweep(
                 f"{indexed}; last error: {dominant} "
                 f"(×{progress.dominant_count()})"
             )
+        ready = mark_embedding_ready(
+            purpose="embedding",
+            service_id=service_id,
+            generation=generation,
+            control_revision=control_revision,
+            objects_written=totals.objects_written,
+            columns_written=totals.columns_written,
+            objects_failed=totals.objects_failed,
+            columns_failed=totals.columns_failed,
+            objects_attempted=totals.objects_attempted,
+            columns_attempted=totals.columns_attempted,
+            progress=indexed,
+            failure_summary=dominant,
+        )
+        if not ready:
+            return _skip(job_id, "aborted", generation=generation)
+        mark_succeeded(job_id, result=result)
         append_job_log(job_id, level="info", message=indexed)
         return {"status": "succeeded"}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
@@ -24,6 +25,7 @@ from backend.admin.model_services.ports import (  # noqa: E402
     CatalogEmbedJobsPort,
     catalog_embed_jobs,
 )
+from backend.admin.model_services.records import CatalogIndexView  # noqa: E402
 from backend.admin.model_services.store import get_model_service_store  # noqa: E402
 from backend.admin.permissions import ALL_PERMISSIONS  # noqa: E402
 from backend.admin.role_store import MemoryRoleStore, get_role_store  # noqa: E402
@@ -46,6 +48,8 @@ from backend.metadata.catalog.embedding import (  # noqa: E402
     embedding_write_enabled,
     set_embed_fn_for_tests,
 )
+from backend.metadata.catalog.service import search_objects  # noqa: E402
+from backend.metadata.errors import CatalogSearchEmbedFailed  # noqa: E402
 from backend.metadata.catalog.store import (  # noqa: E402
     CatalogColumnRecord,
     CatalogObjectRecord,
@@ -69,6 +73,7 @@ class RecordingJobs(CatalogEmbedJobsPort):
         self.clears = 0
         self._status: str | None = None
         self.fail_trigger = False
+        self._index = CatalogIndexView()
 
     def trigger_run(
         self, *, actor_user_id: str, actor_token_id: str | None
@@ -95,6 +100,63 @@ class RecordingJobs(CatalogEmbedJobsPort):
 
     def schedule_view(self):
         return None
+
+    def index_view(self) -> CatalogIndexView:
+        return self._index
+
+    def publish_index(
+        self,
+        *,
+        generation: int,
+        objects_written: int = 0,
+        columns_written: int = 0,
+        objects_failed: int = 0,
+        columns_failed: int = 0,
+        objects_attempted: int = 0,
+        columns_attempted: int = 0,
+        progress: str | None = None,
+        failure_summary: str | None = None,
+    ) -> None:
+        self._index = CatalogIndexView(
+            ready=True,
+            generation_last_swept=generation,
+            objects_written=objects_written,
+            columns_written=columns_written,
+            objects_failed=objects_failed,
+            columns_failed=columns_failed,
+            objects_attempted=objects_attempted,
+            columns_attempted=columns_attempted,
+            progress=progress,
+            failure_summary=failure_summary,
+            rebuild_owed=False,
+        )
+
+    def clear_index_ready(self, *, rebuild_owed: bool) -> None:
+        self._index = replace(self._index, ready=False, rebuild_owed=rebuild_owed)
+
+    def note_index_failure(
+        self,
+        *,
+        failure_summary: str,
+        objects_written: int = 0,
+        columns_written: int = 0,
+        objects_failed: int = 0,
+        columns_failed: int = 0,
+        objects_attempted: int = 0,
+        columns_attempted: int = 0,
+        progress: str | None = None,
+    ) -> None:
+        self._index = replace(
+            self._index,
+            objects_written=objects_written,
+            columns_written=columns_written,
+            objects_failed=objects_failed,
+            columns_failed=columns_failed,
+            objects_attempted=objects_attempted,
+            columns_attempted=columns_attempted,
+            progress=progress if progress is not None else failure_summary,
+            failure_summary=failure_summary,
+        )
 
 
 @pytest.fixture
@@ -174,6 +236,26 @@ def test_unbound_catalog_embed_port_fails() -> None:
     try:
         with pytest.raises(RuntimeError, match="catalog embed jobs port is not bound"):
             catalog_embed_jobs()
+    finally:
+        bind_catalog_embed_jobs(CatalogEmbedJobs())
+
+
+def test_publish_failure_does_not_mark_the_sweep_ready(client: TestClient) -> None:
+    _login(client)
+    created = _create(client)
+    activated = client.post(f"/model-services/{created['id']}/activate")
+    assert activated.status_code == 200
+    state = get_model_service_store().get_purpose("embedding")
+    bind_catalog_embed_jobs(None)
+    try:
+        with pytest.raises(RuntimeError, match="catalog embed jobs port is not bound"):
+            mark_embedding_ready(
+                purpose="embedding",
+                service_id=created["id"],
+                generation=state.generation,
+                control_revision=state.control_revision,
+            )
+        assert get_model_service_store().get_purpose("embedding").ready is False
     finally:
         bind_catalog_embed_jobs(CatalogEmbedJobs())
 
@@ -273,6 +355,61 @@ def test_activate_mints_job_clears_ready_and_is_lexical(
     assert runtime.ready is False
     assert embedding_configured() is False
     assert embedding_write_enabled() is True
+
+
+def test_catalog_index_ready_selects_vector_search(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Search follows the Catalog index, not the purpose ready bit."""
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    store = get_model_service_store()
+    state = store.get_purpose("embedding")
+    store.save_purpose(replace(state, ready=True))
+
+    lexical = search_objects("cust", visible_source_ids=None, limit=5, offset=0)
+    assert lexical.rank_mode == "lexical"
+    assert embedding_configured() is False
+    body = client.get("/model-services/purpose/embedding").json()
+    assert body["catalog_index"]["ready"] is False
+    assert body["catalog_index"]["generation_last_swept"] is None
+    assert body["catalog_index"]["rebuild_owed"] is True
+    assert "entity_index" not in body
+
+    mark_embedding_ready(
+        purpose="embedding", service_id=created["id"], generation=1, control_revision=1
+    )
+    store.save_purpose(replace(store.get_purpose("embedding"), ready=False))
+    calls = {"n": 0}
+
+    def _embed(_texts: list[str]) -> list[list[float]]:
+        calls["n"] += 1
+        return [[0.2, 0.8]]
+
+    monkeypatch.setattr(
+        "backend.metadata.catalog.search_hybrid.embed_texts", _embed
+    )
+    vector = search_objects("cust", visible_source_ids=None, limit=5, offset=0)
+    assert vector.rank_mode == "vector"
+    assert calls["n"] == 1
+    assert embedding_configured() is True
+    shown = client.get("/model-services/purpose/embedding").json()
+    assert shown["ready"] is True
+    assert shown["catalog_index"]["ready"] is True
+    assert shown["catalog_index"]["generation_last_swept"] == 1
+    assert shown["catalog_index"]["rebuild_owed"] is False
+    assert shown["catalog_index"]["index_status"] == "ready"
+    assert "entity_index" not in shown
+
+    def _boom(_texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("embed down")
+
+    monkeypatch.setattr(
+        "backend.metadata.catalog.search_hybrid.embed_texts", _boom
+    )
+    with pytest.raises(CatalogSearchEmbedFailed):
+        search_objects("cust", visible_source_ids=None, limit=5, offset=0)
 
 
 def test_batch_limit_defaults_to_32_and_rejects_out_of_range(client: TestClient) -> None:
@@ -544,6 +681,8 @@ def test_failed_enqueue_keeps_catalog_rebuild_for_the_next_sweep(
     purpose = client.get("/model-services/purpose/embedding").json()
     assert purpose["generation"] == 2
     assert purpose["ready"] is False
+    assert purpose["catalog_index"]["ready"] is False
+    assert purpose["catalog_index"]["rebuild_owed"] is True
     assert purpose["control_revision"] == 2
     assert jobs.triggered == []
     assert jobs.clears == 0
@@ -558,6 +697,10 @@ def test_failed_enqueue_keeps_catalog_rebuild_for_the_next_sweep(
     settled = get_model_service_store().get_purpose("embedding")
     assert settled.generation == 2
     assert settled.ready is True
+    settled_index = client.get("/model-services/purpose/embedding").json()["catalog_index"]
+    assert settled_index["ready"] is True
+    assert settled_index["generation_last_swept"] == 2
+    assert settled_index["rebuild_owed"] is False
 
 
 def test_force_generation_rebuilds_without_deleting_vectors(
@@ -587,6 +730,8 @@ def test_force_generation_rebuilds_without_deleting_vectors(
     body = forced.json()
     assert body["generation"] == 2
     assert body["ready"] is False
+    assert body["catalog_index"]["ready"] is False
+    assert body["catalog_index"]["rebuild_owed"] is True
     assert body["control_revision"] == 2
     assert body["in_use_id"] == created["id"]
     assert len(jobs.triggered) == 1
@@ -618,8 +763,11 @@ def test_close_is_lexical(
     assert closed.status_code == 200
     assert closed.json()["closed"] is True
     assert closed.json()["ready"] is True
+    assert closed.json()["catalog_index"]["ready"] is True
+    assert closed.json()["catalog_index"]["rebuild_owed"] is False
     assert embedding_configured() is False
     assert len(jobs.triggered) == 1
+    assert jobs.clears == 0
     jobs.triggered.clear()
     client.post(f"/model-services/{created['id']}/activate")
     assert len(jobs.triggered) == 1
@@ -685,6 +833,48 @@ def test_open_without_in_use_rejected(client: TestClient) -> None:
         json={"rebuild": "none"},
     )
     assert_problem(response, status=409, code="MODEL_SERVICE_NOT_IN_USE")
+
+
+def test_cleanup_deletes_catalog_vectors_without_refill(client: TestClient) -> None:
+    from backend.metadata.catalog.embedding import CatalogEmbeddingRecord
+    from backend.metadata.catalog.store import get_catalog_store
+
+    reset_job_store()
+    bind_catalog_embed_jobs(CatalogEmbedJobs())
+    _login(client)
+    created = _create(client)
+    activated = client.post(f"/model-services/{created['id']}/activate")
+    assert activated.status_code == 200
+    queued, total = get_job_store().list(kind="catalog_embed")
+    assert total == 1
+    finished = _finish_catalog_embed(queued[0].id)
+    assert finished.status == "succeeded"
+    kept = CatalogEmbeddingRecord(
+        id="emb_cleanup",
+        kind="object",
+        target_id="obj_cleanup",
+        locator_key="obj/postgresql/embed-src/public/table/cleanup",
+        content_hash="abc",
+        embedding=[0.4, 0.6],
+        indexed_at=utc_now(),
+        generation=1,
+    )
+    get_catalog_store().upsert_embedding(kept)
+    closed = client.post("/model-services/purpose/embedding/close")
+    assert closed.status_code == 200
+    assert closed.json()["generation"] == 1
+    assert closed.json()["catalog_index"]["ready"] is True
+    assert get_catalog_store().get_embedding(kind="object", target_id="obj_cleanup") is not None
+    cleaned = client.post("/model-services/purpose/embedding/cleanup")
+    assert cleaned.status_code == 200
+    body = cleaned.json()
+    assert body["generation"] == 1
+    assert body["catalog_index"]["ready"] is False
+    assert body["catalog_index"]["rebuild_owed"] is False
+    assert body["in_use_id"] == created["id"]
+    assert get_catalog_store().get_embedding(kind="object", target_id="obj_cleanup") is None
+    _jobs, after = get_job_store().list(kind="catalog_embed")
+    assert after == 1
 
 
 def test_cleanup_forbidden_while_open_and_in_use(
@@ -985,6 +1175,44 @@ def test_real_catalog_embed_job_marks_ready(client: TestClient) -> None:
     purpose = get_model_service_store().get_purpose("embedding")
     assert purpose.ready is True
     assert embedding_configured() is True
+    index = client.get("/model-services/purpose/embedding").json()["catalog_index"]
+    assert index["ready"] is True
+    assert index["generation_last_swept"] == 1
+    assert index["rebuild_owed"] is False
+    assert index["failure_summary"] is None
+    assert index["coverage"]["objects_attempted"] == 0
+    assert index["coverage"]["columns_attempted"] == 0
+
+
+def test_catalog_sweep_zero_writes_stays_unready_and_records_failure(
+    client: TestClient,
+) -> None:
+    _seed_embed_target()
+    reset_job_store()
+    bind_catalog_embed_jobs(CatalogEmbedJobs())
+
+    def boom(_texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("embed down")
+
+    set_embed_fn_for_tests(boom)
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    jobs, _ = get_job_store().list(kind="catalog_embed")
+    record = _finish_catalog_embed(jobs[0].id)
+    assert record.status == "failed"
+    index = client.get("/model-services/purpose/embedding").json()["catalog_index"]
+    assert index["ready"] is False
+    assert index["rebuild_owed"] is True
+    assert index["generation_last_swept"] is None
+    assert index["failure_summary"] == (
+        "catalog_embed wrote no vectors for a non-empty catalog: embed down"
+    )
+    assert index["coverage"]["objects_written"] == 0
+    assert index["coverage"]["columns_written"] == 0
+    assert index["coverage"]["objects_failed"] == 1
+    assert index["coverage"]["columns_failed"] == 1
+    set_embed_fn_for_tests(None)
 
 
 def test_catalog_embed_zero_writes_fails(client: TestClient) -> None:
@@ -1007,6 +1235,47 @@ def test_catalog_embed_zero_writes_fails(client: TestClient) -> None:
     assert "embed down" in record.error_summary
     purpose = get_model_service_store().get_purpose("embedding")
     assert purpose.ready is False
+    set_embed_fn_for_tests(None)
+
+
+def test_catalog_sweep_records_coverage_and_still_marks_ready(
+    client: TestClient,
+) -> None:
+    # 8 objects × 4 columns = 40 targets. The second batch of 8 fails.
+    _seed_embed_target(object_count=8, columns_per_object=4)
+    reset_job_store()
+    bind_catalog_embed_jobs(CatalogEmbedJobs())
+    calls = {"n": 0}
+
+    def flaky(texts: list[str]) -> list[list[float]]:
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("column embed failed")
+        return [[1.0, 0.0] for _ in texts]
+
+    set_embed_fn_for_tests(flaky)
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    jobs, _ = get_job_store().list(kind="catalog_embed")
+    record = _finish_catalog_embed(jobs[0].id)
+    assert record.status == "succeeded"
+    index = client.get("/model-services/purpose/embedding").json()["catalog_index"]
+    coverage = index["coverage"]
+    assert index["ready"] is True
+    assert index["generation_last_swept"] == 1
+    assert index["rebuild_owed"] is False
+    assert coverage["objects_written"] == 7
+    assert coverage["columns_written"] == 25
+    assert coverage["objects_failed"] == 1
+    assert coverage["columns_failed"] == 7
+    assert coverage["objects_attempted"] == 8
+    assert coverage["columns_attempted"] == 32
+    assert index["failure_summary"] == "column embed failed"
+    assert index["progress"] == (
+        "indexed 7 objects and 25 columns (failed 1/7); "
+        "last error: column embed failed (×8)"
+    )
     set_embed_fn_for_tests(None)
 
 
@@ -1039,6 +1308,39 @@ def test_catalog_embed_partial_row_failure_still_ready(client: TestClient) -> No
     ]
     purpose = get_model_service_store().get_purpose("embedding")
     assert purpose.ready is True
+    set_embed_fn_for_tests(None)
+
+
+def test_catalog_sweep_timeouts_exceeding_writes_stay_unready(
+    client: TestClient,
+) -> None:
+    _seed_embed_target(object_count=8, columns_per_object=4)
+    reset_job_store()
+    bind_catalog_embed_jobs(CatalogEmbedJobs())
+
+    def timed_out(_texts: list[str]) -> list[list[float]]:
+        raise ModelServiceTimeout(
+            "Embeddings request timed out after 30s calling http://embed.test/v1/embeddings"
+        )
+
+    set_embed_fn_for_tests(timed_out)
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    jobs, _ = get_job_store().list(kind="catalog_embed")
+    record = _finish_catalog_embed(jobs[0].id)
+    assert record.status == "failed"
+    index = client.get("/model-services/purpose/embedding").json()["catalog_index"]
+    assert index["ready"] is False
+    assert index["rebuild_owed"] is True
+    assert index["failure_summary"] == (
+        "catalog_embed stopped: embedding timeouts exceed writes: "
+        "Embeddings request timed out after 30s calling http://embed.test/v1/embeddings"
+    )
+    assert index["coverage"]["objects_written"] == 0
+    assert index["coverage"]["columns_written"] == 0
+    assert index["coverage"]["objects_failed"] == 7
+    assert index["coverage"]["columns_failed"] == 25
     set_embed_fn_for_tests(None)
 
 

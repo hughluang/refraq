@@ -69,7 +69,23 @@ function purposeState(closed: boolean): PurposeState {
     ready: !closed,
     in_use_id: "svc_1",
     generation: 2,
-    index_status: "ready",
+    index_status: "failed",
+    catalog_index: {
+      ready: !closed,
+      generation_last_swept: 2,
+      index_status: "ready",
+      coverage: {
+        objects_written: 0,
+        columns_written: 0,
+        objects_failed: 0,
+        columns_failed: 0,
+        objects_attempted: 0,
+        columns_attempted: 0,
+      },
+      progress: null,
+      failure_summary: null,
+      rebuild_owed: false,
+    },
     embed_schedule: null,
   };
 }
@@ -124,7 +140,9 @@ describe("ModelServiceList status", () => {
   it("leaves the explanation off while the purpose is open", async () => {
     await openStatusTab(false);
 
+    expect(copy["modelServices.index.ready"]).toMatch(/^Catalog /);
     expect(await screen.findByText(copy["modelServices.index.ready"])).toBeTruthy();
+    expect(screen.queryByText(copy["modelServices.index.failed"])).toBeNull();
     expect(screen.getByText(copy["modelServices.status.open"])).toBeTruthy();
     expect(screen.queryByText(copy["modelServices.closed.noteTitle"])).toBeNull();
     expect(screen.queryByText(copy["modelServices.closed.note"])).toBeNull();

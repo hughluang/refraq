@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from backend.admin.model_services.records import EmbedScheduleView
+from backend.admin.model_services.records import CatalogIndexView, EmbedScheduleView
 
 
 class CatalogEmbedJobsPort(Protocol):
@@ -19,6 +19,37 @@ class CatalogEmbedJobsPort(Protocol):
     def latest_sweep_status(self) -> str | None: ...
 
     def schedule_view(self) -> EmbedScheduleView | None: ...
+
+    def index_view(self) -> CatalogIndexView: ...
+
+    def publish_index(
+        self,
+        *,
+        generation: int,
+        objects_written: int = 0,
+        columns_written: int = 0,
+        objects_failed: int = 0,
+        columns_failed: int = 0,
+        objects_attempted: int = 0,
+        columns_attempted: int = 0,
+        progress: str | None = None,
+        failure_summary: str | None = None,
+    ) -> None: ...
+
+    def clear_index_ready(self, *, rebuild_owed: bool) -> None: ...
+
+    def note_index_failure(
+        self,
+        *,
+        failure_summary: str,
+        objects_written: int = 0,
+        columns_written: int = 0,
+        objects_failed: int = 0,
+        columns_failed: int = 0,
+        objects_attempted: int = 0,
+        columns_attempted: int = 0,
+        progress: str | None = None,
+    ) -> None: ...
 
 
 _port: CatalogEmbedJobsPort | None = None

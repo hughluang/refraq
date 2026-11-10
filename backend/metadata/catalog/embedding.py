@@ -13,6 +13,7 @@ from backend.admin.model_services import (
     embed_texts as request_embeddings,
     get_embedding_runtime,
 )
+from backend.admin.model_services.ports import catalog_embed_jobs
 
 EmbedFn = Callable[[list[str]], list[list[float]]]
 
@@ -49,8 +50,8 @@ def embedding_configured() -> bool:
     return (
         runtime is not None
         and not runtime.closed
-        and runtime.ready
         and bool(runtime.url)
+        and catalog_embed_jobs().index_view().ready
     )
 
 

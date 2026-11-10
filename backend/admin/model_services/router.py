@@ -17,6 +17,8 @@ from backend.admin.model_services.records import (
     PurposeState,
 )
 from backend.admin.model_services.schemas import (
+    CatalogCoverageOut,
+    CatalogIndexOut,
     EmbedScheduleOut,
     ModelServiceCreateIn,
     ModelServiceList,
@@ -65,7 +67,8 @@ def _out(record: ModelServiceRecord, *, in_use_id: str | None) -> ModelServiceOu
 
 
 def _purpose_out(state: PurposeState) -> PurposeStateOut:
-    view = catalog_embed_jobs().schedule_view()
+    jobs = catalog_embed_jobs()
+    view = jobs.schedule_view()
     embed_schedule = None
     if view is not None:
         embed_schedule = EmbedScheduleOut(
@@ -75,14 +78,32 @@ def _purpose_out(state: PurposeState) -> PurposeStateOut:
             interval_seconds=view.interval_seconds,
             next_run_at=view.next_run_at,
         )
+    index = jobs.index_view()
+    status = index_status()
     return PurposeStateOut(
         purpose=state.purpose,
         closed=state.closed,
-        ready=state.ready,
+        ready=index.ready,
         in_use_id=state.in_use_id,
         generation=state.generation,
         control_revision=state.control_revision,
-        index_status=index_status(state.purpose),  # type: ignore[arg-type]
+        index_status=status,  # type: ignore[arg-type]
+        catalog_index=CatalogIndexOut(
+            ready=index.ready,
+            generation_last_swept=index.generation_last_swept,
+            index_status=status,  # type: ignore[arg-type]
+            coverage=CatalogCoverageOut(
+                objects_written=index.objects_written,
+                columns_written=index.columns_written,
+                objects_failed=index.objects_failed,
+                columns_failed=index.columns_failed,
+                objects_attempted=index.objects_attempted,
+                columns_attempted=index.columns_attempted,
+            ),
+            progress=index.progress,
+            failure_summary=index.failure_summary,
+            rebuild_owed=index.rebuild_owed,
+        ),
         embed_schedule=embed_schedule,
     )
 

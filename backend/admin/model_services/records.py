@@ -46,6 +46,23 @@ class EmbedScheduleView:
 
 
 @dataclass(frozen=True)
+class CatalogIndexView:
+    """Catalog-owned index. Ready here is not Model Service health."""
+
+    ready: bool = False
+    generation_last_swept: int | None = None
+    objects_written: int = 0
+    columns_written: int = 0
+    objects_failed: int = 0
+    columns_failed: int = 0
+    objects_attempted: int = 0
+    columns_attempted: int = 0
+    progress: str | None = None
+    failure_summary: str | None = None
+    rebuild_owed: bool = False
+
+
+@dataclass(frozen=True)
 class EmbeddingRuntime:
     service_id: str
     url: str

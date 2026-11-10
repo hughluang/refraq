@@ -25,6 +25,25 @@ export type ModelService = {
   updated_at: string;
 };
 
+export type CatalogIndexCoverage = {
+  objects_written: number;
+  columns_written: number;
+  objects_failed: number;
+  columns_failed: number;
+  objects_attempted: number;
+  columns_attempted: number;
+};
+
+export type CatalogIndexState = {
+  ready: boolean;
+  generation_last_swept: number | null;
+  index_status: IndexStatus;
+  coverage: CatalogIndexCoverage;
+  progress: string | null;
+  failure_summary: string | null;
+  rebuild_owed: boolean;
+};
+
 export type PurposeState = {
   purpose: ModelServicePurpose;
   closed: boolean;
@@ -32,6 +51,7 @@ export type PurposeState = {
   in_use_id: string | null;
   generation: number;
   index_status: IndexStatus;
+  catalog_index: CatalogIndexState;
   embed_schedule: EmbedSchedule | null;
 };
 
