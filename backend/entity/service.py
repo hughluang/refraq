@@ -57,6 +57,7 @@ from backend.entity.lifecycle import (
     status_filter_selection,
 )
 from backend.entity.present import entity_out, version_out
+from backend.entity.projection import drop_entity_projection
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,
@@ -584,6 +585,8 @@ def patch_entity(
         detail["fields"] = changed_fields
     if shape_changed:
         detail["version_id"] = saved_version.id
+    if "name" in changed_fields or "description" in changed_fields:
+        drop_entity_projection(entity_id)
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -749,6 +752,7 @@ def deprecate_entity(
     saved = get_entity_store().save_entity(
         replace(entity, deprecated_at=now, updated_at=now)
     )
+    drop_entity_projection(entity.id)
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,

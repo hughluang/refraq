@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
+from backend.tags.api import notify_tag_renamed
 from backend.tags.errors import TagNameInvalid, TagNotFound
 from backend.tags.ids import new_tag_id
 from backend.tags.names import enforce_tag_description, enforce_tag_name
@@ -79,11 +80,8 @@ def update_tag(
         new_name, new_key = enforce_tag_name(name)
     if description_set:
         new_description = enforce_tag_description(description)
-    if (
-        new_name == current.name
-        and new_key == current.name_key
-        and new_description == current.description
-    ):
+    name_changed = new_name != current.name or new_key != current.name_key
+    if not name_changed and new_description == current.description:
         return current
 
     def apply(row: TagRecord) -> TagRecord:
@@ -97,6 +95,8 @@ def update_tag(
         )
 
     saved = get_tag_store().modify(tag_id, apply)
+    if name_changed:
+        notify_tag_renamed(saved.id)
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,

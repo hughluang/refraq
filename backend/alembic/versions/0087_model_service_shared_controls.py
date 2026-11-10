@@ -6,6 +6,10 @@ Revises: 0086_access_log_sql_fields
 Existing services take a batch limit of 32. Existing purpose rows keep generation
 and start at control revision 0 with the current projection contract, so shipping
 this revision does not itself advance generation.
+
+The revision id is longer than Alembic's default varchar(32) version column.
+Widen that column before the stamp, or this upgrade rolls back and later
+revisions never run. Downgrade leaves the wider column in place.
 """
 
 from __future__ import annotations
@@ -22,6 +26,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    op.execute(
+        "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE varchar(64)"
+    )
     op.add_column(
         "model_services",
         sa.Column("batch_limit", sa.Integer(), nullable=False, server_default="32"),

@@ -39,6 +39,9 @@ __all__ = [
     "clear_assignment",
     "count_subjects",
     "list_subject_ids",
+    "bind_entity_assignment_listener",
+    "bind_tag_rename_listener",
+    "notify_tag_renamed",
     "read_assignment",
     "remove_tags",
     "replace_assignment",
@@ -80,6 +83,30 @@ class _Audit:
 
 
 _R = TypeVar("_R")
+_ASSIGNMENT_ACTIONS = frozenset({"tags.replace", "tags.add", "tags.remove"})
+_assignment_listeners: list[Callable[[str], None]] = []
+_rename_listeners: list[Callable[[str], None]] = []
+
+
+def bind_entity_assignment_listener(listener: Callable[[str], None]) -> None:
+    """Notify with an entity id after that entity's tag set changes.
+
+    The listener runs after the assignment unit of work. Tags do not import
+    the entity package; the entity projection registers itself.
+    """
+
+    _assignment_listeners.append(listener)
+
+
+def bind_tag_rename_listener(listener: Callable[[str], None]) -> None:
+    """Notify with a tag id after its stored name changes. Description edits do not."""
+
+    _rename_listeners.append(listener)
+
+
+def notify_tag_renamed(tag_id: str) -> None:
+    for listener in tuple(_rename_listeners):
+        listener(tag_id)
 
 
 def read_assignment(kind: str, subject_id: str) -> SubjectTags:
@@ -410,7 +437,16 @@ def _commit(
         actor_token_id=actor_token_id,
         session=session,
     )
+    _notify_entity_assignments(events)
     return presented
+
+
+def _notify_entity_assignments(events: list[_Audit]) -> None:
+    for event in events:
+        if event.resource_type != KIND_ENTITY or event.action not in _ASSIGNMENT_ACTIONS:
+            continue
+        for listener in tuple(_assignment_listeners):
+            listener(event.resource_id)
 
 
 def _emit(

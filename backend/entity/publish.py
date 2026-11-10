@@ -49,6 +49,7 @@ from backend.entity.lifecycle import (
     current_version_of,
     latest_published_of,
 )
+from backend.entity.projection import drop_entity_projection
 from backend.entity.reference_binding import (
     bind_reference_publish,
     freeze_reference_bindings,
@@ -322,6 +323,7 @@ def execute(job_id: str, job_input: dict[str, Any]) -> dict[str, str]:
             summary = f"{summary}; restore view failed: {undo_error}"
         rollback_status(version)
         return _fail(job_id, code, summary)
+    drop_entity_projection(entity.id)
     if change_log_on_entity_database():
         failed = _apply_pending_policy(job_id, entity, version)
         if failed is not None:
