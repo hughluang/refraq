@@ -4,17 +4,20 @@ import {
   Button,
   Group,
   Modal,
+  Paper,
   Stack,
   Table,
   Text,
 } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
 import { RecordReference } from "@/components/display/RecordReference";
 import { RowActions } from "@/components/display/RowActions";
+import { DisplayField } from "@/components/display/DisplayField";
+import { Instant } from "@/components/display/Instant";
 import { StatusBadge } from "@/components/display/StatusBadge";
 import {
   presentIndexStatus,
@@ -28,6 +31,7 @@ import { PageTabs } from "@/components/layout/consoleTabs";
 import { useConsoleTab } from "@/components/layout/consoleTabs";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { runSchedule } from "@/features/schedules/api";
 import {
   activateModelService,
   cleanupEmbeddingPurpose,
@@ -36,6 +40,7 @@ import {
   forceEmbeddingGeneration,
   deleteModelService,
   getEmbeddingPurpose,
+  getModelService,
   openEmbeddingPurpose,
   patchModelService,
   testModelService,
@@ -46,6 +51,9 @@ import {
   servicePayload,
 } from "@/features/model-services/ModelServiceForm";
 import type {
+  CatalogIndexState,
+  EmbedSchedule,
+  EntityIndexState,
   ModelService,
   ModelServiceFormValues,
   ModelServiceTestResult,
@@ -58,6 +66,148 @@ import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
+
+const ENTITY_INDEX_LABEL: Record<string, string> = {
+  none: "modelServices.entity.index.none",
+  indexing: "modelServices.entity.index.indexing",
+  ready: "modelServices.entity.index.ready",
+  failed: "modelServices.entity.index.failed",
+};
+
+function presentEntityIndex(status: string) {
+  return {
+    tone: presentIndexStatus(status).tone,
+    labelKey: ENTITY_INDEX_LABEL[status] ?? "status.unknown",
+  };
+}
+
+function ScheduleSummary({ schedule }: { schedule: EmbedSchedule | null }) {
+  const t = useTranslate();
+  if (!schedule) {
+    return <Text size="sm">{t("modelServices.index.scheduleMissing")}</Text>;
+  }
+  const cadence =
+    schedule.cron ??
+    (schedule.interval_seconds != null
+      ? t("modelServices.index.scheduleInterval", {
+          seconds: schedule.interval_seconds,
+        })
+      : t("modelServices.index.scheduleMissing"));
+  return (
+    <Stack gap={2}>
+      <Text size="sm">
+        {schedule.enabled
+          ? t("modelServices.index.scheduleEnabled")
+          : t("modelServices.index.scheduleDisabled")}
+      </Text>
+      <Text size="sm">{cadence}</Text>
+      <Text size="sm">
+        {t("modelServices.index.scheduleNext")}:{" "}
+        <Instant value={schedule.next_run_at} />
+      </Text>
+    </Stack>
+  );
+}
+
+function IndexStatusPanel({
+  titleId,
+  title,
+  badge,
+  generation,
+  coverage,
+  progress,
+  failureSummary,
+  schedule,
+  rebuildOwed,
+  readyNote,
+  rebuild,
+}: {
+  titleId: string;
+  title: string;
+  badge: { tone: ReturnType<typeof presentIndexStatus>["tone"]; labelKey: string };
+  generation: number | null;
+  coverage: ReactNode;
+  progress: string | null;
+  failureSummary: string | null;
+  schedule: EmbedSchedule | null;
+  rebuildOwed: boolean;
+  readyNote?: string | null;
+  rebuild?: { label: string; onClick: () => void } | null;
+}) {
+  const t = useTranslate();
+  return (
+    <Paper withBorder p="md" component="section" aria-labelledby={titleId}>
+      <Stack gap="sm">
+        <Group gap="xs">
+          <Text id={titleId} fw={600}>
+            {title}
+          </Text>
+          <StatusBadge tone={badge.tone} labelKey={badge.labelKey} />
+        </Group>
+        {readyNote ? <Text size="sm">{readyNote}</Text> : null}
+        <DisplayField
+          label={t("modelServices.index.generation")}
+          value={generation ?? t("modelServices.index.generationNone")}
+        />
+        <DisplayField label={t("modelServices.index.coverage")} value={coverage} />
+        {progress ? (
+          <DisplayField label={t("modelServices.index.progress")} value={progress} />
+        ) : null}
+        {failureSummary ? (
+          <DisplayField
+            label={t("modelServices.index.failure")}
+            value={failureSummary}
+          />
+        ) : null}
+        <DisplayField
+          label={t("modelServices.index.schedule")}
+          value={<ScheduleSummary schedule={schedule} />}
+        />
+        {rebuildOwed ? (
+          <Text size="sm">{t("modelServices.index.rebuildOwed")}</Text>
+        ) : null}
+        {rebuild ? (
+          <Group>
+            <Button size="compact-sm" variant="light" onClick={rebuild.onClick}>
+              {rebuild.label}
+            </Button>
+          </Group>
+        ) : null}
+      </Stack>
+    </Paper>
+  );
+}
+
+function CatalogCoverage({ index }: { index: CatalogIndexState }) {
+  const t = useTranslate();
+  return (
+    <Stack gap={2}>
+      <Text size="sm">
+        {t("modelServices.catalog.coverage.objects", {
+          written: index.coverage.objects_written,
+          failed: index.coverage.objects_failed,
+          attempted: index.coverage.objects_attempted,
+        })}
+      </Text>
+      <Text size="sm">
+        {t("modelServices.catalog.coverage.columns", {
+          written: index.coverage.columns_written,
+          failed: index.coverage.columns_failed,
+          attempted: index.coverage.columns_attempted,
+        })}
+      </Text>
+    </Stack>
+  );
+}
+
+function EntityCoverage({ index }: { index: EntityIndexState }) {
+  const t = useTranslate();
+  return t("modelServices.entity.coverage", {
+    written: index.coverage.written,
+    failed: index.coverage.failed,
+    attempted: index.coverage.attempted,
+  });
+}
 
 export function ModelServiceList() {
   const t = useTranslate();
@@ -72,6 +222,7 @@ export function ModelServiceList() {
   });
 
   const [purpose, setPurpose] = useState<PurposeState | null>(null);
+  const [fetchedInUse, setFetchedInUse] = useState<ModelService | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ModelService | undefined>();
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -82,6 +233,7 @@ export function ModelServiceList() {
   const [forcing, setForcing] = useState(false);
   const [closing, setClosing] = useState(false);
   const [cleaning, setCleaning] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const serviceTabs = useMemo(
@@ -93,6 +245,12 @@ export function ModelServiceList() {
   const forceConfirm = useConfirmAction<true>();
   const closeConfirm = useConfirmAction<true>();
   const cleanupConfirm = useConfirmAction<true>();
+  const rebuildConfirm = useConfirmAction<"catalog" | "entity">();
+  const rebuildCopy = useRef<"catalog" | "entity">("catalog");
+  if (rebuildConfirm.pending != null) {
+    rebuildCopy.current = rebuildConfirm.pending;
+  }
+  const rebuildKind = rebuildConfirm.pending ?? rebuildCopy.current;
   const deleteConfirm = useConfirmAction<ModelService>();
   const activateConfirm = useConfirmAction<ModelService>();
   const { data: canListSchedules } = useCan({
@@ -134,6 +292,29 @@ export function ModelServiceList() {
     // Purpose is loaded once on mount; list reload handles later refreshes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const listedInUse =
+    items.find((row) => row.id === purpose?.in_use_id) ?? null;
+  const listedInUseId = listedInUse?.id ?? null;
+
+  useEffect(() => {
+    const id = purpose?.in_use_id;
+    if (!id || listedInUseId) {
+      setFetchedInUse(null);
+      return;
+    }
+    let cancelled = false;
+    getModelService(id)
+      .then((row) => {
+        if (!cancelled) setFetchedInUse(row);
+      })
+      .catch(() => {
+        if (!cancelled) setFetchedInUse(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [purpose?.in_use_id, listedInUseId]);
 
   const refreshAll = async () => {
     await Promise.all([reload(), reloadPurpose()]);
@@ -246,6 +427,30 @@ export function ModelServiceList() {
     }
   };
 
+  const confirmRebuild = async () => {
+    const pending = rebuildConfirm.pending;
+    if (!pending || !purpose) return;
+    const scheduleId =
+      pending === "catalog"
+        ? purpose.embed_schedule?.id
+        : purpose.entity_index.schedule?.id;
+    if (!scheduleId) return;
+    setRebuilding(true);
+    try {
+      await runSchedule(scheduleId);
+      open?.({
+        type: "success",
+        message: t("modelServices.rebuild.success"),
+      });
+      rebuildConfirm.close();
+      await refreshAll();
+    } catch (err) {
+      notifyError(err, t("common.error.loadFailed"));
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
   const confirmCleanup = async () => {
     setCleaning(true);
     try {
@@ -289,6 +494,8 @@ export function ModelServiceList() {
   );
 
   const canCleanup = Boolean(purpose?.closed || !purpose?.in_use_id);
+  const canRebuild = Boolean(showActions && canListSchedules?.can);
+  const inUseService = listedInUse ?? fetchedInUse;
   const showScheduleLink = Boolean(
     canListSchedules?.can && purpose?.embed_schedule,
   );
@@ -405,88 +612,162 @@ export function ModelServiceList() {
         {
           value: "status",
           label: t("modelServices.tabs.status"),
-          panel: (
+          panel: purpose ? (
           <Stack gap="md">
-            <Group justify="space-between" align="center">
-              <Group gap="xs" align="center">
-                <Text fw={600}>{t("modelServices.purpose.embedding")}</Text>
-                <StatusBadge
-                  tone={presentModelServiceOpen(Boolean(purpose?.closed)).tone}
-                  labelKey={presentModelServiceOpen(Boolean(purpose?.closed)).labelKey}
-                />
-                <StatusBadge
-                  tone={
-                    presentIndexStatus(
-                      purpose?.catalog_index?.index_status ?? "none",
-                    ).tone
-                  }
-                  labelKey={
-                    presentIndexStatus(
-                      purpose?.catalog_index?.index_status ?? "none",
-                    ).labelKey
-                  }
-                />
-              </Group>
-              {showActions || showScheduleLink ? (
-                <Group gap="xs">
-                  {showActions && purpose?.in_use_id ? (
-                    <Button
-                      size="compact-sm"
-                      variant="light"
-                      onClick={() => forceConfirm.open(true)}
-                    >
-                      {t("modelServices.forceGeneration")}
-                    </Button>
-                  ) : null}
-                  {showActions ? (
-                    purpose?.closed ? (
-                      <Button
-                        size="compact-sm"
-                        variant="light"
-                        disabled={!purpose.in_use_id}
-                        onClick={() => openConfirm.open(true)}
-                      >
-                        {t("modelServices.open")}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="compact-sm"
-                        variant="light"
-                        onClick={() => closeConfirm.open(true)}
-                      >
-                        {t("modelServices.close")}
-                      </Button>
-                    )
-                  ) : null}
-                  {showActions ? (
-                    <Button
-                      size="compact-sm"
-                      variant="light"
-                      disabled={!canCleanup}
-                      onClick={() => cleanupConfirm.open(true)}
-                    >
-                      {t("modelServices.cleanup")}
-                    </Button>
-                  ) : null}
-                  {showScheduleLink ? (
-                    <Button
-                      size="compact-sm"
-                      variant="default"
-                      component={ConsoleLink}
-                      href="/console/schedules"
-                    >
-                      {t("schedules.title")}
-                    </Button>
+            <Paper
+              withBorder
+              p="md"
+              component="section"
+              aria-labelledby="model-service-shared"
+            >
+              <Stack gap="sm">
+                <Group justify="space-between" align="center">
+                  <Group gap="xs" align="center">
+                    <Text id="model-service-shared" fw={600}>
+                      {t("modelServices.shared.title")}
+                    </Text>
+                    <StatusBadge
+                      tone={presentModelServiceOpen(purpose.closed).tone}
+                      labelKey={presentModelServiceOpen(purpose.closed).labelKey}
+                    />
+                  </Group>
+                  {showActions || showScheduleLink ? (
+                    <Group gap="xs">
+                      {showActions && purpose.in_use_id ? (
+                        <Button
+                          size="compact-sm"
+                          variant="light"
+                          onClick={() => forceConfirm.open(true)}
+                        >
+                          {t("modelServices.forceGeneration")}
+                        </Button>
+                      ) : null}
+                      {showActions ? (
+                        purpose.closed ? (
+                          <Button
+                            size="compact-sm"
+                            variant="light"
+                            disabled={!purpose.in_use_id}
+                            onClick={() => openConfirm.open(true)}
+                          >
+                            {t("modelServices.open")}
+                          </Button>
+                        ) : (
+                          <Button
+                            size="compact-sm"
+                            variant="light"
+                            onClick={() => closeConfirm.open(true)}
+                          >
+                            {t("modelServices.close")}
+                          </Button>
+                        )
+                      ) : null}
+                      {showActions ? (
+                        <Button
+                          size="compact-sm"
+                          variant="light"
+                          disabled={!canCleanup}
+                          onClick={() => cleanupConfirm.open(true)}
+                        >
+                          {t("modelServices.cleanup")}
+                        </Button>
+                      ) : null}
+                      {showScheduleLink ? (
+                        <Button
+                          size="compact-sm"
+                          variant="default"
+                          component={ConsoleLink}
+                          href="/console/schedules"
+                        >
+                          {t("schedules.title")}
+                        </Button>
+                      ) : null}
+                    </Group>
                   ) : null}
                 </Group>
-              ) : null}
-            </Group>
-            {purpose?.closed ? (
-              <Callout tone="notice" title={t("modelServices.closed.noteTitle")}>
-                {t("modelServices.closed.note")}
-              </Callout>
-            ) : null}
+                {inUseService ? (
+                  <Stack gap="sm">
+                    <DisplayField
+                      label={t("modelServices.fields.url")}
+                      value={inUseService.url}
+                    />
+                    <DisplayField
+                      label={t("modelServices.fields.model")}
+                      value={inUseService.model}
+                    />
+                    <DisplayField
+                      label={t("modelServices.fields.timeout_sec")}
+                      value={inUseService.timeout_sec}
+                    />
+                    <DisplayField
+                      label={t("modelServices.fields.batch_limit")}
+                      value={inUseService.batch_limit}
+                    />
+                    <DisplayField
+                      label={t("modelServices.fields.has_secret")}
+                      value={
+                        inUseService.has_secret
+                          ? t("modelServices.status.secretSet")
+                          : t("modelServices.status.secretNone")
+                      }
+                    />
+                  </Stack>
+                ) : purpose.in_use_id ? null : (
+                  <Text size="sm">{t("modelServices.shared.noService")}</Text>
+                )}
+                {purpose.closed ? (
+                  <Callout tone="notice" title={t("modelServices.closed.noteTitle")}>
+                    {t("modelServices.closed.note")}
+                  </Callout>
+                ) : null}
+              </Stack>
+            </Paper>
+            <IndexStatusPanel
+              titleId="model-service-catalog-index"
+              title={t("modelServices.catalog.title")}
+              badge={presentIndexStatus(purpose.catalog_index.index_status)}
+              generation={purpose.catalog_index.generation_last_swept}
+              coverage={<CatalogCoverage index={purpose.catalog_index} />}
+              progress={purpose.catalog_index.progress}
+              failureSummary={purpose.catalog_index.failure_summary}
+              schedule={purpose.embed_schedule}
+              rebuildOwed={purpose.catalog_index.rebuild_owed}
+              rebuild={
+                canRebuild && purpose.embed_schedule
+                  ? {
+                      label: t("modelServices.rebuild.catalog"),
+                      onClick: () => rebuildConfirm.open("catalog"),
+                    }
+                  : null
+              }
+            />
+            <IndexStatusPanel
+              titleId="model-service-entity-index"
+              title={t("modelServices.entity.title")}
+              badge={presentEntityIndex(purpose.entity_index.index_status)}
+              generation={purpose.entity_index.generation}
+              coverage={<EntityCoverage index={purpose.entity_index} />}
+              progress={purpose.entity_index.progress}
+              failureSummary={purpose.entity_index.failure_summary}
+              schedule={purpose.entity_index.schedule}
+              rebuildOwed={purpose.entity_index.rebuild_owed}
+              readyNote={
+                purpose.entity_index.ready
+                  ? t("modelServices.entity.readyNote")
+                  : null
+              }
+              rebuild={
+                canRebuild && purpose.entity_index.schedule
+                  ? {
+                      label: t("modelServices.rebuild.entity"),
+                      onClick: () => rebuildConfirm.open("entity"),
+                    }
+                  : null
+              }
+            />
           </Stack>
+          ) : (
+            <Stack gap="md" />
           ),
         },
       ]}
@@ -583,6 +864,24 @@ export function ModelServiceList() {
           body={t("modelServices.open.confirmBody")}
           loading={opening}
           onConfirm={() => void confirmOpen()}
+        />
+
+        <ConfirmActionModal
+          stackId="model-service-rebuild"
+          opened={rebuildConfirm.opened}
+          onClose={rebuildConfirm.close}
+          title={t(
+            rebuildKind === "entity"
+              ? "modelServices.rebuild.entityTitle"
+              : "modelServices.rebuild.catalogTitle",
+          )}
+          body={t(
+            rebuildKind === "entity"
+              ? "modelServices.rebuild.entityBody"
+              : "modelServices.rebuild.catalogBody",
+          )}
+          loading={rebuilding}
+          onConfirm={() => void confirmRebuild()}
         />
 
         <ConfirmActionModal

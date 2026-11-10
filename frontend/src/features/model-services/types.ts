@@ -44,6 +44,23 @@ export type CatalogIndexState = {
   rebuild_owed: boolean;
 };
 
+export type EntityIndexCoverage = {
+  written: number;
+  failed: number;
+  attempted: number;
+};
+
+export type EntityIndexState = {
+  ready: boolean;
+  generation: number | null;
+  index_status: IndexStatus;
+  coverage: EntityIndexCoverage;
+  progress: string | null;
+  failure_summary: string | null;
+  schedule: EmbedSchedule | null;
+  rebuild_owed: boolean;
+};
+
 export type PurposeState = {
   purpose: ModelServicePurpose;
   closed: boolean;
@@ -52,6 +69,7 @@ export type PurposeState = {
   generation: number;
   index_status: IndexStatus;
   catalog_index: CatalogIndexState;
+  entity_index: EntityIndexState;
   embed_schedule: EmbedSchedule | null;
 };
 
