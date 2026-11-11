@@ -10,6 +10,7 @@ import type {
   CatalogIndexState,
   EmbedSchedule,
   EntityIndexState,
+  ModelService,
   PurposeState,
 } from "@/features/model-services/types";
 
@@ -166,6 +167,29 @@ function stubDomApis() {
       removeEventListener: vi.fn(),
     }),
   });
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub;
+}
+
+function listedService(
+  patch: Partial<ModelService> & Pick<ModelService, "id" | "display_name" | "in_use">,
+): ModelService {
+  return {
+    purpose: "embedding",
+    protocol: "openai_compat",
+    url: "https://embed.example/v1/embeddings",
+    model: "text-embedding",
+    timeout_sec: 30,
+    batch_limit: 32,
+    has_secret: true,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...patch,
+  };
 }
 
 async function openStatusTab(
@@ -525,5 +549,84 @@ describe("ModelServiceList status", () => {
     expect(cleanupEmbeddingPurpose).toHaveBeenCalledTimes(1);
     expect(forceEmbeddingGeneration).not.toHaveBeenCalled();
     expect(runSchedule).not.toHaveBeenCalled();
+  });
+
+  it("explains enable and in-use delete for both searches", async () => {
+    const enableBody = copy["modelServices.activate.confirmBody"];
+    expect(enableBody).toMatch(/Catalog/);
+    expect(enableBody).toMatch(/Entity/);
+    expect(enableBody).toMatch(/both ready marks/);
+    expect(enableBody).toMatch(/both site embed schedules/);
+    expect(enableBody).toMatch(/Catalog Search stays lexical/);
+    expect(enableBody).toMatch(/Entity semantic search is refused/);
+    expect(enableBody).toMatch(/does not fall back to a lexical rank/);
+    expect(enableBody).not.toMatch(/Search stays lexical until that Job/);
+    expect(enableBody).not.toMatch(/Entity semantic search stays lexical/);
+    expect(enableBody).not.toMatch(/the ready mark/);
+    expect(enableBody).not.toMatch(/the site embed schedule/);
+
+    const success = copy["modelServices.activate.success"];
+    expect(success).toMatch(/both ready marks/i);
+    expect(success).toMatch(/both site embed schedules/i);
+    expect(success).toMatch(/Catalog Search stays lexical/);
+    expect(success).toMatch(/Entity semantic search is refused/);
+    expect(success).not.toMatch(/Search stays lexical until the embed Job/);
+    expect(success).not.toMatch(/Entity semantic search stays lexical/);
+
+    const deleteBody = copy["modelServices.delete.confirmInUse"];
+    expect(deleteBody).toMatch(/Catalog Search becomes lexical/);
+    expect(deleteBody).toMatch(/Entity semantic search stops/);
+    expect(deleteBody).toMatch(/Neither index is cleaned/);
+    expect(deleteBody).toMatch(/in-flight embed Job keeps running/);
+    expect(deleteBody).not.toMatch(/ready/i);
+    expect(deleteBody).not.toMatch(/schedule/i);
+
+    getEmbeddingPurpose.mockResolvedValue(purposeState(false));
+    listModelServices.mockResolvedValue({
+      items: [
+        listedService({
+          id: "svc_draft",
+          display_name: "Draft embed",
+          in_use: false,
+        }),
+        listedService({
+          id: "svc_1",
+          display_name: "Live embed",
+          in_use: true,
+        }),
+      ],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    });
+    const { ModelServiceList } = await import(
+      "@/features/model-services/ModelServiceList"
+    );
+    render(
+      createElement(
+        MantineProvider,
+        { env: "test" },
+        createElement(ModelServiceList),
+      ),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "More actions for Draft embed",
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: copy["modelServices.activate"] }),
+    );
+    expect(await screen.findByText(enableBody)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: copy["common.cancel"] }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "More actions for Live embed" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: copy["actions.delete"] }),
+    );
+    expect(screen.getByText(deleteBody)).toBeTruthy();
   });
 });
