@@ -44,6 +44,7 @@ from backend.admin.routers.account import router as account_router
 from backend.admin.routers.audit import router as audit_router
 from backend.admin.routers.auth import router as auth_router_instance
 from backend.admin.branding.router import router as branding_router
+from backend.admin.host.router import router as host_router
 from backend.admin.model_services import (
     bind_catalog_embed_jobs,
     bind_entity_embed_jobs,
@@ -266,6 +267,7 @@ app.include_router(roles_router)
 app.include_router(console_router)
 app.include_router(settings_router)
 app.include_router(branding_router)
+app.include_router(host_router)
 app.include_router(model_services_router)
 app.include_router(tokens_router)
 app.include_router(audit_router)

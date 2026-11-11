@@ -95,12 +95,13 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "http_account:read", "description": "List and view HTTP Accounts" },
     { "key": "http_account:write", "description": "Create, update, and delete HTTP Accounts" },
     { "key": "inbound_credential:read", "description": "List and view Inbound Credentials" },
-    { "key": "inbound_credential:write", "description": "Create, update, and delete Inbound Credentials" }
+    { "key": "inbound_credential:write", "description": "Create, update, and delete Inbound Credentials" },
+    { "key": "host:read", "description": "View host and Postgres occupancy" }
   ]
 }
 ```
 
-`sources:access_manage` is a granting Permission. It is not implied by `sources:read`, `sources:write`, or `metadata:*`, it is not seeded onto `operator`, and a Role that effectively holds it cannot be an Identity Provider default Role. It is not a **Source Access Level**. Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`. Platform **Job** / **Scheduled Task** permission `jobs:run`: `docs/business-jobs.md`. Entity keys: `docs/business-entity.md` §6. Entity Data API keys: `docs/api-contracts-entity-data.md`. Entity access control: `docs/business-entity-access.md` §18.
+`host:read` views host and Postgres occupancy. It is not implied by `console:access` or `jobs:run`, it is not seeded onto `operator`, and it is not a **Source Access Level**. `sources:access_manage` is a granting Permission. It is not implied by `sources:read`, `sources:write`, or `metadata:*`, it is not seeded onto `operator`, and a Role that effectively holds it cannot be an Identity Provider default Role. It is not a **Source Access Level**. Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`. Platform **Job** / **Scheduled Task** permission `jobs:run`: `docs/business-jobs.md`. Entity keys: `docs/business-entity.md` §6. Entity Data API keys: `docs/api-contracts-entity-data.md`. Entity access control: `docs/business-entity-access.md` §18.
 
 ## 4. `GET /roles`
 

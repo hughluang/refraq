@@ -19,6 +19,7 @@ export const ModuleId = {
   channelDatasetUsage: "channel-dataset-usage",
   jobs: "jobs",
   schedules: "schedules",
+  host: "host",
   settings: "settings",
   branding: "branding",
   webhooks: "webhooks",

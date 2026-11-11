@@ -378,6 +378,26 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "host",
+    "label_key": "host.title",
+    "icon": "chart-bar",
+    "routes": {
+      "list": "/console/host",
+      "create": null,
+      "edit": null,
+      "show": null,
+      "aliases": []
+    },
+    "actions": {
+      "list": "host:read",
+      "create": null,
+      "edit": null,
+      "delete": null,
+      "show": null,
+      "sample": null
+    }
+  },
+  {
     "id": "settings",
     "label_key": "settings.title",
     "icon": "settings",

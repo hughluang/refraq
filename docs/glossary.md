@@ -314,7 +314,7 @@ Avoid calling **Running Time Limit** wall-clock.
 
 ### Operations Nav Group
 
-The Console Navigation group with stable id `operations` for platform-wide **Job** observe and domain **Scheduled Task** definition modules.
+The Console Navigation group with stable id `operations` for platform-wide **Job** observe, domain **Scheduled Task** definition, and the host screen.
 Console IA only; not a product domain.
 Avoid mounting these modules under **Metadata**, Administration, or Platform Settings.
 Avoid treating the group as a synonym for **Job**.

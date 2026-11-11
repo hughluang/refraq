@@ -231,6 +231,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `channel-dataset-usage` | `channel` | `chart-bar` | `/console/channel-dataset-usage` | `channel:read` | — |
 | `jobs` | `operations` | `list-check` | `/console/jobs` | `jobs:run` | — |
 | `schedules` | `operations` | `clock` | `/console/schedules` | `jobs:run` | edit/delete → `jobs:run`; show `/console/sources/:id/schedules` → `jobs:run` |
+| `host` | `operations` | `chart-bar` | `/console/host` | `host:read` | — |
 | `settings` | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |
 | `branding` | `settings` | `palette` | `/console/branding` | `branding:read` | edit → `branding:write` |
 | `model-services` | `settings` | `brain` | `/console/model-services` | `model_services:read` | create/edit/delete → `model_services:write` |

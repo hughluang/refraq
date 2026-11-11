@@ -44,6 +44,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "admin.federation",
             "admin.model_services",
             "admin.subjects",
+            "admin.host",
             "admin.routers",
         }
     ),

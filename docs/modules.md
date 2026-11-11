@@ -466,3 +466,4 @@ For the login/permission slice, each concern should land here:
 - Structure Diff HTTP: `frontend/src/features/sources/api/structure-diffs.ts`
 - Catalog Object Console logic: `frontend/src/features/sources/catalog-detail/` (`sampleFilters`, `columnDrafts`, `joinEdges`, `catalogStatus`)
 - MCP workspace: `frontend/src/features/mcp/` (overview `/console/mcp`, Metadata detail `/console/mcp/metadata`, Entity detail `/console/mcp/entity`). Console Module `mcp` is in the workbench group and is not an Account Center section. Same-origin streams: `frontend/src/app/mcp/route.ts` and `frontend/src/app/mcp/entity/route.ts`
+- Host screen (read-only occupancy beside Jobs and Scheduled Tasks): `frontend/src/features/host/` and `backend/admin/host/`. The screen reads `GET /host` from the series store. That read is not process `/metrics`, and it does not draw process-capacity gauges

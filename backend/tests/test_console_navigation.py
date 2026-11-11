@@ -115,7 +115,11 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "channel-dataset-usage",
     ]
     assert set(groups["channel"]["modules"][0]) == {"id", "label_key", "route"}
-    assert [m["id"] for m in groups["operations"]["modules"]] == ["jobs", "schedules"]
+    assert [m["id"] for m in groups["operations"]["modules"]] == [
+        "jobs",
+        "schedules",
+        "host",
+    ]
     assert [g["id"] for g in response.json()["groups"]] == [
         "workbench",
         "admin",
@@ -214,3 +218,31 @@ def test_without_tag_read_entity_is_followed_by_channel(
     assert "tags" not in ids
     assert ids.index("entity") < ids.index("channel")
     assert ids[ids.index("entity") + 1] == "channel"
+
+
+def test_jobs_run_does_not_show_host(client: TestClient, store_bundle) -> None:
+    user_store, role_store, _sessions = store_bundle
+    role = create_role(
+        role_store,
+        key="job_runner",
+        name="Job runner",
+        permissions=["console:access", "jobs:run"],
+    )
+    user_store.create_user(
+        account="runner",
+        display_name="Runner",
+        password_hash=hash_password("s3cret"),
+        role_id=role.id,
+    )
+    assert (
+        client.post(
+            "/auth/login", json={"account": "runner", "password": "s3cret"}
+        ).status_code
+        == 200
+    )
+    response = client.get("/console/navigation")
+    assert response.status_code == 200, response.text
+    operations = next(
+        group for group in response.json()["groups"] if group["id"] == "operations"
+    )
+    assert [module["id"] for module in operations["modules"]] == ["jobs", "schedules"]

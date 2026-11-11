@@ -389,6 +389,17 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=20,
     ),
     ConsoleModuleSeed(
+        id="host",
+        group_id="operations",
+        group_label_key="layout.navGroup.operations",
+        label_key="host.title",
+        icon="chart-bar",
+        routes=ModuleRoutes(list="/console/host"),
+        actions=ModuleActions(list="host:read"),
+        group_order=27,
+        module_order=30,
+    ),
+    ConsoleModuleSeed(
         id="settings",
         group_id="settings",
         group_label_key="layout.navGroup.settings",
