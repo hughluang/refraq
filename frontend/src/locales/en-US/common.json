@@ -446,6 +446,8 @@
   "host.postgres.checkpointBuffers": "Checkpoint buffers written",
   "host.postgres.tempFiles": "Temporary files",
   "host.postgres.tempBytes": "Temporary file bytes",
+  "host.service.cpu": "CPU time",
+  "host.service.memory": "Memory",
   "jobs.title": "Jobs",
   "jobs.description": "Observe all platform Jobs and run logs. Mint structure and join-detection Jobs from a schedule.",
   "jobs.empty": "No Jobs yet",

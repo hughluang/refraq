@@ -246,6 +246,19 @@ export function HostPage() {
               />
             );
           })}
+          {reading.charts.services.map((service) => (
+            <HostChart
+              key={service.service}
+              title={service.service}
+              start={reading.start}
+              end={reading.end}
+              nowLabel={t("host.axis.now")}
+              series={[
+                { name: t("host.service.cpu"), samples: service.cpu_seconds },
+                { name: t("host.service.memory"), samples: service.memory_bytes },
+              ]}
+            />
+          ))}
         </Stack>
       ) : null}
     </PageChrome>

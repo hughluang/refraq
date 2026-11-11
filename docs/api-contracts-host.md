@@ -40,7 +40,7 @@ The client sends that span. It does not send a query expression, a step, or a ti
 
 `step_seconds` is `max(30, ceil(window / 719))` in whole seconds. Range evaluation includes both endpoints, so dividing by 720 could return 721 points. Each returned series has at most 720 points.
 
-The response includes `span`, `start`, `end`, and `step_seconds`. Step is computed from the query window. A leading stretch where every returned series is absent is removed from `start`. CPU mode, run queue, filesystem available, disk, pressure, and Postgres chart series all take part in that trim. Step is not recomputed after the trim. An empty store returns empty tiles and charts and still returns the query window's `start`, `end`, and `step_seconds`.
+The response includes `span`, `start`, `end`, and `step_seconds`. Step is computed from the query window. A leading stretch where every returned series is absent is removed from `start`. CPU mode, run queue, filesystem available, disk, pressure, Postgres, and service chart series all take part in that trim. Step is not recomputed after the trim. An empty store returns empty tiles and empty CPU, filesystem, disk, pressure, and Postgres charts, and still returns the query window's `start`, `end`, and `step_seconds`. `charts.services` still lists the eight services, and each of their sample values is null.
 
 Tiles are the last sample within 60 seconds. No sample in that window is JSON `null`, not zero. Rate expressions use a lookback of at least 120 seconds, including when the step is 30. Chart gaps stay empty: `v` is `null`, with no fill across the gap.
 
@@ -126,7 +126,18 @@ Postgres tiles are the last sample within 60 seconds. No sample in that window i
 
 Database series are summed across their labels. The checkpointer series has no such labels. Idle states use an exact state match, so `idle in transaction` does not include `idle in transaction (aborted)`.
 
-### 3.7 Response: `200`
+### 3.7 Services
+
+`charts.services` lists eight Compose services, in this order: `postgres`, `redis`, `api`, `worker`, `beat`, `mcp`, `entity-mcp`, `web`. Any other Compose service, including `ensure-entity-db`, is omitted. A service with no samples in the span stays in the list, and its sample values are `null`. Samples from one service are not copied into another.
+
+| Reading | Series |
+| --- | --- |
+| `charts.services[].cpu_seconds` | `rate(container_cpu_usage_seconds_total[window]) * step_seconds`, with `window = max(step_seconds, 120)`. Rate is applied before summing by the Compose service label `container_label_com_docker_compose_service` |
+| `charts.services[].memory_bytes` | `container_memory_working_set_bytes` summed by that label at each timestamp. Not a rate |
+
+Service series take part in the leading-gap trim. Each series has at most 720 points. A recorded zero stays zero.
+
+### 3.8 Response: `200`
 
 ```json
 {
@@ -193,14 +204,56 @@ Database series are summed across their labels. The checkpointer series has no s
       "checkpoint_buffers_written": [{ "t": "2026-11-12T00:00:00Z", "v": 80 }],
       "temp_files": [{ "t": "2026-11-12T00:00:00Z", "v": 5 }],
       "temp_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": 1500 }]
-    }
+    },
+    "services": [
+      {
+        "service": "postgres",
+        "cpu_seconds": [{ "t": "2026-11-12T00:00:00Z", "v": 1.5 }],
+        "memory_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": 8000000 }]
+      },
+      {
+        "service": "redis",
+        "cpu_seconds": [{ "t": "2026-11-12T00:00:00Z", "v": null }],
+        "memory_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": 2000000 }]
+      },
+      {
+        "service": "api",
+        "cpu_seconds": [{ "t": "2026-11-12T00:00:00Z", "v": 3 }],
+        "memory_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": 1500 }]
+      },
+      {
+        "service": "worker",
+        "cpu_seconds": [{ "t": "2026-11-12T00:00:00Z", "v": 4 }],
+        "memory_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": 200 }]
+      },
+      {
+        "service": "beat",
+        "cpu_seconds": [{ "t": "2026-11-12T00:00:00Z", "v": 0 }],
+        "memory_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": 0 }]
+      },
+      {
+        "service": "mcp",
+        "cpu_seconds": [{ "t": "2026-11-12T00:00:00Z", "v": null }],
+        "memory_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": null }]
+      },
+      {
+        "service": "entity-mcp",
+        "cpu_seconds": [{ "t": "2026-11-12T00:00:00Z", "v": null }],
+        "memory_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": null }]
+      },
+      {
+        "service": "web",
+        "cpu_seconds": [{ "t": "2026-11-12T00:00:00Z", "v": 0.5 }],
+        "memory_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": 900 }]
+      }
+    ]
   }
 }
 ```
 
 `start`, `end`, and each sample `t` are Instants in UTC with a trailing `Z`. `v` is `null` when that step has no sample. The body has no `entity_id` and no `channel_id`.
 
-An empty store uses the same tile and chart keys. `online_count`, `busy_share`, memory bytes, swap bytes, `tiles.postgres.backends`, and `tiles.postgres.max_connections` are `null`. Filesystem, disk, CPU mode, and run-queue arrays are empty. Each pressure side is an empty array. Each Postgres chart array is empty.
+An empty store uses the same tile and chart keys. `online_count`, `busy_share`, memory bytes, swap bytes, `tiles.postgres.backends`, and `tiles.postgres.max_connections` are `null`. Filesystem, disk, CPU mode, and run-queue arrays are empty. Each pressure side is an empty array. Each Postgres chart array is empty. `charts.services` still lists the eight services in the order above, and each sample value is `null`.
 
 ## 4. `HOST_SERIES_UNAVAILABLE`
 

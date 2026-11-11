@@ -22,6 +22,7 @@ from backend.admin.host.schemas import (
     MemoryTileOut,
     PostgresTileOut,
     SampleOut,
+    ServiceChartOut,
     SwapTileOut,
     TilesOut,
 )
@@ -77,6 +78,40 @@ CHECKPOINT_QUERIES = {
     "checkpoint_sync_time": "pg_stat_checkpointer_sync_time_total",
     "checkpoint_buffers_written": "pg_stat_checkpointer_buffers_written_total",
 }
+SERVICE_NAMES = (
+    "postgres",
+    "redis",
+    "api",
+    "worker",
+    "beat",
+    "mcp",
+    "entity-mcp",
+    "web",
+)
+SERVICE_LABEL = "container_label_com_docker_compose_service"
+_SERVICE_SELECTOR = SERVICE_LABEL + '=~"' + "|".join(SERVICE_NAMES) + '"'
+
+
+def _service_cpu_query(rate_window: int) -> str:
+    return (
+        "sum by ("
+        + SERVICE_LABEL
+        + ") (rate(container_cpu_usage_seconds_total{"
+        + _SERVICE_SELECTOR
+        + "}["
+        + str(rate_window)
+        + "s]))"
+    )
+
+
+def _service_memory_query() -> str:
+    return (
+        "sum by ("
+        + SERVICE_LABEL
+        + ") (container_memory_working_set_bytes{"
+        + _SERVICE_SELECTOR
+        + "})"
+    )
 
 
 def step_seconds(window: int) -> int:
@@ -141,6 +176,29 @@ def read_host(span: HostSpan) -> HostReadOut:
             allowed,
         ),
     }
+    rate_window = max(step, 120)
+    service_cpu = _by_service(
+        query_range(
+            _service_cpu_query(rate_window),
+            start=start_unix,
+            end=end_unix,
+            step=step,
+        ),
+        allowed,
+    )
+    service_memory = _by_service(
+        query_range(
+            _service_memory_query(),
+            start=start_unix,
+            end=end_unix,
+            step=step,
+        ),
+        allowed,
+    )
+    service_cpu_seconds = {
+        name: {ts: value * step for ts, value in points.items()}
+        for name, points in service_cpu.items()
+    }
     trimmed = _trim(
         instants,
         [
@@ -151,10 +209,17 @@ def read_host(span: HostSpan) -> HostReadOut:
             *[values for _name, values in disk_queue],
             *pressure.values(),
             *postgres_series.values(),
+            *service_cpu_seconds.values(),
+            *service_memory.values(),
         ],
     )
     chart_instants = trimmed if trimmed is not None else []
     postgres = _postgres_charts(chart_instants, postgres_series)
+    services = _service_charts(
+        instants if trimmed is None else trimmed,
+        service_cpu_seconds,
+        service_memory,
+    )
     if trimmed is None:
         charts = ChartsOut(
             cpu_modes=[],
@@ -163,6 +228,7 @@ def read_host(span: HostSpan) -> HostReadOut:
             disks=[],
             pressure=_pressure(instants, pressure),
             postgres=postgres,
+            services=services,
         )
         response_start = start_unix
     else:
@@ -177,6 +243,7 @@ def read_host(span: HostSpan) -> HostReadOut:
             disks=_disk_charts(trimmed, disk_busy, disk_queue),
             pressure=_pressure(trimmed, pressure),
             postgres=postgres,
+            services=services,
         )
         response_start = trimmed[0]
     return HostReadOut(
@@ -220,6 +287,42 @@ def _scalar(body: dict) -> float | None:
     if not isinstance(value, list) or len(value) < 2:
         return None
     return _finite(value[1])
+
+
+def _by_service(body: dict, allowed: set[int]) -> dict[str, dict[int, float]]:
+    known = set(SERVICE_NAMES)
+    found: dict[str, dict[int, float]] = {}
+    for item in _result(body):
+        if not isinstance(item, dict):
+            continue
+        metric = item.get("metric")
+        if not isinstance(metric, dict):
+            continue
+        name = metric.get(SERVICE_LABEL)
+        if not isinstance(name, str) or name not in known:
+            continue
+        slot = found.get(name)
+        if slot is None:
+            slot = {}
+            found[name] = slot
+        for ts, value in _points(item.get("values"), allowed).items():
+            slot[ts] = slot.get(ts, 0.0) + value
+    return found
+
+
+def _service_charts(
+    instants: list[int],
+    cpu_seconds: dict[str, dict[int, float]],
+    memory: dict[str, dict[int, float]],
+) -> list[ServiceChartOut]:
+    return [
+        ServiceChartOut(
+            service=name,
+            cpu_seconds=_samples(instants, cpu_seconds.get(name, {})),
+            memory_bytes=_samples(instants, memory.get(name, {})),
+        )
+        for name in SERVICE_NAMES
+    ]
 
 
 def _postgres_charts(

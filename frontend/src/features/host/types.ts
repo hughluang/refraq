@@ -53,6 +53,12 @@ export type PostgresChart = {
   temp_bytes: HostSample[];
 };
 
+export type ServiceChart = {
+  service: string;
+  cpu_seconds: HostSample[];
+  memory_bytes: HostSample[];
+};
+
 export type HostRead = {
   span: HostSpan;
   start: string;
@@ -79,5 +85,6 @@ export type HostRead = {
       io: PressureSide;
     };
     postgres: PostgresChart;
+    services: ServiceChart[];
   };
 };

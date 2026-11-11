@@ -93,6 +93,12 @@ class PostgresChartOut(BaseModel):
     temp_bytes: list[SampleOut]
 
 
+class ServiceChartOut(BaseModel):
+    service: str
+    cpu_seconds: list[SampleOut]
+    memory_bytes: list[SampleOut]
+
+
 class ChartsOut(BaseModel):
     cpu_modes: list[CpuModeOut]
     run_queue: list[SampleOut]
@@ -100,6 +106,7 @@ class ChartsOut(BaseModel):
     disks: list[DiskChartOut]
     pressure: PressureOut
     postgres: PostgresChartOut
+    services: list[ServiceChartOut]
 
 
 class HostReadOut(BaseModel):

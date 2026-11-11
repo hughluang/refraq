@@ -446,6 +446,8 @@
   "host.postgres.checkpointBuffers": "检查点写出的缓冲区",
   "host.postgres.tempFiles": "临时文件数",
   "host.postgres.tempBytes": "临时文件字节",
+  "host.service.cpu": "CPU 时间",
+  "host.service.memory": "内存",
   "jobs.title": "作业",
   "jobs.description": "观察平台全部 Job 的状态与运行日志。Structure 与 Join 检测请在日程上立即执行。",
   "jobs.empty": "暂无 Job",

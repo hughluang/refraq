@@ -64,6 +64,8 @@ const CONFIRMED = [
   ],
   ["host.postgres.tempFiles", "Temporary files", "\u4e34\u65f6\u6587\u4ef6\u6570"],
   ["host.postgres.tempBytes", "Temporary file bytes", "\u4e34\u65f6\u6587\u4ef6\u5b57\u8282"],
+  ["host.service.cpu", "CPU time", "CPU \u65f6\u95f4"],
+  ["host.service.memory", "Memory", "\u5185\u5b58"],
   [
     "problems.HOST_SERIES_UNAVAILABLE",
     "The host series could not be read. Occupancy is not shown.",
@@ -183,6 +185,7 @@ const dayBody = {
       },
     },
     postgres: emptyPostgresCharts,
+    services: [],
   },
 };
 
@@ -260,6 +263,7 @@ const hourBody = {
       io: { waiting: [], stalled: [] },
     },
     postgres: emptyPostgresCharts,
+    services: [],
   },
 };
 
@@ -319,6 +323,7 @@ const retainedBody = {
       io: { waiting: [], stalled: [] },
     },
     postgres: emptyPostgresCharts,
+    services: [],
   },
 };
 
@@ -598,6 +603,72 @@ describe("HostPage", () => {
     expect(screen.getByText("4096")).toBeTruthy();
     expect(screen.queryByText(/shm_size|shared_buffers|work_mem|effective_cache_size/)).toBeNull();
     expect(screen.queryByText(/threshold/i)).toBeNull();
+  });
+
+  it("draws the eight services from the host response and leaves a gap", async () => {
+    const gap = [
+      { t: "2026-11-11T00:00:00Z", v: 90 },
+      { t: "2026-11-11T12:00:00Z", v: null },
+      { t: "2026-11-12T00:00:00Z", v: 30 },
+    ];
+    const memory = [
+      { t: "2026-11-11T00:00:00Z", v: 1500 },
+      { t: "2026-11-11T12:00:00Z", v: null },
+      { t: "2026-11-12T00:00:00Z", v: 1800 },
+    ];
+    const absent = gap.map((sample) => ({ t: sample.t, v: null }));
+    const names = [
+      "postgres",
+      "redis",
+      "api",
+      "worker",
+      "beat",
+      "mcp",
+      "entity-mcp",
+      "web",
+    ];
+    fetchMock.mockImplementation(() =>
+      jsonResponse({
+        ...dayBody,
+        charts: {
+          ...dayBody.charts,
+          services: names.map((service) => {
+            if (service === "api") {
+              return { service, cpu_seconds: gap, memory_bytes: memory };
+            }
+            if (service === "worker") {
+              return {
+                service,
+                cpu_seconds: [
+                  { t: "2026-11-11T00:00:00Z", v: 120 },
+                  { t: "2026-11-11T12:00:00Z", v: 120 },
+                  { t: "2026-11-12T00:00:00Z", v: 120 },
+                ],
+                memory_bytes: absent,
+              };
+            }
+            return { service, cpu_seconds: absent, memory_bytes: absent };
+          }),
+        },
+      }),
+    );
+    await renderPage();
+
+    expect(await screen.findByText("entity-mcp")).toBeTruthy();
+    for (const name of names) {
+      expect(screen.getByText(name)).toBeTruthy();
+    }
+    expect(screen.getAllByText("CPU time").length).toBe(names.length);
+    expect(screen.getAllByText("Memory").length).toBe(names.length);
+    const api = screen.getByRole("img", { name: "api" });
+    expect(api.querySelectorAll("polyline")).toHaveLength(4);
+    const redis = screen.getByRole("img", { name: "redis" });
+    expect(redis.querySelectorAll("polyline")).toHaveLength(0);
+    expect(screen.getAllByText("30")).toHaveLength(1);
+    expect(screen.getAllByText("1800")).toHaveLength(1);
+    expect(screen.getAllByText("120")).toHaveLength(1);
+    expect(screen.queryByText("ensure-entity-db")).toBeNull();
+    expect(screen.queryByText(/forecast|threshold/i)).toBeNull();
   });
 
   it("shows a zero swap reading and an empty inode count", async () => {

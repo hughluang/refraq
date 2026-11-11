@@ -75,6 +75,40 @@ CHECKPOINT_SYNC_QUERY = "pg_stat_checkpointer_sync_time_total"
 CHECKPOINT_BUFFERS_QUERY = "pg_stat_checkpointer_buffers_written_total"
 TEMP_FILES_QUERY = "pg_stat_database_temp_files"
 TEMP_BYTES_QUERY = "pg_stat_database_temp_bytes"
+SERVICE_LABEL = "container_label_com_docker_compose_service"
+SERVICE_NAMES = (
+    "postgres",
+    "redis",
+    "api",
+    "worker",
+    "beat",
+    "mcp",
+    "entity-mcp",
+    "web",
+)
+_SERVICE_SELECTOR = SERVICE_LABEL + '=~"' + "|".join(SERVICE_NAMES) + '"'
+
+
+def _service_cpu_query(rate_window: int) -> str:
+    return (
+        "sum by ("
+        + SERVICE_LABEL
+        + ") (rate(container_cpu_usage_seconds_total{"
+        + _SERVICE_SELECTOR
+        + "}["
+        + str(rate_window)
+        + "s]))"
+    )
+
+
+def _service_memory_query() -> str:
+    return (
+        "sum by ("
+        + SERVICE_LABEL
+        + ") (container_memory_working_set_bytes{"
+        + _SERVICE_SELECTOR
+        + "})"
+    )
 MAINTAINER_KEYS = [
     "console:access",
     "sources:read",
@@ -1097,11 +1131,160 @@ def test_added_readings_keep_the_cpu_keys(
         "disks",
         "pressure",
         "postgres",
+        "services",
     }
     assert [series["mode"] for series in body["charts"]["cpu_modes"]] == ["user"]
     assert len(body["charts"]["cpu_modes"][0]["samples"]) == 715
     assert len(body["charts"]["run_queue"]) <= 720
     assert body["charts"]["run_queue"][0]["v"] == 2
+
+
+def test_service_charts_are_rate_then_sum_times_step_and_keep_gaps(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 3600
+    label = SERVICE_LABEL
+    prometheus.ranges[_service_cpu_query(120)] = [
+        _series({label: "api"}, [(start_unix, "2"), (start_unix + 30, "1")]),
+        _series({label: "api"}, [(start_unix, "1"), (start_unix + 30, "0")]),
+        _series({label: "worker"}, [(start_unix, "4")]),
+        _series({label: "beat"}, [(start_unix, "0"), (start_unix + 30, "0")]),
+        _series({label: "ensure-entity-db"}, [(start_unix, "100")]),
+    ]
+    prometheus.ranges[_service_memory_query()] = [
+        _series({label: "api"}, [(start_unix, "1000"), (start_unix + 30, "1100")]),
+        _series({label: "api"}, [(start_unix, "500"), (start_unix + 30, "700")]),
+        _series({label: "worker"}, [(start_unix, "200")]),
+        _series({label: "redis"}, [(start_unix + 30, "64")]),
+        _series({label: "beat"}, [(start_unix, "0")]),
+        _series({label: "ensure-entity-db"}, [(start_unix, "99999")]),
+    ]
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["step_seconds"] == 30
+    services = body["charts"]["services"]
+    assert [row["service"] for row in services] == list(SERVICE_NAMES)
+    assert "ensure-entity-db" not in response.text
+    assert "entity_id" not in response.text
+    assert "channel_id" not in response.text
+    by_name = {row["service"]: row for row in services}
+    api = by_name["api"]
+    assert len(api["cpu_seconds"]) == 121
+    assert len(api["cpu_seconds"]) <= 720
+    assert len(api["memory_bytes"]) == 121
+    assert api["cpu_seconds"][0] == {"t": "2026-11-11T23:00:00Z", "v": 90}
+    assert api["cpu_seconds"][1] == {"t": "2026-11-11T23:00:30Z", "v": 30}
+    assert api["cpu_seconds"][2]["v"] is None
+    assert api["memory_bytes"][0]["v"] == 1500
+    assert api["memory_bytes"][1]["v"] == 1800
+    assert api["memory_bytes"][2]["v"] is None
+    assert by_name["worker"]["cpu_seconds"][0]["v"] == 120
+    assert by_name["worker"]["cpu_seconds"][1]["v"] is None
+    assert by_name["worker"]["memory_bytes"][0]["v"] == 200
+    assert by_name["worker"]["memory_bytes"][1]["v"] is None
+    assert by_name["redis"]["cpu_seconds"][0]["v"] is None
+    assert by_name["redis"]["cpu_seconds"][1]["v"] is None
+    assert by_name["redis"]["memory_bytes"][0]["v"] is None
+    assert by_name["redis"]["memory_bytes"][1]["v"] == 64
+    assert by_name["beat"]["cpu_seconds"][0]["v"] == 0
+    assert by_name["beat"]["memory_bytes"][0]["v"] == 0
+    assert all(sample["v"] is None for sample in by_name["postgres"]["cpu_seconds"])
+    assert all(sample["v"] is None for sample in by_name["postgres"]["memory_bytes"])
+    assert all(sample["v"] is None for sample in by_name["mcp"]["cpu_seconds"])
+    assert all(sample["v"] is None for sample in by_name["entity-mcp"]["memory_bytes"])
+    assert all(sample["v"] is None for sample in by_name["web"]["cpu_seconds"])
+    queries = [params["query"] for _url, params in prometheus.calls]
+    cpu_query = _service_cpu_query(120)
+    memory_query = _service_memory_query()
+    assert cpu_query in queries
+    assert memory_query in queries
+    assert "rate(sum" not in cpu_query
+    assert cpu_query.index("rate(") > cpu_query.index("sum by")
+    assert "[120s]" in cpu_query
+    assert "rate(" not in memory_query
+    assert body["tiles"]["cpu"] == {"online_count": 4, "busy_share": 0.25}
+    assert frozen_end == END
+
+
+def test_empty_store_still_lists_the_eight_services_with_null_samples(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    prometheus.online = None
+    prometheus.busy = None
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["start"] == "2026-11-11T23:00:00Z"
+    assert body["step_seconds"] == 30
+    assert body["charts"]["cpu_modes"] == []
+    assert body["charts"]["run_queue"] == []
+    services = body["charts"]["services"]
+    assert [row["service"] for row in services] == list(SERVICE_NAMES)
+    assert "ensure-entity-db" not in response.text
+    for row in services:
+        assert len(row["cpu_seconds"]) == 121
+        assert len(row["cpu_seconds"]) <= 720
+        assert all(sample["v"] is None for sample in row["cpu_seconds"])
+        assert all(sample["v"] is None for sample in row["memory_bytes"])
+    assert frozen_end == END
+
+
+def test_service_cpu_window_is_the_step_when_the_step_exceeds_120_seconds(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 86400
+    prometheus.ranges[_service_cpu_query(121)] = [
+        _series({SERVICE_LABEL: "api"}, [(start_unix, "2")])
+    ]
+    prometheus.ranges[_service_memory_query()] = [
+        _series({SERVICE_LABEL: "api"}, [(start_unix, "10")])
+    ]
+    response = client.get("/host", params={"span": "day"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["step_seconds"] == 121
+    api = next(row for row in body["charts"]["services"] if row["service"] == "api")
+    assert len(api["cpu_seconds"]) == 715
+    assert len(api["cpu_seconds"]) <= 720
+    assert api["cpu_seconds"][0] == {"t": "2026-11-11T00:00:00Z", "v": 242}
+    assert api["memory_bytes"][0]["v"] == 10
+    assert api["memory_bytes"][1]["v"] is None
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert _service_cpu_query(121) in queries
+    assert _service_cpu_query(120) not in queries
+    assert "rate(" not in _service_memory_query()
+    assert frozen_end == END
+
+
+def test_a_service_sample_trims_the_leading_gap(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 86400
+    sample_at = start_unix + 121
+    prometheus.ranges[_service_cpu_query(121)] = [
+        _series({SERVICE_LABEL: "api"}, [(sample_at, "1")])
+    ]
+    response = client.get("/host", params={"span": "day"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["start"] == "2026-11-11T00:02:01Z"
+    assert body["step_seconds"] == 121
+    services = body["charts"]["services"]
+    assert [row["service"] for row in services] == list(SERVICE_NAMES)
+    api = next(row for row in services if row["service"] == "api")
+    postgres = next(row for row in services if row["service"] == "postgres")
+    assert len(api["cpu_seconds"]) == 714
+    assert len(api["cpu_seconds"]) <= 720
+    assert api["cpu_seconds"][0] == {"t": "2026-11-11T00:02:01Z", "v": 121}
+    assert postgres["cpu_seconds"][0]["v"] is None
+    assert postgres["memory_bytes"][0]["v"] is None
+    assert body["charts"]["cpu_modes"] == []
+    assert frozen_end == END
 
 
 @pytest.mark.parametrize(
