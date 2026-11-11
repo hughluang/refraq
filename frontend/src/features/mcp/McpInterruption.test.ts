@@ -554,6 +554,11 @@ describe("MCP interruption and unknown write outcome", () => {
     typeArguments('{"statement":"select 1"}');
     expect(screen.queryByRole("button", { name: STOP })).toBeNull();
     run("/mcp run_sql");
+    const pendingRun = screen.getByRole("button", { name: "Run /mcp run_sql" }) as HTMLButtonElement;
+    expect(pendingRun.disabled).toBe(true);
+    expect(screen.getByText("Waiting for tool result…").getAttribute("aria-live")).toBe("polite");
+    fireEvent.click(pendingRun);
+    expect(callPosts()).toHaveLength(1);
     fireEvent.click(await screen.findByRole("button", { name: STOP }));
     expect(screen.getByRole("region", { name: STOPPED })).toBeTruthy();
     expect(screen.queryByRole("button", { name: STOP })).toBeNull();
@@ -603,6 +608,11 @@ describe("MCP interruption and unknown write outcome", () => {
     verifyPat();
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
+    const pendingDiscovery = screen.getByRole("button", { name: "Discover tools" }) as HTMLButtonElement;
+    expect(pendingDiscovery.disabled).toBe(true);
+    fireEvent.click(pendingDiscovery);
+    expect(listPosts()).toHaveLength(1);
+    expect(screen.getByText("Discovering tools…").closest('[aria-live="polite"]')).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: STOP }));
     expect(screen.getByText(STOPPED)).toBeTruthy();
     expect(screen.queryByText(EMPTY_CATALOG)).toBeNull();

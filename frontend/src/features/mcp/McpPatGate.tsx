@@ -1,7 +1,8 @@
 "use client";
 
-import { Button, Stack, Text } from "@mantine/core";
+import { Button, Group, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
+import { useEffect, useRef, useState } from "react";
 
 import { PasswordInput } from "@/components/form/PasswordInput";
 import {
@@ -24,8 +25,27 @@ function readUserId(body: unknown): string | null {
 export function McpPatGate({ endpoint }: { endpoint: string }) {
   const t = useTranslate();
   const { pat, outcome, setPat, setOutcome } = useMcpWorkspace();
+  const [pending, setPending] = useState(false);
+  const request = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setPending(false);
+    return () => {
+      request.current?.abort();
+      request.current = null;
+    };
+  }, [pat, endpoint]);
+
+  function stop() {
+    request.current?.abort();
+    request.current = null;
+    setPending(false);
+  }
 
   async function verify() {
+    if (request.current || !pat) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setPending(true);
     const submitted = pat;
     let next: McpPatOutcome = { status: "auth-error" };
     try {
@@ -34,6 +54,7 @@ export function McpPatGate({ endpoint }: { endpoint: string }) {
         method: "GET",
         credentials: "omit",
         cache: "no-store",
+        signal: controller.signal,
         headers: {
           Accept: "application/json",
           Authorization: `Bearer ${submitted}`,
@@ -51,6 +72,9 @@ export function McpPatGate({ endpoint }: { endpoint: string }) {
     } catch {
       // Thrown fetch or unreadable JSON keeps the authentication outcome.
     }
+    if (request.current !== controller || controller.signal.aborted) return;
+    request.current = null;
+    setPending(false);
     setOutcome(submitted, next);
   }
 
@@ -63,11 +87,17 @@ export function McpPatGate({ endpoint }: { endpoint: string }) {
           setPat(event.currentTarget.value);
         }}
         autoComplete="off"
+        description={t("mcp.pat.helper")}
       />
-      <Button type="button" disabled={pat.length === 0} onClick={() => void verify()}>
-        {t("mcp.pat.verify")}
-      </Button>
-      <Text>{t("mcp.pat.recordsUse")}</Text>
+      <Group wrap="wrap">
+        <Button type="button" loading={pending} disabled={pat.length === 0 || pending} onClick={() => void verify()}>
+          {t("mcp.pat.verify")}
+        </Button>
+        {pending ? <Button variant="default" onClick={stop}>{t("mcp.invoke.stop")}</Button> : null}
+      </Group>
+      <Text size="sm" c="dimmed">{t("mcp.pat.recordsUse")}</Text>
+      <div aria-live="polite">
+      {pending ? <Text>{t("mcp.pat.pending")}</Text> : null}
       {outcome.status === "verified" ? (
         <>
           <Text>{`${t("mcp.pat.verified")} ${outcome.userId}`}</Text>
@@ -76,6 +106,7 @@ export function McpPatGate({ endpoint }: { endpoint: string }) {
       ) : null}
       {outcome.status === "rejected" ? <Text>{t("mcp.pat.rejected")}</Text> : null}
       {outcome.status === "auth-error" ? <Text>{t("mcp.pat.authError")}</Text> : null}
+      </div>
     </Stack>
   );
 }

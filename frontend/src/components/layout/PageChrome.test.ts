@@ -172,6 +172,23 @@ describe("PageChrome", () => {
     expect(heading.getAttribute("style") ?? "").toContain("h2");
   });
 
+  it("overrides only the current breadcrumb label and preserves the default", async () => {
+    breadcrumbs.current = [
+      { label: "mcp.title", href: "/console/mcp" },
+      { label: "actions.show" },
+    ];
+    const { PageChrome } = await import("@/components/layout/PageChrome");
+    const view = render(shell(createElement(PageChrome, {
+      title: "Metadata MCP", breadcrumbLabel: "Metadata MCP",
+    })));
+    const current = document.querySelector('[aria-current="page"]');
+    expect(current?.textContent).toBe("Metadata MCP");
+    expect(current?.tagName).not.toBe("A");
+    expect(screen.getByRole("link", { name: "mcp.title" }).getAttribute("href")).toBe("/console/mcp");
+    view.rerender(shell(createElement(PageChrome, { title: "Other" })));
+    expect(document.querySelector('[aria-current="page"]')?.textContent).toBe("actions.show");
+  });
+
   it("does not scroll the content region when fill is set", async () => {
     const { PageChrome } = await import("@/components/layout/PageChrome");
     render(shell(createElement(PageChrome, { title: "Users", fill: true }, "Rows")));

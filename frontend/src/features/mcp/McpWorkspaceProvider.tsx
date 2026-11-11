@@ -208,6 +208,7 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
   }, [dropWriteConfirm]);
 
   const runSelected = useCallback(async (endpoint: string, toolName: string, argumentsText: string) => {
+    if (callWaitRef.current) return;
     if (outcomeRef.current.status !== "verified") return;
     const discovery = discoveryRef.current[endpoint];
     if (!discovery || discovery.status !== "ready") return;
@@ -364,12 +365,12 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
   }, [dropWriteConfirm, rejectCredential]);
 
   const discover = useCallback(async (endpoint: string) => {
+    if (discoverAbort.current[endpoint]) return;
     if (outcomeRef.current.status !== "verified") return;
     const submittedPat = patRef.current;
     const epoch = epochRef.current;
     const generation = (requestGen.current[endpoint] ?? 0) + 1;
     requestGen.current[endpoint] = generation;
-    discoverAbort.current[endpoint]?.abort();
     const controller = new AbortController();
     discoverAbort.current[endpoint] = controller;
     discoverWaitRef.current = endpoint;

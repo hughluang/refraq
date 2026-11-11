@@ -153,6 +153,28 @@ describe("MCP PAT identity gate", () => {
     vi.restoreAllMocks();
   });
 
+  it("suppresses duplicate verification and lets the operator stop waiting", async () => {
+    let release: (response: Response) => void = () => {};
+    vi.stubGlobal("fetch", vi.fn((url: string) => String(url).endsWith("/auth/me")
+      ? new Promise<Response>((resolve) => { release = resolve; })
+      : Promise.resolve(jsonResponse(200, { tools: [] }))));
+    useSessionStore.setState({ user: sessionUser("user-a", "ada", "Ada"), permissionsReady: true });
+    const { default: Layout } = await import("@/app/console/mcp/layout");
+    const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
+    render(shell(createElement(Layout, null, createElement(McpMetadataDetail))));
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: PAT } });
+    const verify = screen.getByRole("button", { name: "Verify personal access token" });
+    fireEvent.click(verify);
+    fireEvent.click(verify);
+    expect(authMeCalls()).toHaveLength(1);
+    expect((verify as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Verifying personal access token…").closest('[aria-live="polite"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    await act(async () => { release(jsonResponse(200, meBody("user-a", "ada", "Ada"))); });
+    expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
+    expect((verify as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("shows a masked empty User PAT on an endpoint detail page", async () => {
     const { default: Layout } = await import("@/app/console/mcp/layout");
     const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");

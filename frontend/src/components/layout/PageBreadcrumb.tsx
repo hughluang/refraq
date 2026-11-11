@@ -6,7 +6,7 @@ import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 
 import { shouldRenderBreadcrumbTrail } from "@/components/layout/breadcrumb-trail";
 
-export function PageBreadcrumb() {
+export function PageBreadcrumb({ currentLabel }: { currentLabel?: string }) {
   const t = useTranslate();
   const { breadcrumbs } = useBreadcrumb();
 
@@ -19,7 +19,7 @@ export function PageBreadcrumb() {
       <Breadcrumbs>
         {breadcrumbs.map((item, index) => {
           const isLast = index === breadcrumbs.length - 1;
-          const label = t(item.label);
+          const label = isLast && currentLabel !== undefined ? currentLabel : t(item.label);
 
           if (isLast || !item.href) {
             return (

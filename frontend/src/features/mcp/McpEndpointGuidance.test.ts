@@ -4,16 +4,22 @@
  */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { McpWorkspaceProvider } from "@/features/mcp/McpWorkspaceProvider";
 import en from "@/locales/en-US/common.json";
+import zh from "@/locales/zh-CN/common.json";
 
 const copy = en as Record<string, string>;
 
 const api = vi.hoisted(() => vi.fn());
+const clipboard = vi.hoisted(() => vi.fn());
+const notice = vi.hoisted(() => vi.fn());
+const problemNotice = vi.hoisted(() => vi.fn());
+vi.mock("@/components/feedback/presentProblemNotification", () => ({ presentProblemNotification: problemNotice }));
+vi.mock("@/lib/copy-text", () => ({ copyText: clipboard }));
 const pathname = vi.hoisted(() => ({ current: "/console/mcp/metadata" }));
 
 vi.mock("@/lib/api", async () => {
@@ -26,8 +32,8 @@ vi.mock("@/lib/api", async () => {
 
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string) => copy[key] ?? key,
-  useNotification: () => ({ open: vi.fn() }),
-  useBreadcrumb: () => ({ breadcrumbs: [] }),
+  useNotification: () => ({ open: notice }),
+  useBreadcrumb: () => ({ breadcrumbs: [{ label: "mcp.title", href: "/console/mcp" }, { label: "actions.show" }] }),
   useGetIdentity: () => ({ data: undefined }),
 }));
 
@@ -77,12 +83,109 @@ describe("MCP endpoint connection guidance", () => {
   beforeEach(() => {
     stubDomApis();
     api.mockReset();
+    notice.mockReset();
+    problemNotice.mockReset();
+    clipboard.mockReset();
+    clipboard.mockResolvedValue(undefined);
     api.mockResolvedValue(undefined);
     pathname.current = "/console/mcp/metadata";
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("keeps MCP locale keys paired and renders translated endpoint crumbs", async () => {
+    expect(Object.keys(en).filter((key) => key.startsWith("mcp.")).sort()).toEqual(Object.keys(zh).filter((key) => key.startsWith("mcp.")).sort());
+    const original = { ...copy };
+    Object.assign(copy, zh);
+    try {
+      const { McpEntityDetail } = await import("@/features/mcp/McpEntityDetail");
+      render(shell(createElement(McpEntityDetail)));
+      expect(document.querySelector('[aria-current="page"]')?.textContent).toBe(zh["mcp.entity.title"]);
+      expect(screen.getByRole("heading", { name: zh["mcp.connection.title"] })).toBeTruthy();
+      expect(screen.getByRole("button", { name: zh["mcp.copy.config"] })).toBeTruthy();
+    } finally { Object.assign(copy, original); }
+  });
+
+  it("copies only the public URL and placeholder configuration with shared feedback", async () => {
+    api.mockResolvedValue({ tools: [] });
+    const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
+    render(shell(createElement(McpMetadataDetail)));
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: "memory-only-clipboard-secret" } });
+    const button = screen.getByRole("button", { name: "Copy endpoint URL" });
+    button.focus();
+    await act(async () => { fireEvent.click(button); });
+    expect(clipboard).toHaveBeenLastCalledWith("https://console.example.com/mcp");
+    expect(document.activeElement).toBe(button);
+    expect(notice).toHaveBeenLastCalledWith({ type: "success", message: copy["common.copy.success"] });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy configuration" })); });
+    expect(clipboard).toHaveBeenLastCalledWith('{\n  "url": "https://console.example.com/mcp",\n  "headers": {\n    "Authorization": "Bearer <YOUR_TOKEN>"\n  }\n}');
+    clipboard.mockRejectedValueOnce(new Error("denied"));
+    await act(async () => { fireEvent.click(button); });
+    expect(notice).toHaveBeenLastCalledWith({ type: "error", message: copy["common.copy.failed"] });
+  });
+
+  it("retries only the Session catalog and distinguishes pending from empty", async () => {
+    let release: (value: unknown) => void = () => {};
+    api.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
+    render(shell(createElement(McpMetadataDetail)));
+    expect(screen.getByText("Loading Session tool catalog…")).toBeTruthy();
+    expect(screen.queryByText(copy["mcp.catalog.empty"])).toBeNull();
+    await act(async () => { release(undefined); });
+    const retry = await screen.findByRole("button", { name: "Retry Session catalog" });
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: "memory-only-test" } });
+    api.mockResolvedValueOnce({ tools: [] });
+    fireEvent.click(retry);
+    expect(await screen.findByText(copy["mcp.catalog.empty"])).toBeTruthy();
+    expect(api.mock.calls).toEqual([["/mcp/catalog"], ["/mcp/catalog"]]);
+    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("memory-only-test");
+  });
+
+  it("ignores notification retries after their catalog request has been replaced", async () => {
+    api.mockRejectedValueOnce(new Error("catalog down"));
+    const { McpClientConfiguration } = await import("@/features/mcp/McpClientConfiguration");
+    const view = render(shell(createElement(McpClientConfiguration, { publicPath: "/mcp" })));
+    await screen.findByRole("button", { name: "Retry Session catalog" });
+    const retry = problemNotice.mock.calls[0][2].onRetry as () => void;
+    api.mockResolvedValue({ tools: [] });
+    await act(async () => { retry(); });
+    expect(api).toHaveBeenCalledTimes(2);
+    await act(async () => { retry(); });
+    expect(api).toHaveBeenCalledTimes(2);
+    view.rerender(shell(createElement(McpClientConfiguration, { publicPath: "/mcp/entity" })));
+    await screen.findByText(copy["mcp.catalog.empty"]);
+    expect(api).toHaveBeenCalledTimes(3);
+    await act(async () => { retry(); });
+    expect(api).toHaveBeenCalledTimes(3);
+    view.unmount();
+    await act(async () => { retry(); });
+    expect(api).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores a late catalog response after switching endpoint", async () => {
+    let release: (value: unknown) => void = () => {};
+    api.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    const { McpClientConfiguration } = await import("@/features/mcp/McpClientConfiguration");
+    const view = render(shell(createElement(McpClientConfiguration, { publicPath: "/mcp" })));
+    api.mockResolvedValueOnce({ tools: [] });
+    view.rerender(shell(createElement(McpClientConfiguration, { publicPath: "/mcp/entity" })));
+    await screen.findByText(copy["mcp.catalog.empty"]);
+    await act(async () => { release({ tools: [{ name: "stale-tool", description: "Stale", permission: "metadata:read" }] }); });
+    expect(screen.queryByText("stale-tool")).toBeNull();
+    expect(problemNotice).not.toHaveBeenCalled();
+  });
+
+  it("gives both endpoints named sections and header navigation", async () => {
+    const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
+    render(shell(createElement(McpMetadataDetail)));
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    for (const name of ["Connection setup", "Test with your personal access token", "Tool catalog"]) {
+      expect(screen.getByRole("heading", { name, level: 2 })).toBeTruthy();
+    }
+    expect(document.querySelector("[data-page-header]")?.contains(screen.getByRole("link", { name: "Back to MCP" }))).toBe(true);
+    expect(screen.getByText("Browse Source catalogs, maintain semantics and joins, and run controlled read-only SQL.")).toBeTruthy();
   });
 
   it("explains Metadata purpose, writes, and Source-scoped access", async () => {
@@ -149,7 +252,7 @@ describe("MCP endpoint connection guidance", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Masks and withheld cells keep their server meanings. A withheld cell stays null, and its name stays a server mark. This page does not invent totals.",
+        copy["mcp.entity.masks"],
       ),
     ).toBeTruthy();
   });
@@ -279,13 +382,12 @@ describe("MCP endpoint connection guidance", () => {
     expect(api).toHaveBeenCalledWith("/mcp/catalog");
     expect(screen.getByText("https://console.example.com/mcp")).toBeTruthy();
     expect(document.body.textContent).not.toContain("/catalog-supplied");
-    expect(screen.getByText("set_object_semantics")).toBeTruthy();
-    const catalogRow = screen.getByText("set_object_semantics").parentElement;
-    expect(catalogRow?.style.display).toBe("flex");
-    expect(catalogRow?.style.gap).toBe("0.75rem");
+    expect(await screen.findByText("set_object_semantics")).toBeTruthy();
+    const catalogRow = screen.getByText("set_object_semantics").closest("li");
     expect(catalogRow?.textContent).toContain("metadata:write");
     expect(catalogRow?.textContent).toContain("Write object semantics.");
-    expect(screen.getByText("custom_probe").parentElement?.textContent).toContain("write");
+    expect(catalogRow?.textContent).toContain("Execution class is not published.");
+    expect(screen.getByText("custom_probe").closest("li")?.textContent).toContain("write");
     expect(screen.getByText("metadata:write")).toBeTruthy();
     expect(screen.getByText("Write object semantics.")).toBeTruthy();
     expect(screen.getByText("custom_probe")).toBeTruthy();
@@ -321,10 +423,10 @@ describe("MCP endpoint connection guidance", () => {
     render(shell(createElement(McpMetadataDetail)));
 
     expect(
-      await screen.findByText("This catalog is empty. That is not an outage."),
+      await screen.findByText(copy["mcp.catalog.empty"]),
     ).toBeTruthy();
     expect(
-      screen.queryByText("The catalog request failed. That is not an MCP-host outage."),
+      screen.queryByText(copy["mcp.catalog.failed"]),
     ).toBeNull();
   });
 
@@ -334,10 +436,8 @@ describe("MCP endpoint connection guidance", () => {
     render(shell(createElement(McpMetadataDetail)));
 
     expect(
-      await screen.findByText(
-        "The catalog request failed. That is not an MCP-host outage.",
-      ),
+      await screen.findByRole("button", { name: "Retry Session catalog" }),
     ).toBeTruthy();
-    expect(screen.queryByText("This catalog is empty. That is not an outage.")).toBeNull();
+    expect(screen.queryByText(copy["mcp.catalog.empty"])).toBeNull();
   });
 });

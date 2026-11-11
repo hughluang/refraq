@@ -278,19 +278,24 @@ describe("MCP live tools/list discovery", () => {
 
     const runSql = await screen.findByRole("listitem", { name: "/mcp run_sql" });
     expect(within(runSql).getByText("Run controlled SQL.")).toBeTruthy();
-    expect(within(runSql).getByText(/"statement"/)).toBeTruthy();
+    expect(within(runSql).queryByText(/"statement"/)).toBeNull();
+    fireEvent.click(within(runSql).getByRole("button", { name: "Select /mcp run_sql" }));
+    const inspector = screen.getByRole("region", { name: "Arguments for /mcp run_sql" });
+    expect(within(inspector).queryByText(/"statement"/)).toBeNull();
+    fireEvent.click(within(inspector).getByText("Input schema"));
+    expect(within(inspector).getByText(/"statement"/)).toBeTruthy();
     expect(within(runSql).getByText("read")).toBeTruthy();
     expect(within(runSql).queryByText("Catalog copy of run sql.")).toBeNull();
     expect(within(runSql).queryByText("write")).toBeNull();
 
     const writeTool = screen.getByRole("listitem", { name: "/mcp set_object_semantics" });
     expect(within(writeTool).getByText("Write object semantics.")).toBeTruthy();
-    expect(within(writeTool).getByText(/"object_id"/)).toBeTruthy();
+    expect(within(writeTool).queryByText(/"object_id"/)).toBeNull();
     expect(within(writeTool).getByText("write")).toBeTruthy();
 
     const unclassified = screen.getByRole("listitem", { name: "/mcp search_sources" });
     expect(within(unclassified).getByText("Find sources.")).toBeTruthy();
-    expect(within(unclassified).getByText(/"keywords"/)).toBeTruthy();
+    expect(within(unclassified).queryByText(/"keywords"/)).toBeNull();
     expect(within(unclassified).getByText("Execution class is not published.")).toBeTruthy();
     expect(within(unclassified).queryByText("read")).toBeNull();
 
@@ -372,7 +377,7 @@ describe("MCP live tools/list discovery", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
     const entitySql = await screen.findByRole("listitem", { name: "/mcp/entity run_sql" });
     expect(within(entitySql).getByText("Run entity SQL.")).toBeTruthy();
-    expect(within(entitySql).getByText(/"query"/)).toBeTruthy();
+    expect(within(entitySql).queryByText(/"query"/)).toBeNull();
     expect(within(entitySql).getByText("read")).toBeTruthy();
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
     expect(screen.queryByText(/"statement"/)).toBeNull();
@@ -604,7 +609,9 @@ describe("MCP live tools/list discovery", () => {
 
     const runSql = await screen.findByRole("listitem", { name: "/mcp run_sql" });
     expect(within(runSql).getByText("Streamed SQL.")).toBeTruthy();
-    expect(within(runSql).getByText(/"streamed"/)).toBeTruthy();
+    fireEvent.click(within(runSql).getByRole("button", { name: "Select /mcp run_sql" }));
+    fireEvent.click(screen.getByText("Input schema"));
+    expect(screen.getByText(/"streamed"/)).toBeTruthy();
     expect(
       screen.queryByText("This endpoint returned no tools. That is an empty catalog."),
     ).toBeNull();
@@ -1013,7 +1020,9 @@ describe("MCP live tools/list discovery", () => {
 
     const bare = await screen.findByRole("listitem", { name: "/mcp bare_tool" });
     expect(within(bare).getByText("No schema was published.")).toBeTruthy();
-    expect(within(bare).getByText("Input schema is not published.")).toBeTruthy();
+    fireEvent.click(within(bare).getByRole("button", { name: "Select /mcp bare_tool" }));
+    fireEvent.click(screen.getByText("Input schema"));
+    expect(screen.getByText("Input schema is not published.")).toBeTruthy();
     expect(within(bare).getByText("write")).toBeTruthy();
     expect(within(bare).queryByText("read")).toBeNull();
     expect(within(bare).queryByText("{}")).toBeNull();

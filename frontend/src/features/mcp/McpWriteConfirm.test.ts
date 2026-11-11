@@ -868,7 +868,7 @@ describe("MCP metadata write confirmation", () => {
     expect(screen.getByRole("dialog", { name: "Confirm this write" })).toBeTruthy();
     metadataOverride = semanticsCatalog("write", "Write object semantics refreshed.");
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(await screen.findByText("Write object semantics refreshed.")).toBeTruthy();
+    expect((await screen.findAllByText("Write object semantics refreshed.")).length).toBeGreaterThan(0);
     expect(screen.getByRole("dialog", { name: "Confirm this write" })).toBeTruthy();
     expect(within(screen.getByRole("dialog")).getByText(ARGUMENTS)).toBeTruthy();
     expect(callPosts()).toHaveLength(0);
@@ -880,7 +880,7 @@ describe("MCP metadata write confirmation", () => {
     expect(screen.getByRole("dialog", { name: "Confirm this write" })).toBeTruthy();
     metadataOverride = semanticsCatalog("read", "Semantics published as a read.");
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(await screen.findByText("Semantics published as a read.")).toBeTruthy();
+    expect((await screen.findAllByText("Semantics published as a read.")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(callPosts()).toHaveLength(0);
 
@@ -905,7 +905,7 @@ describe("MCP metadata write confirmation", () => {
     expect(callPosts()).toHaveLength(1);
     metadataOverride = semanticsCatalog("read", "Semantics published as a read.");
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(await screen.findByText("Semantics published as a read.")).toBeTruthy();
+    expect((await screen.findAllByText("Semantics published as a read.")).length).toBeGreaterThan(0);
     expect(screen.getByRole("dialog", { name: "Confirm this write" })).toBeTruthy();
     expect(callPosts()).toHaveLength(1);
 

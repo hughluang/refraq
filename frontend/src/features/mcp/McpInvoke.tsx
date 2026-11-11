@@ -1,7 +1,8 @@
 "use client";
 
-import { Button, Code, Stack, Text, Textarea } from "@mantine/core";
+import { Badge, Button, Code, Group, Stack, Text, Textarea, Title } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
+import { useState } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import type { McpArgumentIssue } from "@/features/mcp/mcp-arguments";
@@ -102,7 +103,7 @@ function OutcomeView({
         ? outcome.protocol
         : undefined;
   return (
-    <div role="region" aria-label={label} style={{ overflow: "auto", maxHeight: "24rem" }}>
+    <div role="region" aria-live="polite" aria-label={label} style={{ overflow: "auto", maxHeight: "24rem" }}>
       {outcome.status === "unknown" && outcome.requestedCancellation ? (
         <Text>{t("mcp.invoke.cancellationRequested")}</Text>
       ) : null}
@@ -126,6 +127,7 @@ function OutcomeView({
 
 export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpListedTool[] }) {
   const t = useTranslate();
+  const [schemaOpenFor, setSchemaOpenFor] = useState<string | null>(null);
   const {
     invocation,
     setArgumentsText,
@@ -147,16 +149,23 @@ export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpLis
     <Stack gap="xs">
       <div role="region" aria-label={`${t("mcp.invoke.argumentsFor")} ${qualified}`}>
         <Stack gap="xs">
-          <Code block>{schemaText(tool.inputSchema, t("mcp.discovery.schemaMissing"))}</Code>
+          <Title order={3}>{t("mcp.invoke.selected")}</Title>
+          <Group wrap="wrap"><Text ff="monospace" fw={500} style={{ overflowWrap: "anywhere" }}>{qualified}</Text><Badge variant="light">{runnable ? t(`mcp.execution.${tool.execution}`) : t("mcp.discovery.executionMissing")}</Badge></Group>
+          <Text size="sm">{tool.description}</Text>
+          <details open={schemaOpenFor === qualified}>
+            <summary onClick={(event) => { event.preventDefault(); setSchemaOpenFor(schemaOpenFor === qualified ? null : qualified); }}>{t("mcp.invoke.schemaDisclosure")}</summary>
+            {schemaOpenFor === qualified ? <Code block style={{ maxWidth: "100%", overflowX: "auto" }}>{schemaText(tool.inputSchema, t("mcp.discovery.schemaMissing"))}</Code> : null}
+          </details>
           <Textarea
             label={t("mcp.invoke.arguments")}
             value={invocation.argumentsText}
             onChange={(event) => setArgumentsText(event.currentTarget.value)}
             rows={6}
+            error={invocation.localError ? <span aria-live="polite">{formatIssue(invocation.localError, t)}</span> : undefined}
           />
-          {invocation.localError ? <Text>{formatIssue(invocation.localError, t)}</Text> : null}
+          {callWaiting ? <Text aria-live="polite">{t("mcp.invoke.pending")}</Text> : null}
           {tool.execution === "read" ? (
-            <Button type="button" onClick={() => void runSelected(endpoint, tool.name, invocation.argumentsText)}>
+            <Button type="button" loading={callWaiting} disabled={callWaiting} onClick={() => void runSelected(endpoint, tool.name, invocation.argumentsText)}>
               {`${t("mcp.invoke.run")} ${qualified}`}
             </Button>
           ) : null}
@@ -166,7 +175,7 @@ export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpLis
             </Button>
           ) : null}
           {callWaiting && !writeConfirm?.sending ? (
-            <Button type="button" onClick={() => stopWaiting("call")}>
+            <Button type="button" variant="default" onClick={() => stopWaiting("call")}>
               {t("mcp.invoke.stop")}
             </Button>
           ) : null}
@@ -195,7 +204,7 @@ export function McpInvoke({ endpoint, tools }: { endpoint: string; tools: McpLis
           <Text>{`${t("mcp.invoke.writeConfirm.tool")} ${writeConfirm.toolName}`}</Text>
           <Code block>{writeConfirm.argumentsJson}</Code>
           {writeConfirm.sending ? (
-            <Button type="button" onClick={() => stopWaiting("call")}>
+            <Button type="button" variant="default" onClick={() => stopWaiting("call")}>
               {t("mcp.invoke.stop")}
             </Button>
           ) : null}

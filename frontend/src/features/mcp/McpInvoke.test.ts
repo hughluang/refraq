@@ -372,6 +372,8 @@ describe("MCP explicit read invocation", () => {
     expect(screen.queryByText("WrappedString")).toBeNull();
 
     const panel = await selectTool("/mcp run_sql");
+    expect(within(panel).queryByText(/"statement"/)).toBeNull();
+    fireEvent.click(within(panel).getByText("Input schema"));
     expect(within(panel).getByText(/"statement"/)).toBeTruthy();
     expect(within(panel).getByText(/"minLength"/)).toBeTruthy();
     expect(within(panel).queryByRole("textbox", { name: "statement" })).toBeNull();
@@ -393,6 +395,9 @@ describe("MCP explicit read invocation", () => {
 
     run("/mcp run_sql");
     expect(screen.getByText("Arguments are empty.")).toBeTruthy();
+    expect(editor().getAttribute("aria-invalid")).toBe("true");
+    const errorId = screen.getByText("Arguments are empty.").closest(".mantine-InputWrapper-error")?.id;
+    expect(editor().getAttribute("aria-describedby")).toContain(errorId);
     expect(callPosts()).toHaveLength(0);
 
     typeArguments("   ");
@@ -460,6 +465,9 @@ describe("MCP explicit read invocation", () => {
     await screen.findByRole("button", { name: "Discover tools" });
     await discover();
 
+    const unknownTool = screen.getByRole("listitem", { name: "/mcp search_sources" });
+    expect(within(unknownTool).getByText("Execution class is not published.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("mcp.execution.lookup");
     for (const name of [
       "/mcp search_sources",
       "/mcp hint_only",
@@ -569,6 +577,7 @@ describe("MCP explicit read invocation", () => {
 
     await selectTool("/mcp bare_tool");
     const panel = screen.getByRole("region", { name: "Arguments for /mcp bare_tool" });
+    fireEvent.click(within(panel).getByText("Input schema"));
     expect(within(panel).getByText("Input schema is not published.")).toBeTruthy();
     expect(within(panel).queryByText("{}")).toBeNull();
     expect(editor().value).toBe("");

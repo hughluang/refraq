@@ -75,7 +75,9 @@ function expectNoCatalogOrClientConfig(options?: { detail?: boolean }) {
     expect(api).not.toHaveBeenCalled();
   }
   expect(screen.queryByRole("table")).toBeNull();
-  expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
+  if (!options?.detail) {
+    expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
+  }
     const secretOrLegacy = options?.detail
     ? /mcpServers/i
     : /mcpServers|YOUR_TOKEN|personal access token/i;
@@ -126,7 +128,7 @@ describe("MCP workspace", () => {
     render(shell(createElement(McpMetadataDetail)));
 
     expect(
-      screen.getByText("This page is Metadata MCP. Endpoint /mcp."),
+      screen.getByRole("heading", { name: "Metadata MCP", level: 1 }),
     ).toBeTruthy();
     expect(
       screen.queryByText("This page is Entity MCP. Endpoint /mcp/entity."),
@@ -143,7 +145,7 @@ describe("MCP workspace", () => {
     render(shell(createElement(McpEntityDetail)));
 
     expect(
-      screen.getByText("This page is Entity MCP. Endpoint /mcp/entity."),
+      screen.getByRole("heading", { name: "Entity MCP", level: 1 }),
     ).toBeTruthy();
     expect(
       screen.queryByText("This page is Metadata MCP. Endpoint /mcp."),
