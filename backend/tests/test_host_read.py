@@ -63,6 +63,18 @@ PRESSURE_MEMORY_WAITING_QUERY = "rate(node_pressure_memory_waiting_seconds_total
 PRESSURE_MEMORY_STALLED_QUERY = "rate(node_pressure_memory_stalled_seconds_total[120s])"
 PRESSURE_IO_WAITING_QUERY = "rate(node_pressure_io_waiting_seconds_total[120s])"
 PRESSURE_IO_STALLED_QUERY = "rate(node_pressure_io_stalled_seconds_total[120s])"
+BACKENDS_TILE_QUERY = "last_over_time(pg_stat_database_numbackends[60s])"
+MAX_CONNECTIONS_QUERY = "last_over_time(pg_settings_max_connections[60s])"
+BACKENDS_RANGE_QUERY = "pg_stat_database_numbackends"
+IDLE_QUERY = 'pg_stat_activity_count{state="idle in transaction"}'
+IDLE_ABORTED_QUERY = 'pg_stat_activity_count{state="idle in transaction (aborted)"}'
+CHECKPOINT_TIMED_QUERY = "pg_stat_checkpointer_num_timed_total"
+CHECKPOINT_REQUESTED_QUERY = "pg_stat_checkpointer_num_requested_total"
+CHECKPOINT_WRITE_QUERY = "pg_stat_checkpointer_write_time_total"
+CHECKPOINT_SYNC_QUERY = "pg_stat_checkpointer_sync_time_total"
+CHECKPOINT_BUFFERS_QUERY = "pg_stat_checkpointer_buffers_written_total"
+TEMP_FILES_QUERY = "pg_stat_database_temp_files"
+TEMP_BYTES_QUERY = "pg_stat_database_temp_bytes"
 MAINTAINER_KEYS = [
     "console:access",
     "sources:read",
@@ -815,6 +827,253 @@ def test_missing_pressure_series_stays_empty(
     } == {"30"}
 
 
+def test_connection_tile_sums_backends_against_max_connections(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    prometheus.instant[BACKENDS_TILE_QUERY] = [
+        _instant({"datid": "1", "datname": "refraq"}, "3"),
+        _instant({"datid": "2", "datname": "postgres"}, "4"),
+    ]
+    prometheus.instant[MAX_CONNECTIONS_QUERY] = [_instant({}, "100")]
+    prometheus.instant["last_over_time(pg_settings_superuser_reserved_connections[60s])"] = [
+        _instant({}, "3")
+    ]
+    response = client.get("/host")
+    assert response.status_code == 200, response.text
+    postgres = response.json()["tiles"]["postgres"]
+    assert postgres["backends"] == 7
+    assert postgres["max_connections"] == 100
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert BACKENDS_TILE_QUERY in queries
+    assert MAX_CONNECTIONS_QUERY in queries
+    assert not any("superuser_reserved" in query for query in queries)
+    assert not any("rate(" in query and "pg_stat_database_numbackends" in query for query in queries)
+    assert "entity_id" not in response.text
+    assert "channel_id" not in response.text
+    tile_times = {
+        params["time"]
+        for _url, params in prometheus.calls
+        if params.get("query") in {BACKENDS_TILE_QUERY, MAX_CONNECTIONS_QUERY}
+    }
+    assert tile_times == {str(_unix(frozen_end))}
+
+
+def test_postgres_tile_without_a_sample_is_null_and_a_recorded_zero_stays_zero(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    absent = client.get("/host")
+    assert absent.status_code == 200, absent.text
+    assert absent.json()["tiles"]["postgres"] == {"backends": None, "max_connections": None}
+
+    prometheus.instant[BACKENDS_TILE_QUERY] = [_instant({"datname": "refraq"}, "0")]
+    prometheus.instant[MAX_CONNECTIONS_QUERY] = [_instant({}, "0")]
+    recorded = client.get("/host")
+    assert recorded.status_code == 200, recorded.text
+    assert recorded.json()["tiles"]["postgres"] == {"backends": 0, "max_connections": 0}
+    assert frozen_end == END
+
+
+def test_backends_chart_is_the_recorded_sum_over_the_span(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 3600
+    prometheus.ranges[BACKENDS_RANGE_QUERY] = [
+        _series({"datid": "1", "datname": "refraq"}, [(start_unix, "3"), (start_unix + 30, "5")]),
+        _series({"datid": "2", "datname": "postgres"}, [(start_unix, "4"), (start_unix + 30, "6")]),
+    ]
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["start"] == "2026-11-11T23:00:00Z"
+    assert body["step_seconds"] == 30
+    samples = body["charts"]["postgres"]["backends"]
+    assert len(samples) == 121
+    assert len(samples) <= 720
+    assert samples[0] == {"t": "2026-11-11T23:00:00Z", "v": 7}
+    assert samples[1] == {"t": "2026-11-11T23:00:30Z", "v": 11}
+    assert samples[2]["v"] is None
+    query = next(
+        params for _url, params in prometheus.calls if params.get("query") == BACKENDS_RANGE_QUERY
+    )
+    assert "rate(" not in query["query"]
+    assert query["step"] == "30"
+    assert query["start"] == str(start_unix)
+    assert query["end"] == str(_unix(frozen_end))
+
+
+def test_idle_in_transaction_charts_are_recorded_state_sums(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 3600
+    prometheus.ranges[IDLE_QUERY] = [
+        _series(
+            {"datname": "refraq", "state": "idle in transaction"},
+            [(start_unix, "2"), (start_unix + 30, "2")],
+        ),
+        _series(
+            {"datname": "postgres", "state": "idle in transaction"},
+            [(start_unix, "1"), (start_unix + 30, "2")],
+        ),
+    ]
+    prometheus.ranges[IDLE_ABORTED_QUERY] = [
+        _series(
+            {"datname": "refraq", "state": "idle in transaction (aborted)"},
+            [(start_unix + 30, "1")],
+        )
+    ]
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    postgres = response.json()["charts"]["postgres"]
+    idle = postgres["idle_in_transaction"]
+    aborted = postgres["idle_in_transaction_aborted"]
+    assert len(idle) == 121
+    assert len(idle) <= 720
+    assert idle[0]["v"] == 3
+    assert idle[1]["v"] == 4
+    assert aborted[0]["v"] is None
+    assert aborted[1]["v"] == 1
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert IDLE_QUERY in queries
+    assert IDLE_ABORTED_QUERY in queries
+    assert not any("rate(" in query and "pg_stat_activity_count" in query for query in queries)
+
+
+def test_checkpoint_charts_are_recorded_counters(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 3600
+    prometheus.ranges[CHECKPOINT_TIMED_QUERY] = [
+        _series({}, [(start_unix, "11"), (start_unix + 30, "14")])
+    ]
+    prometheus.ranges[CHECKPOINT_REQUESTED_QUERY] = [
+        _series({}, [(start_unix, "4"), (start_unix + 30, "4")])
+    ]
+    prometheus.ranges[CHECKPOINT_WRITE_QUERY] = [
+        _series({}, [(start_unix, "2500.5"), (start_unix + 30, "2600.5")])
+    ]
+    prometheus.ranges[CHECKPOINT_SYNC_QUERY] = [
+        _series({}, [(start_unix, "12.5"), (start_unix + 30, "12.5")])
+    ]
+    prometheus.ranges[CHECKPOINT_BUFFERS_QUERY] = [
+        _series({}, [(start_unix, "80"), (start_unix + 30, "90")])
+    ]
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    postgres = response.json()["charts"]["postgres"]
+    timed = postgres["checkpoint_timed"]
+    assert len(timed) == 121
+    assert len(timed) <= 720
+    assert timed[0]["v"] == 11
+    assert timed[1]["v"] == 14
+    assert postgres["checkpoint_requested"][0]["v"] == 4
+    assert postgres["checkpoint_requested"][1]["v"] == 4
+    assert postgres["checkpoint_write_time"][0]["v"] == 2500.5
+    assert postgres["checkpoint_write_time"][1]["v"] == 2600.5
+    assert postgres["checkpoint_sync_time"][0]["v"] == 12.5
+    assert postgres["checkpoint_buffers_written"][0]["v"] == 80
+    assert postgres["checkpoint_buffers_written"][1]["v"] == 90
+    queries = [params["query"] for _url, params in prometheus.calls]
+    for query in (
+        CHECKPOINT_TIMED_QUERY,
+        CHECKPOINT_REQUESTED_QUERY,
+        CHECKPOINT_WRITE_QUERY,
+        CHECKPOINT_SYNC_QUERY,
+        CHECKPOINT_BUFFERS_QUERY,
+    ):
+        assert query in queries
+        assert not query.startswith("rate(")
+    assert frozen_end == END
+
+
+def test_temporary_file_charts_are_recorded_sums(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 3600
+    prometheus.ranges[TEMP_FILES_QUERY] = [
+        _series({"datid": "1", "datname": "refraq"}, [(start_unix, "2"), (start_unix + 30, "2")]),
+        _series({"datid": "2", "datname": "postgres"}, [(start_unix, "3"), (start_unix + 30, "4")]),
+    ]
+    prometheus.ranges[TEMP_BYTES_QUERY] = [
+        _series({"datid": "1", "datname": "refraq"}, [(start_unix, "1000"), (start_unix + 30, "1000")]),
+        _series({"datid": "2", "datname": "postgres"}, [(start_unix, "500"), (start_unix + 30, "800")]),
+    ]
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    postgres = response.json()["charts"]["postgres"]
+    files = postgres["temp_files"]
+    payload = postgres["temp_bytes"]
+    assert len(files) == 121
+    assert len(files) <= 720
+    assert len(payload) <= 720
+    assert files[0]["v"] == 5
+    assert files[1]["v"] == 6
+    assert payload[0]["v"] == 1500
+    assert payload[1]["v"] == 1800
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert TEMP_FILES_QUERY in queries
+    assert TEMP_BYTES_QUERY in queries
+    assert not any(
+        "rate(" in query and "pg_stat_database_temp_" in query for query in queries
+    )
+
+
+def test_a_recorded_postgres_zero_stays_zero_and_a_missing_series_stays_empty(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 3600
+    prometheus.ranges[CHECKPOINT_TIMED_QUERY] = [_series({}, [(start_unix, "0")])]
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    postgres = body["charts"]["postgres"]
+    assert postgres["checkpoint_timed"][0]["v"] == 0
+    assert postgres["checkpoint_requested"] == []
+    assert postgres["checkpoint_write_time"] == []
+    assert postgres["checkpoint_sync_time"] == []
+    assert postgres["checkpoint_buffers_written"] == []
+    assert postgres["idle_in_transaction"] == []
+    assert postgres["idle_in_transaction_aborted"] == []
+    assert postgres["temp_files"] == []
+    assert postgres["temp_bytes"] == []
+    assert postgres["backends"] == []
+    assert body["tiles"]["cpu"] == {"online_count": 4, "busy_share": 0.25}
+    assert "entity_id" not in response.text
+    assert "channel_id" not in response.text
+    assert frozen_end == END
+
+
+def test_postgres_sample_keeps_an_earlier_start(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    postgres_at = datetime(2026, 11, 11, 0, 4, 2, tzinfo=UTC)
+    cpu_at = datetime(2026, 11, 11, 0, 6, 3, tzinfo=UTC)
+    prometheus.modes = [_series({"mode": "user"}, [(_unix(cpu_at), "0.5")])]
+    prometheus.ranges[BACKENDS_RANGE_QUERY] = [
+        _series({"datname": "refraq"}, [(_unix(postgres_at), "3")]),
+        _series({"datname": "postgres"}, [(_unix(postgres_at), "4")]),
+    ]
+    response = client.get("/host", params={"span": "day"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["start"] == "2026-11-11T00:04:02Z"
+    assert body["step_seconds"] == 121
+    assert body["charts"]["postgres"]["backends"][0] == {
+        "t": "2026-11-11T00:04:02Z",
+        "v": 7,
+    }
+    assert body["charts"]["cpu_modes"][0]["samples"][0]["v"] is None
+    assert body["charts"]["cpu_modes"][0]["samples"][1]["v"] == 0.5
+    assert frozen_end == END
+
+
 def test_added_readings_keep_the_cpu_keys(
     client: TestClient, frozen_end: datetime, prometheus: _Store
 ) -> None:
@@ -828,10 +1087,17 @@ def test_added_readings_keep_the_cpu_keys(
     assert set(body) >= {"span", "start", "end", "step_seconds", "tiles", "charts"}
     assert "entity_id" not in response.text
     assert "channel_id" not in response.text
-    assert set(body["tiles"]) == {"cpu", "memory", "swap", "filesystems"}
+    assert set(body["tiles"]) == {"cpu", "memory", "swap", "filesystems", "postgres"}
     assert set(body["tiles"]["cpu"]) == {"online_count", "busy_share"}
     assert body["tiles"]["cpu"] == {"online_count": 4, "busy_share": 0.25}
-    assert set(body["charts"]) == {"cpu_modes", "run_queue", "filesystems", "disks", "pressure"}
+    assert set(body["charts"]) == {
+        "cpu_modes",
+        "run_queue",
+        "filesystems",
+        "disks",
+        "pressure",
+        "postgres",
+    }
     assert [series["mode"] for series in body["charts"]["cpu_modes"]] == ["user"]
     assert len(body["charts"]["cpu_modes"][0]["samples"]) == 715
     assert len(body["charts"]["run_queue"]) <= 720

@@ -35,6 +35,24 @@ export type PressureSide = {
   stalled: HostSample[];
 };
 
+export type PostgresTile = {
+  backends: number | null;
+  max_connections: number | null;
+};
+
+export type PostgresChart = {
+  backends: HostSample[];
+  idle_in_transaction: HostSample[];
+  idle_in_transaction_aborted: HostSample[];
+  checkpoint_timed: HostSample[];
+  checkpoint_requested: HostSample[];
+  checkpoint_write_time: HostSample[];
+  checkpoint_sync_time: HostSample[];
+  checkpoint_buffers_written: HostSample[];
+  temp_files: HostSample[];
+  temp_bytes: HostSample[];
+};
+
 export type HostRead = {
   span: HostSpan;
   start: string;
@@ -48,6 +66,7 @@ export type HostRead = {
     memory: HostBytes;
     swap: HostBytes;
     filesystems: FilesystemTile[];
+    postgres: PostgresTile;
   };
   charts: {
     cpu_modes: { mode: string; samples: HostSample[] }[];
@@ -59,5 +78,6 @@ export type HostRead = {
       memory: PressureSide;
       io: PressureSide;
     };
+    postgres: PostgresChart;
   };
 };

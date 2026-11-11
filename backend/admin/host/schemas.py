@@ -43,11 +43,17 @@ class FilesystemTileOut(BaseModel):
     free_inodes: float | None = None
 
 
+class PostgresTileOut(BaseModel):
+    backends: float | None = None
+    max_connections: float | None = None
+
+
 class TilesOut(BaseModel):
     cpu: CpuTileOut
     memory: MemoryTileOut
     swap: SwapTileOut
     filesystems: list[FilesystemTileOut]
+    postgres: PostgresTileOut
 
 
 class FilesystemChartOut(BaseModel):
@@ -74,12 +80,26 @@ class PressureOut(BaseModel):
     io: PressureSideOut
 
 
+class PostgresChartOut(BaseModel):
+    backends: list[SampleOut]
+    idle_in_transaction: list[SampleOut]
+    idle_in_transaction_aborted: list[SampleOut]
+    checkpoint_timed: list[SampleOut]
+    checkpoint_requested: list[SampleOut]
+    checkpoint_write_time: list[SampleOut]
+    checkpoint_sync_time: list[SampleOut]
+    checkpoint_buffers_written: list[SampleOut]
+    temp_files: list[SampleOut]
+    temp_bytes: list[SampleOut]
+
+
 class ChartsOut(BaseModel):
     cpu_modes: list[CpuModeOut]
     run_queue: list[SampleOut]
     filesystems: list[FilesystemChartOut]
     disks: list[DiskChartOut]
     pressure: PressureOut
+    postgres: PostgresChartOut
 
 
 class HostReadOut(BaseModel):

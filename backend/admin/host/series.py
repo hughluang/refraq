@@ -1,4 +1,4 @@
-"""Map Prometheus CPU series into the host read."""
+"""Map Prometheus host series into the host read."""
 
 from __future__ import annotations
 
@@ -13,12 +13,14 @@ from backend.admin.host.schemas import (
     CpuTileOut,
     DiskChartOut,
     FilesystemChartOut,
+    PostgresChartOut,
     PressureOut,
     PressureSideOut,
     FilesystemTileOut,
     HostReadOut,
     HostSpan,
     MemoryTileOut,
+    PostgresTileOut,
     SampleOut,
     SwapTileOut,
     TilesOut,
@@ -61,6 +63,20 @@ PRESSURE_QUERIES: dict[tuple[str, str], str] = {
     ("io", "stalled"): "rate(node_pressure_io_stalled_seconds_total[120s])",
 }
 POSTGRES_DATA_MOUNT = "/var/lib/postgresql"
+BACKENDS_TILE_QUERY = "last_over_time(pg_stat_database_numbackends[60s])"
+MAX_CONNECTIONS_QUERY = "last_over_time(pg_settings_max_connections[60s])"
+BACKENDS_RANGE_QUERY = "pg_stat_database_numbackends"
+IDLE_QUERY = 'pg_stat_activity_count{state="idle in transaction"}'
+IDLE_ABORTED_QUERY = 'pg_stat_activity_count{state="idle in transaction (aborted)"}'
+TEMP_FILES_QUERY = "pg_stat_database_temp_files"
+TEMP_BYTES_QUERY = "pg_stat_database_temp_bytes"
+CHECKPOINT_QUERIES = {
+    "checkpoint_timed": "pg_stat_checkpointer_num_timed_total",
+    "checkpoint_requested": "pg_stat_checkpointer_num_requested_total",
+    "checkpoint_write_time": "pg_stat_checkpointer_write_time_total",
+    "checkpoint_sync_time": "pg_stat_checkpointer_sync_time_total",
+    "checkpoint_buffers_written": "pg_stat_checkpointer_buffers_written_total",
+}
 
 
 def step_seconds(window: int) -> int:
@@ -99,6 +115,32 @@ def read_host(span: HostSpan) -> HostReadOut:
         key: _queue(query_range(query, start=start_unix, end=end_unix, step=step), allowed)
         for key, query in PRESSURE_QUERIES.items()
     }
+    postgres_series = {
+        "backends": _summed(
+            query_range(BACKENDS_RANGE_QUERY, start=start_unix, end=end_unix, step=step),
+            allowed,
+        ),
+        "idle_in_transaction": _summed(
+            query_range(IDLE_QUERY, start=start_unix, end=end_unix, step=step),
+            allowed,
+        ),
+        "idle_in_transaction_aborted": _summed(
+            query_range(IDLE_ABORTED_QUERY, start=start_unix, end=end_unix, step=step),
+            allowed,
+        ),
+        **{
+            name: _queue(query_range(query, start=start_unix, end=end_unix, step=step), allowed)
+            for name, query in CHECKPOINT_QUERIES.items()
+        },
+        "temp_files": _summed(
+            query_range(TEMP_FILES_QUERY, start=start_unix, end=end_unix, step=step),
+            allowed,
+        ),
+        "temp_bytes": _summed(
+            query_range(TEMP_BYTES_QUERY, start=start_unix, end=end_unix, step=step),
+            allowed,
+        ),
+    }
     trimmed = _trim(
         instants,
         [
@@ -108,8 +150,11 @@ def read_host(span: HostSpan) -> HostReadOut:
             *[values for _name, values in disk_busy],
             *[values for _name, values in disk_queue],
             *pressure.values(),
+            *postgres_series.values(),
         ],
     )
+    chart_instants = trimmed if trimmed is not None else []
+    postgres = _postgres_charts(chart_instants, postgres_series)
     if trimmed is None:
         charts = ChartsOut(
             cpu_modes=[],
@@ -117,6 +162,7 @@ def read_host(span: HostSpan) -> HostReadOut:
             filesystems=[],
             disks=[],
             pressure=_pressure(instants, pressure),
+            postgres=postgres,
         )
         response_start = start_unix
     else:
@@ -130,6 +176,7 @@ def read_host(span: HostSpan) -> HostReadOut:
             filesystems=_filesystem_charts(trimmed, filesystems),
             disks=_disk_charts(trimmed, disk_busy, disk_queue),
             pressure=_pressure(trimmed, pressure),
+            postgres=postgres,
         )
         response_start = trimmed[0]
     return HostReadOut(
@@ -142,6 +189,7 @@ def read_host(span: HostSpan) -> HostReadOut:
             memory=_memory(end_unix),
             swap=_swap(end_unix),
             filesystems=_filesystems(end_unix),
+            postgres=_postgres_tiles(end_unix),
         ),
         charts=charts,
     )
@@ -172,6 +220,38 @@ def _scalar(body: dict) -> float | None:
     if not isinstance(value, list) or len(value) < 2:
         return None
     return _finite(value[1])
+
+
+def _postgres_charts(
+    instants: list[int], series: dict[str, dict[int, float]]
+) -> PostgresChartOut:
+    return PostgresChartOut.model_validate(
+        {name: _aligned(instants, values) for name, values in series.items()}
+    )
+
+
+def _postgres_tiles(end_unix: int) -> PostgresTileOut:
+    return PostgresTileOut(
+        backends=_summed_instant(query_instant(BACKENDS_TILE_QUERY, time=end_unix)),
+        max_connections=_scalar(query_instant(MAX_CONNECTIONS_QUERY, time=end_unix)),
+    )
+
+
+def _summed_instant(body: dict) -> float | None:
+    rows = _labeled_values(body)
+    if not rows:
+        return None
+    return sum(value for _labels, value in rows)
+
+
+def _summed(body: dict, allowed: set[int]) -> dict[int, float]:
+    totals: dict[int, float] = {}
+    for item in _result(body):
+        if not isinstance(item, dict):
+            continue
+        for ts, value in _points(item.get("values"), allowed).items():
+            totals[ts] = totals.get(ts, 0.0) + value
+    return totals
 
 
 def _memory(end_unix: int) -> MemoryTileOut:

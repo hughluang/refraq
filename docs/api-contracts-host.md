@@ -11,7 +11,7 @@ Related boundaries:
 - Errors and request IDs: `docs/conventions-errors.md`.
 - Instants: `docs/conventions-time.md`.
 
-The read queries the series store and returns host CPU, memory, swap, filesystem, disk, and pressure occupancy. It is not the unpublished process `/metrics` endpoint, and it does not return process-capacity gauges or Compose supply settings. The browser calls the Console origin. The series store address is not part of this response.
+The read queries the series store and returns host CPU, memory, swap, filesystem, disk, pressure, and Postgres occupancy. It is not the unpublished process `/metrics` endpoint, and it does not return process-capacity gauges or Compose supply settings. The browser calls the Console origin. The series store address is not part of this response.
 
 ## 2. Authorization
 
@@ -40,7 +40,7 @@ The client sends that span. It does not send a query expression, a step, or a ti
 
 `step_seconds` is `max(30, ceil(window / 719))` in whole seconds. Range evaluation includes both endpoints, so dividing by 720 could return 721 points. Each returned series has at most 720 points.
 
-The response includes `span`, `start`, `end`, and `step_seconds`. Step is computed from the query window. A leading stretch where every returned series is absent is removed from `start`. CPU mode, run queue, filesystem available, disk, and pressure series all take part in that trim. Step is not recomputed after the trim. An empty store returns empty tiles and charts and still returns the query window's `start`, `end`, and `step_seconds`.
+The response includes `span`, `start`, `end`, and `step_seconds`. Step is computed from the query window. A leading stretch where every returned series is absent is removed from `start`. CPU mode, run queue, filesystem available, disk, pressure, and Postgres chart series all take part in that trim. Step is not recomputed after the trim. An empty store returns empty tiles and charts and still returns the query window's `start`, `end`, and `step_seconds`.
 
 Tiles are the last sample within 60 seconds. No sample in that window is JSON `null`, not zero. Rate expressions use a lookback of at least 120 seconds, including when the step is 30. Chart gaps stay empty: `v` is `null`, with no fill across the gap.
 
@@ -105,7 +105,28 @@ Pressure charts are the rates of the CPU, memory, and I/O waiting and stalled co
 
 `charts.pressure` has `cpu`, `memory`, and `io`. Each has `waiting` and `stalled`. A counter with no series is an empty array, not zeros. A recorded zero stays zero. The CPU stalled counter can be absent; that array stays empty.
 
-### 3.6 Response: `200`
+### 3.6 Postgres
+
+Postgres tiles are the last sample within 60 seconds. No sample in that window is `null`, not zero. A recorded zero stays zero. Chart counters are the recorded samples, not rates and not per-step deltas. A chart with no samples is an empty array. `max_connections` is the only connection ceiling. `superuser_reserved_connections` is not subtracted.
+
+| Reading | Series |
+| --- | --- |
+| `tiles.postgres.backends` | Sum of `last_over_time(pg_stat_database_numbackends[60s])` |
+| `tiles.postgres.max_connections` | `last_over_time(pg_settings_max_connections[60s])` |
+| `charts.postgres.backends` | Sum of `pg_stat_database_numbackends` as recorded |
+| `charts.postgres.idle_in_transaction` | Sum of `pg_stat_activity_count` for state `idle in transaction`, as recorded |
+| `charts.postgres.idle_in_transaction_aborted` | Sum of `pg_stat_activity_count` for state `idle in transaction (aborted)`, as recorded |
+| `charts.postgres.checkpoint_timed` | `pg_stat_checkpointer_num_timed_total` as recorded |
+| `charts.postgres.checkpoint_requested` | `pg_stat_checkpointer_num_requested_total` as recorded |
+| `charts.postgres.checkpoint_write_time` | `pg_stat_checkpointer_write_time_total` as recorded |
+| `charts.postgres.checkpoint_sync_time` | `pg_stat_checkpointer_sync_time_total` as recorded |
+| `charts.postgres.checkpoint_buffers_written` | `pg_stat_checkpointer_buffers_written_total` as recorded |
+| `charts.postgres.temp_files` | Sum of `pg_stat_database_temp_files` as recorded |
+| `charts.postgres.temp_bytes` | Sum of `pg_stat_database_temp_bytes` as recorded |
+
+Database series are summed across their labels. The checkpointer series has no such labels. Idle states use an exact state match, so `idle in transaction` does not include `idle in transaction (aborted)`.
+
+### 3.7 Response: `200`
 
 ```json
 {
@@ -126,7 +147,8 @@ Pressure charts are the rates of the CPU, memory, and I/O waiting and stalled co
         "used_share": 0.75,
         "free_inodes": null
       }
-    ]
+    ],
+    "postgres": { "backends": 7, "max_connections": 100 }
   },
   "charts": {
     "cpu_modes": [{ "mode": "user", "samples": [{ "t": "2026-11-12T00:00:00Z", "v": 0.1 }] }],
@@ -159,6 +181,18 @@ Pressure charts are the rates of the CPU, memory, and I/O waiting and stalled co
       },
       "memory": { "waiting": [], "stalled": [] },
       "io": { "waiting": [], "stalled": [] }
+    },
+    "postgres": {
+      "backends": [{ "t": "2026-11-12T00:00:00Z", "v": 7 }],
+      "idle_in_transaction": [{ "t": "2026-11-12T00:00:00Z", "v": 3 }],
+      "idle_in_transaction_aborted": [],
+      "checkpoint_timed": [{ "t": "2026-11-12T00:00:00Z", "v": 11 }],
+      "checkpoint_requested": [{ "t": "2026-11-12T00:00:00Z", "v": 4 }],
+      "checkpoint_write_time": [{ "t": "2026-11-12T00:00:00Z", "v": 2500.5 }],
+      "checkpoint_sync_time": [{ "t": "2026-11-12T00:00:00Z", "v": 12.5 }],
+      "checkpoint_buffers_written": [{ "t": "2026-11-12T00:00:00Z", "v": 80 }],
+      "temp_files": [{ "t": "2026-11-12T00:00:00Z", "v": 5 }],
+      "temp_bytes": [{ "t": "2026-11-12T00:00:00Z", "v": 1500 }]
     }
   }
 }
@@ -166,7 +200,7 @@ Pressure charts are the rates of the CPU, memory, and I/O waiting and stalled co
 
 `start`, `end`, and each sample `t` are Instants in UTC with a trailing `Z`. `v` is `null` when that step has no sample. The body has no `entity_id` and no `channel_id`.
 
-An empty store uses the same tile and chart keys. `online_count`, `busy_share`, memory bytes, and swap bytes are `null`. Filesystem, disk, CPU mode, and run-queue arrays are empty. Each pressure side is an empty array.
+An empty store uses the same tile and chart keys. `online_count`, `busy_share`, memory bytes, swap bytes, `tiles.postgres.backends`, and `tiles.postgres.max_connections` are `null`. Filesystem, disk, CPU mode, and run-queue arrays are empty. Each pressure side is an empty array. Each Postgres chart array is empty.
 
 ## 4. `HOST_SERIES_UNAVAILABLE`
 

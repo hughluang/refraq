@@ -8,8 +8,21 @@ import { presentProblemNotification } from "@/components/feedback/presentProblem
 import { PageChrome } from "@/components/layout/PageChrome";
 import { readHost } from "@/features/host/api";
 import { HostChart } from "@/features/host/HostChart";
-import type { HostRead, HostSpan } from "@/features/host/types";
+import type { HostRead, HostSpan, PostgresChart } from "@/features/host/types";
 import { isSessionExpiredError } from "@/lib/api";
+
+const POSTGRES_CHARTS: { key: string; field: keyof PostgresChart }[] = [
+  { key: "host.postgres.backends", field: "backends" },
+  { key: "host.postgres.idleInTransaction", field: "idle_in_transaction" },
+  { key: "host.postgres.idleInTransactionAborted", field: "idle_in_transaction_aborted" },
+  { key: "host.postgres.checkpointTimed", field: "checkpoint_timed" },
+  { key: "host.postgres.checkpointRequested", field: "checkpoint_requested" },
+  { key: "host.postgres.checkpointWrite", field: "checkpoint_write_time" },
+  { key: "host.postgres.checkpointSync", field: "checkpoint_sync_time" },
+  { key: "host.postgres.checkpointBuffers", field: "checkpoint_buffers_written" },
+  { key: "host.postgres.tempFiles", field: "temp_files" },
+  { key: "host.postgres.tempBytes", field: "temp_bytes" },
+];
 
 type Phase = "loading" | "ready" | "failed";
 
@@ -210,6 +223,29 @@ export function HostPage() {
               ]}
             />
           ))}
+          <Group>
+            <Stack gap={0}>
+              <Text size="sm">{t("host.postgres.backends")}</Text>
+              <Text>{countLabel(reading.tiles.postgres.backends)}</Text>
+            </Stack>
+            <Stack gap={0}>
+              <Text size="sm">{t("host.postgres.maxConnections")}</Text>
+              <Text>{countLabel(reading.tiles.postgres.max_connections)}</Text>
+            </Stack>
+          </Group>
+          {POSTGRES_CHARTS.map((chart) => {
+            const title = t(chart.key);
+            return (
+              <HostChart
+                key={chart.field}
+                title={title}
+                start={reading.start}
+                end={reading.end}
+                nowLabel={t("host.axis.now")}
+                series={[{ name: title, samples: reading.charts.postgres[chart.field] }]}
+              />
+            );
+          })}
         </Stack>
       ) : null}
     </PageChrome>

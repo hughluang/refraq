@@ -45,12 +45,44 @@ const CONFIRMED = [
   ["host.pressure.io", "I/O pressure", "I/O \u538b\u529b"],
   ["host.pressure.waiting", "Waiting", "\u7b49\u5f85"],
   ["host.pressure.stalled", "Stalled", "\u505c\u6ede"],
+  ["host.postgres.backends", "Backends", "\u540e\u7aef\u8fde\u63a5"],
+  ["host.postgres.maxConnections", "max_connections", "max_connections"],
+  ["host.postgres.idleInTransaction", "Idle in transaction", "\u4e8b\u52a1\u4e2d\u7a7a\u95f2"],
+  [
+    "host.postgres.idleInTransactionAborted",
+    "Idle in transaction (aborted)",
+    "\u4e8b\u52a1\u4e2d\u7a7a\u95f2\uff08\u5df2\u4e2d\u6b62\uff09",
+  ],
+  ["host.postgres.checkpointTimed", "Checkpoints timed", "\u5b9a\u65f6\u68c0\u67e5\u70b9"],
+  ["host.postgres.checkpointRequested", "Checkpoints requested", "\u8bf7\u6c42\u7684\u68c0\u67e5\u70b9"],
+  ["host.postgres.checkpointWrite", "Checkpoint write time", "\u68c0\u67e5\u70b9\u5199\u5165\u65f6\u95f4"],
+  ["host.postgres.checkpointSync", "Checkpoint sync time", "\u68c0\u67e5\u70b9\u540c\u6b65\u65f6\u95f4"],
+  [
+    "host.postgres.checkpointBuffers",
+    "Checkpoint buffers written",
+    "\u68c0\u67e5\u70b9\u5199\u51fa\u7684\u7f13\u51b2\u533a",
+  ],
+  ["host.postgres.tempFiles", "Temporary files", "\u4e34\u65f6\u6587\u4ef6\u6570"],
+  ["host.postgres.tempBytes", "Temporary file bytes", "\u4e34\u65f6\u6587\u4ef6\u5b57\u8282"],
   [
     "problems.HOST_SERIES_UNAVAILABLE",
     "The host series could not be read. Occupancy is not shown.",
     "\u8bfb\u4e0d\u5230\u4e3b\u673a\u5e8f\u5217\uff0c\u753b\u9762\u4e0d\u663e\u793a\u5360\u7528\u3002",
   ],
 ] as const;
+
+const emptyPostgresCharts = {
+  backends: [],
+  idle_in_transaction: [],
+  idle_in_transaction_aborted: [],
+  checkpoint_timed: [],
+  checkpoint_requested: [],
+  checkpoint_write_time: [],
+  checkpoint_sync_time: [],
+  checkpoint_buffers_written: [],
+  temp_files: [],
+  temp_bytes: [],
+};
 
 const dayBody = {
   span: "day",
@@ -71,6 +103,7 @@ const dayBody = {
         free_inodes: 42,
       },
     ],
+    postgres: { backends: null, max_connections: null },
   },
   charts: {
     cpu_modes: [
@@ -149,6 +182,7 @@ const dayBody = {
         ],
       },
     },
+    postgres: emptyPostgresCharts,
   },
 };
 
@@ -171,6 +205,7 @@ const hourBody = {
         free_inodes: 11,
       },
     ],
+    postgres: { backends: null, max_connections: null },
   },
   charts: {
     cpu_modes: [
@@ -224,6 +259,7 @@ const hourBody = {
       memory: { waiting: [], stalled: [] },
       io: { waiting: [], stalled: [] },
     },
+    postgres: emptyPostgresCharts,
   },
 };
 
@@ -246,6 +282,7 @@ const retainedBody = {
         free_inodes: 42,
       },
     ],
+    postgres: { backends: null, max_connections: null },
   },
   charts: {
     cpu_modes: [
@@ -281,6 +318,7 @@ const retainedBody = {
       memory: { waiting: [], stalled: [] },
       io: { waiting: [], stalled: [] },
     },
+    postgres: emptyPostgresCharts,
   },
 };
 
@@ -496,6 +534,72 @@ describe("HostPage", () => {
     expect(screen.queryByText("4")).toBeNull();
   });
 
+  it("draws postgres readings from the host response", async () => {
+    fetchMock.mockImplementation(() =>
+      jsonResponse({
+        ...dayBody,
+        tiles: {
+          ...dayBody.tiles,
+          postgres: { backends: 17, max_connections: 100 },
+        },
+        charts: {
+          ...dayBody.charts,
+          postgres: {
+            backends: [
+              { t: "2026-11-11T00:00:00Z", v: 9 },
+              { t: "2026-11-11T12:00:00Z", v: null },
+              { t: "2026-11-12T00:00:00Z", v: 19 },
+            ],
+            idle_in_transaction: [
+              { t: "2026-11-11T00:00:00Z", v: 1 },
+              { t: "2026-11-12T00:00:00Z", v: 3 },
+            ],
+            idle_in_transaction_aborted: [
+              { t: "2026-11-11T00:00:00Z", v: 1 },
+              { t: "2026-11-12T00:00:00Z", v: 6 },
+            ],
+            checkpoint_timed: [{ t: "2026-11-12T00:00:00Z", v: 8 }],
+            checkpoint_requested: [{ t: "2026-11-12T00:00:00Z", v: 22 }],
+            checkpoint_write_time: [{ t: "2026-11-12T00:00:00Z", v: 1400 }],
+            checkpoint_sync_time: [{ t: "2026-11-12T00:00:00Z", v: 90 }],
+            checkpoint_buffers_written: [{ t: "2026-11-12T00:00:00Z", v: 64 }],
+            temp_files: [{ t: "2026-11-12T00:00:00Z", v: 5 }],
+            temp_bytes: [{ t: "2026-11-12T00:00:00Z", v: 4096 }],
+          },
+        },
+      }),
+    );
+    await renderPage();
+
+    expect(await screen.findByText("17")).toBeTruthy();
+    expect(screen.getByText("max_connections")).toBeTruthy();
+    expect(screen.getByText("100")).toBeTruthy();
+    expect(screen.getAllByText("Backends").length).toBeGreaterThan(0);
+    expect(screen.getByText("19")).toBeTruthy();
+    const backends = screen.getByRole("img", { name: "Backends" });
+    expect(backends.querySelectorAll("polyline")).toHaveLength(2);
+    expect(screen.getByText("Idle in transaction")).toBeTruthy();
+    expect(screen.getByText("3")).toBeTruthy();
+    expect(screen.getByText("Idle in transaction (aborted)")).toBeTruthy();
+    expect(screen.getByText("6")).toBeTruthy();
+    expect(screen.getByText("Checkpoints timed")).toBeTruthy();
+    expect(screen.getByText("8")).toBeTruthy();
+    expect(screen.getByText("Checkpoints requested")).toBeTruthy();
+    expect(screen.getByText("22")).toBeTruthy();
+    expect(screen.getByText("Checkpoint write time")).toBeTruthy();
+    expect(screen.getByText("1400")).toBeTruthy();
+    expect(screen.getByText("Checkpoint sync time")).toBeTruthy();
+    expect(screen.getByText("90")).toBeTruthy();
+    expect(screen.getByText("Checkpoint buffers written")).toBeTruthy();
+    expect(screen.getByText("64")).toBeTruthy();
+    expect(screen.getByText("Temporary files")).toBeTruthy();
+    expect(screen.getByText("5")).toBeTruthy();
+    expect(screen.getByText("Temporary file bytes")).toBeTruthy();
+    expect(screen.getByText("4096")).toBeTruthy();
+    expect(screen.queryByText(/shm_size|shared_buffers|work_mem|effective_cache_size/)).toBeNull();
+    expect(screen.queryByText(/threshold/i)).toBeNull();
+  });
+
   it("shows a zero swap reading and an empty inode count", async () => {
     fetchMock.mockImplementation(() =>
       jsonResponse({
@@ -519,7 +623,7 @@ describe("HostPage", () => {
     await renderPage();
     expect(await screen.findByText("Swap used")).toBeTruthy();
     expect(screen.getAllByText("0")).toHaveLength(2);
-    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.getAllByText("—")).toHaveLength(3);
     expect(screen.queryByText(/shm_size|shared_buffers|work_mem|effective_cache_size/)).toBeNull();
   });
 });
