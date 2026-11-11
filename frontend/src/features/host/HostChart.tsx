@@ -22,12 +22,14 @@ type ChartSeries = {
 
 export function HostChart({
   title,
+  label,
   start,
   end,
   nowLabel,
   series,
 }: {
   title: string;
+  label?: string;
   start: string;
   end: string;
   nowLabel: string;
@@ -46,7 +48,7 @@ export function HostChart({
           </Group>
         );
       })}
-      <svg role="img" aria-label={title} viewBox="0 0 720 160" width="100%" height="160">
+      <svg role="img" aria-label={label ?? title} viewBox="0 0 720 160" width="100%" height="160">
         {series.map((item, index) =>
           polylines(item.samples).map((points, run) => (
             <polyline

@@ -24,13 +24,62 @@ class CpuTileOut(BaseModel):
     busy_share: float | None = None
 
 
+class MemoryTileOut(BaseModel):
+    used_bytes: float | None = None
+    total_bytes: float | None = None
+
+
+class SwapTileOut(BaseModel):
+    used_bytes: float | None = None
+    total_bytes: float | None = None
+
+
+class FilesystemTileOut(BaseModel):
+    mount: str
+    type: str
+    used_bytes: float | None = None
+    total_bytes: float | None = None
+    used_share: float | None = None
+    free_inodes: float | None = None
+
+
 class TilesOut(BaseModel):
     cpu: CpuTileOut
+    memory: MemoryTileOut
+    swap: SwapTileOut
+    filesystems: list[FilesystemTileOut]
+
+
+class FilesystemChartOut(BaseModel):
+    mount: str
+    type: str
+    available: list[SampleOut]
+    delta: list[SampleOut]
+
+
+class DiskChartOut(BaseModel):
+    device: str
+    busy_share: list[SampleOut]
+    queue_length: list[SampleOut]
+
+
+class PressureSideOut(BaseModel):
+    waiting: list[SampleOut]
+    stalled: list[SampleOut]
+
+
+class PressureOut(BaseModel):
+    cpu: PressureSideOut
+    memory: PressureSideOut
+    io: PressureSideOut
 
 
 class ChartsOut(BaseModel):
     cpu_modes: list[CpuModeOut]
     run_queue: list[SampleOut]
+    filesystems: list[FilesystemChartOut]
+    disks: list[DiskChartOut]
+    pressure: PressureOut
 
 
 class HostReadOut(BaseModel):

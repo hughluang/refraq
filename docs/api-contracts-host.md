@@ -11,7 +11,7 @@ Related boundaries:
 - Errors and request IDs: `docs/conventions-errors.md`.
 - Instants: `docs/conventions-time.md`.
 
-The read queries the series store and returns host CPU occupancy. It is not the unpublished process `/metrics` endpoint, and it does not return process-capacity gauges. The browser calls the Console origin. The series store address is not part of this response.
+The read queries the series store and returns host CPU, memory, swap, filesystem, disk, and pressure occupancy. It is not the unpublished process `/metrics` endpoint, and it does not return process-capacity gauges or Compose supply settings. The browser calls the Console origin. The series store address is not part of this response.
 
 ## 2. Authorization
 
@@ -26,7 +26,7 @@ Session or User PAT. The read requires `host:read`.
 
 ## 3. `GET /host`
 
-Purpose: read current CPU tiles and the CPU mode and run-queue charts for one span.
+Purpose: read current host tiles and the host charts for one span.
 
 The only query parameter is `span`: `hour`, `day`, or `retained`. An omitted span is `day`. Any other value is `REQUEST_INVALID`, HTTP 422.
 
@@ -40,7 +40,7 @@ The client sends that span. It does not send a query expression, a step, or a ti
 
 `step_seconds` is `max(30, ceil(window / 719))` in whole seconds. Range evaluation includes both endpoints, so dividing by 720 could return 721 points. Each returned series has at most 720 points.
 
-The response includes `span`, `start`, `end`, and `step_seconds`. Step is computed from the query window. A leading stretch where every returned series is absent is removed from `start`. Step is not recomputed after that trim. An empty store returns empty tiles and charts and still returns the query window's `start`, `end`, and `step_seconds`.
+The response includes `span`, `start`, `end`, and `step_seconds`. Step is computed from the query window. A leading stretch where every returned series is absent is removed from `start`. CPU mode, run queue, filesystem available, disk, and pressure series all take part in that trim. Step is not recomputed after the trim. An empty store returns empty tiles and charts and still returns the query window's `start`, `end`, and `step_seconds`.
 
 Tiles are the last sample within 60 seconds. No sample in that window is JSON `null`, not zero. Rate expressions use a lookback of at least 120 seconds, including when the step is 30. Chart gaps stay empty: `v` is `null`, with no fill across the gap.
 
@@ -55,7 +55,57 @@ Tiles are the last sample within 60 seconds. No sample in that window is JSON `n
 
 Guest modes appear on the mode chart and are not added into `busy_share`.
 
-### 3.2 Response: `200`
+### 3.2 Memory and swap
+
+| Reading | Series |
+| --- | --- |
+| `tiles.memory.total_bytes` | `node_memory_MemTotal_bytes`, last sample within 60 seconds |
+| `tiles.memory.used_bytes` | `node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes`, last sample within 60 seconds |
+| `tiles.swap.total_bytes` | `node_memory_SwapTotal_bytes`, last sample within 60 seconds |
+| `tiles.swap.used_bytes` | Swap total minus `node_memory_SwapFree_bytes` |
+
+`used_bytes` is `null` when either series it depends on is absent. A present `0` stays `0`. Swap total `0` and swap free `0` therefore stay `used_bytes` `0` and `total_bytes` `0`.
+
+### 3.3 Filesystems
+
+Filesystem rows come from `node_filesystem_size_bytes` and `node_filesystem_avail_bytes`, identified by the collector's reported mount (`mountpoint`) and type (`fstype`). The read does not apply a second mount exclusion list. It omits a row whose mount is `/var/lib/postgresql`.
+
+| Reading | Rule |
+| --- | --- |
+| `tiles.filesystems[].used_bytes` | Size minus available. `null` when either series is absent for that mount and type |
+| `tiles.filesystems[].total_bytes` | `node_filesystem_size_bytes`. `null` when that series is absent |
+| `tiles.filesystems[].used_share` | `used_bytes / total_bytes` when `total_bytes` is non-zero. `null` when the share cannot be calculated |
+| `tiles.filesystems[].free_inodes` | `node_filesystem_files_free`. `null` when that series is absent, not zero |
+| `charts.filesystems[].available` | `node_filesystem_avail_bytes` as recorded over the span. Not a rate |
+| `charts.filesystems[].delta` | Each available sample minus the previous sample in the returned span. The first sample is `null`. A sample whose previous sample has no value is `null` |
+
+Tiles use the last sample within 60 seconds. The same mount omission applies to the chart.
+
+### 3.4 Disk
+
+Disk charts are grouped by `device` and are not summed across devices.
+
+| Reading | Series |
+| --- | --- |
+| `charts.disks[].busy_share` | `rate(node_disk_io_time_seconds_total[120s])` |
+| `charts.disks[].queue_length` | `rate(node_disk_io_time_weighted_seconds_total[120s])` |
+
+A device that has samples for only one of the two series has an empty array for the other. An empty array is not a series of zeros.
+
+### 3.5 Pressure
+
+Pressure charts are the rates of the CPU, memory, and I/O waiting and stalled counters, each with a 120 second lookback:
+
+- `node_pressure_cpu_waiting_seconds_total`
+- `node_pressure_cpu_stalled_seconds_total`
+- `node_pressure_memory_waiting_seconds_total`
+- `node_pressure_memory_stalled_seconds_total`
+- `node_pressure_io_waiting_seconds_total`
+- `node_pressure_io_stalled_seconds_total`
+
+`charts.pressure` has `cpu`, `memory`, and `io`. Each has `waiting` and `stalled`. A counter with no series is an empty array, not zeros. A recorded zero stays zero. The CPU stalled counter can be absent; that array stays empty.
+
+### 3.6 Response: `200`
 
 ```json
 {
@@ -63,17 +113,60 @@ Guest modes appear on the mode chart and are not added into `busy_share`.
   "start": "2026-11-11T00:00:00Z",
   "end": "2026-11-12T00:00:00Z",
   "step_seconds": 121,
-  "tiles": { "cpu": { "online_count": 4, "busy_share": 0.25 } },
+  "tiles": {
+    "cpu": { "online_count": 4, "busy_share": 0.25 },
+    "memory": { "used_bytes": 600, "total_bytes": 1000 },
+    "swap": { "used_bytes": 0, "total_bytes": 0 },
+    "filesystems": [
+      {
+        "mount": "/",
+        "type": "ext4",
+        "used_bytes": 750,
+        "total_bytes": 1000,
+        "used_share": 0.75,
+        "free_inodes": null
+      }
+    ]
+  },
   "charts": {
     "cpu_modes": [{ "mode": "user", "samples": [{ "t": "2026-11-12T00:00:00Z", "v": 0.1 }] }],
-    "run_queue": [{ "t": "2026-11-12T00:00:00Z", "v": 2 }]
+    "run_queue": [{ "t": "2026-11-12T00:00:00Z", "v": 2 }],
+    "filesystems": [
+      {
+        "mount": "/",
+        "type": "ext4",
+        "available": [
+          { "t": "2026-11-11T00:00:00Z", "v": 250 },
+          { "t": "2026-11-12T00:00:00Z", "v": 200 }
+        ],
+        "delta": [
+          { "t": "2026-11-11T00:00:00Z", "v": null },
+          { "t": "2026-11-12T00:00:00Z", "v": -50 }
+        ]
+      }
+    ],
+    "disks": [
+      {
+        "device": "sda",
+        "busy_share": [{ "t": "2026-11-12T00:00:00Z", "v": 0.2 }],
+        "queue_length": [{ "t": "2026-11-12T00:00:00Z", "v": 1.25 }]
+      }
+    ],
+    "pressure": {
+      "cpu": {
+        "waiting": [{ "t": "2026-11-12T00:00:00Z", "v": 0.01 }],
+        "stalled": []
+      },
+      "memory": { "waiting": [], "stalled": [] },
+      "io": { "waiting": [], "stalled": [] }
+    }
   }
 }
 ```
 
 `start`, `end`, and each sample `t` are Instants in UTC with a trailing `Z`. `v` is `null` when that step has no sample. The body has no `entity_id` and no `channel_id`.
 
-An empty store uses the same tile and chart keys, with `online_count` and `busy_share` set to `null` and both chart arrays empty.
+An empty store uses the same tile and chart keys. `online_count`, `busy_share`, memory bytes, and swap bytes are `null`. Filesystem, disk, CPU mode, and run-queue arrays are empty. Each pressure side is an empty array.
 
 ## 4. `HOST_SERIES_UNAVAILABLE`
 
@@ -91,4 +184,5 @@ The body is not a success payload of zeros. This 503 is the outbound store being
 - Publishing the series store, or any collector, to the browser.
 - Changing process `/metrics`, `/healthz`, or `/readyz`.
 - Thresholds, forecasts, status chips, or mail from this read.
+- Returning `shm_size`, `shared_buffers`, `work_mem`, or `effective_cache_size`.
 - Create, edit, or delete of a host record.

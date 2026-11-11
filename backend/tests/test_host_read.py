@@ -47,6 +47,22 @@ BUSY_QUERY = (
 )
 MODE_QUERY = "rate(node_cpu_seconds_total[120s])"
 QUEUE_QUERY = "node_procs_running"
+MEMORY_TOTAL_QUERY = "last_over_time(node_memory_MemTotal_bytes[60s])"
+MEMORY_AVAILABLE_QUERY = "last_over_time(node_memory_MemAvailable_bytes[60s])"
+SWAP_TOTAL_QUERY = "last_over_time(node_memory_SwapTotal_bytes[60s])"
+SWAP_FREE_QUERY = "last_over_time(node_memory_SwapFree_bytes[60s])"
+FILESYSTEM_SIZE_QUERY = "last_over_time(node_filesystem_size_bytes[60s])"
+FILESYSTEM_AVAIL_QUERY = "last_over_time(node_filesystem_avail_bytes[60s])"
+FILESYSTEM_INODES_QUERY = "last_over_time(node_filesystem_files_free[60s])"
+FILESYSTEM_AVAIL_RANGE_QUERY = "node_filesystem_avail_bytes"
+DISK_BUSY_QUERY = "rate(node_disk_io_time_seconds_total[120s])"
+DISK_QUEUE_QUERY = "rate(node_disk_io_time_weighted_seconds_total[120s])"
+PRESSURE_CPU_WAITING_QUERY = "rate(node_pressure_cpu_waiting_seconds_total[120s])"
+PRESSURE_CPU_STALLED_QUERY = "rate(node_pressure_cpu_stalled_seconds_total[120s])"
+PRESSURE_MEMORY_WAITING_QUERY = "rate(node_pressure_memory_waiting_seconds_total[120s])"
+PRESSURE_MEMORY_STALLED_QUERY = "rate(node_pressure_memory_stalled_seconds_total[120s])"
+PRESSURE_IO_WAITING_QUERY = "rate(node_pressure_io_waiting_seconds_total[120s])"
+PRESSURE_IO_STALLED_QUERY = "rate(node_pressure_io_stalled_seconds_total[120s])"
 MAINTAINER_KEYS = [
     "console:access",
     "sources:read",
@@ -87,6 +103,14 @@ def _series(labels: dict[str, str], points: list[tuple[int, str]]) -> dict:
     }
 
 
+def _instant(labels: dict[str, str], raw: str) -> dict:
+    return {"metric": labels, "value": [0, raw]}
+
+
+def _vector_rows(rows: list[dict]) -> dict:
+    return {"status": "success", "data": {"resultType": "vector", "result": rows}}
+
+
 class _Store:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, str]]] = []
@@ -94,6 +118,8 @@ class _Store:
         self.busy: str | None = "0.25"
         self.modes: list[dict] = []
         self.queue: list[dict] = []
+        self.instant: dict[str, list[dict]] = {}
+        self.ranges: dict[str, list[dict]] = {}
         self.fail: Exception | None = None
         self.status_code = 200
 
@@ -107,12 +133,14 @@ class _Store:
         if "query_range" in url:
             if query == QUEUE_QUERY:
                 return _Response(_matrix(self.queue))
-            return _Response(_matrix(self.modes))
+            if query == MODE_QUERY:
+                return _Response(_matrix(self.modes))
+            return _Response(_matrix(self.ranges.get(query, [])))
         if query == ONLINE_QUERY:
             return _Response(_vector(self.online))
         if query == BUSY_QUERY:
             return _Response(_vector(self.busy))
-        raise AssertionError(query)
+        return _Response(_vector_rows(self.instant.get(query, [])))
 
 
 def _unix(moment: datetime) -> int:
@@ -312,8 +340,9 @@ def test_span_sets_step_and_keeps_each_series_at_or_under_720_points(
     assert body["start"] == start_text
     assert body["end"] == END_TEXT
     assert body["step_seconds"] == step
-    assert set(body["tiles"]) == {"cpu"}
-    assert set(body["charts"]) == {"cpu_modes", "run_queue"}
+    assert "cpu" in body["tiles"]
+    assert "cpu_modes" in body["charts"]
+    assert "run_queue" in body["charts"]
     assert "entity_id" not in body
     assert "channel_id" not in body
     mode_samples = body["charts"]["cpu_modes"][0]["samples"]
@@ -420,7 +449,18 @@ def test_empty_store_keeps_the_query_window(
     assert body["end"] == END_TEXT
     assert body["step_seconds"] == 1803
     assert body["tiles"]["cpu"] == {"online_count": None, "busy_share": None}
-    assert body["charts"] == {"cpu_modes": [], "run_queue": []}
+    assert body["tiles"]["memory"] == {"used_bytes": None, "total_bytes": None}
+    assert body["tiles"]["swap"] == {"used_bytes": None, "total_bytes": None}
+    assert body["tiles"]["filesystems"] == []
+    assert body["charts"]["cpu_modes"] == []
+    assert body["charts"]["run_queue"] == []
+    assert body["charts"]["filesystems"] == []
+    assert body["charts"]["disks"] == []
+    assert body["charts"]["pressure"] == {
+        "cpu": {"waiting": [], "stalled": []},
+        "memory": {"waiting": [], "stalled": []},
+        "io": {"waiting": [], "stalled": []},
+    }
 
 
 def test_leading_gap_trims_start_without_changing_step(
@@ -473,6 +513,329 @@ def test_a_present_series_keeps_the_leading_window(
     assert body["charts"]["cpu_modes"][0]["samples"][0]["v"] == 0.5
     assert body["charts"]["run_queue"][0]["v"] is None
     assert body["charts"]["run_queue"][-1]["v"] == 2
+
+
+def test_memory_tile_is_total_minus_available(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    prometheus.instant[MEMORY_TOTAL_QUERY] = [_instant({}, "1000")]
+    prometheus.instant[MEMORY_AVAILABLE_QUERY] = [_instant({}, "400")]
+    response = client.get("/host")
+    assert response.status_code == 200, response.text
+    assert response.json()["tiles"]["memory"] == {"used_bytes": 600, "total_bytes": 1000}
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert MEMORY_TOTAL_QUERY in queries
+    assert MEMORY_AVAILABLE_QUERY in queries
+    assert {params["time"] for url, params in prometheus.calls if params["query"] == MEMORY_TOTAL_QUERY} == {
+        str(_unix(frozen_end))
+    }
+
+
+def test_memory_tile_stays_null_when_the_series_is_absent(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    response = client.get("/host")
+    assert response.status_code == 200, response.text
+    assert response.json()["tiles"]["memory"] == {"used_bytes": None, "total_bytes": None}
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert MEMORY_TOTAL_QUERY in queries
+    assert MEMORY_AVAILABLE_QUERY in queries
+
+
+def test_memory_used_stays_null_when_available_is_absent(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    prometheus.instant[MEMORY_TOTAL_QUERY] = [_instant({}, "1000")]
+    response = client.get("/host")
+    assert response.status_code == 200, response.text
+    assert response.json()["tiles"]["memory"] == {"used_bytes": None, "total_bytes": 1000}
+    assert frozen_end == END
+
+
+def test_swap_tile_is_total_minus_free(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    prometheus.instant[SWAP_TOTAL_QUERY] = [_instant({}, "200")]
+    prometheus.instant[SWAP_FREE_QUERY] = [_instant({}, "50")]
+    response = client.get("/host")
+    assert response.status_code == 200, response.text
+    assert response.json()["tiles"]["swap"] == {"used_bytes": 150, "total_bytes": 200}
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert SWAP_TOTAL_QUERY in queries
+    assert SWAP_FREE_QUERY in queries
+    assert {params["time"] for _url, params in prometheus.calls if params["query"] == SWAP_TOTAL_QUERY} == {
+        str(_unix(frozen_end))
+    }
+
+
+def test_swap_tile_keeps_zero_when_both_readings_are_zero(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    prometheus.instant[SWAP_TOTAL_QUERY] = [_instant({}, "0")]
+    prometheus.instant[SWAP_FREE_QUERY] = [_instant({}, "0")]
+    response = client.get("/host")
+    assert response.status_code == 200, response.text
+    assert response.json()["tiles"]["swap"] == {"used_bytes": 0, "total_bytes": 0}
+    assert frozen_end == END
+
+
+def test_swap_tile_stays_null_when_the_series_is_absent(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    response = client.get("/host")
+    assert response.status_code == 200, response.text
+    assert response.json()["tiles"]["swap"] == {"used_bytes": None, "total_bytes": None}
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert SWAP_TOTAL_QUERY in queries
+    assert SWAP_FREE_QUERY in queries
+    assert frozen_end == END
+
+
+def test_filesystem_rows_follow_the_collector_mount_and_type(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    root = {"mountpoint": "/", "fstype": "ext4", "device": "/dev/sda1"}
+    tmp = {"mountpoint": "/run", "fstype": "tmpfs", "device": "tmpfs"}
+    data = {"mountpoint": "/data", "fstype": "xfs", "device": "/dev/sdc1"}
+    prometheus.instant[FILESYSTEM_SIZE_QUERY] = [
+        _instant(root, "1000"),
+        _instant(tmp, "100"),
+        _instant(data, "800"),
+    ]
+    prometheus.instant[FILESYSTEM_AVAIL_QUERY] = [
+        _instant(root, "250"),
+        _instant(tmp, "40"),
+        _instant(data, "200"),
+    ]
+    prometheus.instant[FILESYSTEM_INODES_QUERY] = [
+        _instant(root, "42"),
+        _instant(tmp, "7"),
+    ]
+    response = client.get("/host")
+    assert response.status_code == 200, response.text
+    assert response.json()["tiles"]["filesystems"] == [
+        {
+            "mount": "/",
+            "type": "ext4",
+            "used_bytes": 750,
+            "total_bytes": 1000,
+            "used_share": 0.75,
+            "free_inodes": 42,
+        },
+        {
+            "mount": "/run",
+            "type": "tmpfs",
+            "used_bytes": 60,
+            "total_bytes": 100,
+            "used_share": 0.6,
+            "free_inodes": 7,
+        },
+        {
+            "mount": "/data",
+            "type": "xfs",
+            "used_bytes": 600,
+            "total_bytes": 800,
+            "used_share": 0.75,
+            "free_inodes": None,
+        },
+    ]
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert FILESYSTEM_SIZE_QUERY in queries
+    assert FILESYSTEM_AVAIL_QUERY in queries
+    assert FILESYSTEM_INODES_QUERY in queries
+    assert {
+        params["time"]
+        for _url, params in prometheus.calls
+        if params["query"] == FILESYSTEM_SIZE_QUERY
+    } == {str(_unix(frozen_end))}
+
+
+def test_postgres_data_directory_is_not_a_host_filesystem(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    root = {"mountpoint": "/", "fstype": "ext4", "device": "/dev/sda1"}
+    data = {"mountpoint": "/var/lib/postgresql", "fstype": "ext4", "device": "/dev/sdb1"}
+    prometheus.instant[FILESYSTEM_SIZE_QUERY] = [
+        _instant(root, "1000"),
+        _instant(data, "99999"),
+    ]
+    prometheus.instant[FILESYSTEM_AVAIL_QUERY] = [
+        _instant(root, "250"),
+        _instant(data, "111"),
+    ]
+    response = client.get("/host")
+    assert response.status_code == 200, response.text
+    rows = response.json()["tiles"]["filesystems"]
+    assert [row["mount"] for row in rows] == ["/"]
+    assert rows[0]["used_bytes"] == 750
+    assert frozen_end == END
+
+
+def test_filesystem_charts_are_available_bytes_and_the_previous_sample_delta(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 86400
+    root = {"mountpoint": "/", "fstype": "ext4", "device": "/dev/sda1"}
+    logs = {"mountpoint": "/var", "fstype": "ext4", "device": "/dev/sda2"}
+    data = {"mountpoint": "/var/lib/postgresql", "fstype": "ext4", "device": "/dev/sdb1"}
+    prometheus.ranges[FILESYSTEM_AVAIL_RANGE_QUERY] = [
+        _series(root, [(start_unix, "100"), (start_unix + 121, "80"), (start_unix + 242, "90")]),
+        _series(logs, [(start_unix, "500"), (start_unix + 242, "480")]),
+        _series(data, [(start_unix, "1")]),
+    ]
+    response = client.get("/host", params={"span": "day"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["start"] == "2026-11-11T00:00:00Z"
+    charts = body["charts"]["filesystems"]
+    assert [chart["mount"] for chart in charts] == ["/", "/var"]
+    root_chart = charts[0]
+    assert root_chart["type"] == "ext4"
+    assert len(root_chart["available"]) == 715
+    assert len(root_chart["available"]) <= 720
+    assert len(root_chart["delta"]) == 715
+    assert [sample["v"] for sample in root_chart["available"][:4]] == [100, 80, 90, None]
+    assert [sample["v"] for sample in root_chart["delta"][:4]] == [None, -20, 10, None]
+    assert root_chart["available"][0]["t"] == "2026-11-11T00:00:00Z"
+    log_chart = charts[1]
+    assert [sample["v"] for sample in log_chart["available"][:3]] == [500, None, 480]
+    assert [sample["v"] for sample in log_chart["delta"][:3]] == [None, None, None]
+    query_call = next(
+        params for _url, params in prometheus.calls if params.get("query") == FILESYSTEM_AVAIL_RANGE_QUERY
+    )
+    assert query_call["start"] == str(start_unix)
+    assert query_call["end"] == str(_unix(frozen_end))
+    assert query_call["step"] == "121"
+    assert "rate(" not in query_call["query"]
+
+
+def test_filesystem_samples_keep_an_earlier_start(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    filesystem_at = datetime(2026, 11, 11, 0, 4, 2, tzinfo=UTC)
+    cpu_at = datetime(2026, 11, 11, 0, 6, 3, tzinfo=UTC)
+    prometheus.modes = [_series({"mode": "user"}, [(_unix(cpu_at), "0.5")])]
+    prometheus.ranges[FILESYSTEM_AVAIL_RANGE_QUERY] = [
+        _series({"mountpoint": "/", "fstype": "ext4"}, [(_unix(filesystem_at), "250")])
+    ]
+    response = client.get("/host", params={"span": "day"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["start"] == "2026-11-11T00:04:02Z"
+    assert body["step_seconds"] == 121
+    available = body["charts"]["filesystems"][0]["available"]
+    assert available[0] == {"t": "2026-11-11T00:04:02Z", "v": 250}
+    assert body["charts"]["filesystems"][0]["delta"][0]["v"] is None
+    assert body["charts"]["cpu_modes"][0]["samples"][0]["v"] is None
+    assert body["charts"]["cpu_modes"][0]["samples"][1]["v"] == 0.5
+    assert frozen_end == END
+
+
+def test_disk_charts_are_per_device_rates(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 3600
+    prometheus.modes = [_series({"mode": "user"}, [(start_unix, "0.5")])]
+    prometheus.ranges[DISK_BUSY_QUERY] = [
+        _series({"device": "sda"}, [(start_unix, "0.2")]),
+        _series({"device": "sdb"}, [(start_unix, "0.5")]),
+    ]
+    prometheus.ranges[DISK_QUEUE_QUERY] = [
+        _series({"device": "sda"}, [(start_unix, "1.25")]),
+        _series({"device": "sdb"}, [(start_unix, "4")]),
+        _series({"device": "vdc"}, [(start_unix, "9")]),
+    ]
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    disks = response.json()["charts"]["disks"]
+    assert [disk["device"] for disk in disks] == ["sda", "sdb", "vdc"]
+    assert len(disks[0]["busy_share"]) == 121
+    assert len(disks[0]["busy_share"]) <= 720
+    assert disks[0]["busy_share"][0]["v"] == 0.2
+    assert disks[0]["busy_share"][1]["v"] is None
+    assert disks[1]["busy_share"][0]["v"] == 0.5
+    assert disks[0]["queue_length"][0]["v"] == 1.25
+    assert disks[1]["queue_length"][0]["v"] == 4
+    assert disks[2]["busy_share"] == []
+    assert disks[2]["queue_length"][0]["v"] == 9
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert DISK_BUSY_QUERY in queries
+    assert DISK_QUEUE_QUERY in queries
+    assert not any("sum(" in query and "node_disk_" in query for query in queries)
+    disk_steps = {
+        params["step"]
+        for _url, params in prometheus.calls
+        if params.get("query") in {DISK_BUSY_QUERY, DISK_QUEUE_QUERY}
+    }
+    assert disk_steps == {"30"}
+
+
+def test_missing_pressure_series_stays_empty(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 3600
+    prometheus.modes = [_series({"mode": "user"}, [(start_unix, "0.5")])]
+    prometheus.ranges[PRESSURE_CPU_WAITING_QUERY] = [_series({}, [(start_unix, "0.01")])]
+    prometheus.ranges[PRESSURE_MEMORY_WAITING_QUERY] = [_series({}, [(start_unix, "0.02")])]
+    prometheus.ranges[PRESSURE_MEMORY_STALLED_QUERY] = [_series({}, [(start_unix, "0")])]
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    pressure = response.json()["charts"]["pressure"]
+    assert len(pressure["cpu"]["waiting"]) == 121
+    assert len(pressure["cpu"]["waiting"]) <= 720
+    assert pressure["cpu"]["waiting"][0]["v"] == 0.01
+    assert pressure["cpu"]["waiting"][1]["v"] is None
+    assert pressure["cpu"]["stalled"] == []
+    assert pressure["memory"]["waiting"][0]["v"] == 0.02
+    assert pressure["memory"]["stalled"][0]["v"] == 0
+    assert pressure["io"] == {"waiting": [], "stalled": []}
+    queries = [params["query"] for _url, params in prometheus.calls]
+    assert PRESSURE_CPU_WAITING_QUERY in queries
+    assert PRESSURE_CPU_STALLED_QUERY in queries
+    assert PRESSURE_MEMORY_WAITING_QUERY in queries
+    assert PRESSURE_MEMORY_STALLED_QUERY in queries
+    assert PRESSURE_IO_WAITING_QUERY in queries
+    assert PRESSURE_IO_STALLED_QUERY in queries
+    assert {
+        params["step"]
+        for _url, params in prometheus.calls
+        if params.get("query") == PRESSURE_CPU_STALLED_QUERY
+    } == {"30"}
+
+
+def test_added_readings_keep_the_cpu_keys(
+    client: TestClient, frozen_end: datetime, prometheus: _Store
+) -> None:
+    _login(client)
+    start_unix = _unix(frozen_end) - 86400
+    prometheus.modes = [_series({"mode": "user"}, [(start_unix, "0.5")])]
+    prometheus.queue = [_series({}, [(start_unix, "2")])]
+    response = client.get("/host", params={"span": "day"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) >= {"span", "start", "end", "step_seconds", "tiles", "charts"}
+    assert "entity_id" not in response.text
+    assert "channel_id" not in response.text
+    assert set(body["tiles"]) == {"cpu", "memory", "swap", "filesystems"}
+    assert set(body["tiles"]["cpu"]) == {"online_count", "busy_share"}
+    assert body["tiles"]["cpu"] == {"online_count": 4, "busy_share": 0.25}
+    assert set(body["charts"]) == {"cpu_modes", "run_queue", "filesystems", "disks", "pressure"}
+    assert [series["mode"] for series in body["charts"]["cpu_modes"]] == ["user"]
+    assert len(body["charts"]["cpu_modes"][0]["samples"]) == 715
+    assert len(body["charts"]["run_queue"]) <= 720
+    assert body["charts"]["run_queue"][0]["v"] == 2
 
 
 @pytest.mark.parametrize(
