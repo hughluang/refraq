@@ -1,0 +1,38 @@
+# Series store scrape file. Mounted read-only by the site Prometheus service.
+# Time retention is 15d. Size retention is 1073741824 bytes (the B unit).
+# Whichever limit is reached first wins. This file is not a disk-share setting.
+
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+
+storage:
+  tsdb:
+    retention:
+      time: 15d
+      size: 1073741824B
+
+scrape_configs:
+  - job_name: node_exporter
+    static_configs:
+      - targets: ["host.docker.internal:9100"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: node_cpu_seconds_total|node_procs_running|node_memory_MemTotal_bytes|node_memory_MemAvailable_bytes|node_memory_SwapTotal_bytes|node_memory_SwapFree_bytes|node_filesystem_size_bytes|node_filesystem_avail_bytes|node_filesystem_files_free|node_disk_io_time_seconds_total|node_disk_io_time_weighted_seconds_total|node_pressure_cpu_waiting_seconds_total|node_pressure_cpu_stalled_seconds_total|node_pressure_memory_waiting_seconds_total|node_pressure_memory_stalled_seconds_total|node_pressure_io_waiting_seconds_total|node_pressure_io_stalled_seconds_total|up
+        action: keep
+
+  - job_name: postgres_exporter
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: pg_stat_database_numbackends|pg_settings_max_connections|pg_stat_activity_count|pg_stat_checkpointer_num_timed_total|pg_stat_checkpointer_num_requested_total|pg_stat_checkpointer_write_time_total|pg_stat_checkpointer_sync_time_total|pg_stat_checkpointer_buffers_written_total|pg_stat_database_temp_files|pg_stat_database_temp_bytes|up
+        action: keep
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    metric_relabel_configs:
+      - source_labels: [__name__, container_label_com_docker_compose_service]
+        regex: up;.*|(container_cpu_usage_seconds_total|container_memory_working_set_bytes);(postgres|redis|api|worker|beat|mcp|entity-mcp|web)
+        action: keep

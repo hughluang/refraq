@@ -127,7 +127,7 @@ Current `frontend/.env.example` defines:
 
 ### Deploy
 
-`deploy/` holds the site compose template and the secrets example. It is not a live site directory and is not an install source. Download the runnable compose and `.env.example` from the GitHub Release (`https://github.com/hughluang/refraq/releases/latest/download/docker-compose.yaml` and `…/download/.env.example`). Never commit the live `.env`.
+`deploy/` holds the site compose template, the scrape file, and the secrets example. It is not a live site directory and is not an install source. Download `docker-compose.yaml`, `.env.example`, and `prometheus.yml` from the GitHub Release (`https://github.com/hughluang/refraq/releases/latest/download/docker-compose.yaml`, `…/download/.env.example`, and `…/download/prometheus.yml`). Replacing only the Compose file leaves Prometheus without configuration, so the scrape file is replaced with it. Never commit the live `.env`.
 
 Current Release / `deploy/.env.example` defines:
 
@@ -139,9 +139,13 @@ Current Release / `deploy/.env.example` defines:
 - `ENTITY_OWNER_PASSWORD` (required; password for `refraq_entity_owner`; URL-safe characters only)
 - `ENTITY_READER_PASSWORD` (required; password for `refraq_reader`; URL-safe characters only)
 - `ENTITY_SIGNER_PASSWORD` (required; password for `refraq_signer`; URL-safe characters only; Compose interpolates it into `ENTITY_SIGNER_DATABASE_URL`. Bootstrap reads the password from that URL, not from this name)
+- `REFRAQ_MONITOR_PASSWORD` (required; password for `refraq_monitor`; `LOGIN`, `NOSUPERUSER`, granted `pg_monitor`; URL-safe characters only, no `@ : / % ? #`; Compose interpolates `${REFRAQ_MONITOR_PASSWORD:?set REFRAQ_MONITOR_PASSWORD}` and refuses the Postgres collector and the monitor-role one-shot when it is unset)
+- `REFRAQ_PROMETHEUS_URL` (optional; URL the API uses to read the in-stack series store; default `http://prometheus:9090`. Not a capacity knob and not grouped with `REFRAQ_HTTP_MAX_INFLIGHT`)
 - `REFRAQ_WEB_PORT=3001` (host port for the Management Console)
 - `REFRAQ_BROWSER_FACING_PROTO` (optional on web; default `http`; set `https` when TLS terminates in front of the Console)
 - `REFRAQ_BROWSER_FACING_HOST` (optional on web and API; host or `host:port` the browser uses for the Console, without scheme. Required for non-loopback Console URLs so OIDC `redirect_uri` is not taken from request `Host`)
+
+Prometheus keeps samples for `15d` or `1073741824` bytes, whichever comes first, on the named volume `refraq_prometheus`. A `blkio_config` weight is a relative preference under contention, not latency isolation. A second named volume on the same device is not isolation. node_exporter listens on host port `9100` because it uses the host network; block `9100` from everything except the Compose bridge. The Compose file does not publish that port and does not enforce the firewall rule.
 
 Image tags live in the stamped Release compose, not in `.env`. A leftover `REFRAQ_VERSION` in an older site `.env` has no effect after the compose attachment replaces the interpolated template. Published images are **linux/amd64** only (`ghcr.io/hughluang/refraq-api:<version>` and `ghcr.io/hughluang/refraq-web:<version>`). Compose project name is `refraq-prod` so volumes do not collide with the local Postgres/Redis Compose and stay attached when the site directory moves.
 
@@ -205,6 +209,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_ENTITY_DB_SCHEMA` (retired; entity schemas are fixed; ignored and reported at startup)
 - `REFRAQ_HTTP_MAX_INFLIGHT`, `REFRAQ_THREAD_TOKENS`, `REFRAQ_ADMISSION_SLOTS`, `REFRAQ_ADMISSION_ACTOR_SHARE` (API/MCP runtime capacity; ADR 0040 / 0045)
 - Postgres `shared_buffers` / `effective_cache_size` / `work_mem` / container `shm_size` (database supply; ADR 0040; set on the Compose `postgres` service, not as process env)
+- `REFRAQ_PROMETHEUS_URL` (optional series-store URL; default `http://prometheus:9090`. Not a capacity knob and not one of `REFRAQ_HTTP_MAX_INFLIGHT`, `REFRAQ_THREAD_TOKENS`, `REFRAQ_ADMISSION_SLOTS`, or `REFRAQ_ADMISSION_ACTOR_SHARE`)
 
 ### Frontend-Owned Variables
 
@@ -226,6 +231,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_MCP_UPSTREAM` (web runtime; site value `http://mcp:8001`; not a public origin)
 - `REFRAQ_ENTITY_MCP_UPSTREAM` (web runtime; site value `http://entity-mcp:8002`; not a public origin)
 - `ENTITY_SIGNER_PASSWORD` (Compose interpolation for `refraq_signer`; not read by the process. The process and bootstrap read `ENTITY_SIGNER_DATABASE_URL`)
+- `REFRAQ_MONITOR_PASSWORD` (required Compose interpolation for role `refraq_monitor`; URL-safe characters only, no `@ : / % ? #`; `${REFRAQ_MONITOR_PASSWORD:?set REFRAQ_MONITOR_PASSWORD}` refuses the Postgres collector and the monitor-role one-shot when unset)
 
 ## 5. Process timezone (`TZ`)
 
