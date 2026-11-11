@@ -11,6 +11,7 @@ import type { InboundCredential } from "@/features/inbound-credentials/types";
 const getInboundCredential = vi.hoisted(() => vi.fn());
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => (zh as Record<string, string>)[key] ?? key,
   useCan: () => ({ data: { can: true } }),
   useNotification: () => ({ open: vi.fn() }),

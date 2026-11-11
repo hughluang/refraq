@@ -64,6 +64,7 @@ Rules:
 
 - Protected endpoints accept **either** valid Session cookie **or** valid User PAT Bearer.
 - Exactly one principal resolution path per request; do not mix partial credentials in conflicting ways.
+- `last_used_at` is written when Bearer resolution accepts the PAT: the token exists, is not deactivated, is not soft-deleted, is not expired, and its User is active. An invalid, expired, deactivated, or soft-deleted PAT does not update `last_used_at`, and neither does a PAT whose User is not active. A request that authenticates by Session, and therefore never resolves the Bearer, does not update it. The Console verify control calls `GET /auth/me` with credentials omitted, so a resolved PAT records last use even when the Console then reports that the token belongs to a different user.
 - HTTP MCP (`/mcp`) accepts **only** User PAT Bearer. A Session cookie is ignored and does not authenticate. Missing or invalid PAT is HTTP 401 before any protocol method.
 - MCP tools use the same Permission catalog as HTTP after the PAT is resolved.
 - Audit events for PAT create/deactivate/restore/delete and for actions performed via PAT record the User id (and token id where relevant, never plaintext). **Entity Data API** calls (Session or PAT) do not produce **Management Audit Event**s; each call that reaches the access decision appends an Entity Access Log record carrying the User id and, for PAT calls, the token id (`docs/business-entity-access.md` §16).

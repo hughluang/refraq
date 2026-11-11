@@ -34,6 +34,7 @@ import {
 } from "@/providers/session-store";
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
     const template = key === "status.freshness" ? "Last updated {{time}}" : key;
     if (!options) return template;

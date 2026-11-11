@@ -33,6 +33,7 @@ const USAGE_KEYS = [
 ] as const;
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, values?: Record<string, unknown>) => {
     const template = key;
     if (!values) return template;

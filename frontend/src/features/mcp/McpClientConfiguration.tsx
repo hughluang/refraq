@@ -1,10 +1,11 @@
 "use client";
 
-import { Badge, Button, Code, Group, Stack, Text, Title } from "@mantine/core";
+import { Badge, Button, Code, Group, Stack, Text, Title, UnstyledButton } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { StatusBadge } from "@/components/display/StatusBadge";
 import { FormSection } from "@/components/form/FormSection";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
@@ -87,7 +88,7 @@ export function McpClientConfiguration({ publicPath }: { publicPath: string }) {
           <div aria-live="polite">
             {tools === null && !catalogFailed ? <Text size="sm">{t("mcp.catalog.loading")}</Text> : null}
             {tools?.length === 0 ? <Text size="sm">{t("mcp.catalog.empty")}</Text> : null}
-            {catalogFailed ? <Stack gap="xs"><Text size="sm">{t("mcp.catalog.failed")}</Text><Button variant="default" size="sm" onClick={() => setAttempt((value) => value + 1)}>{t("mcp.catalog.retry")}</Button></Stack> : null}
+            {catalogFailed ? <UnstyledButton type="button" onClick={() => setAttempt((value) => value + 1)}><StatusBadge tone="danger" labelKey="status.unloaded" /></UnstyledButton> : null}
           </div>
           {tools && tools.length > 0 ? <Stack component="ul" gap="sm" m={0} pl={0} style={{ listStyle: "none" }}>
             {tools.map((tool) => <Stack component="li" key={tool.name} gap={4} p="sm" style={{ borderBottom: "1px solid var(--mantine-color-default-border)" }}>

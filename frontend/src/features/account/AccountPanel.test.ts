@@ -32,6 +32,7 @@ vi.mock("@/lib/api", async () => {
 });
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => key,
   useGetIdentity: () => ({ data: identity }),
   useNotification: () => ({ open: vi.fn() }),

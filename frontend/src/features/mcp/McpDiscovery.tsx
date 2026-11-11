@@ -26,9 +26,6 @@ export function McpDiscovery({ endpoint }: { endpoint: string }) {
         {pending ? <Text>{t("mcp.discovery.pending")}</Text> : null}
         {discovery.status === "stopped" ? <Text>{t("mcp.invoke.waitingStopped")}</Text> : null}
         {discovery.status === "empty" ? <Text>{t("mcp.discovery.empty")}</Text> : null}
-        {discovery.status === "unavailable" ? <Text>{t("mcp.discovery.unavailable")}</Text> : null}
-        {discovery.status === "protocol-error" ? <Text>{t("mcp.discovery.protocolError")}</Text> : null}
-        {discovery.status === "transport-failure" ? <Text>{t("mcp.discovery.transportFailure")}</Text> : null}
       </div>
       {discovery.status === "ready" ? <>
         <Stack component="ul" gap="sm" m={0} pl={0} style={{ listStyle: "none" }}>

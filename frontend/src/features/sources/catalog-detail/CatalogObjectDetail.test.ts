@@ -19,6 +19,7 @@ function translate(key: string) {
 }
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => translate,
   useNotification: () => ({ open: vi.fn() }),
   useCan: () => ({ data: { can: false }, isLoading: false }),

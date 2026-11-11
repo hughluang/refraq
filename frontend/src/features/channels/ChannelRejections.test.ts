@@ -33,6 +33,7 @@ const LABELS: Record<string, string> = {
 };
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
     const template = LABELS[key] ?? key;
     if (!options) return template;

@@ -28,6 +28,7 @@ const LABELS: Record<string, string> = {
 };
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, options?: { defaultValue?: string }) =>
     LABELS[key] ?? options?.defaultValue ?? key,
   useNotification: () => ({ open: vi.fn() }),

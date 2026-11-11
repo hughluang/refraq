@@ -19,6 +19,7 @@ const copy = en as Record<string, string>;
 const getIdentity = vi.hoisted(() => vi.fn(() => ({ data: undefined })));
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => copy[key] ?? key,
   useNotification: () => ({ open: vi.fn() }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
@@ -221,11 +222,7 @@ describe("MCP PAT identity gate", () => {
     const { McpMetadataDetail } = await import("@/features/mcp/McpMetadataDetail");
     render(shell(createElement(Layout, null, createElement(McpMetadataDetail))));
 
-    expect(
-      screen.getByText(
-        "Verification calls GET /auth/me and records last use of this personal access token.",
-      ),
-    ).toBeTruthy();
+    expect(screen.getByText(copy["mcp.pat.recordsUse"])).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/side-effect free/i);
     expect(screen.queryByText("Selected endpoint /mcp")).toBeNull();
 
@@ -296,6 +293,7 @@ describe("MCP PAT identity gate", () => {
     fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 
     expect(await screen.findByText("This personal access token belongs to a different user.")).toBeTruthy();
+    expect(screen.getByText(copy["mcp.pat.recordsUse"])).toBeTruthy();
     expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
     expect(screen.queryByText("user-b")).toBeNull();
     expect(document.body.textContent).not.toContain(PAT);
@@ -338,6 +336,7 @@ describe("MCP PAT identity gate", () => {
         "That personal access token was not accepted. The Console session stays signed in.",
       ),
     ).toBeTruthy();
+    expect(screen.getByText(copy["mcp.pat.recordsUse"])).toBeTruthy();
     expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
     expect(screen.queryByText(/belongs to a different user/)).toBeNull();
     expect(document.body.textContent).not.toContain("hidden-problem-detail");

@@ -34,6 +34,7 @@ vi.mock("@refinedev/core", async () => {
     );
   };
   return {
+    matchResourceFromRoute: () => ({ found: false }),
     useTranslate: () => translate,
     useNotification: () => notify,
     useCan: () => ({ data: { can: access.canWrite } }),

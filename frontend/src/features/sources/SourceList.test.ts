@@ -53,6 +53,7 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
     const template = copy[key] ?? key;
     if (!options) return template;

@@ -27,6 +27,7 @@ vi.mock("@/lib/api", async () => {
 });
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => copy[key] ?? key,
   useNotification: () => ({ open: vi.fn() }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),

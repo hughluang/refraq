@@ -27,6 +27,7 @@ vi.mock("@/lib/api", async () => {
 });
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => copy[key] ?? key,
   useNotification: () => ({ open: vi.fn() }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
@@ -50,6 +51,16 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/features/branding/BrandingProvider", () => ({
   useBranding: () => ({ brandName: "Refraq" }),
 }));
+
+const discoveryNotice = vi.hoisted(() => vi.fn());
+
+vi.mock("@/providers/notification-provider", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/providers/notification-provider")>();
+  return {
+    ...actual,
+    presentConsoleNotification: (...args: unknown[]) => discoveryNotice(...args),
+  };
+});
 
 function stubDomApis() {
   Object.defineProperty(window, "matchMedia", {
@@ -357,6 +368,7 @@ describe("MCP metadata write confirmation", () => {
     pathname.current = "/console/mcp/metadata";
     resetSessionStoreForTests();
     useSessionStore.setState({ user: sessionUser("user-a"), permissionsReady: true });
+    discoveryNotice.mockReset();
     api.mockReset();
     api.mockResolvedValue({ tools: [] });
     callResponder = (_url, body) =>
@@ -923,9 +935,20 @@ describe("MCP metadata write confirmation", () => {
     expect(screen.getByRole("dialog", { name: "Confirm this write" })).toBeTruthy();
     metadataUnreadable = true;
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
+    await vi.waitFor(() => {
+      expect(
+        discoveryNotice.mock.calls.some((call) => {
+          const notice = call[0] as { type?: string; title?: string };
+          return (
+            notice.type === "error" &&
+            notice.title === "The tool list response could not be read. That is not an empty catalog."
+          );
+        }),
+      ).toBe(true);
+    });
     expect(
-      await screen.findByText("The tool list response could not be read. That is not an empty catalog."),
-    ).toBeTruthy();
+      screen.queryByText("The tool list response could not be read. That is not an empty catalog."),
+    ).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(callPosts()).toHaveLength(0);
 

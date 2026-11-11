@@ -15,6 +15,7 @@ import { ConsoleNotifications } from "@/providers/notification-provider";
 const openNotice = vi.hoisted(() => vi.fn());
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => key,
   useNotification: () => ({ open: openNotice }),
   useCan: () => ({ data: { can: true } }),

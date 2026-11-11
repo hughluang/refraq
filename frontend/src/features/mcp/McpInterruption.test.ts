@@ -27,6 +27,7 @@ vi.mock("@/lib/api", async () => {
 });
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => copy[key] ?? key,
   useNotification: () => ({ open: vi.fn() }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
@@ -50,6 +51,16 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/features/branding/BrandingProvider", () => ({
   useBranding: () => ({ brandName: "Refraq" }),
 }));
+
+const discoveryNotice = vi.hoisted(() => vi.fn());
+
+vi.mock("@/providers/notification-provider", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/providers/notification-provider")>();
+  return {
+    ...actual,
+    presentConsoleNotification: (...args: unknown[]) => discoveryNotice(...args),
+  };
+});
 
 function stubDomApis() {
   Object.defineProperty(window, "matchMedia", {
@@ -337,6 +348,7 @@ describe("MCP interruption and unknown write outcome", () => {
     pathname.current = "/console/mcp/metadata";
     resetSessionStoreForTests();
     useSessionStore.setState({ user: sessionUser("user-a"), permissionsReady: true });
+    discoveryNotice.mockReset();
     api.mockReset();
     api.mockResolvedValue({ tools: [] });
     callResponder = (_url, body) =>
@@ -633,7 +645,15 @@ describe("MCP interruption and unknown write outcome", () => {
 
     listMode = "bad-gateway";
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(await screen.findByText(UNAVAILABLE)).toBeTruthy();
+    await vi.waitFor(() => {
+      expect(
+        discoveryNotice.mock.calls.some((call) => {
+          const notice = call[0] as { type?: string; title?: string };
+          return notice.type === "error" && notice.title === UNAVAILABLE;
+        }),
+      ).toBe(true);
+    });
+    expect(screen.queryByText(UNAVAILABLE)).toBeNull();
     expect(screen.queryByText(STOPPED)).toBeNull();
     expect(screen.queryByText(EMPTY_CATALOG)).toBeNull();
     expect(listPosts()).toHaveLength(2);

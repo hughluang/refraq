@@ -31,6 +31,7 @@ vi.mock("@/lib/api", async () => {
 });
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => copy[key] ?? key,
   useNotification: () => ({ open: notice }),
   useBreadcrumb: () => ({ breadcrumbs: [{ label: "mcp.title", href: "/console/mcp" }, { label: "actions.show" }] }),
@@ -134,12 +135,15 @@ describe("MCP endpoint connection guidance", () => {
     expect(screen.getByText("Loading Session tool catalog…")).toBeTruthy();
     expect(screen.queryByText(copy["mcp.catalog.empty"])).toBeNull();
     await act(async () => { release(undefined); });
-    const retry = await screen.findByRole("button", { name: "Retry Session catalog" });
+    const retry = await screen.findByRole("button", { name: "Not loaded" });
     fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: "memory-only-test" } });
     api.mockResolvedValueOnce({ tools: [] });
     fireEvent.click(retry);
     expect(await screen.findByText(copy["mcp.catalog.empty"])).toBeTruthy();
-    expect(api.mock.calls).toEqual([["/mcp/catalog"], ["/mcp/catalog"]]);
+    expect(api.mock.calls.filter((call) => String(call[0]).includes("/catalog"))).toEqual([
+      ["/mcp/catalog"],
+      ["/mcp/catalog"],
+    ]);
     expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("memory-only-test");
   });
 
@@ -147,21 +151,27 @@ describe("MCP endpoint connection guidance", () => {
     api.mockRejectedValueOnce(new Error("catalog down"));
     const { McpClientConfiguration } = await import("@/features/mcp/McpClientConfiguration");
     const view = render(shell(createElement(McpClientConfiguration, { publicPath: "/mcp" })));
-    await screen.findByRole("button", { name: "Retry Session catalog" });
+    await screen.findByRole("button", { name: "Not loaded" });
     const retry = problemNotice.mock.calls[0][2].onRetry as () => void;
     api.mockResolvedValue({ tools: [] });
+    const catalogCalls = () =>
+      api.mock.calls.filter((call) => String(call[0]).includes("/catalog"));
     await act(async () => { retry(); });
-    expect(api).toHaveBeenCalledTimes(2);
+    expect(catalogCalls()).toEqual([["/mcp/catalog"], ["/mcp/catalog"]]);
     await act(async () => { retry(); });
-    expect(api).toHaveBeenCalledTimes(2);
+    expect(catalogCalls()).toHaveLength(2);
     view.rerender(shell(createElement(McpClientConfiguration, { publicPath: "/mcp/entity" })));
     await screen.findByText(copy["mcp.catalog.empty"]);
-    expect(api).toHaveBeenCalledTimes(3);
+    expect(catalogCalls()).toEqual([
+      ["/mcp/catalog"],
+      ["/mcp/catalog"],
+      ["/mcp/entity/catalog"],
+    ]);
     await act(async () => { retry(); });
-    expect(api).toHaveBeenCalledTimes(3);
+    expect(catalogCalls()).toHaveLength(3);
     view.unmount();
     await act(async () => { retry(); });
-    expect(api).toHaveBeenCalledTimes(3);
+    expect(catalogCalls()).toHaveLength(3);
   });
 
   it("ignores a late catalog response after switching endpoint", async () => {
@@ -425,9 +435,7 @@ describe("MCP endpoint connection guidance", () => {
     expect(
       await screen.findByText(copy["mcp.catalog.empty"]),
     ).toBeTruthy();
-    expect(
-      screen.queryByText(copy["mcp.catalog.failed"]),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Not loaded" })).toBeNull();
   });
 
   it("treats a failed catalog request as a catalog failure", async () => {
@@ -436,8 +444,10 @@ describe("MCP endpoint connection guidance", () => {
     render(shell(createElement(McpMetadataDetail)));
 
     expect(
-      await screen.findByRole("button", { name: "Retry Session catalog" }),
+      await screen.findByRole("button", { name: "Not loaded" }),
     ).toBeTruthy();
+    expect(screen.getByText("Streamable HTTP · 2026-07-28")).toBeTruthy();
     expect(screen.queryByText(copy["mcp.catalog.empty"])).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry Session catalog" })).toBeNull();
   });
 });

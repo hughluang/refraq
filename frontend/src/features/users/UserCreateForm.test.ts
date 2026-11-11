@@ -25,6 +25,7 @@ function translate(key: string, options?: Record<string, unknown>) {
 }
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => translate,
   useForm: () => ({ onFinish: finish.run }),
 }));

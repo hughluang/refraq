@@ -1,5 +1,7 @@
 "use client";
 
+import { Button } from "@mantine/core";
+import { useTranslate } from "@refinedev/core";
 import {
   createContext,
   useCallback,
@@ -19,6 +21,7 @@ import {
   type McpToolsListResult,
 } from "@/features/mcp/mcp-tools-list";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
+import { presentConsoleNotification } from "@/providers/notification-provider";
 
 export type McpPatOutcome =
   | { status: "unverified" }
@@ -30,6 +33,23 @@ export type McpEndpointDiscovery =
   | McpToolsListResult
   | { status: "idle" }
   | { status: "stopped" };
+
+const DISCOVERY_FAILURE_KEY = {
+  unavailable: "mcp.discovery.unavailable",
+  "protocol-error": "mcp.discovery.protocolError",
+  "transport-failure": "mcp.discovery.transportFailure",
+} as const;
+
+type DiscoveryFailureStatus = keyof typeof DISCOVERY_FAILURE_KEY;
+
+function discoveryFailureStatus(
+  status: McpToolsListResult["status"],
+): DiscoveryFailureStatus | null {
+  if (status === "unavailable" || status === "protocol-error" || status === "transport-failure") {
+    return status;
+  }
+  return null;
+}
 
 export type McpCallWait = {
   endpoint: string;
@@ -88,6 +108,7 @@ const McpWorkspaceContext = createContext<McpWorkspace | null>(null);
 
 /** Workspace-scoped PAT. Unmounting this provider drops the secret. */
 export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
+  const t = useTranslate();
   const [pat, setPatState] = useState("");
   const [outcome, setOutcomeState] = useState<McpPatOutcome>({ status: "unverified" });
   const [discoveryByEndpoint, setDiscoveryByEndpoint] = useState<
@@ -111,6 +132,7 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
   const [discoverWait, setDiscoverWait] = useState<string | null>(null);
   const callWaitRef = useRef<McpCallWait | null>(null);
   const discoverWaitRef = useRef<string | null>(null);
+  const discoverRef = useRef<(endpoint: string) => Promise<void>>(async () => {});
   outcomeRef.current = outcome;
   discoveryRef.current = discoveryByEndpoint;
   invocationRef.current = invocation;
@@ -397,7 +419,29 @@ export function McpWorkspaceProvider({ children }: { children: ReactNode }) {
       if (!tool || tool.execution !== "write") dropWriteConfirm();
     }
     setDiscoveryByEndpoint((current) => ({ ...current, [endpoint]: next }));
-  }, [dropWriteConfirm, rejectCredential]);
+    const failure = discoveryFailureStatus(next.status);
+    if (failure) {
+      const failureGeneration = generation;
+      presentConsoleNotification({
+        type: "error",
+        title: t(DISCOVERY_FAILURE_KEY[failure]),
+        message: (
+          <Button
+            type="button"
+            size="compact-xs"
+            variant="subtle"
+            onClick={() => {
+              if (requestGen.current[endpoint] !== failureGeneration) return;
+              void discoverRef.current(endpoint);
+            }}
+          >
+            {t("common.retry")}
+          </Button>
+        ),
+      });
+    }
+  }, [dropWriteConfirm, rejectCredential, t]);
+  discoverRef.current = discover;
 
   const stopWaiting = useCallback((kind: "call" | "discover") => {
     if (kind === "discover") {

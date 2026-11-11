@@ -2,13 +2,35 @@
 
 import { Anchor, Breadcrumbs, Text } from "@mantine/core";
 import { useBreadcrumb, useTranslate } from "@refinedev/core";
-import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { usePathname } from "next/navigation";
 
-import { shouldRenderBreadcrumbTrail } from "@/components/layout/breadcrumb-trail";
+import {
+  resolveBreadcrumbTrail,
+  shouldRenderBreadcrumbTrail,
+} from "@/components/layout/breadcrumb-trail";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { matchPath } from "@/features/console/module-identity/adapters";
+import { useModuleIdentityStore } from "@/features/console/module-identity/store";
 
 export function PageBreadcrumb({ currentLabel }: { currentLabel?: string }) {
   const t = useTranslate();
-  const { breadcrumbs } = useBreadcrumb();
+  const { breadcrumbs: refineBreadcrumbs } = useBreadcrumb();
+  const pathname = usePathname();
+  const modules = useModuleIdentityStore((state) => state.modules);
+  const matched = matchPath(pathname, modules);
+  const matchedModule = matched
+    ? modules.find((item) => item.id === matched.resource)
+    : undefined;
+  const breadcrumbs = resolveBreadcrumbTrail(
+    refineBreadcrumbs,
+    matched && matchedModule
+      ? {
+          action: matched.action,
+          labelKey: matchedModule.label_key,
+          listHref: matchedModule.routes.list,
+        }
+      : null,
+  );
 
   if (!shouldRenderBreadcrumbTrail(breadcrumbs)) {
     return null;

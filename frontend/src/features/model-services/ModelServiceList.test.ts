@@ -27,6 +27,7 @@ const access = vi.hoisted(() => ({
 }));
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
     const template = (en as Record<string, string>)[key] ?? key;
     if (!options) return template;

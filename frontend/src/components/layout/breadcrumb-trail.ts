@@ -3,6 +3,12 @@ export type BreadcrumbTrailItem = {
   href?: string;
 };
 
+export type AliasBreadcrumbSource = {
+  action: string;
+  labelKey: string;
+  listHref: string | null;
+};
+
 const MIN_ITEMS = 2;
 
 /**
@@ -15,4 +21,25 @@ export function shouldRenderBreadcrumbTrail(
   return (
     items.length >= MIN_ITEMS && items.some((item) => Boolean(item.href))
   );
+}
+
+/**
+ * Prefer a Refine trail that already navigates. An alias show, edit, or create
+ * whose module has a list route gets that same two-segment shape when Refine
+ * did not match the path.
+ */
+export function resolveBreadcrumbTrail(
+  refineBreadcrumbs: ReadonlyArray<BreadcrumbTrailItem>,
+  aliasSource: AliasBreadcrumbSource | null,
+): BreadcrumbTrailItem[] {
+  if (shouldRenderBreadcrumbTrail(refineBreadcrumbs)) {
+    return [...refineBreadcrumbs];
+  }
+  if (aliasSource && aliasSource.action !== "list" && aliasSource.listHref) {
+    return [
+      { label: aliasSource.labelKey, href: aliasSource.listHref },
+      { label: `actions.${aliasSource.action}` },
+    ];
+  }
+  return [];
 }

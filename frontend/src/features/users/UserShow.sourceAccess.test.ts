@@ -17,6 +17,7 @@ const listAllSubjectAttributes = vi.hoisted(() => vi.fn());
 const getUserSourceAccess = vi.hoisted(() => vi.fn());
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => translate,
   useNotification: () => ({ open: vi.fn() }),
   useCan: () => ({ data: { can: true } }),

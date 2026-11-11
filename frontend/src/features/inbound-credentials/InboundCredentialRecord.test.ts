@@ -18,6 +18,7 @@ const locationAssign = vi.hoisted(() => vi.fn());
 const access = vi.hoisted(() => ({ can: true as boolean | undefined }));
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => key,
   useCan: () => ({
     data: access.can === undefined ? undefined : { can: access.can },

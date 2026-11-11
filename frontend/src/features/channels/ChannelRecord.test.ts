@@ -30,6 +30,7 @@ import {
 const notify = vi.hoisted(() => vi.fn());
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, options?: { defaultValue?: string }) =>
     options?.defaultValue ?? key,
   useNotification: () => ({ open: notify }),

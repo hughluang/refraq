@@ -15,6 +15,7 @@ const createInboundCredential = vi.hoisted(() => vi.fn());
 const patchInboundCredential = vi.hoisted(() => vi.fn());
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => key,
   useCan: () => ({ data: { can: true } }),
   useNotification: () => ({ open: vi.fn() }),

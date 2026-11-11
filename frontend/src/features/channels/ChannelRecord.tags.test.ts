@@ -25,6 +25,7 @@ import { EMPTY_GRAPH, type Channel, type ChannelRunDetail, type NodeTypeSpec } f
 const flags = vi.hoisted(() => ({ canWrite: true }));
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, values?: Record<string, unknown>) => {
     if (!values) return key;
     return key.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values[name] ?? ""));

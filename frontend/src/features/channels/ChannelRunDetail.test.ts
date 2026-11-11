@@ -112,6 +112,7 @@ vi.mock("@/features/channels/RunExecutionBrowser", () => ({
 }));
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
     const template =
       key === "status.freshness" ? "Last updated {{time}}" : (i18n.extra[key] ?? key);

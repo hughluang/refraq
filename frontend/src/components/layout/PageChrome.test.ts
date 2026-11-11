@@ -172,6 +172,110 @@ describe("PageChrome", () => {
     expect(heading.getAttribute("style") ?? "").toContain("h2");
   });
 
+  it("builds an alias show trail when Refine has no crumbs", async () => {
+    const { useModuleIdentityStore } = await import(
+      "@/features/console/module-identity/store"
+    );
+    useModuleIdentityStore.setState({
+      status: "ready",
+      modules: [
+        {
+          id: "mcp",
+          label_key: "mcp.title",
+          routes: {
+            list: "/console/mcp",
+            show: "/console/mcp/metadata",
+            aliases: [{ path: "/console/mcp/entity", action: "show" }],
+          },
+          actions: { list: "console:access", show: "console:access" },
+        },
+        {
+          id: "account",
+          label_key: "account.title",
+          routes: { list: null, show: "/console/account", aliases: [] },
+          actions: { list: "console:access", show: "console:access" },
+        },
+        {
+          id: "sources",
+          label_key: "sources.title",
+          routes: {
+            list: "/console/sources",
+            show: "/console/sources/:id",
+            aliases: [
+              {
+                path: "/console/sources/:id/structure-diffs/:diffId",
+                action: "show",
+              },
+            ],
+          },
+          actions: { list: "sources:read", show: "sources:read" },
+        },
+      ],
+      error: null,
+      errorKind: null,
+    });
+    const { PageChrome } = await import("@/components/layout/PageChrome");
+
+    nav.pathname = "/console/mcp/entity";
+    const entity = render(
+      shell(
+        createElement(PageChrome, {
+          title: "Entity MCP",
+          breadcrumbLabel: "Entity MCP",
+        }),
+      ),
+    );
+    const entityCurrent = document.querySelector('[aria-current="page"]');
+    expect(entityCurrent?.textContent).toBe("Entity MCP");
+    expect(entityCurrent?.tagName).not.toBe("A");
+    expect(screen.getByRole("link", { name: "mcp.title" }).getAttribute("href")).toBe(
+      "/console/mcp",
+    );
+    entity.unmount();
+
+    nav.pathname = "/console/mcp";
+    const overview = render(shell(createElement(PageChrome, { title: "MCP" })));
+    expect(screen.queryByRole("navigation", { name: "layout.breadcrumb" })).toBeNull();
+    overview.unmount();
+
+    nav.pathname = "/console/account";
+    const account = render(shell(createElement(PageChrome, { title: "Account" })));
+    expect(screen.queryByRole("navigation", { name: "layout.breadcrumb" })).toBeNull();
+    account.unmount();
+
+    breadcrumbs.current = [
+      { label: "from-refine", href: "/console/mcp" },
+      { label: "refine-current" },
+    ];
+    nav.pathname = "/console/mcp/metadata";
+    render(
+      shell(
+        createElement(PageChrome, {
+          title: "Metadata MCP",
+          breadcrumbLabel: "Metadata MCP",
+        }),
+      ),
+    );
+    expect(screen.getByRole("link", { name: "from-refine" }).getAttribute("href")).toBe(
+      "/console/mcp",
+    );
+    expect(document.querySelector('[aria-current="page"]')?.textContent).toBe(
+      "Metadata MCP",
+    );
+    expect(screen.queryByRole("link", { name: "mcp.title" })).toBeNull();
+    cleanup();
+
+    breadcrumbs.current = [];
+    nav.pathname = "/console/sources/src_1/structure-diffs/diff_1";
+    render(shell(createElement(PageChrome, { title: "Structure diff" })));
+    const diffCurrent = document.querySelector('[aria-current="page"]');
+    expect(diffCurrent?.textContent).toBe("actions.show");
+    expect(diffCurrent?.tagName).not.toBe("A");
+    expect(
+      screen.getByRole("link", { name: "sources.title" }).getAttribute("href"),
+    ).toBe("/console/sources");
+  });
+
   it("overrides only the current breadcrumb label and preserves the default", async () => {
     breadcrumbs.current = [
       { label: "mcp.title", href: "/console/mcp" },

@@ -27,6 +27,7 @@ vi.mock("@/lib/api", async () => {
 });
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string) => copy[key] ?? key,
   useNotification: () => ({ open: vi.fn() }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
@@ -50,6 +51,16 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/features/branding/BrandingProvider", () => ({
   useBranding: () => ({ brandName: "Refraq" }),
 }));
+
+const discoveryNotice = vi.hoisted(() => vi.fn());
+
+vi.mock("@/providers/notification-provider", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/providers/notification-provider")>();
+  return {
+    ...actual,
+    presentConsoleNotification: (...args: unknown[]) => discoveryNotice(...args),
+  };
+});
 
 function stubDomApis() {
   Object.defineProperty(window, "matchMedia", {
@@ -204,6 +215,18 @@ function verifyPat() {
   fireEvent.click(screen.getByRole("button", { name: "Verify personal access token" }));
 }
 
+async function expectDiscoveryFailure(title: string) {
+  await vi.waitFor(() => {
+    expect(
+      discoveryNotice.mock.calls.some((call) => {
+        const notice = call[0] as { type?: string; title?: string };
+        return notice.type === "error" && notice.title === title;
+      }),
+    ).toBe(true);
+  });
+  expect(screen.queryByText(title)).toBeNull();
+}
+
 function toolsListCalls() {
   return vi.mocked(fetch).mock.calls.filter((call) => {
     const init = call[1] as RequestInit | undefined;
@@ -224,6 +247,7 @@ describe("MCP live tools/list discovery", () => {
       user: sessionUser("user-a"),
       permissionsReady: true,
     });
+    discoveryNotice.mockReset();
     api.mockReset();
     api.mockResolvedValue({
       tools: [
@@ -635,7 +659,7 @@ describe("MCP live tools/list discovery", () => {
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
 
-    expect(await screen.findByText("This endpoint returned a protocol error.")).toBeTruthy();
+    await expectDiscoveryFailure("This endpoint returned a protocol error.");
     expect(screen.queryByText("hidden-rpc-detail")).toBeNull();
     expect(
       screen.queryByText("This endpoint returned no tools. That is an empty catalog."),
@@ -668,7 +692,7 @@ describe("MCP live tools/list discovery", () => {
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
 
-    expect(await screen.findByText("This endpoint is unavailable.")).toBeTruthy();
+    await expectDiscoveryFailure("This endpoint is unavailable.");
     expect(screen.queryByText("Failed stream SQL.")).toBeNull();
     expect(
       screen.queryByText("This endpoint returned no tools. That is an empty catalog."),
@@ -693,7 +717,7 @@ describe("MCP live tools/list discovery", () => {
     verifyPat();
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(await screen.findByText("This endpoint is unavailable.")).toBeTruthy();
+    await expectDiscoveryFailure("This endpoint is unavailable.");
     expect(
       screen.queryByText("This endpoint returned no tools. That is an empty catalog."),
     ).toBeNull();
@@ -720,7 +744,7 @@ describe("MCP live tools/list discovery", () => {
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
 
-    expect(await screen.findByText("This endpoint returned a protocol error.")).toBeTruthy();
+    await expectDiscoveryFailure("This endpoint returned a protocol error.");
     expect(screen.queryByText("hidden-sse-detail")).toBeNull();
     expect(screen.queryByText("This endpoint is unavailable.")).toBeNull();
   });
@@ -754,7 +778,7 @@ describe("MCP live tools/list discovery", () => {
       ),
     );
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(await screen.findByText("This endpoint is unavailable.")).toBeTruthy();
+    await expectDiscoveryFailure("This endpoint is unavailable.");
     expect(screen.getByText(/belongs to the signed-in user/)).toBeTruthy();
     expect(screen.queryByText("mcp_upstream_unavailable")).toBeNull();
     expect(screen.queryByRole("listitem", { name: "/mcp run_sql" })).toBeNull();
@@ -795,7 +819,7 @@ describe("MCP live tools/list discovery", () => {
     verifyPat();
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(await screen.findByText("This endpoint is unavailable.")).toBeTruthy();
+    await expectDiscoveryFailure("This endpoint is unavailable.");
     expect(screen.queryByText("hidden-http-detail")).toBeNull();
     cleanup();
 
@@ -810,8 +834,42 @@ describe("MCP live tools/list discovery", () => {
     verifyPat();
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(await screen.findByText("This endpoint is unavailable.")).toBeTruthy();
+    await expectDiscoveryFailure("This endpoint is unavailable.");
     expect(screen.queryByText("network down")).toBeNull();
+  });
+
+  it("retries the notification only while that discovery failure is still current", async () => {
+    let fail = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).endsWith("/auth/me")) return jsonResponse(200, meBody("user-a"));
+        if (fail) throw new TypeError("network down");
+        return jsonResponse(200, metadataTools(requestId([url, init])));
+      }),
+    );
+    await renderMetadata();
+    verifyPat();
+    await screen.findByRole("button", { name: "Discover tools" });
+    fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
+    await expectDiscoveryFailure("This endpoint is unavailable.");
+    expect(toolsListCalls()).toHaveLength(1);
+
+    fail = false;
+    const notice = discoveryNotice.mock.calls.at(-1)?.[0] as {
+      message: { props: { onClick: () => void } };
+    };
+    notice.message.props.onClick();
+    expect(await screen.findByRole("listitem", { name: "/mcp run_sql" })).toBeTruthy();
+    expect(toolsListCalls()).toHaveLength(2);
+
+    notice.message.props.onClick();
+    expect(toolsListCalls()).toHaveLength(2);
+    fireEvent.change(screen.getByLabelText("Personal access token"), {
+      target: { value: `${PAT}x` },
+    });
+    notice.message.props.onClick();
+    expect(toolsListCalls()).toHaveLength(2);
   });
 
   it("withdraws a verified token when discovery is refused, and keeps an outage on the endpoint", async () => {
@@ -844,6 +902,7 @@ describe("MCP live tools/list discovery", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/belongs to the signed-in user/)).toBeNull();
     expect(screen.queryByText("This endpoint is unavailable.")).toBeNull();
+    expect(discoveryNotice).not.toHaveBeenCalled();
     expect(screen.queryByText("AUTH_UNAUTHENTICATED")).toBeNull();
     expect(screen.queryByText("Not signed in or session expired")).toBeNull();
     expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe(PAT);
@@ -867,11 +926,9 @@ describe("MCP live tools/list discovery", () => {
     verifyPat();
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(
-      await screen.findByText(
-        "The tool list response could not be read. That is not an empty catalog.",
-      ),
-    ).toBeTruthy();
+    await expectDiscoveryFailure(
+      "The tool list response could not be read. That is not an empty catalog.",
+    );
     expect(
       screen.queryByText("This endpoint returned no tools. That is an empty catalog."),
     ).toBeNull();
@@ -888,11 +945,9 @@ describe("MCP live tools/list discovery", () => {
     verifyPat();
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(
-      await screen.findByText(
-        "The tool list response could not be read. That is not an empty catalog.",
-      ),
-    ).toBeTruthy();
+    await expectDiscoveryFailure(
+      "The tool list response could not be read. That is not an empty catalog.",
+    );
     expect(
       screen.queryByText("This endpoint returned no tools. That is an empty catalog."),
     ).toBeNull();
@@ -914,11 +969,9 @@ describe("MCP live tools/list discovery", () => {
     verifyPat();
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(
-      await screen.findByText(
-        "The tool list response could not be read. That is not an empty catalog.",
-      ),
-    ).toBeTruthy();
+    await expectDiscoveryFailure(
+      "The tool list response could not be read. That is not an empty catalog.",
+    );
     expect(
       screen.queryByText("This endpoint returned no tools. That is an empty catalog."),
     ).toBeNull();
@@ -948,11 +1001,9 @@ describe("MCP live tools/list discovery", () => {
     verifyPat();
     await screen.findByRole("button", { name: "Discover tools" });
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
-    expect(
-      await screen.findByText(
-        "The tool list response could not be read. That is not an empty catalog.",
-      ),
-    ).toBeTruthy();
+    await expectDiscoveryFailure(
+      "The tool list response could not be read. That is not an empty catalog.",
+    );
     expect(
       screen.queryByText("This endpoint returned no tools. That is an empty catalog."),
     ).toBeNull();
@@ -986,6 +1037,7 @@ describe("MCP live tools/list discovery", () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByText("This endpoint is unavailable.")).toBeNull();
+    expect(discoveryNotice).not.toHaveBeenCalled();
     expect(screen.queryByText("Not signed in or session expired")).toBeNull();
     expect(document.body.textContent).not.toContain(PAT);
     expect(useSessionStore.getState().user?.id).toBe("user-a");

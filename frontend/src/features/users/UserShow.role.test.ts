@@ -22,6 +22,7 @@ const notify = vi.hoisted(() => vi.fn());
 const sessionUser = vi.hoisted(() => ({ id: null as string | null }));
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => translate,
   useNotification: () => ({ open: notify }),
   useCan: () => ({ data: { can: canWrite.value } }),

@@ -38,6 +38,7 @@ function translate(key: string, options?: Record<string, unknown>) {
 }
 
 vi.mock("@refinedev/core", () => ({
+  matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => translate,
   useNotification: () => ({ open: vi.fn() }),
   useGetIdentity: () => ({ data: { id: "self-user" } }),
