@@ -8,7 +8,7 @@ subject's current policy once and project stored images with that policy.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from backend.admin.subjects import user_group_ids
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
@@ -33,7 +33,7 @@ from backend.entity.entity_db import get_entity_engine
 from backend.entity.errors import EntityChangeLogQueryUnsupported, EntityNotFound
 from backend.entity.history.bounds import _blank, _bound, _occurred_to_bound
 from backend.entity.history.cursor import HistoryLookup, resolve_history_lookup
-from backend.entity.history.project import SideWork, project_sides
+from backend.entity.history.project import HistorySide, SideWork, project_sides
 from backend.entity.lifecycle import PUBLISHED
 from backend.entity.service import change_log_tables
 from backend.entity.store import get_entity_store
@@ -50,24 +50,6 @@ __all__ = [
     "read_history",
     "read_incremental",
 ]
-
-SideState = Literal["absent", "unavailable", "visible"]
-
-
-@dataclass(frozen=True, slots=True)
-class HistorySide:
-    """One side of a stored change.
-
-    ``absent`` is not part of the operation. ``unavailable`` is not safely
-    readable. Only ``visible`` carries ``values``. ``masked`` names attributes
-    whose effective presentation is not clear. It stays off ``values`` and
-    off the interactive HTTP body.
-    """
-
-    state: SideState
-    values: dict[str, Any] | None = None
-    masked: frozenset[str] = frozenset()
-
 
 @dataclass(frozen=True, slots=True)
 class HistoryEvent:
@@ -159,13 +141,13 @@ def read_history(
     Filters match the change-log list, including a fraction-less ``occurred_to``
     that covers the rest of that second. ``row_identity`` is business-key text.
     ``version_id`` and ``row_id`` together name one row of one logical version.
-    A hit is an exact comparison on a visible side after projection. An update
+    A hit is an exact comparison on a visible side after projection. An event
     whose two visible projections are equal is omitted. The continuation is the
     last candidate evaluated on the storage page, including a candidate omitted
     from ``events``.
     """
     lookup = resolve_history_lookup(row_identity, version_id, row_id)
-    policy, outcome, person, head_attributes = _authorize(entity_id, user)
+    policy, outcome, person = _authorize(entity_id, user)
     index = _versions(entity_id)
     if lookup.row_identity is not None and not _key_can_be_clear(index, outcome):
         raise EntityChangeLogQueryUnsupported()
@@ -186,9 +168,7 @@ def read_history(
             occurred_from=_bound(occurred_from),
             occurred_to=_occurred_to_bound(occurred_to),
         )
-        projected = _project(
-            conn, page.items, index, policy, outcome, person, head_attributes
-        )
+        projected = _project(conn, page.items, index, policy, outcome, person)
     events = [
         HistoryEvent(
             sequence=entry.sequence,
@@ -203,7 +183,7 @@ def read_history(
         )
         for entry, version_id, version_number, before, after in projected
         if _eligible(before, after)
-        and not _same_update(entry.operation, before, after)
+        and not _same_projection(before, after)
         and _lookup_hit(
             index[entry.physical_table],
             before,
@@ -229,7 +209,7 @@ def read_incremental(
     ``progress``. Recording off raises ``ChangeLogOff``.
     """
     user = ensure_system_user(get_user_store())
-    policy, outcome, person, head_attributes = _authorize(entity_id, user)
+    policy, outcome, person = _authorize(entity_id, user)
     index = _versions(entity_id)
     with get_entity_engine().begin() as conn:
         effective = read_effective(conn, entity_id)
@@ -244,9 +224,7 @@ def read_incremental(
             limit=limit,
         )
         entries = [entry for entry, _commit in spans]
-        projected = _project(
-            conn, entries, index, policy, outcome, person, head_attributes
-        )
+        projected = _project(conn, entries, index, policy, outcome, person)
     events: list[IncrementalEvent] = []
     for (_entry, commit), (entry, version_id, version_number, before, after_side) in zip(
         spans, projected, strict=True
@@ -285,9 +263,7 @@ class _Version:
     table: ChangeLogTable
 
 
-def _authorize(
-    entity_id: str, user: UserRecord
-) -> tuple[Any, Any, Person, tuple[Any, ...]]:
+def _authorize(entity_id: str, user: UserRecord) -> tuple[Any, Any, Person]:
     head = load_head(entity_id)
     revision = get_access_store().revision(entity_id)
     person = Person(
@@ -307,7 +283,7 @@ def _authorize(
     if outcome.hidden or not outcome.grant_ids or outcome.shape is None:
         raise EntityNotFound()
     _ensure_generated(head, outcome, revision, user_id=user.id)
-    return policy, outcome, person, head.attributes
+    return policy, outcome, person
 
 
 def _versions(entity_id: str) -> dict[str, _Version]:
@@ -341,7 +317,6 @@ def _project(
     policy: Any,
     outcome: Any,
     person: Person,
-    head_attributes: tuple[Any, ...],
 ) -> list[tuple[ChangeLogEntry, str, int, HistorySide, HistorySide]]:
     works: list[SideWork] = []
     located: list[tuple[ChangeLogEntry, _Version]] = []
@@ -349,46 +324,32 @@ def _project(
         version = index[entry.physical_table]
         located.append((entry, version))
         snapshots = version.table.reference_snapshots
+        attributes = version.table.attributes
         works.append(
             SideWork(
-                key=_key(entry, "before"),
                 image=entry.before,
-                attributes=version.table.attributes,
+                attributes=attributes,
                 reference_snapshots=snapshots,
             )
         )
         works.append(
             SideWork(
-                key=_key(entry, "after"),
                 image=entry.after,
-                attributes=version.table.attributes,
+                attributes=attributes,
                 reference_snapshots=snapshots,
             )
         )
-    projected = project_sides(
-        conn, works, policy, outcome, person, head_attributes
-    )
+    projected = project_sides(conn, works, policy, outcome, person)
     return [
         (
             entry,
             version.version_id,
             version.version_number,
-            _as_side(projected[_key(entry, "before")]),
-            _as_side(projected[_key(entry, "after")]),
+            projected[2 * offset],
+            projected[2 * offset + 1],
         )
-        for entry, version in located
+        for offset, (entry, version) in enumerate(located)
     ]
-
-
-def _as_side(
-    projected: tuple[str, dict[str, Any] | None, frozenset[str]],
-) -> HistorySide:
-    state, values, masked = projected
-    if state == "visible":
-        return HistorySide(state="visible", values=values, masked=masked)
-    if state == "absent":
-        return HistorySide(state="absent")
-    return HistorySide(state="unavailable")
 
 
 def _projected_key_name(version: _Version, policy: Any) -> str | None:
@@ -413,18 +374,13 @@ def _projected_key_name(version: _Version, policy: Any) -> str | None:
     return historical
 
 
-def _key(entry: ChangeLogEntry, side: str) -> str:
-    return f"{entry.sequence}:{side}"
-
-
 def _eligible(before: HistorySide, after: HistorySide) -> bool:
     return before.state == "visible" or after.state == "visible"
 
 
-def _same_update(operation: str, before: HistorySide, after: HistorySide) -> bool:
+def _same_projection(before: HistorySide, after: HistorySide) -> bool:
     return (
-        operation == "update"
-        and before.state == "visible"
+        before.state == "visible"
         and after.state == "visible"
         and before.values == after.values
     )

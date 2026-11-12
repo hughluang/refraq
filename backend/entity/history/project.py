@@ -1,16 +1,16 @@
 """Adapt stored change images and project them with the current access policy.
 
-One statement evaluates every candidate side. A side that lacks a rule input,
-or whose stored type cannot feed a rule or cell, is unavailable before that
+A side whose image cannot feed the current shape is unavailable before that
 statement. Schema absence is not a SQL NULL.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -23,16 +23,30 @@ from backend.entity.access.masks import CLEAR
 from backend.entity.ddl import EXPOSURE_OWNER_ROLE, ident
 from backend.entity.records import AttributeRecord
 
-_Projected = tuple[str, dict[str, Any] | None, frozenset[str]]
-
 _SIDE = "refraq_side"
+
+SideState = Literal["absent", "unavailable", "visible"]
+
+
+@dataclass(frozen=True, slots=True)
+class HistorySide:
+    """One side of a stored change.
+
+    ``absent`` is not part of the operation. ``unavailable`` is not safely
+    readable. Only ``visible`` carries ``values``. ``masked`` names attributes
+    whose effective presentation is not clear. It stays off ``values`` and
+    off the interactive HTTP body.
+    """
+
+    state: SideState
+    values: dict[str, Any] | None = None
+    masked: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
 class SideWork:
     """One existing or absent image. ``image`` is None when the operation has no side."""
 
-    key: str
     image: dict[str, Any] | None
     attributes: Sequence[AttributeRecord]
     reference_snapshots: Mapping[str, Any]
@@ -44,25 +58,33 @@ def project_sides(
     policy: Policy,
     outcome: Outcome,
     person: Person,
-    head_attributes: Sequence[AttributeRecord],
-) -> dict[str, _Projected]:
-    """Project each side. States are ``absent``, ``unavailable``, or ``visible``.
+) -> tuple[HistorySide, ...]:
+    """One result per side, in input order.
 
-    The third item names attributes whose effective mask mode is not clear.
-    Those names are not copied into ``values``.
+    A side feeds the current shape when every attribute that shape consumes
+    is present and has the same interpretation as the head. No image is
+    ``absent``. A consumed attribute that is missing or whose interpretation
+    differs, and a side the shape does not return, are both ``unavailable``.
+    Names whose winning grant is not clear stay on ``masked`` and out of
+    ``values``.
+
+    ``conn`` is inside a transaction. ``outcome.shape`` is required.
+    Head attributes are ``policy.source_attributes``.
     """
     if outcome.shape is None:
         raise RuntimeError("historical projection requires a subject shape")
     needed = _needed_ids(policy, outcome)
     cells = frozenset(column.attr.attribute_id for column in outcome.columns)
     head_by_id = {
-        attr.attribute_id: attr for attr in head_attributes if attr.attribute_id
+        attr.attribute_id: attr
+        for attr in policy.source_attributes
+        if attr.attribute_id
     }
-    result: dict[str, _Projected] = {}
+    slots: dict[int, HistorySide] = {}
     candidates: list[_Candidate] = []
-    for side in sides:
+    for index, side in enumerate(sides):
         if side.image is None:
-            result[side.key] = ("absent", None, frozenset())
+            slots[index] = HistorySide(state="absent")
             continue
         present, incompatible, values, row_id = _adapt(
             side.image,
@@ -72,30 +94,30 @@ def project_sides(
             side.reference_snapshots,
         )
         if (needed - present) or (incompatible & (needed | cells)):
-            result[side.key] = ("unavailable", None, frozenset())
+            slots[index] = HistorySide(state="unavailable")
             continue
         candidates.append(
             _Candidate(
-                key=side.key,
+                key=str(index),
                 row_id=row_id,
                 values=values,
                 present=present,
             )
         )
-    if not candidates:
-        return result
-    found = _query(conn, candidates, policy, outcome, person)
-    for item in candidates:
-        row = found.get(item.key)
-        if row is None:
-            result[item.key] = ("unavailable", None, frozenset())
-            continue
-        result[item.key] = (
-            "visible",
-            _cells(row, outcome, item.present),
-            _masked(row, outcome, item.present),
-        )
-    return result
+    if candidates:
+        found = _query(conn, candidates, policy, outcome, person)
+        for item in candidates:
+            slot = int(item.key)
+            row = found.get(item.key)
+            if row is None:
+                slots[slot] = HistorySide(state="unavailable")
+                continue
+            slots[slot] = HistorySide(
+                state="visible",
+                values=_cells(row, outcome, item.present),
+                masked=_masked(row, outcome, item.present),
+            )
+    return tuple(slots[index] for index in range(len(sides)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,26 +171,27 @@ def _adapt(
     return frozenset(present), frozenset(incompatible), values, image.get("row_id")
 
 
+def _interpretation(
+    attr: AttributeRecord, key_type: str | None
+) -> tuple[str, str | None, str | None, str | None]:
+    """Type, dictionary, reference target, and key type, compared as one value."""
+    return (attr.type, attr.dictionary_id, attr.target_entity_id, key_type)
+
+
 def _compatible(
     historical: AttributeRecord,
     head: AttributeRecord,
     current: AttrFact,
     snapshots: Mapping[str, Any],
 ) -> bool:
-    """Same type, dictionary, and reference-target checks as access ``_compatible``.
+    """True when the stored attribute and the head read as the same value.
 
-    A reference whose stored snapshot key type differs from the current fact
-    is also incompatible. That makes the side unavailable; it does not raise.
+    A mismatch makes the side unavailable when that attribute feeds a rule
+    or a cell. It does not raise.
     """
-    if historical.type != head.type:
-        return False
-    if historical.type == "dictionary" and historical.dictionary_id != head.dictionary_id:
-        return False
-    if historical.type != "reference":
-        return True
-    if historical.target_entity_id != head.target_entity_id:
-        return False
-    return _snapshot_key_type(snapshots, historical.name) == current.reference_key_type
+    return _interpretation(
+        historical, _snapshot_key_type(snapshots, historical.name)
+    ) == _interpretation(head, current.reference_key_type)
 
 
 def _snapshot_key_type(snapshots: Mapping[str, Any], name: str) -> str | None:
@@ -179,6 +202,26 @@ def _snapshot_key_type(snapshots: Mapping[str, Any], name: str) -> str | None:
     return kind if isinstance(kind, str) else None
 
 
+def _json_param(value: Any) -> str:
+    """Text form of a value ``json.dumps`` cannot emit on its own.
+
+    Decoded change images are already JSON values. A decimal or instant that
+    arrives as a Python object stays exact: a decimal is not a binary float,
+    and an instant keeps its microseconds.
+    """
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, datetime):
+        return format_instant(value, timespec="microseconds")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, time):
+        return value.isoformat()
+    raise TypeError(
+        f"historical projection cannot encode {type(value).__name__}"
+    )
+
+
 def _query(
     conn: Connection,
     candidates: Sequence[_Candidate],
@@ -186,23 +229,30 @@ def _query(
     outcome: Outcome,
     person: Person,
 ) -> dict[str, Any]:
+    """Send every candidate as one JSON payload.
+
+    Binding each cell would exceed PostgreSQL's 65535-parameter limit on a
+    wide page.
+    """
     assert outcome.shape is not None
     names = [fact.name for fact in policy.attributes]
-    params: dict[str, Any] = {}
-    tuples: list[str] = []
-    for index, item in enumerate(candidates):
-        side_param = f"sk{index}"
-        row_param = f"rk{index}"
-        params[side_param] = item.key
-        params[row_param] = item.row_id
-        slots = [f":{side_param}", f":{row_param}"]
-        for column, name in enumerate(names):
-            value_param = f"v{index}_{column}"
-            params[value_param] = item.values.get(name)
-            slots.append(f":{value_param}")
-        tuples.append("(" + ", ".join(slots) + ")")
-    aliases = ", ".join(
-        [ident(_SIDE), ident("row_id"), *(ident(name) for name in names)]
+    payload = json.dumps(
+        [
+            {
+                _SIDE: item.key,
+                "row_id": None if item.row_id is None else str(item.row_id),
+                **{name: item.values.get(name) for name in names},
+            }
+            for item in candidates
+        ],
+        default=_json_param,
+    )
+    fields = ", ".join(
+        [
+            f"{ident(_SIDE)} text",
+            f"{ident('row_id')} text",
+            *(f"{ident(name)} text" for name in names),
+        ]
     )
     casts = [
         f"v.{ident(_SIDE)} AS {ident(_SIDE)}",
@@ -215,10 +265,11 @@ def _query(
     source = (
         "SELECT "
         + ", ".join(casts)
-        + " FROM (VALUES "
-        + ", ".join(tuples)
-        + f") AS v({aliases})"
+        + " FROM jsonb_to_recordset(CAST(:payload AS jsonb)) AS v("
+        + fields
+        + ")"
     )
+    params = {"payload": payload}
     sql = render_shape(
         outcome.shape,
         replace(policy, source_sql=f"({source})"),
