@@ -2,6 +2,117 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "dev-services-up",
+      "type": "shell",
+      "command": "docker compose up -d --remove-orphans",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "dev-services-status",
+      "type": "shell",
+      "command": "docker compose ps",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "dev-services-down",
+      "type": "shell",
+      "command": "docker compose down --remove-orphans",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "backend-install",
+      "type": "shell",
+      "command": "python3 -m pip --version >/dev/null 2>&1 || (curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/refraq-get-pip.py && python3 /tmp/refraq-get-pip.py --user --break-system-packages); python3 -m pip install --user --break-system-packages virtualenv && python3 -m virtualenv .venv && .venv/bin/python -m pip install --upgrade pip && .venv/bin/python -m pip install -r backend/requirements.txt",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "entity-bootstrap",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python -m backend.entity.bootstrap",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "backend-upgrade",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python -m backend.core.upgrade",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "dev-setup",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "backend-install",
+        "dev-services-up",
+        "entity-bootstrap",
+        "backend-upgrade"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "free-port-8000",
+      "type": "shell",
+      "command": "fuser -k 8000/tcp 2>/dev/null || true; sleep 0.3; ss -ltn | grep -q ':8000' && echo 'port still busy' && exit 1 || echo 'port 8000 free'",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      }
+    },
+    {
+      "label": "free-port-3000",
+      "type": "shell",
+      "command": "fuser -k 3000/tcp 2>/dev/null || true; sleep 0.3; ss -ltn | grep -q ':3000' && echo 'port still busy' && exit 1 || echo 'port 3000 free'",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      }
+    },
+    {
       "label": "free-port-12000",
       "type": "shell",
       "command": "fuser -k 12000/tcp 2>/dev/null || true; sleep 0.3; ss -ltn | grep -q ':12000' && echo 'port still busy' && exit 1 || echo 'port 12000 free'",

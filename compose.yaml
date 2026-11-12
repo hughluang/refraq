@@ -15,8 +15,10 @@ services:
       POSTGRES_PASSWORD: refraq
       POSTGRES_DB: refraq
       TZ: UTC
+    volumes:
+      - refraq_pg:/var/lib/postgresql
     ports:
-      - "5432:5432"
+      - "${REFRAQ_POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U refraq -d refraq"]
       interval: 5s
@@ -48,28 +50,131 @@ services:
 
   redis:
     image: redis:7-alpine
+    volumes:
+      - refraq_redis:/data
     ports:
-      - "6379:6379"
+      - "${REFRAQ_REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.3
-    command: start-dev --import-realm
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.12.1
+    network_mode: host
+    pid: host
     volumes:
-      - ./dev/keycloak:/opt/keycloak/data/import:ro
+      - type: bind
+        source: /
+        target: /host
+        read_only: true
+    command:
+      - --path.rootfs=/host
+      - --collector.disable-defaults
+      - --collector.cpu
+      - --collector.meminfo
+      - --collector.filesystem
+      - --collector.diskstats
+      - --collector.pressure
+      - --collector.stat
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    command:
+      - --docker_only
+      - --housekeeping_interval=15s
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.service
+      - --disable_metrics=advtcp,app,cpuLoad,cpu_topology,cpuset,disk,diskIO,hugetlb,memory_numa,network,oom_event,percpu,perf_event,process,referenced_memory,resctrl,sched,tcp,udp
+
+  ensure-monitor-role:
+    image: pgvector/pgvector:pg18
+    restart: "no"
     environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-      KC_HTTP_PORT: 8080
-      KC_HOSTNAME_STRICT: "false"
+      PGPASSWORD: refraq
+      REFRAQ_MONITOR_PASSWORD: ${REFRAQ_MONITOR_PASSWORD:-refraq-monitor}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - bash
+      - -eu
+      - -c
+      - |
+        psql --host=postgres --username=refraq --dbname=refraq --set=ON_ERROR_STOP=1 \
+          --set=monitor_password="$$REFRAQ_MONITOR_PASSWORD" <<'SQL'
+        SELECT format(
+          'CREATE ROLE refraq_monitor WITH LOGIN NOSUPERUSER PASSWORD %L',
+          :'monitor_password'
+        )
+        WHERE NOT EXISTS (
+          SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'refraq_monitor'
+        )
+        \gexec
+        ALTER ROLE refraq_monitor WITH LOGIN NOSUPERUSER PASSWORD :'monitor_password';
+        GRANT pg_monitor TO refraq_monitor;
+        SQL
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    environment:
+      DATA_SOURCE_NAME: postgresql://refraq_monitor:${REFRAQ_MONITOR_PASSWORD:-refraq-monitor}@postgres:5432/refraq?sslmode=disable
+      PG_EXPORTER_COLLECTION_TIMEOUT: 8s
+    depends_on:
+      ensure-monitor-role:
+        condition: service_completed_successfully
+    command:
+      - --collector.settings
+      - --collector.stat_database
+      - --collector.stat_activity
+      - --collector.stat_checkpointer
+      - --no-collector.buffercache_summary
+      - --no-collector.database
+      - --no-collector.database_wraparound
+      - --no-collector.locks
+      - --no-collector.long_running_transactions
+      - --no-collector.postmaster
+      - --no-collector.process_idle
+      - --no-collector.replication
+      - --no-collector.replication_slots
+      - --no-collector.roles
+      - --no-collector.stat_activity_autovacuum
+      - --no-collector.stat_archiver
+      - --no-collector.stat_bgwriter
+      - --no-collector.stat_progress_vacuum
+      - --no-collector.stat_replication
+      - --no-collector.stat_statements
+      - --no-collector.stat_user_tables
+      - --no-collector.stat_wal_receiver
+      - --no-collector.statio_user_indexes
+      - --no-collector.statio_user_tables
+      - --no-collector.wal
+      - --no-collector.xlog_location
+
+  prometheus:
+    image: quay.io/prometheus/prometheus:v3.15.1
+    command:
+      - --storage.tsdb.path=/prometheus
+      - --config.file=/etc/prometheus/prometheus.yml
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - refraq_prometheus:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      - "${REFRAQ_PROMETHEUS_PORT:-19090}:9090"
+
+volumes:
+  refraq_pg:
+  refraq_redis:
+  refraq_prometheus:

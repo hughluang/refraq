@@ -2,6 +2,24 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Backend: Official Entry (8000)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "backend.core.entry",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "VIRTUAL_ENV": "${workspaceFolder}/.venv",
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+        "REFRAQ_PROCESS_ROLE": "api"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "preLaunchTask": "free-port-8000"
+    },
+    {
       "name": "FastAPI: Run Server (uvicorn)",
       "type": "debugpy",
       "request": "launch",
@@ -39,6 +57,25 @@
         "REFRAQ_MCP_HOST": "127.0.0.1",
         "REFRAQ_MCP_PORT": "8001",
         "REFRAQ_PROCESS_ROLE": "mcp"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Entity MCP: HTTP (streamable)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "backend.entity.mcp.http",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "VIRTUAL_ENV": "${workspaceFolder}/.venv",
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+        "REFRAQ_ENTITY_MCP_HOST": "127.0.0.1",
+        "REFRAQ_ENTITY_MCP_PORT": "8002",
+        "REFRAQ_PROCESS_ROLE": "entity_mcp"
       },
       "console": "integratedTerminal",
       "justMyCode": true
@@ -93,7 +130,6 @@
       "console": "integratedTerminal",
       "justMyCode": true
     },
-
     {
       "name": "Python: Current File",
       "type": "debugpy",
@@ -143,12 +179,13 @@
       "stopAll": true
     },
     {
-      "name": "API + Worker + Beat + MCP",
+      "name": "Full Local Platform",
       "configurations": [
-        "FastAPI: Run Server (uvicorn)",
+        "Backend: Official Entry (8000)",
+        "MCP: HTTP (streamable)",
+        "Entity MCP: HTTP (streamable)",
         "Celery: Worker",
-        "Celery: Beat",
-        "MCP: HTTP (streamable)"
+        "Celery: Beat"
       ],
       "stopAll": true
     }
