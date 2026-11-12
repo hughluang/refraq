@@ -1,700 +1,283 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { notifications, notificationsStore } from "@mantine/notifications";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { moduleIcon } from "@/components/icons";
+import { HostPage } from "./HostPage";
+import type { HostRead, HostSpan } from "./types";
 import en from "@/locales/en-US/common.json";
 import zh from "@/locales/zh-CN/common.json";
-import { ConsoleNotifications } from "@/providers/notification-provider";
-
-const copy = en as Record<string, string>;
-const zhCopy = zh as Record<string, string>;
-
-const CONFIRMED = [
-  ["host.title", "Host", "\u4e3b\u673a"],
-  ["host.span.hour", "Last hour", "\u6700\u8fd1\u4e00\u5c0f\u65f6"],
-  ["host.span.day", "Last 24 hours", "\u6700\u8fd1 24 \u5c0f\u65f6"],
-  ["host.span.retained", "Samples still in the store", "\u4ecd\u4fdd\u7559\u7684\u6837\u672c"],
-  ["host.axis.now", "Now", "\u73b0\u5728"],
-  ["host.cpu.online", "Online CPUs", "\u5728\u7ebf CPU"],
-  ["host.cpu.busy", "CPU share", "CPU \u5360\u6bd4"],
-  ["host.cpu.modes", "CPU modes", "CPU \u6a21\u5f0f"],
-  ["host.cpu.runQueue", "Run queue", "\u8fd0\u884c\u961f\u5217"],
-  ["host.memory.used", "Memory used", "\u5df2\u7528\u5185\u5b58"],
-  ["host.memory.total", "Memory total", "\u5185\u5b58\u603b\u91cf"],
-  ["host.swap.used", "Swap used", "\u5df2\u7528\u4ea4\u6362\u533a"],
-  ["host.swap.total", "Swap total", "\u4ea4\u6362\u533a\u603b\u91cf"],
-  ["host.filesystem.mount", "Mount", "\u6302\u8f7d\u70b9"],
-  ["host.filesystem.type", "Type", "\u7c7b\u578b"],
-  ["host.filesystem.used", "Used", "\u5df2\u7528"],
-  ["host.filesystem.total", "Total", "\u603b\u91cf"],
-  ["host.filesystem.share", "In use", "\u5df2\u7528\u6bd4\u4f8b"],
-  ["host.filesystem.freeInodes", "Free inodes", "\u7a7a\u95f2 inode"],
-  ["host.filesystem.available", "Available", "\u53ef\u7528\u7a7a\u95f4"],
-  ["host.filesystem.delta", "Change since previous sample", "\u76f8\u5bf9\u4e0a\u4e00\u91c7\u6837\u7684\u53d8\u5316"],
-  ["host.disk.device", "Disk", "\u78c1\u76d8"],
-  ["host.disk.queue", "Queue length", "\u961f\u5217\u957f\u5ea6"],
-  ["host.disk.busy", "Time doing I/O", "\u8fdb\u884c I/O \u7684\u65f6\u95f4"],
-  ["host.pressure.cpu", "CPU pressure", "CPU \u538b\u529b"],
-  ["host.pressure.memory", "Memory pressure", "\u5185\u5b58\u538b\u529b"],
-  ["host.pressure.io", "I/O pressure", "I/O \u538b\u529b"],
-  ["host.pressure.waiting", "Waiting", "\u7b49\u5f85"],
-  ["host.pressure.stalled", "Stalled", "\u505c\u6ede"],
-  ["host.postgres.backends", "Backends", "\u540e\u7aef\u8fde\u63a5"],
-  ["host.postgres.maxConnections", "max_connections", "max_connections"],
-  ["host.postgres.idleInTransaction", "Idle in transaction", "\u4e8b\u52a1\u4e2d\u7a7a\u95f2"],
-  [
-    "host.postgres.idleInTransactionAborted",
-    "Idle in transaction (aborted)",
-    "\u4e8b\u52a1\u4e2d\u7a7a\u95f2\uff08\u5df2\u4e2d\u6b62\uff09",
-  ],
-  ["host.postgres.checkpointTimed", "Checkpoints timed", "\u5b9a\u65f6\u68c0\u67e5\u70b9"],
-  ["host.postgres.checkpointRequested", "Checkpoints requested", "\u8bf7\u6c42\u7684\u68c0\u67e5\u70b9"],
-  ["host.postgres.checkpointWrite", "Checkpoint write time", "\u68c0\u67e5\u70b9\u5199\u5165\u65f6\u95f4"],
-  ["host.postgres.checkpointSync", "Checkpoint sync time", "\u68c0\u67e5\u70b9\u540c\u6b65\u65f6\u95f4"],
-  [
-    "host.postgres.checkpointBuffers",
-    "Checkpoint buffers written",
-    "\u68c0\u67e5\u70b9\u5199\u51fa\u7684\u7f13\u51b2\u533a",
-  ],
-  ["host.postgres.tempFiles", "Temporary files", "\u4e34\u65f6\u6587\u4ef6\u6570"],
-  ["host.postgres.tempBytes", "Temporary file bytes", "\u4e34\u65f6\u6587\u4ef6\u5b57\u8282"],
-  ["host.service.cpu", "CPU time", "CPU \u65f6\u95f4"],
-  ["host.service.memory", "Memory", "\u5185\u5b58"],
-  [
-    "problems.HOST_SERIES_UNAVAILABLE",
-    "The host series could not be read. Occupancy is not shown.",
-    "\u8bfb\u4e0d\u5230\u4e3b\u673a\u5e8f\u5217\uff0c\u753b\u9762\u4e0d\u663e\u793a\u5360\u7528\u3002",
-  ],
-] as const;
-
-const emptyPostgresCharts = {
-  backends: [],
-  idle_in_transaction: [],
-  idle_in_transaction_aborted: [],
-  checkpoint_timed: [],
-  checkpoint_requested: [],
-  checkpoint_write_time: [],
-  checkpoint_sync_time: [],
-  checkpoint_buffers_written: [],
-  temp_files: [],
-  temp_bytes: [],
-};
-
-const dayBody = {
-  span: "day",
-  start: "2026-11-11T00:00:00Z",
-  end: "2026-11-12T00:00:00Z",
-  step_seconds: 121,
-  tiles: {
-    cpu: { online_count: 4, busy_share: 0.25 },
-    memory: { used_bytes: 6100, total_bytes: 8192 },
-    swap: { used_bytes: 128, total_bytes: 256 },
-    filesystems: [
-      {
-        mount: "/data",
-        type: "xfs",
-        used_bytes: 750,
-        total_bytes: 4000,
-        used_share: 0.75,
-        free_inodes: 42,
-      },
-    ],
-    postgres: { backends: null, max_connections: null },
-  },
-  charts: {
-    cpu_modes: [
-      {
-        mode: "user",
-        samples: [
-          { t: "2026-11-11T00:00:00Z", v: 0.25 },
-          { t: "2026-11-11T12:00:00Z", v: null },
-          { t: "2026-11-12T00:00:00Z", v: 0.5 },
-        ],
-      },
-    ],
-    run_queue: [
-      { t: "2026-11-11T00:00:00Z", v: 1 },
-      { t: "2026-11-11T12:00:00Z", v: null },
-      { t: "2026-11-12T00:00:00Z", v: 2 },
-    ],
-    filesystems: [
-      {
-        mount: "/data",
-        type: "xfs",
-        available: [
-          { t: "2026-11-11T00:00:00Z", v: 300 },
-          { t: "2026-11-11T12:00:00Z", v: null },
-          { t: "2026-11-12T00:00:00Z", v: 333 },
-        ],
-        delta: [
-          { t: "2026-11-11T00:00:00Z", v: null },
-          { t: "2026-11-11T12:00:00Z", v: null },
-          { t: "2026-11-12T00:00:00Z", v: -17 },
-        ],
-      },
-    ],
-    disks: [
-      {
-        device: "sda",
-        busy_share: [
-          { t: "2026-11-11T00:00:00Z", v: 0.2 },
-          { t: "2026-11-11T12:00:00Z", v: null },
-          { t: "2026-11-12T00:00:00Z", v: 0.2 },
-        ],
-        queue_length: [
-          { t: "2026-11-11T00:00:00Z", v: 1.5 },
-          { t: "2026-11-11T12:00:00Z", v: null },
-          { t: "2026-11-12T00:00:00Z", v: 1.5 },
-        ],
-      },
-    ],
-    pressure: {
-      cpu: {
-        waiting: [
-          { t: "2026-11-11T00:00:00Z", v: 0.11 },
-          { t: "2026-11-11T12:00:00Z", v: null },
-          { t: "2026-11-12T00:00:00Z", v: 0.11 },
-        ],
-        stalled: [],
-      },
-      memory: {
-        waiting: [
-          { t: "2026-11-11T00:00:00Z", v: 0.12 },
-          { t: "2026-11-12T00:00:00Z", v: 0.12 },
-        ],
-        stalled: [
-          { t: "2026-11-11T00:00:00Z", v: 0.13 },
-          { t: "2026-11-12T00:00:00Z", v: 0.13 },
-        ],
-      },
-      io: {
-        waiting: [
-          { t: "2026-11-11T00:00:00Z", v: 0.14 },
-          { t: "2026-11-12T00:00:00Z", v: 0.14 },
-        ],
-        stalled: [
-          { t: "2026-11-11T00:00:00Z", v: 0.15 },
-          { t: "2026-11-12T00:00:00Z", v: 0.15 },
-        ],
-      },
-    },
-    postgres: emptyPostgresCharts,
-    services: [],
-  },
-};
-
-const hourBody = {
-  span: "hour",
-  start: "2026-11-11T23:00:00Z",
-  end: "2026-11-12T00:00:00Z",
-  step_seconds: 30,
-  tiles: {
-    cpu: { online_count: 8, busy_share: 0.5 },
-    memory: { used_bytes: 7000, total_bytes: 8192 },
-    swap: { used_bytes: 64, total_bytes: 256 },
-    filesystems: [
-      {
-        mount: "/var/log",
-        type: "ext4",
-        used_bytes: 90,
-        total_bytes: 4000,
-        used_share: 0.125,
-        free_inodes: 11,
-      },
-    ],
-    postgres: { backends: null, max_connections: null },
-  },
-  charts: {
-    cpu_modes: [
-      {
-        mode: "user",
-        samples: [
-          { t: "2026-11-11T23:00:00Z", v: 0.5 },
-          { t: "2026-11-12T00:00:00Z", v: 0.5 },
-        ],
-      },
-    ],
-    run_queue: [
-      { t: "2026-11-11T23:00:00Z", v: 3 },
-      { t: "2026-11-12T00:00:00Z", v: 3 },
-    ],
-    filesystems: [
-      {
-        mount: "/var/log",
-        type: "ext4",
-        available: [
-          { t: "2026-11-11T23:00:00Z", v: 80 },
-          { t: "2026-11-12T00:00:00Z", v: 70 },
-        ],
-        delta: [
-          { t: "2026-11-11T23:00:00Z", v: null },
-          { t: "2026-11-12T00:00:00Z", v: -10 },
-        ],
-      },
-    ],
-    disks: [
-      {
-        device: "sdb",
-        busy_share: [
-          { t: "2026-11-11T23:00:00Z", v: 0.4 },
-          { t: "2026-11-12T00:00:00Z", v: 0.4 },
-        ],
-        queue_length: [
-          { t: "2026-11-11T23:00:00Z", v: 6 },
-          { t: "2026-11-12T00:00:00Z", v: 6 },
-        ],
-      },
-    ],
-    pressure: {
-      cpu: {
-        waiting: [
-          { t: "2026-11-11T23:00:00Z", v: 0.21 },
-          { t: "2026-11-12T00:00:00Z", v: 0.21 },
-        ],
-        stalled: [],
-      },
-      memory: { waiting: [], stalled: [] },
-      io: { waiting: [], stalled: [] },
-    },
-    postgres: emptyPostgresCharts,
-    services: [],
-  },
-};
-
-const retainedBody = {
-  span: "retained",
-  start: "2026-10-28T00:00:00Z",
-  end: "2026-11-12T00:00:00Z",
-  step_seconds: 1803,
-  tiles: {
-    cpu: { online_count: 4, busy_share: 0.25 },
-    memory: { used_bytes: 5000, total_bytes: 8192 },
-    swap: { used_bytes: 128, total_bytes: 256 },
-    filesystems: [
-      {
-        mount: "/srv",
-        type: "xfs",
-        used_bytes: 750,
-        total_bytes: 4000,
-        used_share: 0.75,
-        free_inodes: 42,
-      },
-    ],
-    postgres: { backends: null, max_connections: null },
-  },
-  charts: {
-    cpu_modes: [
-      {
-        mode: "user",
-        samples: [
-          { t: "2026-10-28T00:00:00Z", v: 0.25 },
-          { t: "2026-11-12T00:00:00Z", v: 0.25 },
-        ],
-      },
-    ],
-    run_queue: [
-      { t: "2026-10-28T00:00:00Z", v: 1 },
-      { t: "2026-11-12T00:00:00Z", v: 1 },
-    ],
-    filesystems: [
-      {
-        mount: "/srv",
-        type: "xfs",
-        available: [
-          { t: "2026-10-28T00:00:00Z", v: 300 },
-          { t: "2026-11-12T00:00:00Z", v: 300 },
-        ],
-        delta: [
-          { t: "2026-10-28T00:00:00Z", v: null },
-          { t: "2026-11-12T00:00:00Z", v: null },
-        ],
-      },
-    ],
-    disks: [],
-    pressure: {
-      cpu: { waiting: [], stalled: [] },
-      memory: { waiting: [], stalled: [] },
-      io: { waiting: [], stalled: [] },
-    },
-    postgres: emptyPostgresCharts,
-    services: [],
-  },
-};
 
 const fetchMock = vi.hoisted(() => vi.fn());
-
 vi.mock("@refinedev/core", () => ({
   matchResourceFromRoute: () => ({ found: false }),
-  useTranslate: () => (key: string) => copy[key] ?? key,
-  useNotification: () => ({ open: vi.fn() }),
+  useTranslate: () => (key: string, params?: Record<string, unknown>) => {
+    let text = (en as Record<string, string>)[key] ?? key;
+    for (const [name, value] of Object.entries(params ?? {})) text = text.replace(`{{${name}}}`, String(value));
+    return text;
+  },
+  useGetLocale: () => () => "en-US",
   useCan: () => ({ data: { can: true } }),
-  usePermissions: () => ({ data: ["host:read"] as string[] }),
+  usePermissions: () => ({ data: ["host:read"] }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
 }));
-
-vi.mock("@/features/branding/BrandingProvider", () => ({
-  useBranding: () => ({ brandName: "Refraq" }),
+vi.mock("@/providers/time-zones", () => ({ useTimeZones: () => ({ items: [] }) }));
+vi.mock("@/providers/session-store", () => ({
+  useSessionStore: (select: (state: unknown) => unknown) => select({ user: { locale: "en-US", display_timezone: "America/New_York" } }),
 }));
-
+vi.mock("@/features/branding/BrandingProvider", () => ({ useBranding: () => ({ brandName: "Refraq" }) }));
 vi.mock("next/navigation", () => ({
   usePathname: () => "/console/host",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
-
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children?: ReactNode }) =>
-    createElement("a", { href }, children),
+  default: ({ href, children }: { href: string; children?: ReactNode }) => createElement("a", { href }, children),
   useLinkStatus: () => ({ pending: false }),
 }));
+const notify = vi.hoisted(() => vi.fn());
+vi.mock("@/components/feedback/presentProblemNotification", () => ({ presentProblemNotification: notify }));
 
-function stubDomApis() {
-  Object.defineProperty(window, "matchMedia", {
-    writable: true,
-    value: (query: string) => ({
-      matches: false,
-      media: query,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    }),
-  });
-  class ResizeObserverStub {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  globalThis.ResizeObserver = ResizeObserverStub;
+const end = "2026-11-12T00:00:00Z";
+const names = ["postgres", "redis", "api", "worker", "beat", "mcp", "entity-mcp", "web"];
+const samples = [{ t: "2026-11-11T23:58:00Z", v: 1 }, { t: "2026-11-11T23:59:00Z", v: null }, { t: end, v: 2 }];
+function body(span: HostSpan = "day"): HostRead {
+  return {
+    span, start: "2026-11-11T00:00:00Z", end, step_seconds: 121,
+    tiles: { cpu: { online_count: 4, busy_share: 0.25 }, memory: { used_bytes: 6100, total_bytes: 8192 }, swap: { used_bytes: 0, total_bytes: 0 }, postgres: { backends: 17, max_connections: 100 }, filesystems: [{ mount: "/data", type: "xfs", used_bytes: 750, total_bytes: 4000, used_share: 0.75, free_inodes: null }] },
+    charts: {
+      cpu_modes: [{ mode: "guest_nice", samples }], run_queue: samples,
+      pressure: { cpu: { waiting: samples, stalled: [] }, memory: { waiting: [], stalled: [] }, io: { waiting: [], stalled: [] } },
+      filesystems: [{ mount: "/data", type: "xfs", available: samples, delta: [{ t: end, v: -17 }] }, { mount: "/archive", type: "zfs", available: [], delta: [] }],
+      disks: [{ device: "nvme1n1", busy_share: samples, queue_length: samples }],
+      postgres: { backends: samples, idle_in_transaction: samples, idle_in_transaction_aborted: samples, checkpoint_timed: samples, checkpoint_requested: samples, checkpoint_write_time: samples, checkpoint_sync_time: samples, checkpoint_buffers_written: samples, temp_files: samples, temp_bytes: samples },
+      services: names.map((service) => ({ service, cpu_seconds: service === "redis" ? [] : samples, memory_bytes: service === "redis" ? [] : samples })),
+    },
+  };
 }
-
-function resetNotifications() {
-  const state = notificationsStore.getState();
-  for (const item of [...state.notifications, ...state.queue]) {
-    notifications.hide(item.id);
-  }
-  notifications.clean();
+function response(value: unknown, status = 200) {
+  return new Response(JSON.stringify(value), { status, headers: { "content-type": status === 200 ? "application/json" : "application/problem+json" } });
 }
-
-function jsonResponse(body: unknown, status = 200) {
-  return Promise.resolve(
-    new Response(JSON.stringify(body), {
-      status,
-      headers: {
-        "content-type": status === 200 ? "application/json" : "application/problem+json",
-      },
-    }),
-  );
+function pending() {
+  let resolve!: (value: Response) => void;
+  const promise = new Promise<Response>((done) => { resolve = done; });
+  return { promise, resolve: (value: unknown, status = 200) => resolve(response(value, status)) };
 }
+function page() { return render(createElement(MantineProvider, { env: "test" }, createElement(HostPage))); }
+function tab(name: string) { fireEvent.click(screen.getByRole("tab", { name, exact: true })); }
+function span(value: HostSpan) { fireEvent.change(screen.getByRole("combobox", { name: "History period" }), { target: { value } }); }
+async function ready() { await screen.findByText("25%"); }
+function requests() { return fetchMock.mock.calls.map((call) => new URL(String(call[0]), "http://test").searchParams.get("span")); }
 
-function requestedSpan(call: unknown[]): string | null {
-  const url = new URL(String(call[0]), "http://console.local");
-  expect(url.pathname).toBe("/api/host");
-  expect([...url.searchParams.keys()]).toEqual(["span"]);
-  return url.searchParams.get("span");
-}
+beforeEach(() => {
+  window.history.replaceState(null, "", "/console/host");
+  fetchMock.mockReset(); notify.mockReset();
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  Object.defineProperty(window, "matchMedia", { writable: true, value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
+});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-function shell(node: ReactNode) {
-  return createElement(MantineProvider, { env: "test" }, createElement(ConsoleNotifications), node);
-}
+it("opens compact Overview and lazily discloses CPU diagnostics without another read", async () => {
+  fetchMock.mockResolvedValue(response(body())); page(); await ready();
+  expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  expect(screen.queryByRole("img", { name: "CPU modes (CPU-s/s)" })).toBeNull();
+  fireEvent.click(screen.getByText("Advanced CPU modes", { selector: "summary" }));
+  expect(screen.getByText("guest_nice")).toBeTruthy();
+  expect(screen.getByText("No swap configured")).toBeTruthy();
+  expect(screen.getAllByText("0 B")).toHaveLength(2);
+  expect(screen.getByText(/Query snapshot time:/).textContent).toContain("7:00:00 PM");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
 
-async function renderPage() {
-  const { HostPage } = await import("@/features/host/HostPage");
-  render(shell(createElement(HostPage)));
-}
+it("selects independent filesystem and disk histories while keeping identities discoverable", async () => {
+  fetchMock.mockResolvedValue(response(body())); page(); await ready(); tab("Storage");
+  expect(window.location.search).toContain("tab=storage");
+  const select = screen.getByRole("combobox", { name: "Inspect resource history" });
+  expect(within(select).getByRole("option", { name: "/archive (zfs)" })).toBeTruthy();
+  expect(screen.getAllByRole("img")).toHaveLength(2);
+  expect(screen.getAllByText(/Free inodes: —/)).toHaveLength(2);
+  const delta = screen.getByRole("img", { name: "/data (xfs) · Space change per sample" });
+  expect(delta.querySelectorAll("circle[data-series]")).toHaveLength(1);
+  fireEvent.change(select, { target: { value: JSON.stringify(["disk", "nvme1n1"]) } });
+  expect(screen.getByRole("img", { name: "nvme1n1 · Queue length" })).toBeTruthy();
+  expect(screen.queryByRole("img", { name: /Available/ })).toBeNull();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
 
-describe("HostPage", () => {
-  beforeEach(() => {
-    stubDomApis();
-    fetchMock.mockReset();
-    vi.stubGlobal("fetch", fetchMock);
-    resetNotifications();
+it("prioritizes connection and idle states and discloses cumulative counter diagnostics", async () => {
+  fetchMock.mockResolvedValue(response(body())); page(); await ready(); tab("PostgreSQL");
+  expect(screen.getAllByRole("img")).toHaveLength(3);
+  expect(screen.getByRole("img", { name: "Idle in transaction (aborted)" })).toBeTruthy();
+  fireEvent.click(screen.getByText("Checkpoint counters", { selector: "summary" }));
+  expect(screen.getByRole("img", { name: "Checkpoint write time counter (unit unknown)" })).toBeTruthy();
+  fireEvent.click(screen.getByText("Temporary-file counters", { selector: "summary" }));
+  expect(screen.getByRole("img", { name: "Temporary file bytes" })).toBeTruthy();
+  expect(screen.getAllByRole("img")).toHaveLength(10);
+});
+
+it("compares selected services in two shared charts and preserves gaps, zeros and absent identities", async () => {
+  fetchMock.mockResolvedValue(response(body())); page(); await ready(); tab("Services");
+  for (const name of names) expect(screen.getByRole("checkbox", { name, exact: true })).toBeTruthy();
+  const inventory = screen.getByRole("checkbox", { name: "api", exact: true }).closest('[data-service]')!;
+  expect(within(inventory as HTMLElement).getByText("2 CPU-s/step")).toBeTruthy();
+  expect(within(inventory as HTMLElement).getAllByRole("time")[0]?.textContent).toContain("7:00:00 PM");
+  expect(screen.getAllByRole("img")).toHaveLength(2);
+  const cpu = screen.getByRole("img", { name: "Estimated CPU time per step (CPU-s/step)" });
+  expect(cpu.querySelectorAll('circle[data-series="api"]')).toHaveLength(2);
+  expect(cpu.querySelectorAll('polyline[data-series="api"]')).toHaveLength(0);
+  fireEvent.click(screen.getByRole("checkbox", { name: "redis", exact: true }));
+  expect(cpu.querySelectorAll('[data-series="redis"]')).toHaveLength(0);
+  for (const name of ["api", "worker", "redis"]) fireEvent.click(screen.getByRole("checkbox", { name, exact: true }));
+  expect(screen.queryByRole("img")).toBeNull();
+  expect(screen.getByText("Select a service to inspect its CPU and memory history.")).toBeTruthy();
+});
+
+it("uses compact section empty states instead of empty plots and retains all eight services", async () => {
+  const empty = body();
+  empty.charts.run_queue = []; empty.charts.cpu_modes = [];
+  empty.charts.pressure.cpu.waiting = []; empty.charts.filesystems = []; empty.tiles.filesystems = []; empty.charts.disks = [];
+  for (const key of Object.keys(empty.charts.postgres) as (keyof HostRead["charts"]["postgres"])[]) empty.charts.postgres[key] = [];
+  empty.charts.services = names.map((service) => ({ service, cpu_seconds: [], memory_bytes: [] }));
+  fetchMock.mockResolvedValue(response(empty)); page(); await ready();
+  expect(screen.queryByRole("img")).toBeNull();
+  tab("Storage"); expect(screen.getByText(en["host.empty.storage"])).toBeTruthy();
+  tab("PostgreSQL"); expect(screen.getByText(en["host.empty.postgres"])).toBeTruthy();
+  tab("Services"); expect(screen.getAllByRole("checkbox")).toHaveLength(8);
+  expect(screen.queryByRole("img")).toBeNull();
+});
+
+it("restores URL span/panel and falls back from invalid URL values", async () => {
+  window.history.replaceState(null, "", "/console/host?span=hour&tab=services");
+  fetchMock.mockResolvedValue(response(body("hour"))); page();
+  await screen.findByRole("checkbox", { name: "api", exact: true });
+  expect(requests()).toEqual(["hour"]);
+  cleanup(); window.history.replaceState(null, "", "/console/host?span=bad&tab=bad");
+  fetchMock.mockResolvedValue(response(body())); page(); await ready();
+  expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true");
+  expect(requests()).toEqual(["hour", "day"]);
+});
+
+it("deduplicates refresh, retains successful snapshots on failure and retries selected history with trigger focus", async () => {
+  const replacement = pending();
+  fetchMock.mockResolvedValueOnce(response(body())).mockReturnValueOnce(replacement.promise).mockResolvedValueOnce(response({ ...body("hour"), end: "2026-11-12T00:01:00Z" }));
+  page(); await ready();
+  span("hour");
+  const refresh = screen.getByRole("button", { name: "Refresh" }); refresh.focus(); fireEvent.click(refresh); fireEvent.click(refresh);
+  expect(requests()).toEqual(["day", "hour"]);
+  expect(screen.getByText("Displayed history: Last 24 hours")).toBeTruthy();
+  await act(async () => replacement.resolve({ code: "HOST_SERIES_UNAVAILABLE", status: 503 }, 503));
+  expect(screen.getByText("Previous snapshot retained")).toBeTruthy();
+  expect(screen.getByText(/Query snapshot time:/).querySelector("time")?.getAttribute("datetime")).toBe(end);
+  fireEvent.click(refresh);
+  await screen.findByText("Displayed history: Last hour");
+  expect(requests()).toEqual(["day", "hour", "hour"]);
+  expect(document.activeElement).toBe(refresh);
+  expect(notify).toHaveBeenCalledTimes(1);
+});
+
+it.each([200, 503])("ignores obsolete success/failure across spans and newer same-span refresh (%s)", async (status) => {
+  const old = pending(); const newest = pending();
+  fetchMock.mockReturnValueOnce(old.promise).mockResolvedValueOnce(response(body("hour"))).mockResolvedValueOnce(response(body("retained"))).mockResolvedValueOnce(response(body("hour"))).mockReturnValueOnce(newest.promise);
+  page(); span("hour"); await ready(); span("retained"); await screen.findByText("Displayed history: Samples still in the store"); span("hour"); await screen.findByText("Displayed history: Last hour");
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  await act(async () => old.resolve(status === 200 ? body() : { code: "HOST_SERIES_UNAVAILABLE", status }, status));
+  expect(screen.getByRole("status").textContent).toBe("Loading: Last hour");
+  await act(async () => newest.resolve({ ...body("hour"), end: "2026-11-12T00:03:00Z" }));
+  expect(screen.getByText(/Query snapshot time:/).querySelector("time")?.getAttribute("datetime")).toBe("2026-11-12T00:03:00Z");
+  expect(notify).not.toHaveBeenCalled();
+});
+
+it("retries an initial outage without invented zeros and ignores responses after unmount", async () => {
+  fetchMock.mockResolvedValueOnce(response({ code: "HOST_SERIES_UNAVAILABLE", status: 503 }, 503)).mockResolvedValueOnce(response(body()));
+  page(); fireEvent.click(await screen.findByRole("button", { name: en["status.unloaded"] })); await ready();
+  expect(requests()).toEqual(["day", "day"]);
+  cleanup(); const late = pending(); fetchMock.mockReturnValueOnce(late.promise); page(); cleanup();
+  await act(async () => late.resolve({ code: "HOST_SERIES_UNAVAILABLE", status: 503 }, 503));
+  expect(notify).toHaveBeenCalledTimes(1);
+});
+
+it("marks URL-driven range reads busy, retains facts and rejects obsolete URL responses", async () => {
+  const obsolete = pending(); const newest = pending();
+  fetchMock.mockResolvedValueOnce(response(body())).mockReturnValueOnce(obsolete.promise).mockReturnValueOnce(newest.promise);
+  const view = page(); await ready();
+  const navigate = (value: HostSpan) => {
+    window.history.replaceState(null, "", `/console/host?span=${value}&tab=services`);
+    view.rerender(createElement(MantineProvider, { env: "test" }, createElement(HostPage)));
+  };
+  navigate("hour");
+  expect(requests()).toEqual(["day", "hour"]);
+  expect(screen.getByRole("status").textContent).toBe("Loading: Last hour");
+  expect(screen.getByRole("button", { name: "Refresh" }).getAttribute("aria-busy")).toBe("true");
+  expect(screen.getByText("Displayed history: Last 24 hours")).toBeTruthy();
+  navigate("retained");
+  await act(async () => obsolete.resolve(body("hour")));
+  expect(screen.getByRole("status").textContent).toBe("Loading: Samples still in the store");
+  await act(async () => newest.resolve(body("retained")));
+  expect(screen.getByRole("status").textContent).toBe("Loaded: Samples still in the store");
+  expect(requests()).toEqual(["day", "hour", "retained"]);
+});
+
+it.each([200, 503])("ignores an obsolete request for the same span during a newer refresh (%s)", async (status) => {
+  const oldHour = pending(); const newest = pending();
+  fetchMock.mockResolvedValueOnce(response(body())).mockReturnValueOnce(oldHour.promise).mockResolvedValueOnce(response(body("retained"))).mockResolvedValueOnce(response(body("hour"))).mockReturnValueOnce(newest.promise);
+  page(); await ready(); span("hour"); span("retained");
+  await screen.findByText("Displayed history: Samples still in the store");
+  span("hour"); await screen.findByText("Displayed history: Last hour");
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  await act(async () => oldHour.resolve(status === 200 ? body("hour") : { code: "HOST_SERIES_UNAVAILABLE", status }, status));
+  expect(screen.getByRole("status").textContent).toBe("Loading: Last hour");
+  expect(notify).not.toHaveBeenCalled();
+  await act(async () => newest.resolve({ ...body("hour"), end: "2026-11-12T00:04:00Z" }));
+  expect(screen.getByText(/Query snapshot time:/).querySelector("time")?.getAttribute("datetime")).toBe("2026-11-12T00:04:00Z");
+});
+
+it("retains hidden panel selections and joins filesystem histories by mount and type", async () => {
+  const reading = body();
+  reading.charts.filesystems.push({ mount: "/data", type: "ext4", available: [{ t: end, v: 4096 }], delta: [] });
+  reading.charts.services[2]!.cpu_seconds = [{ t: end, v: 0 }];
+  fetchMock.mockResolvedValue(response(reading)); page(); await ready(); tab("Storage");
+  fireEvent.change(screen.getByRole("combobox", { name: "Inspect resource history" }), { target: { value: JSON.stringify(["mount", "/data", "ext4"]) } });
+  expect(screen.getByRole("img", { name: "/data (ext4) · Available" })).toBeTruthy();
+  expect(screen.getAllByText("4 KiB").length).toBeGreaterThan(0);
+  tab("Services");
+  const inventory = screen.getByRole("checkbox", { name: "api", exact: true }).closest('[data-service]')!;
+  expect(within(inventory as HTMLElement).getByText("0 CPU-s/step")).toBeTruthy();
+  fireEvent.click(screen.getByRole("checkbox", { name: "worker", exact: true }));
+  tab("Storage");
+  expect((screen.getByRole("combobox", { name: "Inspect resource history" }) as HTMLSelectElement).value).toBe(JSON.stringify(["mount", "/data", "ext4"]));
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  tab("Services");
+  expect((screen.getByRole("checkbox", { name: "worker", exact: true }) as HTMLInputElement).checked).toBe(false);
+  expect(screen.queryByRole("combobox", { name: "Inspect resource history" })).toBeNull();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it("maps each PostgreSQL diagnostic to its own response field", async () => {
+  const reading = body();
+  const fields = Object.keys(reading.charts.postgres) as (keyof HostRead["charts"]["postgres"])[];
+  fields.forEach((field, index) => { reading.charts.postgres[field] = [{ t: end, v: index + 10 }]; });
+  fetchMock.mockResolvedValue(response(reading)); page(); await ready(); tab("PostgreSQL");
+  fireEvent.click(screen.getByText("Checkpoint counters", { selector: "summary" }));
+  fireEvent.click(screen.getByText("Temporary-file counters", { selector: "summary" }));
+  const titles = ["Connections", "Idle in transaction", "Idle in transaction (aborted)", "Checkpoints timed", "Checkpoints requested", "Checkpoint write time counter (unit unknown)", "Checkpoint sync time counter (unit unknown)", "Checkpoint buffers written", "Temporary files", "Temporary file bytes"];
+  titles.forEach((title, index) => {
+    const chart = screen.getByRole("img", { name: title, exact: true }).closest(".mantine-Stack-root")!;
+    expect(within(chart as HTMLElement).getByText(`${index + 10}${index === 9 ? " B" : ""}`, { selector: "span" })).toBeTruthy();
   });
+});
 
-  afterEach(() => {
-    cleanup();
-    resetNotifications();
-    vi.unstubAllGlobals();
-  });
+it("localizes malformed snapshot time without losing resource facts", async () => {
+  fetchMock.mockResolvedValue(response({ ...body(), end: "malformed" })); page(); await ready();
+  expect(screen.getByText(/Query snapshot time:/).textContent).toContain(en["problems.API_CONTRACT_INVALID"]);
+  expect(screen.getByText("5.96 KiB")).toBeTruthy();
+});
 
-  it("keeps the confirmed copy in both catalogs", () => {
-    for (const [key, english, chinese] of CONFIRMED) {
-      expect(copy[key]).toBe(english);
-      expect(zhCopy[key]).toBe(chinese);
-    }
-  });
-
-  it("maps chart-bar to a real icon", () => {
-    const chosen = renderToStaticMarkup(createElement(moduleIcon("chart-bar")));
-    const fallback = renderToStaticMarkup(createElement(moduleIcon("not-a-real-icon")));
-    expect(chosen).not.toBe(fallback);
-  });
-
-  it("opens on the last 24 hours and follows the selected span", async () => {
-    fetchMock.mockImplementation((input: RequestInfo) => {
-      const span = new URL(String(input), "http://console.local").searchParams.get("span");
-      if (span === "hour") return jsonResponse(hourBody);
-      if (span === "retained") return jsonResponse(retainedBody);
-      return jsonResponse(dayBody);
-    });
-    await renderPage();
-
-    expect(await screen.findByText("4")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Host" })).toBeTruthy();
-    expect(requestedSpan(fetchMock.mock.calls[0] ?? [])).toBe("day");
-    expect(screen.getByText("Online CPUs")).toBeTruthy();
-    expect(screen.getByText("CPU share")).toBeTruthy();
-    expect(screen.getByText("25%")).toBeTruthy();
-    expect(screen.getByText("user")).toBeTruthy();
-    expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByText("Memory used")).toBeTruthy();
-    expect(screen.getByText("6100")).toBeTruthy();
-    expect(screen.getByText("8192")).toBeTruthy();
-    expect(screen.getByText("Swap used")).toBeTruthy();
-    expect(screen.getByText("128")).toBeTruthy();
-    expect(screen.getByText("256")).toBeTruthy();
-    expect(screen.getByText("/data")).toBeTruthy();
-    expect(screen.getByText("xfs")).toBeTruthy();
-    expect(screen.getByText("750")).toBeTruthy();
-    expect(screen.getByText("4000")).toBeTruthy();
-    expect(screen.getByText("75%")).toBeTruthy();
-    expect(screen.getByText("42")).toBeTruthy();
-    expect(screen.getByText("333")).toBeTruthy();
-    expect(screen.getByText("-17")).toBeTruthy();
-    expect(screen.getByText("sda")).toBeTruthy();
-    expect(screen.getByText("0.2")).toBeTruthy();
-    expect(screen.getByText("1.5")).toBeTruthy();
-    expect(screen.getByText("CPU pressure")).toBeTruthy();
-    expect(screen.getByText("Memory pressure")).toBeTruthy();
-    expect(screen.getByText("I/O pressure")).toBeTruthy();
-    expect(screen.getAllByText("Waiting").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Stalled").length).toBeGreaterThan(0);
-    expect(screen.getByText("0.11")).toBeTruthy();
-    expect(screen.getByText("0.13")).toBeTruthy();
-    expect(screen.queryByText("0")).toBeNull();
-    const space = screen.getByRole("img", { name: "/data" });
-    expect(space.querySelectorAll("polyline")).toHaveLength(3);
-    expect(screen.getAllByText("Now").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("-24h").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("-12h").length).toBeGreaterThan(0);
-    const modes = screen.getByRole("img", { name: "CPU modes" });
-    expect(modes.querySelectorAll("polyline")).toHaveLength(2);
-    expect(screen.queryByText("0")).toBeNull();
-    expect(screen.queryByText(/forecast/i)).toBeNull();
-    expect(screen.queryByText(/shm_size|shared_buffers|work_mem|effective_cache_size/)).toBeNull();
-
-    fireEvent.click(screen.getByRole("radio", { name: "Last hour" }));
-    await waitFor(() => {
-      expect(screen.getByText("8")).toBeTruthy();
-    });
-    const hourCall = fetchMock.mock.calls.at(-1) ?? [];
-    expect(requestedSpan(hourCall)).toBe("hour");
-    expect(screen.getByText("50%")).toBeTruthy();
-    expect(screen.getByText("7000")).toBeTruthy();
-    expect(screen.getByText("/var/log")).toBeTruthy();
-    expect(screen.getByText("sdb")).toBeTruthy();
-    expect(screen.getByText("0.21")).toBeTruthy();
-    expect(screen.queryByText("6100")).toBeNull();
-    expect(screen.queryByText("/data")).toBeNull();
-    expect(screen.queryByText("sda")).toBeNull();
-    expect(screen.getAllByText("-1h").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("-30m").length).toBeGreaterThan(0);
-    expect(screen.queryByText("-24h")).toBeNull();
-
-    fireEvent.click(screen.getByRole("radio", { name: "Samples still in the store" }));
-    await waitFor(() => {
-      expect(screen.getAllByText("-360h").length).toBeGreaterThan(0);
-    });
-    expect(requestedSpan(fetchMock.mock.calls.at(-1) ?? [])).toBe("retained");
-    expect(document.body.textContent ?? "").not.toMatch(/\d+\s*days?/i);
-  });
-
-  it("shows the series failure and does not draw zeros", async () => {
-    fetchMock.mockImplementation(() =>
-      jsonResponse(
-        {
-          type: "urn:refraq:problem:HOST_SERIES_UNAVAILABLE",
-          status: 503,
-          code: "HOST_SERIES_UNAVAILABLE",
-          detail: "The host series could not be read.",
-          request_id: "req-host",
-        },
-        503,
-      ),
-    );
-    await renderPage();
-
-    expect(
-      await screen.findByText("The host series could not be read. Occupancy is not shown."),
-    ).toBeTruthy();
-    expect(requestedSpan(fetchMock.mock.calls[0] ?? [])).toBe("day");
-    expect(screen.queryByRole("img", { name: "CPU modes" })).toBeNull();
-    expect(screen.queryByRole("img", { name: "Run queue" })).toBeNull();
-    expect(screen.queryByText("0")).toBeNull();
-    expect(screen.queryByText("0%")).toBeNull();
-    expect(screen.queryByText("4")).toBeNull();
-  });
-
-  it("draws postgres readings from the host response", async () => {
-    fetchMock.mockImplementation(() =>
-      jsonResponse({
-        ...dayBody,
-        tiles: {
-          ...dayBody.tiles,
-          postgres: { backends: 17, max_connections: 100 },
-        },
-        charts: {
-          ...dayBody.charts,
-          postgres: {
-            backends: [
-              { t: "2026-11-11T00:00:00Z", v: 9 },
-              { t: "2026-11-11T12:00:00Z", v: null },
-              { t: "2026-11-12T00:00:00Z", v: 19 },
-            ],
-            idle_in_transaction: [
-              { t: "2026-11-11T00:00:00Z", v: 1 },
-              { t: "2026-11-12T00:00:00Z", v: 3 },
-            ],
-            idle_in_transaction_aborted: [
-              { t: "2026-11-11T00:00:00Z", v: 1 },
-              { t: "2026-11-12T00:00:00Z", v: 6 },
-            ],
-            checkpoint_timed: [{ t: "2026-11-12T00:00:00Z", v: 8 }],
-            checkpoint_requested: [{ t: "2026-11-12T00:00:00Z", v: 22 }],
-            checkpoint_write_time: [{ t: "2026-11-12T00:00:00Z", v: 1400 }],
-            checkpoint_sync_time: [{ t: "2026-11-12T00:00:00Z", v: 90 }],
-            checkpoint_buffers_written: [{ t: "2026-11-12T00:00:00Z", v: 64 }],
-            temp_files: [{ t: "2026-11-12T00:00:00Z", v: 5 }],
-            temp_bytes: [{ t: "2026-11-12T00:00:00Z", v: 4096 }],
-          },
-        },
-      }),
-    );
-    await renderPage();
-
-    expect(await screen.findByText("17")).toBeTruthy();
-    expect(screen.getByText("max_connections")).toBeTruthy();
-    expect(screen.getByText("100")).toBeTruthy();
-    expect(screen.getAllByText("Backends").length).toBeGreaterThan(0);
-    expect(screen.getByText("19")).toBeTruthy();
-    const backends = screen.getByRole("img", { name: "Backends" });
-    expect(backends.querySelectorAll("polyline")).toHaveLength(2);
-    expect(screen.getByText("Idle in transaction")).toBeTruthy();
-    expect(screen.getByText("3")).toBeTruthy();
-    expect(screen.getByText("Idle in transaction (aborted)")).toBeTruthy();
-    expect(screen.getByText("6")).toBeTruthy();
-    expect(screen.getByText("Checkpoints timed")).toBeTruthy();
-    expect(screen.getByText("8")).toBeTruthy();
-    expect(screen.getByText("Checkpoints requested")).toBeTruthy();
-    expect(screen.getByText("22")).toBeTruthy();
-    expect(screen.getByText("Checkpoint write time")).toBeTruthy();
-    expect(screen.getByText("1400")).toBeTruthy();
-    expect(screen.getByText("Checkpoint sync time")).toBeTruthy();
-    expect(screen.getByText("90")).toBeTruthy();
-    expect(screen.getByText("Checkpoint buffers written")).toBeTruthy();
-    expect(screen.getByText("64")).toBeTruthy();
-    expect(screen.getByText("Temporary files")).toBeTruthy();
-    expect(screen.getByText("5")).toBeTruthy();
-    expect(screen.getByText("Temporary file bytes")).toBeTruthy();
-    expect(screen.getByText("4096")).toBeTruthy();
-    expect(screen.queryByText(/shm_size|shared_buffers|work_mem|effective_cache_size/)).toBeNull();
-    expect(screen.queryByText(/threshold/i)).toBeNull();
-  });
-
-  it("draws the eight services from the host response and leaves a gap", async () => {
-    const gap = [
-      { t: "2026-11-11T00:00:00Z", v: 90 },
-      { t: "2026-11-11T12:00:00Z", v: null },
-      { t: "2026-11-12T00:00:00Z", v: 30 },
-    ];
-    const memory = [
-      { t: "2026-11-11T00:00:00Z", v: 1500 },
-      { t: "2026-11-11T12:00:00Z", v: null },
-      { t: "2026-11-12T00:00:00Z", v: 1800 },
-    ];
-    const absent = gap.map((sample) => ({ t: sample.t, v: null }));
-    const names = [
-      "postgres",
-      "redis",
-      "api",
-      "worker",
-      "beat",
-      "mcp",
-      "entity-mcp",
-      "web",
-    ];
-    fetchMock.mockImplementation(() =>
-      jsonResponse({
-        ...dayBody,
-        charts: {
-          ...dayBody.charts,
-          services: names.map((service) => {
-            if (service === "api") {
-              return { service, cpu_seconds: gap, memory_bytes: memory };
-            }
-            if (service === "worker") {
-              return {
-                service,
-                cpu_seconds: [
-                  { t: "2026-11-11T00:00:00Z", v: 120 },
-                  { t: "2026-11-11T12:00:00Z", v: 120 },
-                  { t: "2026-11-12T00:00:00Z", v: 120 },
-                ],
-                memory_bytes: absent,
-              };
-            }
-            return { service, cpu_seconds: absent, memory_bytes: absent };
-          }),
-        },
-      }),
-    );
-    await renderPage();
-
-    expect(await screen.findByText("entity-mcp")).toBeTruthy();
-    for (const name of names) {
-      expect(screen.getByText(name)).toBeTruthy();
-    }
-    expect(screen.getAllByText("CPU time").length).toBe(names.length);
-    expect(screen.getAllByText("Memory").length).toBe(names.length);
-    const api = screen.getByRole("img", { name: "api" });
-    expect(api.querySelectorAll("polyline")).toHaveLength(4);
-    const redis = screen.getByRole("img", { name: "redis" });
-    expect(redis.querySelectorAll("polyline")).toHaveLength(0);
-    expect(screen.getAllByText("30")).toHaveLength(1);
-    expect(screen.getAllByText("1800")).toHaveLength(1);
-    expect(screen.getAllByText("120")).toHaveLength(1);
-    expect(screen.queryByText("ensure-entity-db")).toBeNull();
-    expect(screen.queryByText(/forecast|threshold/i)).toBeNull();
-  });
-
-  it("shows a zero swap reading and an empty inode count", async () => {
-    fetchMock.mockImplementation(() =>
-      jsonResponse({
-        ...dayBody,
-        tiles: {
-          ...dayBody.tiles,
-          swap: { used_bytes: 0, total_bytes: 0 },
-          filesystems: [
-            {
-              mount: "/data",
-              type: "xfs",
-              used_bytes: 750,
-              total_bytes: 4000,
-              used_share: 0.75,
-              free_inodes: null,
-            },
-          ],
-        },
-      }),
-    );
-    await renderPage();
-    expect(await screen.findByText("Swap used")).toBeTruthy();
-    expect(screen.getAllByText("0")).toHaveLength(2);
-    expect(screen.getAllByText("—")).toHaveLength(3);
-    expect(screen.queryByText(/shm_size|shared_buffers|work_mem|effective_cache_size/)).toBeNull();
-  });
+it("contains matching localized Host keys and preserves unit caveats", () => {
+  expect(Object.keys(en).filter((key) => key.startsWith("host.")).sort()).toEqual(Object.keys(zh).filter((key) => key.startsWith("host.")).sort());
+  expect(en["host.service.cpu"]).toContain("CPU-s/step");
+  expect(en["host.postgres.counterHelp"]).toContain("cumulative counters, not rates");
 });

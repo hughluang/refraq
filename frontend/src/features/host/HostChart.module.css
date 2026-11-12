@@ -1,0 +1,87 @@
+.chart {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.plot {
+  display: block;
+  overflow: hidden;
+  font-family: var(--mantine-font-family);
+  font-size: var(--mantine-font-size-sm);
+  fill: var(--mantine-color-text);
+}
+
+.plotArea {
+  position: relative;
+  min-width: 0;
+}
+
+.pointerReadout {
+  position: absolute;
+  inset-block-start: var(--mantine-spacing-xs);
+  inset-inline-end: var(--mantine-spacing-xs);
+  max-width: calc(100% - var(--mantine-spacing-md));
+  max-height: 160px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: var(--mantine-spacing-xs);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-body);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.timeAxis {
+  display: grid;
+  gap: var(--mantine-spacing-xs);
+  font-size: var(--mantine-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.timeAxis span:last-child {
+  text-align: end;
+}
+
+.timeAxis span:nth-child(2):not(:last-child) {
+  text-align: center;
+}
+
+.grid {
+  stroke: var(--mantine-color-default-border);
+}
+
+.cursor {
+  stroke: var(--mantine-color-dimmed);
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+
+.legend {
+  overflow-wrap: anywhere;
+  align-items: baseline;
+}
+
+.legend > :last-child {
+  font-size: var(--mantine-font-size-xs);
+  color: var(--mantine-color-dimmed);
+  line-height: 1.4;
+}
+
+.legend svg {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.chart summary {
+  cursor: pointer;
+  font-size: var(--mantine-font-size-sm);
+}
+
+.readout {
+  margin: 0;
+  font-size: var(--mantine-font-size-sm);
+}
+
+.readout dd {
+  margin-inline-start: var(--mantine-spacing-md);
+}

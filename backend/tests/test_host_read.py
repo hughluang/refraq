@@ -45,7 +45,7 @@ BUSY_QUERY = (
     " and "
     "count(last_over_time(node_cpu_seconds_total[60s]))"
 )
-MODE_QUERY = "rate(node_cpu_seconds_total[120s])"
+MODE_QUERY = "avg by (mode) (rate(node_cpu_seconds_total[120s]))"
 QUEUE_QUERY = "node_procs_running"
 MEMORY_TOTAL_QUERY = "last_over_time(node_memory_MemTotal_bytes[60s])"
 MEMORY_AVAILABLE_QUERY = "last_over_time(node_memory_MemAvailable_bytes[60s])"
@@ -250,7 +250,11 @@ def prometheus(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("REFRAQ_PROMETHEUS_URL", "http://prometheus:9090")
     reset_settings_cache()
     store = _Store()
-    monkeypatch.setattr("backend.admin.host.prometheus.httpx.get", store)
+    def handle_request(_transport, request):
+        response = store(str(request.url.copy_with(query=None)), params=dict(request.url.params))
+        return httpx.Response(response.status_code, json=response.json())
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle_request)
     yield store
     reset_settings_cache()
 
@@ -296,8 +300,46 @@ def test_prometheus_url_defaults_without_being_required(
 ) -> None:
     monkeypatch.delenv("REFRAQ_PROMETHEUS_URL", raising=False)
     reset_settings_cache()
-    assert get_settings().refraq_prometheus_url == "http://prometheus:9090"
+    from backend.core.config import Settings
+
+    assert Settings(_env_file=None).refraq_prometheus_url == "http://prometheus:9090"
     reset_settings_cache()
+
+
+def test_prometheus_adapter_uses_explicit_endpoint_without_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.admin.host import prometheus as prometheus_adapter
+    from backend.core import config
+
+    def fail_settings():
+        pytest.fail("Prometheus adapter must not look up settings")
+
+    monkeypatch.setattr(config, "get_settings", fail_settings)
+    monkeypatch.setattr(prometheus_adapter, "get_settings", fail_settings, raising=False)
+    requests: list[httpx.Request] = []
+    instant_body = _vector("4")
+    range_body = _matrix([])
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        body = range_body if request.url.path.endswith("query_range") else instant_body
+        return httpx.Response(200, json=body)
+
+    with httpx.Client(transport=httpx.MockTransport(handle_request)) as client:
+        store = prometheus_adapter.PrometheusRead(client, "http://series.example:9091/prometheus/")
+        assert store.query_instant(ONLINE_QUERY, time=120) == instant_body
+        assert store.query_range(MODE_QUERY, start=60, end=120, step=30) == range_body
+
+    assert [request.method for request in requests] == ["GET", "GET"]
+    assert [str(request.url.copy_with(query=None)) for request in requests] == [
+        "http://series.example:9091/prometheus/api/v1/query",
+        "http://series.example:9091/prometheus/api/v1/query_range",
+    ]
+    assert [dict(request.url.params) for request in requests] == [
+        {"query": ONLINE_QUERY, "time": "120"},
+        {"query": MODE_QUERY, "start": "60", "end": "120", "step": "30"},
+    ]
 
 
 def test_host_read_requires_a_session_or_pat(client: TestClient) -> None:
@@ -431,6 +473,61 @@ def test_omitted_span_is_the_last_24_hours(
     assert body["start"] == "2026-11-11T00:00:00Z"
     assert body["end"] == END_TEXT
     assert body["step_seconds"] == 121
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_cpu_modes_average_observed_cores_and_preserve_gaps(
+    client: TestClient, frozen_end: datetime, prometheus: _Store,
+    monkeypatch: pytest.MonkeyPatch, reverse: bool,
+) -> None:
+    _login(client)
+    start = _unix(frozen_end) - 3600
+    rows = [
+        _series({"cpu": "0", "mode": "user"}, [(start, "0.2"), (start + 30, "0.4")]),
+        _series({"cpu": "1", "mode": "user"}, [(start, "0.8")]),
+        _series({"cpu": "0", "mode": "guest"}, [(start, "0.1")]),
+        _series({"cpu": "1", "mode": "guest"}, [(start, "0.3")]),
+        _series({"cpu": "0", "mode": "guest_nice"}, [(start, "0")]),
+    ]
+    if reverse:
+        rows.reverse()
+
+    def cpu_store(url, params=None, timeout=None):
+        query = (params or {}).get("query")
+        if query == "rate(node_cpu_seconds_total[120s])":
+            return _Response(_matrix(rows))
+        if query == "avg by (mode) (rate(node_cpu_seconds_total[120s]))":
+            # Model the external aggregate response; this is not a PromQL engine.
+            observed: dict[str, dict[int, list[float]]] = {}
+            for row in rows:
+                for timestamp, value in row["values"]:
+                    observed.setdefault(row["metric"]["mode"], {}).setdefault(
+                        timestamp, []
+                    ).append(float(value))
+            return _Response(_matrix([
+                _series({"mode": mode}, [
+                    (timestamp, str(sum(values) / len(values)))
+                    for timestamp, values in points.items()
+                ])
+                for mode, points in observed.items()
+            ]))
+        return prometheus(url, params=params, timeout=timeout)
+
+    def handle_request(_transport, request):
+        response = cpu_store(
+            str(request.url.copy_with(query=None)), params=dict(request.url.params)
+        )
+        return httpx.Response(response.status_code, json=response.json())
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle_request)
+    response = client.get("/host", params={"span": "hour"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    modes = {row["mode"]: row["samples"] for row in body["charts"]["cpu_modes"]}
+    assert [sample["v"] for sample in modes["user"][:3]] == [0.5, 0.4, None]
+    assert modes["guest"][0]["v"] == 0.2
+    assert modes["guest_nice"][0]["v"] == 0
+    assert body["tiles"]["cpu"]["busy_share"] == 0.25
 
 
 def test_cpu_tiles_and_modes_keep_guest_out_of_the_share(

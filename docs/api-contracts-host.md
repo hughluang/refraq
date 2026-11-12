@@ -32,6 +32,8 @@ The only query parameter is `span`: `hour`, `day`, or `retained`. An omitted spa
 
 The client sends that span. It does not send a query expression, a step, or a time. The server captures one end Instant from the platform clock and uses it for every query in the request.
 
+Acquisition is serial, with at most one upstream query in flight per read and 34 queries for a complete successful read. A read owns one HTTP client with a one-connection pool, allowing keep-alive reuse when supported by the store. The client is closed on success or failure and is not shared across reads. Each upstream operation uses a five-second HTTP timeout; this is not a request-wide wall-clock deadline. There are no automatic retries or cached results. Any failed query fails the whole read without returning partial tiles or charts or exposing upstream details.
+
 | `span` | Window | `step_seconds` |
 | --- | --- | --- |
 | `hour` | 3600 seconds | 30 |
@@ -50,10 +52,10 @@ Tiles are the last sample within 60 seconds. No sample in that window is JSON `n
 | --- | --- |
 | `tiles.cpu.online_count` | `count(node_cpu_seconds_total{mode="idle"})`, last sample within 60 seconds |
 | `tiles.cpu.busy_share` | Sum of per-mode rates for modes other than `idle`, `iowait`, `guest`, and `guest_nice`, divided by the sum of per-mode rates for modes other than `guest` and `guest_nice`. Rate lookback is 120 seconds. The value counts only when a sample exists within 60 seconds |
-| `charts.cpu_modes` | `rate(node_cpu_seconds_total[120s])` for every reported mode, including `guest` and `guest_nice` |
+| `charts.cpu_modes` | `avg by (mode) (rate(node_cpu_seconds_total[120s]))` for every reported mode, including `guest` and `guest_nice` |
 | `charts.run_queue` | `node_procs_running` as recorded. Not a rate and not load average |
 
-Guest modes appear on the mode chart and are not added into `busy_share`.
+Each mode is the average per-core rate for this deployment's single host, not a sum in cores. At each evaluation, only cores with an observed rate for that mode contribute to its average; absent cores are not filled with zero. A mode with no observed rate remains absent. Guest modes appear on the mode chart and are not added into `busy_share`; they are already accounted for in the host's user and nice counters and must not be added a second time.
 
 ### 3.2 Memory and swap
 

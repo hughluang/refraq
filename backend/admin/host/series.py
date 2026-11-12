@@ -5,8 +5,10 @@ from __future__ import annotations
 import math
 from datetime import UTC, datetime
 
+import httpx
+
 from backend.admin.host.errors import HostSeriesUnavailable
-from backend.admin.host.prometheus import query_instant, query_range
+from backend.admin.host.prometheus import PrometheusRead
 from backend.admin.host.schemas import (
     ChartsOut,
     CpuModeOut,
@@ -26,6 +28,7 @@ from backend.admin.host.schemas import (
     SwapTileOut,
     TilesOut,
 )
+from backend.core.config import get_settings
 from backend.core.time import format_instant, utc_now
 
 # Bounded query windows. Retained matches the store time-retention limit.
@@ -43,7 +46,7 @@ BUSY_QUERY = (
     " and "
     "count(last_over_time(node_cpu_seconds_total[60s]))"
 )
-MODE_QUERY = "rate(node_cpu_seconds_total[120s])"
+MODE_QUERY = "avg by (mode) (rate(node_cpu_seconds_total[120s]))"
 QUEUE_QUERY = "node_procs_running"
 MEMORY_TOTAL_QUERY = "last_over_time(node_memory_MemTotal_bytes[60s])"
 MEMORY_AVAILABLE_QUERY = "last_over_time(node_memory_MemAvailable_bytes[60s])"
@@ -120,6 +123,17 @@ def step_seconds(window: int) -> int:
 
 
 def read_host(span: HostSpan) -> HostReadOut:
+    base_url = get_settings().refraq_prometheus_url
+    with httpx.Client(
+        timeout=5.0,
+        limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+    ) as client:
+        return _read_host(span, PrometheusRead(client, base_url))
+
+
+def _read_host(span: HostSpan, store: PrometheusRead) -> HostReadOut:
+    query_instant = store.query_instant
+    query_range = store.query_range
     window = SPAN_SECONDS[span]
     step = step_seconds(window)
     end = utc_now().replace(microsecond=0)
@@ -253,10 +267,10 @@ def read_host(span: HostSpan) -> HostReadOut:
         step_seconds=step,
         tiles=TilesOut(
             cpu=CpuTileOut(online_count=online, busy_share=busy),
-            memory=_memory(end_unix),
-            swap=_swap(end_unix),
-            filesystems=_filesystems(end_unix),
-            postgres=_postgres_tiles(end_unix),
+            memory=_memory(end_unix, store),
+            swap=_swap(end_unix, store),
+            filesystems=_filesystems(end_unix, store),
+            postgres=_postgres_tiles(end_unix, store),
         ),
         charts=charts,
     )
@@ -333,7 +347,8 @@ def _postgres_charts(
     )
 
 
-def _postgres_tiles(end_unix: int) -> PostgresTileOut:
+def _postgres_tiles(end_unix: int, store: PrometheusRead) -> PostgresTileOut:
+    query_instant = store.query_instant
     return PostgresTileOut(
         backends=_summed_instant(query_instant(BACKENDS_TILE_QUERY, time=end_unix)),
         max_connections=_scalar(query_instant(MAX_CONNECTIONS_QUERY, time=end_unix)),
@@ -357,21 +372,24 @@ def _summed(body: dict, allowed: set[int]) -> dict[int, float]:
     return totals
 
 
-def _memory(end_unix: int) -> MemoryTileOut:
+def _memory(end_unix: int, store: PrometheusRead) -> MemoryTileOut:
+    query_instant = store.query_instant
     total = _scalar(query_instant(MEMORY_TOTAL_QUERY, time=end_unix))
     available = _scalar(query_instant(MEMORY_AVAILABLE_QUERY, time=end_unix))
     used = None if total is None or available is None else total - available
     return MemoryTileOut(used_bytes=used, total_bytes=total)
 
 
-def _swap(end_unix: int) -> SwapTileOut:
+def _swap(end_unix: int, store: PrometheusRead) -> SwapTileOut:
+    query_instant = store.query_instant
     total = _scalar(query_instant(SWAP_TOTAL_QUERY, time=end_unix))
     free = _scalar(query_instant(SWAP_FREE_QUERY, time=end_unix))
     used = None if total is None or free is None else total - free
     return SwapTileOut(used_bytes=used, total_bytes=total)
 
 
-def _filesystems(end_unix: int) -> list[FilesystemTileOut]:
+def _filesystems(end_unix: int, store: PrometheusRead) -> list[FilesystemTileOut]:
+    query_instant = store.query_instant
     sizes = _labeled_values(query_instant(FILESYSTEM_SIZE_QUERY, time=end_unix))
     available = _labeled_values(query_instant(FILESYSTEM_AVAIL_QUERY, time=end_unix))
     inodes = _labeled_values(query_instant(FILESYSTEM_INODES_QUERY, time=end_unix))
