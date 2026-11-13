@@ -9,6 +9,13 @@ import {
 import type { ContainerDeclaration } from "@/features/channels/types";
 
 describe("layoutNodePorts", () => {
+  it("sizes nested frames from actual measured leaf boxes", () => {
+    expect(frameBox("outer", [
+      { id: "outer", position: { x: 0, y: 0 }, container: { round_templates: [] } },
+      { id: "inner", parentId: "outer", position: { x: 48, y: 80 }, container: { round_templates: [] } },
+      { id: "leaf", parentId: "inner", position: { x: 48, y: 80 }, container: null, measured: { width: 300, height: 180 } },
+    ])).toEqual({ width: 492, height: 436 });
+  });
   it("keeps a single main handle unlabelled on its side", () => {
     const laid = layoutNodePorts([{ port: "main" }], [{ port: "main" }]);
     expect(laid.inputs).toEqual([

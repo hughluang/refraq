@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listExecutions, nodeSample } from "@/features/channels/api";
 import { CANVAS_PLUS_PATH } from "@/features/channels/CanvasPlusIcon";
+import * as layoutEngine from "./graphLayout";
 import { EACH_INSET } from "@/features/channels/portLayout";
 import {
   EMPTY_GRAPH,
@@ -82,6 +83,9 @@ const LABELS: Record<string, string> = {
   "channels.canvas.zoomPercent": "Zoom {{percent}}%",
   "channels.canvas.zoom100": "100%",
   "channels.canvas.fitView": "Fit view",
+  "channels.canvas.arrange": "Arrange",
+  "channels.canvas.arranging": "Arranging…",
+  "channels.canvas.arrangeFailed": "Could not arrange this graph",
   "channels.canvas.minimap": "Minimap",
   "channels.canvas.shortcuts": "Keyboard shortcuts",
   "channels.canvas.shortcuts.group.edit": "Edit",
@@ -350,9 +354,11 @@ function renderCanvas(
   } = {},
 ) {
   const appearance = options.appearance ?? "edit";
-  const mutable = options.mutable ?? appearance === "edit";
+  let mutable = options.mutable ?? appearance === "edit";
   return import("@/features/channels/ChannelCanvas").then(({ ChannelCanvas }) => {
     let sessionRun = options.sessionRun;
+    let adoptToken = 0;
+    let currentGraph = graph;
     let runNodeFocus = options.runNodeFocus;
     const element = (
       next: GraphProblem[],
@@ -366,7 +372,8 @@ function renderCanvas(
             ...(options.colorScheme ? { forceColorScheme: options.colorScheme } : {}),
           },
           createElement(ChannelCanvas, {
-          graph,
+          graph: currentGraph,
+          adoptToken,
           catalog: options.catalog ?? [spec],
           appearance,
           mutable,
@@ -382,6 +389,15 @@ function renderCanvas(
       );
     const view = render(element(problems));
     return {
+      setMutable(next: boolean) {
+        mutable = next;
+        view.rerender(element(problems));
+      },
+      adoptGraph(next: Graph) {
+        currentGraph = next;
+        adoptToken += 1;
+        view.rerender(element(problems));
+      },
       rerenderProblems(next: GraphProblem[]) {
         view.rerender(element(next));
       },
@@ -447,6 +463,179 @@ describe("ChannelCanvas controls", () => {
       }),
     );
   });
+
+  it("arranges as one undoable manual edit while preserving explicit priority and notes", async () => {
+    const graph: Graph = { ...EMPTY_GRAPH, nodes: [
+      { id: "a", ref: "a", name: "A", type: spec.type, position: { x: 0, y: 300 }, config: {}, on_error: "stop", retry: null, execution_order: 5 },
+      { id: "b", ref: "b", name: "B", type: spec.type, position: { x: 0, y: 0 }, config: {}, on_error: "stop", retry: null },
+    ], notes: [{ id: "nt_fixed", position: { x: 999, y: 999 }, size: { width: 240, height: 120 }, text: "Fixed" }] };
+    const onChange = vi.fn();
+    await renderCanvas([], graph, { onChange });
+    const arrange = screen.getByRole("button", { name: "Arrange" });
+    await waitFor(() => expect((arrange as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(arrange);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const changed = onChange.mock.lastCall![0] as Graph;
+    expect(changed.layout).toEqual({ mode: "manual" });
+    expect(changed.nodes.map((node) => node.execution_order)).toEqual([5, 6]);
+    expect(changed.notes).toEqual(graph.notes);
+    expect(changed.nodes.map((node) => node.position)).not.toEqual(graph.nodes.map((node) => node.position));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(onChange.mock.lastCall![0].nodes.map((node: Graph["nodes"][number]) => node.position)).toEqual(graph.nodes.map((node) => node.position));
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    expect(onChange.mock.lastCall![0]).toEqual(changed);
+  });
+
+  it("automatically lays out auto graphs without changing layout intent", async () => {
+    const graph: Graph = { ...EMPTY_GRAPH, layout: { mode: "auto" }, nodes: [
+      { id: "a", ref: "a", name: "A", type: spec.type, position: { x: 0, y: 0 }, config: {}, on_error: "stop", retry: null },
+      { id: "b", ref: "b", name: "B", type: spec.type, position: { x: 0, y: 0 }, config: {}, on_error: "stop", retry: null },
+    ] };
+    const onChange = vi.fn();
+    await renderCanvas([], graph, { onChange });
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange.mock.lastCall![0].layout).toEqual({ mode: "auto" });
+    expect(onChange.mock.lastCall![0].nodes[0].position).not.toEqual(onChange.mock.lastCall![0].nodes[1].position);
+  });
+
+  it("keeps read-only Arrange local and disables it under the edit lock", async () => {
+    const graph: Graph = { ...EMPTY_GRAPH, nodes: [{ id: "a", ref: "a", name: "A", type: spec.type, position: { x: 900, y: 900 }, config: {}, on_error: "stop", retry: null }] };
+    const onChange = vi.fn();
+    await renderCanvas([], graph, { appearance: "browse", mutable: false, onChange });
+    const arrange = screen.getByRole("button", { name: "Arrange" });
+    await waitFor(() => expect((arrange as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(arrange);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Arranging…" })).toBeNull());
+    expect(onChange).not.toHaveBeenCalled();
+    cleanup();
+    await renderCanvas([], graph, { appearance: "edit", mutable: false, onChange });
+    expect((screen.getByRole("button", { name: "Arrange" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("rejects an outstanding Arrange after a newer keyboard geometry edit", async () => {
+    const graph: Graph = { ...EMPTY_GRAPH, nodes: [{ id: "a", ref: "a", name: "A", type: spec.type, position: { x: 900, y: 900 }, config: {}, on_error: "stop", retry: null }] };
+    let resolve!: (result: layoutEngine.LayoutResult) => void;
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const onChange = vi.fn();
+    await renderCanvas([], graph, { onChange });
+    const arrange = screen.getByRole("button", { name: "Arrange" });
+    await waitFor(() => expect((arrange as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(arrange);
+    const node = document.querySelector('[data-id="a"]') as HTMLElement;
+    fireEvent.click(node);
+    node.focus();
+    fireEvent.keyDown(node, { key: "ArrowRight" });
+    await act(async () => { resolve({ status: "laid-out", nodes: [{ id: "a", position: { x: 1, y: 1 }, width: 160, height: 88 }] }); });
+    expect(onChange.mock.lastCall![0].nodes[0].position).toEqual({ x: 908, y: 900 });
+    planner.mockRestore();
+  });
+
+  it("folds automatic structural geometry into one history step without replaying on undo", async () => {
+    const graph: Graph = { ...nodeGraph, layout: { mode: "auto" }, nodes: nodeGraph.nodes.map((node) => ({ ...node, type: "transform.code" })) };
+    const planner = vi.spyOn(layoutEngine, "layoutGraph");
+    const onChange = vi.fn();
+    await renderCanvas([], graph, { onChange, catalog: [{ ...CODE_SPEC, permission: null }] });
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+    const card = document.querySelector(`[data-id="${graph.nodes[0].id}"]`) as HTMLElement;
+    fireEvent.click(card);
+    card.focus();
+    fireEvent.keyDown(card, { key: "d", code: "KeyD", ctrlKey: true });
+    await waitFor(() => expect(onChange.mock.lastCall![0].nodes).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Arranging…" })).toBeNull());
+    const completed = onChange.mock.lastCall![0] as Graph;
+    const requests = planner.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await act(async () => { await new Promise((done) => setTimeout(done, 50)); });
+    expect(onChange.mock.lastCall![0].nodes).toHaveLength(1);
+    expect(planner).toHaveBeenCalledTimes(requests);
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    await act(async () => { await new Promise((done) => setTimeout(done, 50)); });
+    expect(onChange.mock.lastCall![0]).toEqual(completed);
+    expect(planner).toHaveBeenCalledTimes(requests);
+    planner.mockRestore();
+  });
+
+  it("rejects pending geometry after adoption and restores exact adopted metadata on undo", async () => {
+    let resolve!: (result: layoutEngine.LayoutResult) => void;
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const onChange = vi.fn();
+    const view = await renderCanvas([], nodeGraph, { onChange });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Arrange" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    const adopted: Graph = { ...nodeGraph, layout: { mode: "manual" }, nodes: nodeGraph.nodes.map((node) => ({ ...node, position: { x: 501, y: 607 }, execution_order: 42 })) };
+    view.adoptGraph(adopted);
+    await act(async () => { resolve({ status: "laid-out", nodes: nodeGraph.nodes.map((node) => ({ id: node.id, position: { x: 1, y: 1 }, width: 160, height: 88 })) }); });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(onChange.mock.lastCall![0]).toEqual({ ...nodeGraph, nodes: nodeGraph.nodes.map((node) => ({ ...node, type_version: 1 })) });
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    expect(onChange.mock.lastCall![0]).toEqual({ ...adopted, nodes: adopted.nodes.map((node) => ({ ...node, type_version: 1 })) });
+    planner.mockRestore();
+  });
+
+  it("moving only a note preserves scheduling metadata and legacy layout absence", async () => {
+    const graph: Graph = { ...nodeGraph, notes: [{ id: "nt_note", position: { x: 500, y: 500 }, size: { width: 240, height: 120 }, text: "Note" }] };
+    const onChange = vi.fn();
+    await renderCanvas([], graph, { onChange });
+    const note = document.querySelector('[data-id="nt_note"]') as HTMLElement;
+    fireEvent.click(note);
+    note.focus();
+    fireEvent.keyDown(note, { key: "ArrowRight" });
+    expect(onChange.mock.lastCall![0].nodes).toEqual(graph.nodes.map((node) => ({ ...node, type_version: 1 })));
+    expect(onChange.mock.lastCall![0].layout).toBeUndefined();
+    expect(onChange.mock.lastCall![0].notes[0].position.x).toBe(508);
+  });
+
+  it("invalidates pending Arrange across a lock and unlock even without another edit", async () => {
+    let resolve!: (result: layoutEngine.LayoutResult) => void;
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const onChange = vi.fn();
+    const view = await renderCanvas([], nodeGraph, { onChange });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Arrange" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    view.setMutable(false);
+    view.setMutable(true);
+    await act(async () => { resolve({ status: "laid-out", nodes: [{ id: "nd_1", position: { x: 1, y: 1 }, width: 160, height: 88 }] }); });
+    expect(onChange).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Arrange" }) as HTMLButtonElement).disabled).toBe(false);
+    planner.mockRestore();
+  });
+
+  it("retries pending auto layout against the latest configuration without losing the edit", async () => {
+    const graph: Graph = { ...nodeGraph, layout: { mode: "auto" }, nodes: nodeGraph.nodes.map((node) => ({ ...node, type: "transform.code", config: { code: "return 1", timeout_sec: 30 } })) };
+    let resolve!: (result: layoutEngine.LayoutResult) => void;
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const onChange = vi.fn();
+    await renderCanvas([], graph, { onChange, catalog: [{ ...CODE_SPEC, permission: null }] });
+    await waitFor(() => expect(planner).toHaveBeenCalledTimes(1));
+    openSettings(document.querySelector('[data-id="nd_1"]') as HTMLElement);
+    fireEvent.change(screen.getByRole("textbox", { name: "Timeout (seconds)" }), { target: { value: "45" } });
+    expect(onChange.mock.lastCall![0].nodes[0].config.timeout_sec).toBe(45);
+    await act(async () => { resolve({ status: "laid-out", nodes: [{ id: "nd_1", position: { x: 999, y: 999 }, width: 160, height: 88 }] }); });
+    await waitFor(() => expect(planner).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Arranging…" })).toBeNull());
+    const arranged = onChange.mock.lastCall![0] as Graph;
+    expect(arranged.nodes[0].config).toEqual({ code: "return 1", timeout_sec: 45 });
+    expect(arranged.nodes[0].position).not.toEqual({ x: 999, y: 999 });
+    expect(arranged.layout).toEqual({ mode: "auto" });
+    expect(onChange.mock.calls.some(([value]) => value.nodes[0].position.x === 999)).toBe(false);
+    planner.mockRestore();
+  });
+
+  it("shows layout failures and releases pending state without a graph write", async () => {
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockRejectedValueOnce(new Error("engine unavailable"));
+    const onChange = vi.fn();
+    await renderCanvas([], nodeGraph, { onChange });
+    const arrange = screen.getByRole("button", { name: "Arrange" });
+    await waitFor(() => expect((arrange as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(arrange);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Could not arrange this graph"));
+    expect((screen.getByRole("button", { name: "Arrange" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(onChange).not.toHaveBeenCalled();
+    planner.mockRestore();
+  }, 15000);
 
   it("puts authoring, zoom, minimap, and shortcut help on the bottom toolbar", async () => {
     await renderCanvas();
@@ -1247,7 +1436,7 @@ describe("ChannelCanvas controls", () => {
       resolve(__dirname, "../../../../docs/ui-console-interaction.md"),
       "utf8",
     );
-    const section = doc.split(/^## 9\. /m)[0]?.split(/^## 8\. Motion/m)[1] ?? "";
+    const section = doc.split(/^## \d+\. Motion\s*$/m)[1]?.split(/^## /m)[0] ?? "";
     expect(section).toMatch(/node settings overlay may fade in and out/i);
     expect(section).toMatch(/does not shift layout/i);
     expect(section).not.toMatch(/focus altitude/i);
@@ -1271,7 +1460,12 @@ describe("ChannelCanvas controls", () => {
   it("sizes the node window and keeps three columns", () => {
     const css = readFileSync(resolve(__dirname, "ChannelCanvas.css"), "utf8");
     expect(css).not.toMatch(/960px/);
-    expect(css).not.toMatch(/@container/);
+    const containers = [...css.matchAll(/@container[^{}]*\{((?:[^{}]|\{[^{}]*\})*)\}/g)].map((match) => match[1]);
+    expect(containers.length).toBeGreaterThan(0);
+    for (const block of containers) {
+      expect(block).toMatch(/\.channel-history/);
+      expect(block).not.toMatch(/\.channel-node-(?:config|detail)/);
+    }
 
     const detail = css.match(/^\.channel-node-config--detail \{([\s\S]*?)\n\}/m)?.[1] ?? "";
     expect(css).toMatch(
@@ -2656,6 +2850,75 @@ describe("channel ports", () => {
     });
   });
 
+  it("materializes the complete legacy graph before a manual drag crosses its old execution order", async () => {
+    const onChange = vi.fn();
+    const graph: Graph = { ...EMPTY_GRAPH, nodes: [placed("first", "read.sql", "First", 0), placed("second", "read.sql", "Second", 400)] };
+    let resolve!: (result: layoutEngine.LayoutResult) => void;
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    await renderCanvas([], graph, { catalog: [READ_SPEC], onChange });
+    await measured("first");
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    // Keep this gesture inside a real-sized pane: jsdom's zero bounds otherwise
+    // start React Flow auto-pan, whose awaited pan can update nodes after mouseup.
+    const pane = document.querySelector(".react-flow") as HTMLElement;
+    vi.spyOn(pane, "getBoundingClientRect").mockReturnValue({ x: -10000, y: -10000, left: -10000, top: -10000, right: 10000, bottom: 10000, width: 20000, height: 20000, toJSON: () => ({}) });
+    dragNode("first", [{ x: 0, y: 40 }, { x: 40, y: 40 }, { x: 800, y: 800 }]);
+    const dragged = onChange.mock.lastCall![0] as Graph;
+    expect(dragged.nodes[0].position).toEqual({ x: 760, y: 800 });
+    expect(dragged.nodes.map((node) => node.execution_order)).toEqual([0, 1]);
+    expect(dragged.layout).toEqual({ mode: "manual" });
+    expect(dragged.nodes[0].position.y).toBeGreaterThan(dragged.nodes[1].position.y);
+    await act(async () => { resolve({ status: "laid-out", nodes: graph.nodes.map((node) => ({ id: node.id, position: { x: 1, y: 1 }, width: 160, height: 88 })) }); });
+    expect(onChange.mock.lastCall![0]).toEqual(dragged);
+    await waitFor(() => expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(onChange.mock.lastCall![0].nodes.map((node: Graph["nodes"][number]) => node.execution_order)).toEqual([undefined, undefined]);
+    planner.mockRestore();
+  });
+
+  it("rejects an explicit layout result after a structural deletion", async () => {
+    const onChange = vi.fn();
+    const graph: Graph = { ...EMPTY_GRAPH, nodes: [placed("first", "read.sql", "First", 0), placed("second", "read.sql", "Second", 400)] };
+    let resolve!: (result: layoutEngine.LayoutResult) => void;
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    await renderCanvas([], graph, { catalog: [READ_SPEC], onChange });
+    await measured("first");
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    const card = flowNode("first");
+    fireEvent.click(card);
+    card.focus();
+    fireEvent.keyDown(card, { key: "Delete", code: "Delete" });
+    await waitFor(() => expect(onChange.mock.lastCall![0].nodes).toHaveLength(1));
+    const deleted = onChange.mock.lastCall![0];
+    await act(async () => { resolve({ status: "laid-out", nodes: graph.nodes.map((node) => ({ id: node.id, position: { x: 1, y: 1 }, width: 160, height: 88 })) }); });
+    expect(onChange.mock.lastCall![0]).toEqual(deleted);
+    expect(deleted.nodes[0].position).toEqual(graph.nodes[1].position);
+    planner.mockRestore();
+  });
+
+  it("shrinks an arranged frame after its child is removed and restores it on undo", async () => {
+    const onChange = vi.fn();
+    const graph: Graph = { ...EMPTY_GRAPH, nodes: [placed("walk", "volume.for", "Walk", 0), { ...placed("step", "read.sql", "Step", 800), parent: "walk" }, { ...placed("step2", "read.sql", "Step 2", 1200), parent: "walk" }], edges: [{ id: "chain", source: { node_id: "step2", port: "main" }, target: { node_id: "step", port: "main" } }] };
+    await renderCanvas([], graph, { catalog: [FOR_SPEC, READ_SPEC], onChange });
+    await measured("step");
+    const legacyWidth = Number.parseFloat(flowNode("walk").style.width);
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const arranged = onChange.mock.lastCall![0] as Graph;
+    // onChange runs before React Flow commits the controlled nodes to its DOM.
+    await waitFor(() => expect(Number.parseFloat(flowNode("walk").style.width)).toBeLessThan(legacyWidth));
+    const expanded = Number.parseFloat(flowNode("walk").style.width);
+    const card = flowNode("step");
+    fireEvent.click(card);
+    card.focus();
+    fireEvent.keyDown(card, { key: "Delete", code: "Delete" });
+    await waitFor(() => expect(onChange.mock.lastCall![0].nodes).toHaveLength(2));
+    await waitFor(() => expect(Number.parseFloat(flowNode("walk").style.width)).toBeLessThan(expanded));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(onChange.mock.lastCall![0]).toEqual(arranged);
+    await waitFor(() => expect(Number.parseFloat(flowNode("walk").style.width)).toBe(expanded));
+  });
+
   function dragThrough(
     id: string,
     points: { x: number; y: number }[],
@@ -2705,14 +2968,14 @@ describe("channel ports", () => {
       ],
     }, { catalog: [FOR_SPEC, READ_SPEC], onChange });
     await measured("step");
-    expect(flowNode("walk").style.width).toBe("456px");
+    expect(flowNode("walk").style.width).toBe("408px");
 
     dragThrough("step", [
       { x: 200, y: 40 },
       { x: 216, y: 40 },
     ], () => {
       expect(translationOf("step")).toEqual({ x: 216, y: 40 });
-      expect(flowNode("walk").style.width).toBe("472px");
+      expect(flowNode("walk").style.width).toBe("424px");
       expect(screen.getByRole("group", { name: "Each to Main" })).toBeTruthy();
     });
 

@@ -47,6 +47,13 @@ function edge(
 }
 
 describe("flow conversion", () => {
+  it("preserves explicit priorities and layout intent through conversion", () => {
+    const graph: Graph = { nodes: [{ ...node("a", "read.sql"), execution_order: 0 }], edges: [], settings: { run_timeout_sec: null, error_channel_id: null }, layout: { mode: "auto" } };
+    const flow = flowFromGraph(graph, TRIGGERS);
+    const restored = graphFromFlow(flow.nodes, flow.edges, graph.settings, flow.notes, graph.layout);
+    expect(restored.nodes[0].execution_order).toBe(0);
+    expect(restored.layout).toEqual({ mode: "auto" });
+  });
   it("round-trips node type, ports, and position", () => {
     const graph: Graph = {
       nodes: [

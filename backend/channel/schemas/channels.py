@@ -26,8 +26,8 @@ _RUN_TIMEOUT_MAX = 252_460_800
 class PositionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    x: float
-    y: float
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
 
 
 class RetryIn(BaseModel):
@@ -53,6 +53,14 @@ class NodeIn(BaseModel):
     retry: RetryIn | None = None
     type_version: int = Field(default=1, ge=1)
     parent: str | None = None
+    execution_order: int | None = Field(default=None, ge=0, le=9_007_199_254_740_991, strict=True)
+
+    @field_validator("execution_order", mode="before")
+    @classmethod
+    def _execution_order(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("execution_order must be a non-negative integer")
+        return value
 
     @field_validator("name")
     @classmethod
@@ -88,6 +96,8 @@ class NodeIn(BaseModel):
         document = handler(self)
         if document.get("parent") is None:
             document.pop("parent", None)
+        if document.get("execution_order") is None:
+            document.pop("execution_order", None)
         return document
 
 
@@ -158,6 +168,12 @@ class NoteIn(BaseModel):
     text: str = Field(max_length=4000)
 
 
+class LayoutIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["auto", "manual"]
+
+
 class GraphIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -165,12 +181,41 @@ class GraphIn(BaseModel):
     edges: list[EdgeIn]
     notes: list[NoteIn] = Field(default_factory=list, max_length=200)
     settings: GraphSettingsIn
+    layout: LayoutIn | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _auto_positions(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        if "layout" in value and value["layout"] is None:
+            raise ValueError("layout must declare a mode")
+        layout = value.get("layout")
+        if isinstance(layout, dict) and layout.get("mode") == "auto":
+            nodes = value.get("nodes")
+            if isinstance(nodes, list):
+                value = {**value, "nodes": [
+                    {"position": {"x": 0, "y": 0}, **node}
+                    if isinstance(node, dict) else node
+                    for node in nodes
+                ]}
+        return value
+
+    @model_validator(mode="after")
+    def _auto_execution_order(self) -> GraphIn:
+        if self.layout is not None and self.layout.mode == "auto":
+            for index, node in enumerate(self.nodes):
+                if node.execution_order is None:
+                    node.execution_order = index
+        return self
 
     @model_serializer(mode="wrap")
     def _omit_empty_notes(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         document = handler(self)
         if not document.get("notes"):
             document.pop("notes", None)
+        if document.get("layout") is None:
+            document.pop("layout", None)
         return document
 
     @model_validator(mode="after")

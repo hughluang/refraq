@@ -76,6 +76,14 @@ const read = spec("read.sql");
 const code = spec("transform.code", { permission: "channel:code_write" });
 
 describe("canvasClipboard", () => {
+  it("round-trips execution priorities and remaps copied parent membership without translating children", () => {
+    const original = graph([node({ id: "frame", type: read.type, execution_order: 4 }), node({ id: "child", type: read.type, parent: "frame", execution_order: 5, position: { x: 48, y: 80 } })]);
+    const fragment = parseFragment(JSON.stringify(serializeFragment(original, ["frame", "child"])))!;
+    expect(fragment.nodes.map((item) => item.execution_order)).toEqual([4, 5]);
+    const pasted = pasteFragment(fragment, EMPTY_GRAPH, [read], [], null);
+    expect(pasted.nodes[1].parent).toBe(pasted.nodes[0].id);
+    expect(pasted.nodes[1].position).toEqual({ x: 48, y: 80 });
+  });
   it("serializes the selection as a fragment and parses that envelope back", () => {
     const start = node({
       id: "nd_a",
@@ -103,7 +111,7 @@ describe("canvasClipboard", () => {
     expect(fragment).toEqual({
       kind: "refraq.channel.fragment",
       version: 1,
-      nodes: [start, load],
+      nodes: [{ ...start, execution_order: 1 }, { ...load, execution_order: 2 }],
       edges: [linked],
       notes: [],
     });

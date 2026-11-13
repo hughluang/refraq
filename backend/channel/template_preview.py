@@ -16,6 +16,7 @@ from backend.channel.graph import (
     _crosses_frame,
     _template_fields,
     ancestor_closure,
+    execution_sort_key,
     template_site,
 )
 from backend.channel.nodes import list_node_types
@@ -857,16 +858,20 @@ def _ordered_ancestors(graph: Mapping[str, Any], ancestors: set[str]) -> list[st
     return ordered
 
 
-def _position(node: Mapping[str, Any]) -> tuple[float, float, str]:
+def _position(node: Mapping[str, Any]) -> tuple[int, float, float, str]:
     raw = node.get("position")
     position = raw if isinstance(raw, dict) else {}
 
-    def _num(value: Any) -> float:
+    def coordinate(axis: str) -> float:
+        value = position.get(axis)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return 0.0
         return float(value)
 
-    return (_num(position.get("y")), _num(position.get("x")), str(node.get("id")))
+    return execution_sort_key(
+        {**node, "position": {"x": coordinate("x"), "y": coordinate("y")}},
+        legacy_id_tiebreak=True,
+    )
 
 
 def _bindings(upstream: list[_Slot]) -> list[dict[str, Any]]:

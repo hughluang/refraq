@@ -67,6 +67,7 @@ export type FrameMember = {
   position: { x: number; y: number };
   /** `null` is a card. Any declaration, including empty Round Templates, is a frame. */
   container: ContainerDeclaration | null;
+  measured?: { width?: number; height?: number };
 };
 
 /** Width and height of a For frame. Not stored on the graph. */
@@ -102,7 +103,7 @@ function measureFrame(
     const size =
       child.container != null
         ? measureFrame(child.id, nodes, seen)
-        : { width: CARD_WIDTH, height: CARD_HEIGHT };
+        : { width: child.measured?.width ?? CARD_WIDTH, height: child.measured?.height ?? CARD_HEIGHT };
     right = Math.max(right, child.position.x + size.width);
     bottom = Math.max(bottom, child.position.y + size.height);
   }

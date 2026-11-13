@@ -22,6 +22,7 @@ export type FlowNodeData = {
   container: ContainerDeclaration | null;
   problem: boolean;
   typeVersion: number;
+  executionOrder?: number;
 };
 
 export type FlowNodeShape = {
@@ -125,6 +126,7 @@ export function flowFromGraph(
           container: copyContainer(containers.get(node.type)),
           problem: false,
           typeVersion: node.type_version ?? 1,
+          ...(node.execution_order !== undefined ? { executionOrder: node.execution_order } : {}),
         },
       };
       if (node.parent) flowNode.parentId = node.parent;
@@ -160,6 +162,7 @@ export function graphFromFlow(
   edges: FlowEdgeShape[],
   settings: GraphSettings,
   notes: FlowNoteShape[] = [],
+  layout?: Graph["layout"],
 ): Graph {
   const graph: Graph = {
     nodes: nodes.map((node) => {
@@ -174,6 +177,7 @@ export function graphFromFlow(
         retry: node.data.retry,
         type_version: node.data.typeVersion ?? 1,
       };
+      if (node.data.executionOrder !== undefined) graphNode.execution_order = node.data.executionOrder;
       if (node.parentId) graphNode.parent = node.parentId;
       return graphNode;
     }),
@@ -184,6 +188,7 @@ export function graphFromFlow(
     })),
     settings,
   };
+  if (layout) graph.layout = { ...layout };
   if (notes.length > 0) graph.notes = notes.map(noteFromFlow);
   return graph;
 }

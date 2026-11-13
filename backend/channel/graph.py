@@ -28,6 +28,7 @@ from backend.channel.values import attribute_value_schema
 __all__ = [
     "RefinedPort",
     "TemplateSite",
+    "execution_sort_key",
     "refine_ports",
     "template_site",
     "validate",
@@ -54,6 +55,19 @@ class TemplateSite:
     text: str
     value_schema: dict[str, Any] | None
     problems: tuple[Problem, ...]
+
+
+def execution_sort_key(
+    node: Mapping[str, Any], *, legacy_id_tiebreak: bool = False,
+) -> tuple[int, float, float, str]:
+    order = node.get("execution_order")
+    if order is not None:
+        return (0, order, 0, str(node["id"]))
+    position = node.get("position") or {}
+    return (
+        1, float(position.get("y") or 0), float(position.get("x") or 0),
+        str(node["id"]) if legacy_id_tiebreak else "",
+    )
 
 
 def validate(

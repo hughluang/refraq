@@ -18,6 +18,7 @@ import {
   ChevronDownIcon,
   FitViewIcon,
   KeyboardIcon,
+  LayoutRowsIcon,
   MinimapIcon,
   NoteIcon,
   RedoIcon,
@@ -88,6 +89,9 @@ export function CanvasToolbar({
   onFocusProblem,
   minZoom,
   maxZoom,
+  onArrange,
+  arrangePending = false,
+  arrangeDisabled = false,
 }: {
   editing: boolean;
   mutable: boolean;
@@ -113,6 +117,9 @@ export function CanvasToolbar({
   onFocusProblem: (problem: GraphProblem) => void;
   minZoom: number;
   maxZoom: number;
+  onArrange?: () => void;
+  arrangePending?: boolean;
+  arrangeDisabled?: boolean;
 }) {
   const t = useTranslate();
   const { zoomIn, zoomOut, zoomTo, fitView } = useReactFlow();
@@ -200,6 +207,7 @@ export function CanvasToolbar({
               <span className="channel-canvas-toolbar__sep" role="separator" />
             </>
           ) : null}
+          {onArrange ? <ToolButton label={t(arrangePending ? "channels.canvas.arranging" : "channels.canvas.arrange")} disabled={arrangePending || arrangeDisabled} onClick={onArrange}><LayoutRowsIcon size={14} /></ToolButton> : null}
           <ToolButton
             label={t("channels.canvas.zoomOut")}
             disabled={atMin}

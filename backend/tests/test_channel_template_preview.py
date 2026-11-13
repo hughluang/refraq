@@ -669,6 +669,48 @@ def _finish(record: Any, **fields: Any) -> Any:
     return record
 
 
+@pytest.mark.parametrize("moved", [False, True])
+def test_sample_and_preview_order_explicit_ancestors_before_legacy(
+    client: TestClient, moved: bool,
+) -> None:
+    graph = {
+        "nodes": [
+            _node("trigger", "trigger", "trigger.manual", 0, {}),
+            {**_node("b", "b", "transform.set_fields", -99 if moved else 1, {"fields": []}), "execution_order": 2},
+            {**_node("a", "a", "transform.set_fields", 99 if moved else 2, {"fields": []}), "execution_order": 2},
+            _node("legacy", "legacy", "transform.set_fields", -100, {"fields": []}),
+            _node("tail", "tail", "transform.set_fields", 3, {"fields": [{"name": "n", "value": "1"}]}),
+        ],
+        "edges": [
+            _edge("trigger", "b"), _edge("trigger", "a"), _edge("trigger", "legacy"),
+            _edge("b", "tail"), _edge("a", "tail"), _edge("legacy", "tail"),
+        ],
+        "settings": {},
+    }
+    channel_id, job_id = _seed(client, graph, name="Priority preview")
+    sample = _sample(client, channel_id, job_id, graph, "tail")
+    assert sample.status_code == 200, sample.text
+    assert [item["node_id"] for item in sample.json()["upstream"]] == ["trigger", "a", "b", "legacy"]
+    preview = _preview(client, channel_id, job_id, graph, "tail", ["fields", 0, "value"])
+    assert preview.status_code == 200, preview.text
+    assert [item["node_id"] for item in preview.json()["bindings"]] == ["trigger", "a", "b", "legacy"]
+
+
+@pytest.mark.parametrize("position", [None, "legacy", [], {"x": "unknown", "y": True}])
+def test_sample_reads_legacy_positions_without_numeric_geometry(
+    client: TestClient, position: Any,
+) -> None:
+    from backend.channel.template_preview import node_sample
+
+    graph = _graph()
+    channel_id, job_id = _seed(client, graph, name="Legacy preview geometry")
+    graph["nodes"][0]["position"] = position
+    sample = node_sample(
+        channel_id=channel_id, job_id=job_id, graph=graph, node_id="nd_read",
+    )
+    assert [item["node_id"] for item in sample["upstream"]] == ["nd_keep", "nd_trigger"]
+
+
 def test_skipped_execution_keeps_output_and_error(client: TestClient) -> None:
     graph = {
         "nodes": [

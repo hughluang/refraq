@@ -1,3 +1,4 @@
+import { materializeExecutionOrder } from "./canvasLayout";
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import type { Graph, GraphEdge, GraphNode, GraphNote, NodeTypeSpec } from "@/features/channels/types";
 import { newGraphId, nodeRef } from "@/features/channels/graphValidation";
@@ -35,7 +36,7 @@ const DUPLICATE_OFFSET = 40;
 
 export function serializeFragment(graph: Graph, selectedNodeIds: Iterable<string>): ChannelFragment {
   const selected = new Set(selectedNodeIds);
-  const nodes = graph.nodes.filter((item) => selected.has(item.id)).map((item) => structuredClone(item));
+  const nodes = materializeExecutionOrder(graph.nodes).filter((item) => selected.has(item.id)).map((item) => structuredClone(item));
   const edges = graph.edges
     .filter((item) => selected.has(item.source.node_id) && selected.has(item.target.node_id))
     .map((item) => structuredClone(item));
@@ -132,6 +133,10 @@ export function pasteFragment(
     accepted.push(copy);
   }
 
+  for (const copy of accepted) {
+    if (copy.parent && idMap.has(copy.parent)) copy.parent = idMap.get(copy.parent)!;
+    else if (copy.parent && !graph.nodes.some((node) => node.id === copy.parent)) delete copy.parent;
+  }
   const notes = fragment.notes.map((source) => ({
     ...structuredClone(source),
     id: newGraphId("nt"),
@@ -151,7 +156,7 @@ export function pasteFragment(
   return { nodes: placed.nodes, edges, notes: placed.notes, skipped };
 }
 
-type Positioned = { position: { x: number; y: number } };
+type Positioned = { position: { x: number; y: number }; parent?: string };
 
 /** Anchor uses one origin for nodes and notes. No anchor shifts each item by the duplicate offset. */
 function placePasted<N extends Positioned, M extends Positioned>(
@@ -166,7 +171,8 @@ function placePasted<N extends Positioned, M extends Positioned>(
       notes: shiftBy(notes, DUPLICATE_OFFSET, DUPLICATE_OFFSET),
     };
   }
-  const origin = boundsOrigin([...nodes, ...notes]);
+  const roots = nodes.filter((node) => !node.parent);
+  const origin = roots.length + notes.length > 0 ? boundsOrigin([...roots, ...notes]) : { x: 0, y: 0 };
   return {
     nodes: shiftBy(nodes, anchor.x - origin.x, anchor.y - origin.y),
     notes: shiftBy(notes, anchor.x - origin.x, anchor.y - origin.y),
@@ -182,7 +188,7 @@ function boundsOrigin(items: readonly Positioned[]): { x: number; y: number } {
 
 function shiftBy<T extends Positioned>(items: T[], dx: number, dy: number): T[] {
   if (items.length === 0) return items;
-  return items.map((item) => ({
+  return items.map((item) => item.parent ? item : ({
     ...item,
     position: { x: item.position.x + dx, y: item.position.y + dy },
   }));
@@ -241,6 +247,14 @@ function parseNode(value: unknown): GraphNode | null {
     on_error: onError,
     retry,
   };
+  if ("execution_order" in value) {
+    if (!Number.isSafeInteger(value.execution_order) || (value.execution_order as number) < 0) return null;
+    node.execution_order = value.execution_order as number;
+  }
+  if ("parent" in value) {
+    if (typeof value.parent !== "string") return null;
+    node.parent = value.parent;
+  }
   if ("type_version" in value) {
     if (typeof value.type_version !== "number") return null;
     node.type_version = value.type_version;

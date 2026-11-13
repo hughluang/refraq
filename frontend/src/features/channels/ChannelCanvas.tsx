@@ -59,6 +59,8 @@ import "./ChannelCanvas.css";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { presentConsoleNotification } from "@/providers/notification-provider";
 import { CanvasToolbar } from "@/features/channels/CanvasToolbar";
+import { layoutGraph } from "./graphLayout";
+import { canvasLayoutNode, materializeExecutionOrder } from "./canvasLayout";
 import { formatShortcutChord, type ShortcutChord } from "@/features/channels/CanvasShortcuts";
 import {
   parseFragment,
@@ -236,6 +238,7 @@ function linkMembers(nodes: readonly CanvasNode[]) {
             parentId: node.parentId,
             position: node.position,
             container: node.data.container,
+            measured: node.measured,
           },
         ]
       : [],
@@ -302,6 +305,7 @@ function settleNote(node: NoteCanvasNode): NoteCanvasNode {
 }
 
 type CanvasSnapshot = {
+  layout?: Graph["layout"];
   nodes: CanvasNode[];
   edges: Edge[];
 };
@@ -589,10 +593,18 @@ function ChannelCanvasBody({
   const [contextMenu, setContextMenu] = useState<CanvasMenuState | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const layoutRef = useRef(graph.layout);
+  const layoutRequest = useRef(0);
+  const editRevision = useRef(0);
+  const historyReplay = useRef(false);
+  const [layoutPending, setLayoutPending] = useState(false);
+  const [layoutRetry, setLayoutRetry] = useState(0);
+  const [layoutError, setLayoutError] = useState(false);
+  const [legacyOrderTies, setLegacyOrderTies] = useState(false);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const historyRef = useRef<History<CanvasSnapshot>>(
-    createHistory(snapshotOf(seededNodes, seededEdges)),
+    createHistory(snapshotOf(seededNodes, seededEdges, graph.layout)),
   );
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const noteEditOrigin = useRef<{ id: string; text: string } | null>(null);
@@ -683,10 +695,22 @@ function ChannelCanvasBody({
       })),
       settingsRef.current,
       nextNodes.filter(isNoteNode).map(flowNoteOf),
+      layoutRef.current,
     );
 
-  const emit = (nextNodes: CanvasNode[], nextEdges: Edge[]) => {
-    onChange(graphOf(nextNodes, nextEdges));
+  const emit = (nextNodes: CanvasNode[], nextEdges: Edge[], restoring = false) => {
+    if (!restoring) historyReplay.current = false;
+    editRevision.current += 1;
+    const graph = graphOf(nextNodes, nextEdges);
+    if (!restoring && graph.nodes.some((node) => node.execution_order !== undefined) && graph.nodes.some((node) => node.execution_order === undefined)) {
+      try { graph.nodes = materializeExecutionOrder(graph.nodes); }
+      catch { restore(historyRef.current.present); setLayoutError(true); return; }
+      const byId = new Map(graph.nodes.map((node) => [node.id, node.execution_order]));
+      const ordered = nextNodes.map((node) => isChannelNode(node) ? { ...node, data: { ...node.data, executionOrder: byId.get(node.id) } } : node);
+      nodesRef.current = ordered;
+      setNodes(ordered);
+    }
+    onChange(graph);
   };
 
   const graphNow = () => graphOf(nodesRef.current, edgesRef.current);
@@ -698,7 +722,7 @@ function ChannelCanvasBody({
   };
 
   const pushSnap = () => {
-    const snap = snapshotOf(nodesRef.current, edgesRef.current);
+    const snap = snapshotOf(nodesRef.current, edgesRef.current, layoutRef.current);
     if (sameSnapshot(historyRef.current.present, snap)) return;
     publishHistory(pushHistory(historyRef.current, snap));
   };
@@ -734,7 +758,7 @@ function ChannelCanvasBody({
   };
 
   const nudgeDirty = () =>
-    !sameSnapshot(historyRef.current.present, snapshotOf(nodesRef.current, edgesRef.current));
+    !sameSnapshot(historyRef.current.present, snapshotOf(nodesRef.current, edgesRef.current, layoutRef.current));
 
   const scheduleNudgeCommit = () => {
     if (nudgeTimer.current != null) window.clearTimeout(nudgeTimer.current);
@@ -749,13 +773,48 @@ function ChannelCanvasBody({
     setCanRedo(!dirty && historyRef.current.future.length > 0);
   };
 
+  const executionPriorities = () => {
+    const current = graphNow().nodes;
+    const seen = new Set<string>();
+    for (const node of current) {
+      if (node.execution_order !== undefined) continue;
+      const key = JSON.stringify([node.parent, node.position.x, node.position.y]);
+      if (seen.has(key)) setLegacyOrderTies(true);
+      seen.add(key);
+    }
+    return new Map(materializeExecutionOrder(current).map((node) => [node.id, node.execution_order]));
+  };
+
+  const prepareGeometryEdit = () => {
+    layoutRequest.current += 1;
+    setLayoutPending(false);
+    let ordered: Map<string, number | undefined>;
+    try { ordered = executionPriorities(); }
+    catch { setLayoutError(true); return false; }
+    nodesRef.current = nodesRef.current.map((node) => isChannelNode(node)
+      ? { ...node, data: { ...node.data, executionOrder: ordered.get(node.id) } }
+      : node);
+    setNodes(nodesRef.current);
+    layoutRef.current = { mode: "manual" };
+    return true;
+  };
+
   const nudgeSelection = (dx: number, dy: number) => {
     if (!nodesRef.current.some((node) => node.selected)) return;
+    if (nodesRef.current.some((node) => node.selected && isChannelNode(node)) && !prepareGeometryEdit()) return;
     const next = nodesRef.current.map((node) =>
       node.selected
         ? { ...node, position: { x: node.position.x + dx, y: node.position.y + dy } }
         : node,
     );
+    const baseline = historyRef.current.present;
+    if (next.every((node) => baseline.nodes.some((prior) => prior.id === node.id && prior.position.x === node.position.x && prior.position.y === node.position.y))) {
+      layoutRef.current = baseline.layout;
+      for (const node of next) {
+        const prior = baseline.nodes.find((item) => item.id === node.id);
+        if (isChannelNode(node) && prior && isChannelNode(prior)) node.data = { ...node.data, executionOrder: prior.data.executionOrder };
+      }
+    }
     nodesRef.current = next;
     setNodes(next);
     emit(next, edgesRef.current);
@@ -763,6 +822,10 @@ function ChannelCanvasBody({
   };
 
   const restore = (snap: CanvasSnapshot) => {
+    historyReplay.current = true;
+    layoutRequest.current += 1;
+    setLayoutPending(false);
+    layoutRef.current = snap.layout;
     cancelOverlayCloseRef.current();
     const painted = paintProblems(snap.nodes, snap.edges);
     nodesRef.current = painted.nodes;
@@ -773,7 +836,7 @@ function ChannelCanvasBody({
     setConfigNodeId(
       painted.nodes.find((node) => node.selected && isChannelNode(node))?.id ?? null,
     );
-    emit(painted.nodes, painted.edges);
+    emit(painted.nodes, painted.edges, true);
   };
 
   const undo = () => {
@@ -797,11 +860,77 @@ function ChannelCanvasBody({
     restore(next.present);
   };
 
+  const layoutTopology = JSON.stringify({
+    nodes: nodes.filter(isChannelNode).map((node) => ({ id: node.id, parent: node.parentId, type: node.data.nodeType, container: node.data.container })),
+    edges: edges.map((edge) => [edge.id, edge.source, edge.target, edge.sourceHandle, edge.targetHandle]),
+  });
+  const layoutMeasurements = JSON.stringify(nodes.filter(isChannelNode).map((node) =>
+    [node.id, node.data.container == null ? node.measured : null]));
+  const layoutReady = nodes.filter(isChannelNode).every((node) => node.measured?.width && node.measured?.height);
+  const latestLayoutState = useRef({ mutable, appearance });
+  latestLayoutState.current = { mutable, appearance };
+
+  const arrange = async (explicit: boolean) => {
+    if (latestLayoutState.current.appearance === "edit" && !latestLayoutState.current.mutable) return;
+    flushNudge();
+    flushCommit();
+    const request = ++layoutRequest.current;
+    const revision = editRevision.current;
+    const before = JSON.stringify(graphNow());
+    const measured = JSON.stringify(nodesRef.current.filter(isChannelNode).map((node) => [node.id, node.data.container == null ? node.measured : null]));
+    const byType = new Map(catalog.map((spec) => [spec.type, spec]));
+    setLayoutPending(true);
+    setLayoutError(false);
+    try {
+      const ordered = executionPriorities();
+      const result = await layoutGraph({
+        nodes: nodesRef.current.filter(isChannelNode).map((node) => {
+          const body = flowRootRef.current?.querySelector(`[data-id="${CSS.escape(node.id)}"] .channel-flow-node__body`);
+          const headerHeight = body instanceof HTMLElement ? body.offsetHeight + 32 : undefined;
+          return canvasLayoutNode(node, byType.get(node.data.nodeType), edgesRef.current.some((edge) => edge.source === node.id && edge.sourceHandle === "error"), headerHeight);
+        }),
+        edges: graphNow().edges,
+      });
+      if (request === layoutRequest.current && revision !== editRevision.current && layoutRef.current?.mode === "auto") setLayoutRetry((value) => value + 1);
+      if (request !== layoutRequest.current || revision !== editRevision.current || before !== JSON.stringify(graphNow()) ||
+        measured !== JSON.stringify(nodesRef.current.filter(isChannelNode).map((node) => [node.id, node.data.container == null ? node.measured : null])) ||
+        (latestLayoutState.current.appearance === "edit" && !latestLayoutState.current.mutable)) return;
+      if (result.status !== "laid-out") { setLayoutError(true); return; }
+      const placements = new Map(result.nodes.map((node) => [node.id, node]));
+      const next = nodesRef.current.map((node) => {
+        if (!isChannelNode(node)) return node;
+        const placed = placements.get(node.id)!;
+        return { ...node, position: placed.position, ...(node.data.container != null ? { style: { ...node.style, width: placed.width, height: placed.height } } : {}), data: { ...node.data, executionOrder: ordered.get(node.id) } };
+      });
+      if (explicit) layoutRef.current = { mode: "manual" };
+      nodesRef.current = next;
+      setNodes(next);
+      if (mutable) {
+        emit(next, edgesRef.current);
+        if (explicit) commitNow();
+        else publishHistory({ ...historyRef.current, present: snapshotOf(nodesRef.current, edgesRef.current, layoutRef.current) });
+      }
+      if (explicit || !initialLayoutDone.current) {
+        requestAnimationFrame(() => { if (request === layoutRequest.current) void fitView({ duration: canvasViewportDuration() }); });
+      }
+      initialLayoutDone.current = true;
+    } catch {
+      if (request === layoutRequest.current) setLayoutError(true);
+    } finally {
+      if (request === layoutRequest.current) setLayoutPending(false);
+    }
+  };
+  const initialLayoutDone = useRef(false);
+  useEffect(() => () => { layoutRequest.current += 1; }, []);
+
   const adoptedToken = useRef(adoptToken);
   useEffect(() => {
     if (adoptedToken.current === adoptToken) return;
     adoptedToken.current = adoptToken;
+    historyReplay.current = false;
     const nextGraph = graph;
+    layoutRequest.current += 1;
+    setLayoutPending(false);
     if (JSON.stringify(graphNow()) === JSON.stringify(nextGraph)) return;
     cancelOverlayCloseRef.current();
     const selectedNodeIds = new Set(
@@ -810,6 +939,7 @@ function ChannelCanvasBody({
     const selectedEdgeIds = new Set(
       edgesRef.current.filter((edge) => edge.selected).map((edge) => edge.id),
     );
+    layoutRef.current = nextGraph.layout;
     const flow = flowFromGraph(nextGraph, triggerTypes, containers);
     const adoptedNodes: CanvasNode[] = [
       ...flow.notes.map((note) => noteCanvasNode(note, selectedNodeIds.has(note.id))),
@@ -839,6 +969,19 @@ function ChannelCanvasBody({
     // returns to that unsaved graph.
     pushSnap();
   }, [adoptToken, triggerTypes, containers, graph]);
+
+  useEffect(() => {
+    if (appearance !== "edit" || mutable) return;
+    layoutRequest.current += 1;
+    setLayoutPending(false);
+  }, [appearance, mutable]);
+
+  useEffect(() => {
+    if (historyReplay.current || layoutRef.current?.mode !== "auto" || !layoutReady) return;
+    void arrange(false);
+    // Coordinates, selection, camera and configuration are not layout triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutTopology, layoutMeasurements, layoutReady, adoptToken, mutable, layoutRetry]);
 
   useEffect(() => {
     if (mutable) return;
@@ -1239,6 +1382,7 @@ function ChannelCanvasBody({
   };
 
   const onNodesChange = (changes: NodeChange<CanvasNode>[]) => {
+    if (mutable && changes.some((change) => change.type === "position" && change.position != null && nodesRef.current.some((node) => node.id === change.id && isChannelNode(node))) && !prepareGeometryEdit()) return;
     const next = applyNodeChanges(changes, nodesRef.current).map((node) =>
       isNoteNode(node) ? settleNote(node) : node,
     );
@@ -1319,6 +1463,7 @@ function ChannelCanvasBody({
   ) => {
     const ids = dragged.flatMap((node) => (isChannelNode(node) ? [node.id] : []));
     if (ids.length === 0) return;
+    if (!prepareGeometryEdit()) return;
     const gesture = { ids, frozen: freezeFrames(linkMembers(nodesRef.current)) };
     dragRef.current = gesture;
     setDrag(gesture);
@@ -1356,7 +1501,7 @@ function ChannelCanvasBody({
     setNodes(nextNodes);
     setEdges(nextEdges);
     emit(nextNodes, nextEdges);
-    commitNow();
+    scheduleCommit();
   };
 
   const onConnect = (connection: Connection) => {
@@ -2390,6 +2535,9 @@ function ChannelCanvasBody({
               editing={appearance === "edit"}
               mutable={mutable}
               canUndo={canUndo}
+              onArrange={() => { void arrange(true); }}
+              arrangePending={layoutPending}
+              arrangeDisabled={!layoutReady || (appearance === "edit" && !mutable)}
               canRedo={canRedo}
               addExpanded={picker?.fromAdd ?? false}
               onAdd={openToolbarPicker}
@@ -2419,6 +2567,8 @@ function ChannelCanvasBody({
               maxZoom={CANVAS_MAX_ZOOM}
             />
           </ReactFlow>
+          {legacyOrderTies ? <Text role="status" className="channel-canvas-clipboard-note" size="sm">{t("channels.canvas.legacyOrderTies")}</Text> : null}
+          {layoutError ? <Text role="alert" className="channel-canvas-clipboard-note" size="sm">{t("channels.canvas.arrangeFailed")}</Text> : null}
           {connectNote ? (
             <Text
               className="channel-canvas-connect-note"
@@ -2774,8 +2924,9 @@ function ChannelCanvasBody({
 
 }
 
-function snapshotOf(nodes: CanvasNode[], edges: Edge[]): CanvasSnapshot {
+function snapshotOf(nodes: CanvasNode[], edges: Edge[], layout?: Graph["layout"]): CanvasSnapshot {
   return {
+    layout,
     nodes: nodes.map((node) =>
       isNoteNode(node)
         ? {
@@ -2813,6 +2964,7 @@ function sameSnapshot(left: CanvasSnapshot, right: CanvasSnapshot): boolean {
 
 function structural(snap: CanvasSnapshot) {
   return {
+    layout: snap.layout,
     nodes: snap.nodes.map((node) =>
       isNoteNode(node)
         ? {
@@ -2828,6 +2980,7 @@ function structural(snap: CanvasSnapshot) {
             x: node.position.x,
             y: node.position.y,
             type: node.data.nodeType,
+            executionOrder: node.data.executionOrder,
             name: node.data.name,
             config: node.data.config,
             onError: node.data.onError,

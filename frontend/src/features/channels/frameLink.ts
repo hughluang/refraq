@@ -17,6 +17,7 @@ export type LinkMember = {
   position: { x: number; y: number };
   /** Copied from flow node data. `null` is not a Container. */
   container: ContainerDeclaration | null;
+  measured?: { width?: number; height?: number };
 };
 
 export type LinkEdge = {

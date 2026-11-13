@@ -148,6 +148,50 @@ def test_branch_finishes_before_the_next_sibling() -> None:
     assert hooks.order == ["a", "b", "d", "c"]
 
 
+@pytest.mark.parametrize("inside_container", [False, True])
+@pytest.mark.parametrize("moved", [False, True])
+def test_explicit_priority_is_geometry_independent_and_legacy_nodes_follow(
+    inside_container: bool, moved: bool,
+) -> None:
+    parent = "walk" if inside_container else None
+    nodes = [_node("entry", 0)]
+    edges = []
+    source = "entry"
+    catalog = _catalog({"fake": _ok})
+    if inside_container:
+        walk = _node("walk", 0, type_id="volume.for")
+        walk["config"] = {"items": "[1, 2]"}
+        nodes.append(walk)
+        edges.append(_edge("entry", "walk"))
+        source = "walk"
+        catalog.append(_for_type())
+    siblings = [
+        {**_node("z", -10 if moved else 30, parent=parent), "execution_order": 4},
+        {**_node("b", 99 if moved else 20, parent=parent), "execution_order": 1},
+        {**_node("a", 100 if moved else 10, parent=parent), "execution_order": 1},
+        _node("legacy_last", -1, parent=parent),
+        _node("legacy_first", -2, parent=parent),
+    ]
+    nodes.extend(siblings)
+    edges.extend(_edge(source, node["id"], "each" if inside_container else "main") for node in siblings)
+    hooks = FakeHooks()
+    outcome = execute({"nodes": nodes, "edges": edges, "settings": {}}, "entry", catalog, _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    order = ["a", "b", "z", "legacy_first", "legacy_last"]
+    assert hooks.order == (["entry", "walk", *order, *order] if inside_container else ["entry", *order])
+
+
+def test_legacy_equal_positions_keep_existing_stack_order() -> None:
+    graph = {
+        "nodes": [_node("entry", 0), _node("z", 0), _node("a", 0)],
+        "edges": [_edge("entry", "z"), _edge("entry", "a")],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    execute(graph, "entry", _catalog({"fake": _ok}), _RESOLVER, hooks)
+    assert hooks.order == ["entry", "a", "z"]
+
+
 def test_stop_failure_does_not_run_downstream() -> None:
     def fail(node: dict, hooks: EngineHooks) -> NodeResult:
         if node["id"] == "b":

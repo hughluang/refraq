@@ -168,6 +168,122 @@ def _stop_at_ignores_errors_outside_the_closure(client: TestClient) -> None:
     assert body["problems"]
 
 
+def test_auto_graph_materializes_positions_and_submission_priorities(client: TestClient) -> None:
+    created = client.post("/channels", json={"name": "Automatic"})
+    channel_id = created.json()["channel"]["id"]
+    nodes = [
+        {**TRIGGER_GRAPH["nodes"][0], "id": node_id, "ref": node_id, "name": node_id}
+        for node_id in ("trigger", "first", "last")
+    ]
+    for node in nodes:
+        node.pop("position")
+    nodes[1]["execution_order"] = 9
+    nodes[2]["position"] = {"x": 41, "y": 12}
+    graph = {**TRIGGER_GRAPH, "nodes": nodes, "layout": {"mode": "auto"}}
+    saved = client.put(f"/channels/{channel_id}/draft", json={"base_revision": 1, "graph": graph})
+    assert saved.status_code == 200, saved.text
+    stored = saved.json()["graph"]
+    assert stored["layout"] == {"mode": "auto"}
+    assert [node["execution_order"] for node in stored["nodes"]] == [0, 9, 2]
+    assert [node["position"] for node in stored["nodes"]] == [
+        {"x": 0, "y": 0}, {"x": 0, "y": 0}, {"x": 41, "y": 12},
+    ]
+    assert client.get(f"/channels/{channel_id}/draft").json()["graph"] == stored
+    checked = client.post(f"/channels/{channel_id}/draft/validate", json={"graph": graph})
+    assert checked.status_code == 200, checked.text
+
+
+@pytest.mark.parametrize("layout", [None, {"mode": "manual"}])
+def test_manual_graph_requires_position(client: TestClient, layout: dict | None) -> None:
+    channel_id = client.post("/channels", json={"name": "Manual"}).json()["channel"]["id"]
+    graph = {**TRIGGER_GRAPH, "nodes": [{k: v for k, v in TRIGGER_GRAPH["nodes"][0].items() if k != "position"}]}
+    if layout is not None:
+        graph["layout"] = layout
+    response = client.put(f"/channels/{channel_id}/draft", json={"base_revision": 1, "graph": graph})
+    assert_problem(response, status=422, code="REQUEST_INVALID")
+
+
+@pytest.mark.parametrize("order", [-1, 1.5, True, "2", None, 9_007_199_254_740_992])
+def test_execution_order_requires_a_non_negative_integer(client: TestClient, order: object) -> None:
+    channel_id = client.post("/channels", json={"name": "Priority"}).json()["channel"]["id"]
+    graph = {**TRIGGER_GRAPH, "nodes": [{**TRIGGER_GRAPH["nodes"][0], "execution_order": order}]}
+    response = client.put(f"/channels/{channel_id}/draft", json={"base_revision": 1, "graph": graph})
+    assert_problem(response, status=422, code="REQUEST_INVALID")
+
+
+@pytest.mark.parametrize("order", [0, 9_007_199_254_740_991])
+def test_execution_order_exact_integer_boundary_round_trips(client: TestClient, order: int) -> None:
+    channel_id = client.post("/channels", json={"name": "Priority boundary"}).json()["channel"]["id"]
+    graph = {**TRIGGER_GRAPH, "nodes": [{**TRIGGER_GRAPH["nodes"][0], "execution_order": order}]}
+    response = client.put(f"/channels/{channel_id}/draft", json={"base_revision": 1, "graph": graph})
+    assert response.status_code == 200, response.text
+    assert response.json()["graph"]["nodes"][0]["execution_order"] == order
+
+
+@pytest.mark.parametrize("layout", [None, {"mode": "manual"}])
+def test_manual_and_legacy_metadata_round_trip_without_synthesis(client: TestClient, layout: dict | None) -> None:
+    channel_id = client.post("/channels", json={"name": "Legacy"}).json()["channel"]["id"]
+    graph = {**TRIGGER_GRAPH}
+    if layout is not None:
+        graph["layout"] = layout
+    saved = client.put(f"/channels/{channel_id}/draft", json={"base_revision": 1, "graph": graph})
+    assert saved.status_code == 200, saved.text
+    stored = saved.json()["graph"]
+    assert "execution_order" not in stored["nodes"][0]
+    assert stored.get("layout") == layout
+    if layout is None:
+        assert "layout" not in stored
+    published = client.post(f"/channels/{channel_id}/publish", json={"draft_revision": 2})
+    assert published.status_code == 201, published.text
+    assert published.json()["version"]["graph"] == stored
+    assert client.get(f"/channels/{channel_id}/versions/1").json()["version"]["graph"] == stored
+    again = client.put(f"/channels/{channel_id}/draft", json={"base_revision": 2, "graph": stored})
+    assert again.status_code == 200, again.text
+    assert again.json()["graph"] == stored
+
+
+@pytest.mark.parametrize("coordinate", [float("inf"), float("nan")])
+def test_auto_graph_rejects_non_finite_positions(coordinate: float) -> None:
+    from pydantic import ValidationError
+    from backend.channel.schemas.channels import GraphIn
+
+    graph = {
+        **TRIGGER_GRAPH,
+        "layout": {"mode": "auto"},
+        "nodes": [{**TRIGGER_GRAPH["nodes"][0], "position": {"x": coordinate, "y": 0}}],
+    }
+    with pytest.raises(ValidationError):
+        GraphIn.model_validate(graph)
+
+
+@pytest.mark.parametrize("layout", [None, {}, {"mode": "other"}, {"mode": "auto", "extra": True}])
+def test_layout_requires_only_a_known_mode(client: TestClient, layout: object) -> None:
+    channel_id = client.post("/channels", json={"name": "Layout shape"}).json()["channel"]["id"]
+    response = client.put(
+        f"/channels/{channel_id}/draft",
+        json={"base_revision": 1, "graph": {**TRIGGER_GRAPH, "layout": layout}},
+    )
+    assert_problem(response, status=422, code="REQUEST_INVALID")
+
+
+def test_auto_publish_keeps_intent_and_explicit_priority_immutable(client: TestClient) -> None:
+    channel_id = client.post("/channels", json={"name": "Auto snapshot"}).json()["channel"]["id"]
+    node = {k: v for k, v in TRIGGER_GRAPH["nodes"][0].items() if k != "position"}
+    node["execution_order"] = 0
+    graph = {**TRIGGER_GRAPH, "nodes": [node], "layout": {"mode": "auto"}}
+    saved = client.put(f"/channels/{channel_id}/draft", json={"base_revision": 1, "graph": graph})
+    assert saved.status_code == 200, saved.text
+    snapshot = saved.json()["graph"]
+    published = client.post(f"/channels/{channel_id}/publish", json={"draft_revision": 2})
+    assert published.status_code == 201, published.text
+    assert published.json()["version"]["graph"] == snapshot
+    edited = {**snapshot, "layout": {"mode": "manual"}, "nodes": [{**snapshot["nodes"][0], "execution_order": 7}]}
+    again = client.put(f"/channels/{channel_id}/draft", json={"base_revision": 2, "graph": edited})
+    assert again.status_code == 200, again.text
+    assert again.json()["graph"] == edited
+    assert client.get(f"/channels/{channel_id}/versions/1").json()["version"]["graph"] == snapshot
+
+
 def test_create_rejects_unknown_fields(client: TestClient) -> None:
     response = client.post(
         "/channels", json={"name": "Material", "description": None, "active": True}

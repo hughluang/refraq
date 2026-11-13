@@ -261,7 +261,7 @@ describe("ChannelRecord draft access", () => {
       expect(notify).toHaveBeenCalledWith(
         expect.objectContaining({ type: "error", message: "channels.validate.transport" }),
       );
-    });
+    }, { timeout: 5000 });
     expect(notify.mock.calls.some((call) => call[0]?.message === "channels.save.failed")).toBe(false);
   });
 

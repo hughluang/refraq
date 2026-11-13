@@ -2,9 +2,9 @@
 
 Edges order nodes and select a branch. They do not carry items. A node runs
 when every incoming edge in scope has settled and at least one is live. A node
-whose incoming edges are all dead does not run. Among ready siblings, the
-smaller canvas y, then x, is explored first, and that branch finishes before
-the next sibling.
+whose incoming edges are all dead does not run. Explicit execution priority
+orders ready siblings before legacy canvas y/x ordering, and each branch
+finishes before the next sibling.
 
 A container is a node type that declares one. Its body is the nodes whose
 parent is that container. The container runs its own rounds through the body
@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from backend.channel.graph import ancestor_closure, refine_ports
+from backend.channel.graph import ancestor_closure, execution_sort_key, refine_ports
 from backend.channel.node_support import (
     InputCapture,
     bind_execution_input,
@@ -424,8 +424,8 @@ class _Run:
         self.produced[node_id] = result.output
         self.ran_stack[-1].add(node_id)
 
-    def _position(self, node_id: str) -> tuple[float, float]:
-        return _position(self.nodes[node_id])
+    def _position(self, node_id: str) -> tuple[int, float, float, str]:
+        return execution_sort_key(self.nodes[node_id])
 
 
 _BODY_STOP_CODE = "CHANNEL_LOOP_BODY_STOPPED"
@@ -626,8 +626,6 @@ def _child_index(
         if source in nodes and target in nodes:
             children[source].append(target)
             parents[target].append(source)
-    for kids in children.values():
-        kids.sort(key=lambda item: _position(nodes[item]))
     return children, parents
 
 
@@ -669,8 +667,3 @@ def _declares_error(spec: NodeType | None) -> bool:
     if spec is None:
         return False
     return any(port.port == "error" for port in spec.outputs)
-
-
-def _position(node: Mapping[str, Any]) -> tuple[float, float]:
-    position = node.get("position") or {}
-    return (float(position.get("y") or 0), float(position.get("x") or 0))

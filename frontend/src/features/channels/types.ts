@@ -12,6 +12,7 @@ export type GraphNode = {
   on_error: "stop" | "continue" | "error_output";
   retry: { max_tries: number; wait_sec: number } | null;
   type_version?: number;
+  execution_order?: number;
 };
 
 export type GraphEdge = {
@@ -39,6 +40,7 @@ export type GraphSettings = {
 };
 
 export type Graph = {
+  layout?: { mode: "auto" | "manual" };
   nodes: GraphNode[];
   edges: GraphEdge[];
   settings: GraphSettings;
