@@ -5,12 +5,16 @@ from __future__ import annotations
 import threading
 from dataclasses import replace
 from functools import lru_cache
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
+from backend.admin.model_services import get_embedding_runtime, mark_embedding_ready
 from backend.admin.model_services.records import CatalogIndexView
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.metadata.models import CatalogIndexStateRow
+
+if TYPE_CHECKING:
+    from backend.metadata.catalog.index_embeddings import EmbeddingRefreshCounts
 
 CATALOG_INDEX_ID = "catalog"
 
@@ -109,32 +113,48 @@ def reset_catalog_index_store() -> None:
     get_catalog_index_store.cache_clear()
 
 
-def publish_catalog_index(
+def publish_catalog_readiness(
     *,
+    service_id: str,
     generation: int,
-    objects_written: int = 0,
-    columns_written: int = 0,
-    objects_failed: int = 0,
-    columns_failed: int = 0,
-    objects_attempted: int = 0,
-    columns_attempted: int = 0,
+    control_revision: int,
+    counts: EmbeddingRefreshCounts,
     progress: str | None = None,
     failure_summary: str | None = None,
-) -> CatalogIndexView:
-    state = CatalogIndexView(
-        ready=True,
-        generation_last_swept=generation,
-        objects_written=objects_written,
-        columns_written=columns_written,
-        objects_failed=objects_failed,
-        columns_failed=columns_failed,
-        objects_attempted=objects_attempted,
-        columns_attempted=columns_attempted,
-        progress=progress,
-        failure_summary=failure_summary,
-        rebuild_owed=False,
+) -> bool:
+    live = get_embedding_runtime()
+    if (
+        live is None
+        or live.service_id != service_id
+        or live.generation != generation
+        or live.control_revision != control_revision
+    ):
+        return False
+
+    def publish() -> None:
+        get_catalog_index_store().save(
+            CatalogIndexView(
+                ready=True,
+                generation_last_swept=generation,
+                objects_written=counts.objects_written,
+                columns_written=counts.columns_written,
+                objects_failed=counts.objects_failed,
+                columns_failed=counts.columns_failed,
+                objects_attempted=counts.objects_attempted,
+                columns_attempted=counts.columns_attempted,
+                progress=progress,
+                failure_summary=failure_summary,
+                rebuild_owed=False,
+            )
+        )
+
+    return mark_embedding_ready(
+        purpose="embedding",
+        service_id=service_id,
+        generation=generation,
+        control_revision=control_revision,
+        publish=publish,
     )
-    return get_catalog_index_store().save(state)
 
 
 def clear_catalog_index_ready(*, rebuild_owed: bool) -> CatalogIndexView:

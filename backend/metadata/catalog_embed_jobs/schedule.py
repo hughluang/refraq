@@ -25,7 +25,6 @@ from backend.jobs.store import (
     get_job_store,
     mark_cancelled,
 )
-from backend.metadata.catalog_embed_jobs.jobs import CATALOG_EMBED_KIND
 from backend.metadata.source_jobs import dispatch_queued_job
 from backend.worker.api import current_schedule_timezone, initial_next_run_at
 from backend.worker.due import commit_due_mint, consume_due_tick
@@ -33,6 +32,7 @@ from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 
 logger = logging.getLogger(__name__)
 
+CATALOG_EMBED_KIND = "catalog_embed"
 CATALOG_EMBED_SCHEDULE_KEY = "catalog_embed:site"
 CATALOG_EMBED_OWNER_REF = "admin:model_services:embedding"
 CATALOG_EMBED_ENQUEUE_TASK_NAME = (

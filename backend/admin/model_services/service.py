@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 
 from backend.admin.audit import persist_audit_event
@@ -235,36 +236,18 @@ def mark_embedding_ready(
     purpose: str,
     service_id: str,
     generation: int,
-    control_revision: int | None = None,
-    objects_written: int = 0,
-    columns_written: int = 0,
-    objects_failed: int = 0,
-    columns_failed: int = 0,
-    objects_attempted: int = 0,
-    columns_attempted: int = 0,
-    progress: str | None = None,
-    failure_summary: str | None = None,
+    control_revision: int,
+    publish: Callable[[], None],
 ) -> bool:
     store = get_model_service_store()
     state = store.get_purpose(purpose)
-    if state.in_use_id != service_id or state.generation != generation:
-        return False
     if (
-        control_revision is not None
-        and state.control_revision != control_revision
+        state.in_use_id != service_id
+        or state.generation != generation
+        or state.control_revision != control_revision
     ):
         return False
-    catalog_embed_jobs().publish_index(
-        generation=generation,
-        objects_written=objects_written,
-        columns_written=columns_written,
-        objects_failed=objects_failed,
-        columns_failed=columns_failed,
-        objects_attempted=objects_attempted,
-        columns_attempted=columns_attempted,
-        progress=progress,
-        failure_summary=failure_summary,
-    )
+    publish()
     store.save_purpose(replace(state, ready=True))
     return True
 

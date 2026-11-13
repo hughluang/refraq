@@ -22,7 +22,6 @@ from backend.admin.model_services import (  # noqa: E402
     bind_catalog_embed_jobs,
     bind_entity_embed_jobs,
     get_embedding_runtime,
-    mark_embedding_ready,
 )
 from backend.admin.model_services.records import (  # noqa: E402
     CURRENT_PROCESSING_CONTRACT,
@@ -61,7 +60,11 @@ from backend.metadata.catalog.embedding import (  # noqa: E402
     embedding_configured,
     set_embed_fn_for_tests,
 )
-from backend.metadata.catalog.index_state import get_catalog_index_store  # noqa: E402
+from backend.metadata.catalog.index_embeddings import EmbeddingRefreshCounts  # noqa: E402
+from backend.metadata.catalog.index_state import (  # noqa: E402
+    get_catalog_index_store,
+    publish_catalog_readiness,
+)
 from backend.metadata.catalog.store import get_catalog_store  # noqa: E402
 from backend.metadata.catalog_embed_jobs import (  # noqa: E402
     CatalogEmbedJobs,
@@ -113,11 +116,11 @@ def _create(*, name: str = "Office embed", model: str = "qwen-test") -> str:
 def _publish_both() -> None:
     runtime = get_embedding_runtime()
     assert runtime is not None
-    assert mark_embedding_ready(
-        purpose="embedding",
+    assert publish_catalog_readiness(
         service_id=runtime.service_id,
         generation=runtime.generation,
         control_revision=runtime.control_revision,
+        counts=EmbeddingRefreshCounts(),
     )
     assert publish_entity_index(
         generation=runtime.generation,
@@ -544,7 +547,13 @@ def test_catalog_and_entity_rebuilds_do_not_wait_for_each_other() -> None:
     assert get_catalog_index_store().get().ready is True
 
 
-def test_stale_generation_or_control_revision_cannot_publish_either_ready_bit() -> None:
+@pytest.mark.parametrize(
+    "service_id,generation,revision",
+    [("stale_service", 1, 4), ("msvc_cross", 0, 4), ("msvc_cross", 1, 3)],
+)
+def test_stale_fence_cannot_publish_either_ready_bit(
+    service_id: str, generation: int, revision: int,
+) -> None:
     now = utc_now()
     store = get_model_service_store()
     store.save(
@@ -572,15 +581,12 @@ def test_stale_generation_or_control_revision_cannot_publish_either_ready_bit() 
             processing_contract=CURRENT_PROCESSING_CONTRACT,
         )
     )
-    assert (
-        mark_embedding_ready(
-            purpose="embedding",
-            service_id="msvc_cross",
-            generation=0,
-            control_revision=4,
-        )
-        is False
-    )
+    assert publish_catalog_readiness(
+        service_id=service_id,
+        generation=generation,
+        control_revision=revision,
+        counts=EmbeddingRefreshCounts(),
+    ) is False
     assert (
         publish_entity_index(
             generation=0,
@@ -592,8 +598,8 @@ def test_stale_generation_or_control_revision_cannot_publish_either_ready_bit() 
         is False
     )
     assert (
-        mark_embedding_ready(
-            purpose="embedding",
+        publish_catalog_readiness(
+            counts=EmbeddingRefreshCounts(),
             service_id="msvc_cross",
             generation=1,
             control_revision=3,
@@ -613,14 +619,16 @@ def test_stale_generation_or_control_revision_cannot_publish_either_ready_bit() 
     assert get_catalog_index_store().get().ready is False
     assert EntityEmbedJobs().index_view().ready is False
 
-    assert mark_embedding_ready(
-        purpose="embedding",
+    assert publish_catalog_readiness(
+        counts=EmbeddingRefreshCounts(),
         service_id="msvc_cross",
         generation=1,
         control_revision=4,
     )
     assert get_catalog_index_store().get().ready is True
     assert EntityEmbedJobs().index_view().ready is False
+    state = store.get_purpose("embedding")
+    store.save_purpose(replace(state, ready=False))
     assert publish_entity_index(
         generation=1,
         control_revision=4,
@@ -628,6 +636,7 @@ def test_stale_generation_or_control_revision_cannot_publish_either_ready_bit() 
         failed=0,
         attempted=1,
     )
+    assert store.get_purpose("embedding").ready is False
     state = store.get_purpose("embedding")
     store.save_purpose(replace(state, control_revision=5))
     from backend.metadata.catalog.index_state import clear_catalog_index_ready
@@ -636,8 +645,8 @@ def test_stale_generation_or_control_revision_cannot_publish_either_ready_bit() 
     clear_catalog_index_ready(rebuild_owed=False)
     clear_entity_index_ready(rebuild_owed=False)
     assert (
-        mark_embedding_ready(
-            purpose="embedding",
+        publish_catalog_readiness(
+            counts=EmbeddingRefreshCounts(),
             service_id="msvc_cross",
             generation=1,
             control_revision=4,

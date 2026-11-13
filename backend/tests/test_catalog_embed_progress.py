@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
+from backend.admin.model_services import get_embedding_runtime, mark_embedding_ready
+from backend.metadata.catalog.index_state import (
+    get_catalog_index_store,
+    note_catalog_index_failure,
+    publish_catalog_readiness,
+)
+
 from backend.admin.model_services.records import ModelServiceRecord, PurposeState
 from backend.admin.model_services.store import get_model_service_store
 from backend.core.time import utc_now
@@ -254,6 +265,258 @@ def _run_embed(*, embed_fn) -> object:
     assert record is not None
     set_embed_fn_for_tests(None)
     return record
+
+
+@pytest.mark.parametrize("field", ["in_use_id", "generation", "control_revision"])
+def test_shared_fence_rejection_does_not_execute_callback(monkeypatch, field) -> None:
+    _seed_embedding_runtime()
+    store = get_model_service_store()
+    state = store.get_purpose("embedding")
+    stale = replace(state, **{field: "other_service" if field == "in_use_id" else 99})
+    store.save_purpose(stale)
+    callbacks = []
+    writes = []
+    monkeypatch.setattr(store, "save_purpose", writes.append)
+    assert mark_embedding_ready(
+        purpose="embedding", service_id="msvc_test", generation=state.generation,
+        control_revision=state.control_revision, publish=lambda: callbacks.append(True),
+    ) is False
+    assert callbacks == []
+    assert writes == []
+    assert store.get_purpose("embedding") == stale
+
+
+def test_catalog_publication_without_runtime_does_not_write(monkeypatch) -> None:
+    before = get_catalog_index_store().get()
+    writes = []
+    monkeypatch.setattr(get_catalog_index_store(), "save", writes.append)
+    monkeypatch.setattr(get_model_service_store(), "save_purpose", writes.append)
+    assert get_embedding_runtime() is None
+    assert publish_catalog_readiness(
+        service_id="missing", generation=1, control_revision=1,
+        counts=EmbeddingRefreshCounts(objects_written=1),
+    ) is False
+    assert writes == []
+    assert get_catalog_index_store().get() == before
+
+
+@pytest.mark.parametrize("purpose_fails", [False, True])
+def test_catalog_publication_precedes_purpose_and_does_not_roll_back(
+    monkeypatch, purpose_fails,
+) -> None:
+    _seed_embedding_runtime()
+    store = get_model_service_store()
+    state = store.get_purpose("embedding")
+    index = get_catalog_index_store()
+    index.save(replace(index.get(), rebuild_owed=True))
+    events = []
+    save_catalog = index.save
+    save_purpose = store.save_purpose
+
+    def catalog_save(value):
+        assert store.get_purpose("embedding").ready is False
+        events.append("catalog")
+        return save_catalog(value)
+
+    def purpose_save(value):
+        assert index.get().ready is True
+        assert index.get().rebuild_owed is False
+        events.append("purpose")
+        if purpose_fails:
+            raise RuntimeError("purpose save failed")
+        return save_purpose(value)
+
+    monkeypatch.setattr(index, "save", catalog_save)
+    monkeypatch.setattr(store, "save_purpose", purpose_save)
+    kwargs = dict(
+        service_id="msvc_test", generation=1, control_revision=state.control_revision,
+        counts=EmbeddingRefreshCounts(
+            objects_written=2, columns_written=3, objects_failed=4, columns_failed=5,
+            objects_attempted=6, columns_attempted=8,
+        ),
+        progress="partial sweep", failure_summary="some rows failed",
+    )
+    if purpose_fails:
+        with pytest.raises(RuntimeError, match="purpose save failed"):
+            publish_catalog_readiness(**kwargs)
+    else:
+        assert publish_catalog_readiness(**kwargs) is True
+    assert events == ["catalog", "purpose"]
+    saved = index.get()
+    assert saved.ready is True
+    assert saved.generation_last_swept == 1
+    assert (saved.objects_written, saved.columns_written) == (2, 3)
+    assert (saved.objects_failed, saved.columns_failed) == (4, 5)
+    assert (saved.objects_attempted, saved.columns_attempted) == (6, 8)
+    assert saved.progress == "partial sweep"
+    assert saved.failure_summary == "some rows failed"
+    assert saved.rebuild_owed is False
+    assert store.get_purpose("embedding").ready is (not purpose_fails)
+
+
+@pytest.mark.parametrize("ready", [False, True])
+@pytest.mark.parametrize("rebuild_owed", [False, True])
+def test_failure_note_preserves_readiness_generation_and_rebuild_intent(
+    ready, rebuild_owed,
+) -> None:
+    index = get_catalog_index_store()
+    index.save(replace(index.get(), ready=ready, generation_last_swept=7,
+                       rebuild_owed=rebuild_owed))
+    saved = note_catalog_index_failure(
+        failure_summary="deadline exceeded", objects_written=1, columns_written=2,
+        objects_failed=3, columns_failed=4, objects_attempted=4, columns_attempted=6,
+    )
+    assert saved.ready is ready
+    assert saved.generation_last_swept == 7
+    assert saved.rebuild_owed is rebuild_owed
+    assert (saved.objects_written, saved.columns_written) == (1, 2)
+    assert (saved.objects_failed, saved.columns_failed) == (3, 4)
+    assert (saved.objects_attempted, saved.columns_attempted) == (4, 6)
+    assert saved.progress == saved.failure_summary == "deadline exceeded"
+
+
+def test_runner_completes_job_only_after_both_readiness_writes(monkeypatch) -> None:
+    _seed_embedding_runtime()
+    store = get_model_service_store()
+    original = store.save_purpose
+    job = create_queued_job(kind="catalog_embed", input={})
+    events = []
+
+    def save_purpose(state):
+        assert get_catalog_index_store().get().ready is True
+        assert get_job_store().get(job.id).status == "running"
+        events.append("purpose")
+        return original(state)
+
+    monkeypatch.setattr(store, "save_purpose", save_purpose)
+    assert run_catalog_embed_job(job.id)["status"] == "succeeded"
+    assert events == ["purpose"]
+    assert get_job_store().get(job.id).status == "succeeded"
+
+
+def test_runner_catalog_save_error_does_not_record_failure_note(monkeypatch) -> None:
+    _seed_embedding_runtime()
+    index = get_catalog_index_store()
+    before = index.get()
+    saves = []
+
+    def fail_save(state):
+        saves.append(state)
+        raise RuntimeError("catalog save failed")
+
+    monkeypatch.setattr(index, "save", fail_save)
+    job = create_queued_job(kind="catalog_embed", input={})
+    assert run_catalog_embed_job(job.id)["status"] == "failed"
+    assert len(saves) == 1
+    assert saves[0].ready is True
+    assert index.get() == before
+    assert get_model_service_store().get_purpose("embedding").ready is False
+    assert get_job_store().get(job.id).error_summary == "catalog save failed"
+
+
+@pytest.mark.parametrize("change", ["service", "generation", "revision", "missing"])
+def test_catalog_stale_runtime_does_not_execute_publication(monkeypatch, change) -> None:
+    _seed_embedding_runtime()
+    runtime = get_embedding_runtime()
+    assert runtime is not None
+    store = get_model_service_store()
+    state = store.get_purpose("embedding")
+    if change == "missing":
+        store.delete("msvc_test")
+    else:
+        field = {"service": "in_use_id", "generation": "generation",
+                 "revision": "control_revision"}[change]
+        store.save_purpose(replace(state, **{
+            field: "other_service" if change == "service" else 99,
+        }))
+    writes = []
+    monkeypatch.setattr(get_catalog_index_store(), "save", writes.append)
+    monkeypatch.setattr(store, "save_purpose", writes.append)
+    assert publish_catalog_readiness(
+        service_id=runtime.service_id, generation=runtime.generation,
+        control_revision=runtime.control_revision, counts=EmbeddingRefreshCounts(),
+    ) is False
+    assert writes == []
+    assert get_catalog_index_store().get().ready is False
+    assert store.get_purpose("embedding").ready is False
+
+
+@pytest.mark.parametrize("repeat", [False, True])
+def test_generation_restart_and_limit_keep_existing_outcomes(monkeypatch, repeat) -> None:
+    _seed_embedding_runtime()
+    _seed_source(object_count=1, columns_per_object=0)
+    calls = []
+
+    def refresh(source_id, *, progress, should_stop):
+        calls.append(source_id)
+        if repeat or len(calls) == 1:
+            store = get_model_service_store()
+            state = store.get_purpose("embedding")
+            store.save_purpose(replace(state, generation=state.generation + 1))
+            assert should_stop(EmbeddingRefreshCounts()) is True
+        return EmbeddingRefreshCounts(objects_skipped=1)
+
+    monkeypatch.setattr(
+        "backend.metadata.catalog_embed_jobs.runner.refresh_source_embeddings", refresh,
+    )
+    job = create_queued_job(kind="catalog_embed", input={})
+    assert run_catalog_embed_job(job.id)["status"] == "succeeded"
+    record = get_job_store().get(job.id)
+    if repeat:
+        assert len(calls) == 9
+        assert record.result["reason"] == "generation_changed"
+        assert get_catalog_index_store().get().ready is False
+        assert get_model_service_store().get_purpose("embedding").ready is False
+    else:
+        assert len(calls) == 2
+        assert record.result["outcome"] == "completed"
+        assert record.result["objects_skipped"] == 1
+        assert get_catalog_index_store().get().generation_last_swept == 2
+        assert get_catalog_index_store().get().ready is True
+
+
+def test_timeout_equal_to_writes_still_publishes_catalog(monkeypatch) -> None:
+    _seed_embedding_runtime()
+    _seed_source(object_count=1, columns_per_object=0)
+
+    def refresh(source_id, *, progress, should_stop):
+        counts = EmbeddingRefreshCounts(
+            objects_written=1, columns_failed=1, objects_attempted=1,
+            columns_attempted=1, timeout_failed=1,
+        )
+        assert should_stop(counts) is False
+        return counts
+
+    monkeypatch.setattr(
+        "backend.metadata.catalog_embed_jobs.runner.refresh_source_embeddings", refresh,
+    )
+    job = create_queued_job(kind="catalog_embed", input={})
+    assert run_catalog_embed_job(job.id)["status"] == "succeeded"
+    assert get_catalog_index_store().get().ready is True
+    assert get_model_service_store().get_purpose("embedding").ready is True
+
+
+def test_all_current_rows_skipped_can_publish_ready() -> None:
+    _seed_embedding_runtime()
+    _seed_source(object_count=1, columns_per_object=1)
+    set_embed_fn_for_tests(lambda texts: [[1.0, 0.0] for _ in texts])
+    try:
+        first = create_queued_job(kind="catalog_embed", input={})
+        assert run_catalog_embed_job(first.id)["status"] == "succeeded"
+        index = get_catalog_index_store()
+        index.save(replace(index.get(), ready=False, rebuild_owed=True))
+        store = get_model_service_store()
+        store.save_purpose(replace(store.get_purpose("embedding"), ready=False))
+        second = create_queued_job(kind="catalog_embed", input={})
+        assert run_catalog_embed_job(second.id)["status"] == "succeeded"
+        result = get_job_store().get(second.id).result
+        assert result["objects_written"] == result["columns_written"] == 0
+        assert result["objects_skipped"] == result["columns_skipped"] == 1
+        assert index.get().ready is True
+        assert index.get().rebuild_owed is False
+        assert store.get_purpose("embedding").ready is True
+    finally:
+        set_embed_fn_for_tests(None)
 
 
 def test_control_revision_change_stops_the_sweep_before_ready() -> None:

@@ -4,11 +4,7 @@ from __future__ import annotations
 
 from celery import current_task
 
-from backend.admin.model_services import (
-    get_embedding_runtime,
-    mark_embedding_ready,
-)
-from backend.admin.model_services.ports import catalog_embed_jobs
+from backend.admin.model_services import get_embedding_runtime
 from backend.jobs.store import (
     TERMINAL,
     append_job_log,
@@ -21,6 +17,10 @@ from backend.jobs.store import (
 from backend.metadata.catalog.index_embeddings import (
     EmbeddingRefreshCounts,
     refresh_source_embeddings,
+)
+from backend.metadata.catalog.index_state import (
+    note_catalog_index_failure,
+    publish_catalog_readiness,
 )
 from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.catalog_embed_jobs.progress_log import CatalogEmbedLog
@@ -219,7 +219,7 @@ def _sweep(
                     running, dominant=progress.dominant_reason()
                 )
                 assert summary is not None
-                catalog_embed_jobs().note_index_failure(
+                note_catalog_index_failure(
                     failure_summary=summary,
                     objects_written=running.objects_written,
                     columns_written=running.columns_written,
@@ -278,7 +278,7 @@ def _sweep(
                 summary = f"{summary}: {dominant}"
             if len(summary) > _SUMMARY_MAX:
                 summary = summary[:_SUMMARY_MAX] + "…"
-            catalog_embed_jobs().note_index_failure(
+            note_catalog_index_failure(
                 failure_summary=summary,
                 objects_written=totals.objects_written,
                 columns_written=totals.columns_written,
@@ -293,14 +293,6 @@ def _sweep(
                 error_code="JOB_EXECUTION_FAILED",
                 error_summary=summary,
             )
-        live = get_embedding_runtime()
-        if (
-            live is None
-            or live.service_id != service_id
-            or live.generation != generation
-            or live.control_revision != control_revision
-        ):
-            return _skip(job_id, "aborted", generation=generation)
         indexed = (
             f"indexed {totals.objects_written} objects and "
             f"{totals.columns_written} columns "
@@ -312,17 +304,11 @@ def _sweep(
                 f"{indexed}; last error: {dominant} "
                 f"(×{progress.dominant_count()})"
             )
-        ready = mark_embedding_ready(
-            purpose="embedding",
+        ready = publish_catalog_readiness(
             service_id=service_id,
             generation=generation,
             control_revision=control_revision,
-            objects_written=totals.objects_written,
-            columns_written=totals.columns_written,
-            objects_failed=totals.objects_failed,
-            columns_failed=totals.columns_failed,
-            objects_attempted=totals.objects_attempted,
-            columns_attempted=totals.columns_attempted,
+            counts=totals,
             progress=indexed,
             failure_summary=dominant,
         )

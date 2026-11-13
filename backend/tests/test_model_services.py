@@ -19,7 +19,6 @@ from backend.admin.model_services import (  # noqa: E402
     bind_catalog_embed_jobs,
     bind_entity_embed_jobs,
     get_embedding_runtime,
-    mark_embedding_ready,
 )
 from backend.admin.model_services.errors import ModelServiceTimeout  # noqa: E402
 from backend.admin.model_services.ports import (  # noqa: E402
@@ -53,6 +52,12 @@ from backend.metadata.catalog.embedding import (  # noqa: E402
     embedding_write_enabled,
     set_embed_fn_for_tests,
 )
+from backend.metadata.catalog.index_embeddings import EmbeddingRefreshCounts  # noqa: E402
+from backend.metadata.catalog.index_state import (  # noqa: E402
+    clear_catalog_index_ready,
+    get_catalog_index_store,
+    publish_catalog_readiness,
+)
 from backend.metadata.catalog.service import search_objects  # noqa: E402
 from backend.metadata.errors import CatalogSearchEmbedFailed  # noqa: E402
 from backend.metadata.catalog.store import (  # noqa: E402
@@ -79,7 +84,6 @@ class RecordingJobs(CatalogEmbedJobsPort):
         self.clears = 0
         self._status: str | None = None
         self.fail_trigger = False
-        self._index = CatalogIndexView()
 
     def trigger_run(
         self, *, actor_user_id: str, actor_token_id: str | None
@@ -108,61 +112,10 @@ class RecordingJobs(CatalogEmbedJobsPort):
         return None
 
     def index_view(self) -> CatalogIndexView:
-        return self._index
-
-    def publish_index(
-        self,
-        *,
-        generation: int,
-        objects_written: int = 0,
-        columns_written: int = 0,
-        objects_failed: int = 0,
-        columns_failed: int = 0,
-        objects_attempted: int = 0,
-        columns_attempted: int = 0,
-        progress: str | None = None,
-        failure_summary: str | None = None,
-    ) -> None:
-        self._index = CatalogIndexView(
-            ready=True,
-            generation_last_swept=generation,
-            objects_written=objects_written,
-            columns_written=columns_written,
-            objects_failed=objects_failed,
-            columns_failed=columns_failed,
-            objects_attempted=objects_attempted,
-            columns_attempted=columns_attempted,
-            progress=progress,
-            failure_summary=failure_summary,
-            rebuild_owed=False,
-        )
+        return get_catalog_index_store().get()
 
     def clear_index_ready(self, *, rebuild_owed: bool) -> None:
-        self._index = replace(self._index, ready=False, rebuild_owed=rebuild_owed)
-
-    def note_index_failure(
-        self,
-        *,
-        failure_summary: str,
-        objects_written: int = 0,
-        columns_written: int = 0,
-        objects_failed: int = 0,
-        columns_failed: int = 0,
-        objects_attempted: int = 0,
-        columns_attempted: int = 0,
-        progress: str | None = None,
-    ) -> None:
-        self._index = replace(
-            self._index,
-            objects_written=objects_written,
-            columns_written=columns_written,
-            objects_failed=objects_failed,
-            columns_failed=columns_failed,
-            objects_attempted=objects_attempted,
-            columns_attempted=columns_attempted,
-            progress=progress if progress is not None else failure_summary,
-            failure_summary=failure_summary,
-        )
+        clear_catalog_index_ready(rebuild_owed=rebuild_owed)
 
 
 class RecordingEntityJobs(EntityEmbedJobsPort):
@@ -281,24 +234,32 @@ def test_unbound_catalog_embed_port_fails() -> None:
         bind_catalog_embed_jobs(CatalogEmbedJobs())
 
 
-def test_publish_failure_does_not_mark_the_sweep_ready(client: TestClient) -> None:
+def test_publish_failure_does_not_mark_the_sweep_ready(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _login(client)
     created = _create(client)
     activated = client.post(f"/model-services/{created['id']}/activate")
     assert activated.status_code == 200
     state = get_model_service_store().get_purpose("embedding")
-    bind_catalog_embed_jobs(None)
-    try:
-        with pytest.raises(RuntimeError, match="catalog embed jobs port is not bound"):
-            mark_embedding_ready(
-                purpose="embedding",
-                service_id=created["id"],
-                generation=state.generation,
-                control_revision=state.control_revision,
-            )
-        assert get_model_service_store().get_purpose("embedding").ready is False
-    finally:
-        bind_catalog_embed_jobs(CatalogEmbedJobs())
+    before = get_catalog_index_store().get()
+    purpose_writes = []
+
+    def fail_save(_state):
+        raise RuntimeError("catalog save failed")
+
+    monkeypatch.setattr(get_catalog_index_store(), "save", fail_save)
+    monkeypatch.setattr(get_model_service_store(), "save_purpose", purpose_writes.append)
+    with pytest.raises(RuntimeError, match="catalog save failed"):
+        publish_catalog_readiness(
+            service_id=created["id"],
+            generation=state.generation,
+            control_revision=state.control_revision,
+            counts=EmbeddingRefreshCounts(),
+        )
+    assert purpose_writes == []
+    assert get_catalog_index_store().get() == before
+    assert get_model_service_store().get_purpose("embedding").ready is False
 
 
 def test_operator_lacks_write(client: TestClient) -> None:
@@ -419,8 +380,9 @@ def test_catalog_index_ready_selects_vector_search(
     assert body["entity_index"]["ready"] is False
     assert body["entity_index"]["rebuild_owed"] is True
 
-    mark_embedding_ready(
-        purpose="embedding", service_id=created["id"], generation=1, control_revision=1
+    publish_catalog_readiness(
+        service_id=created["id"], generation=1, control_revision=1,
+        counts=EmbeddingRefreshCounts(),
     )
     store.save_purpose(replace(store.get_purpose("embedding"), ready=False))
     calls = {"n": 0}
@@ -504,7 +466,10 @@ def test_batch_limit_edit_does_not_advance_generation_or_clear_ready(
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(
+        service_id=created["id"], generation=1, control_revision=1,
+        counts=EmbeddingRefreshCounts(),
+    )
     jobs.triggered.clear()
     updated = client.patch(
         f"/model-services/{created['id']}",
@@ -558,7 +523,10 @@ def test_in_use_model_change_advances_generation_and_keeps_protocol(
     created = _create(client)
     draft = _create(client, display_name="Draft")
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(
+        service_id=created["id"], generation=1, control_revision=1,
+        counts=EmbeddingRefreshCounts(),
+    )
     jobs.triggered.clear()
     updated = client.patch(
         f"/model-services/{created['id']}",
@@ -640,7 +608,7 @@ def test_secret_only_keeps_hybrid_without_rebuild(
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
     store = get_model_service_store()
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     jobs.triggered.clear()
     patched = client.patch(
         f"/model-services/{created['id']}",
@@ -664,7 +632,7 @@ def test_control_revision_fences_lifecycle_without_joining_generation(
     after_activate = client.get("/model-services/purpose/embedding").json()
     assert after_activate["generation"] == 1
     assert after_activate["control_revision"] == 1
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     closed = client.post("/model-services/purpose/embedding/close")
     assert closed.status_code == 200
     assert closed.json()["generation"] == 1
@@ -691,7 +659,7 @@ def test_secret_timeout_and_batch_edits_do_not_bump_control_revision(
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     jobs.triggered.clear()
     before = client.get("/model-services/purpose/embedding").json()["control_revision"]
     for body in (
@@ -715,7 +683,7 @@ def test_failed_enqueue_keeps_catalog_rebuild_for_the_next_sweep(
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     jobs.triggered.clear()
     jobs.fail_trigger = True
     with pytest.raises(RuntimeError, match="queue delivery failed"):
@@ -754,7 +722,7 @@ def test_force_generation_rebuilds_without_deleting_vectors(
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     jobs.triggered.clear()
     kept = CatalogEmbeddingRecord(
         id="emb_kept",
@@ -799,7 +767,7 @@ def test_close_is_lexical(
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     assert embedding_configured() is True
     closed = client.post("/model-services/purpose/embedding/close")
     assert closed.status_code == 200
@@ -822,7 +790,7 @@ def test_open_none_restores_hybrid_when_ready(
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     client.post("/model-services/purpose/embedding/close")
     jobs.triggered.clear()
     opened = client.post(
@@ -857,7 +825,7 @@ def test_open_does_not_mint(client: TestClient, jobs: RecordingJobs) -> None:
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     client.post("/model-services/purpose/embedding/close")
     jobs.triggered.clear()
     opened = client.post("/model-services/purpose/embedding/open")
@@ -953,7 +921,7 @@ def test_delete_in_use_leaves_index_and_is_lexical(
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     deleted = client.delete(f"/model-services/{created['id']}")
     assert deleted.status_code == 204
     purpose = client.get("/model-services/purpose/embedding")
@@ -980,7 +948,7 @@ def test_display_name_only_skips_probe_and_rebuild(
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
+    publish_catalog_readiness(service_id=created["id"], generation=1, control_revision=1, counts=EmbeddingRefreshCounts())
     jobs.triggered.clear()
     called = {"n": 0}
 
