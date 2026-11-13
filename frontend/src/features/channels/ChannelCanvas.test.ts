@@ -162,7 +162,12 @@ vi.mock("@refinedev/core", () => ({
   usePermissions: () => ({ data: sessionPermissions.current }),
 }));
 
+const nodeMeasurements = { width: 160, height: 88 };
+const resizeCallbacks = new Map<Element, () => void>();
+
 function stubDomApis() {
+  nodeMeasurements.width = 160;
+  resizeCallbacks.clear();
   sessionPermissions.current = [];
   localStorage.removeItem("refraq.channelCanvas.minimap");
   Object.defineProperty(window, "matchMedia", {
@@ -184,12 +189,14 @@ function stubDomApis() {
     }
 
     observe(target: Element) {
-      queueMicrotask(() => {
+      const notify = () => {
         this.callback(
           [{ target, contentRect: target.getBoundingClientRect() } as ResizeObserverEntry],
           this as unknown as ResizeObserver,
         );
-      });
+      };
+      resizeCallbacks.set(target, notify);
+      queueMicrotask(notify);
     }
 
     unobserve() {}
@@ -198,7 +205,7 @@ function stubDomApis() {
   globalThis.ResizeObserver = ResizeObserverStub;
   const layoutSize = (element: Element): { width: number; height: number } | null => {
     if (!(element instanceof HTMLElement)) return null;
-    if (element.classList.contains("react-flow__node")) return { width: 160, height: 88 };
+    if (element.classList.contains("react-flow__node")) return nodeMeasurements;
     if (element.classList.contains("react-flow__handle")) return { width: 8, height: 8 };
     return null;
   };
@@ -572,6 +579,56 @@ describe("ChannelCanvas controls", () => {
     expect(onChange.mock.lastCall![0]).toEqual({ ...nodeGraph, nodes: nodeGraph.nodes.map((node) => ({ ...node, type_version: 1 })) });
     fireEvent.click(screen.getByRole("button", { name: "Redo" }));
     expect(onChange.mock.lastCall![0]).toEqual({ ...adopted, nodes: adopted.nodes.map((node) => ({ ...node, type_version: 1 })) });
+    planner.mockRestore();
+  });
+
+  it("cancels Arrange on same-graph adoption without adding history", async () => {
+    let resolve!: (result: layoutEngine.LayoutResult) => void;
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const onChange = vi.fn();
+    const normalized = { ...nodeGraph, nodes: nodeGraph.nodes.map((node) => ({ ...node, type_version: 1 })) };
+    const view = await renderCanvas([], normalized, { onChange });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Arrange" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    view.adoptGraph(normalized);
+    await act(async () => { resolve({ status: "laid-out", nodes: [{ id: "nd_1", position: { x: 1, y: 1 }, width: 160, height: 88 }] }); });
+    expect(onChange).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Arranging…" })).toBeNull();
+    planner.mockRestore();
+  });
+
+  it("ignores a layout completion after unmount", async () => {
+    let resolve!: (result: layoutEngine.LayoutResult) => void;
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const onChange = vi.fn();
+    const view = await renderCanvas([], nodeGraph, { onChange });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Arrange" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    cleanup();
+    await act(async () => { resolve({ status: "laid-out", nodes: [{ id: "nd_1", position: { x: 1, y: 1 }, width: 160, height: 88 }] }); });
+    expect(onChange).not.toHaveBeenCalled();
+    planner.mockRestore();
+  });
+
+  it("rejects pending Arrange when an ordinary node measurement changes", async () => {
+    let resolve!: (result: layoutEngine.LayoutResult) => void;
+    const planner = vi.spyOn(layoutEngine, "layoutGraph").mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const onChange = vi.fn();
+    await renderCanvas([], nodeGraph, { onChange });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Arrange" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    await act(async () => {
+      nodeMeasurements.width = 240;
+      for (const [element, notify] of resizeCallbacks) {
+        if (element.classList.contains("react-flow__node")) notify();
+      }
+      await new Promise((done) => requestAnimationFrame(done));
+    });
+    await act(async () => { resolve({ status: "laid-out", nodes: [{ id: "nd_1", position: { x: 1, y: 1 }, width: 160, height: 88 }] }); });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(planner).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Arranging…" })).toBeNull();
     planner.mockRestore();
   });
 

@@ -60,6 +60,7 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { presentConsoleNotification } from "@/providers/notification-provider";
 import { CanvasToolbar } from "@/features/channels/CanvasToolbar";
 import { layoutGraph } from "./graphLayout";
+import { createLayoutAttempts, type LayoutAttemptAdapter } from "./layoutAttempt";
 import { canvasLayoutNode, materializeExecutionOrder } from "./canvasLayout";
 import { formatShortcutChord, type ShortcutChord } from "@/features/channels/CanvasShortcuts";
 import {
@@ -594,11 +595,15 @@ function ChannelCanvasBody({
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const layoutRef = useRef(graph.layout);
-  const layoutRequest = useRef(0);
-  const editRevision = useRef(0);
-  const historyReplay = useRef(false);
+  const layoutAdapter = useRef<LayoutAttemptAdapter>(null!);
+  const [layoutAttempts] = useState(() => createLayoutAttempts({
+    read: () => layoutAdapter.current.read(),
+    prepare: () => layoutAdapter.current.prepare(),
+    run: (work) => layoutAdapter.current.run(work),
+    apply: (work, result, explicit, isCurrent) => layoutAdapter.current.apply(work, result, explicit, isCurrent),
+    publish: (state) => layoutAdapter.current.publish(state),
+  }));
   const [layoutPending, setLayoutPending] = useState(false);
-  const [layoutRetry, setLayoutRetry] = useState(0);
   const [layoutError, setLayoutError] = useState(false);
   const [legacyOrderTies, setLegacyOrderTies] = useState(false);
   const nodesRef = useRef(nodes);
@@ -699,8 +704,7 @@ function ChannelCanvasBody({
     );
 
   const emit = (nextNodes: CanvasNode[], nextEdges: Edge[], restoring = false) => {
-    if (!restoring) historyReplay.current = false;
-    editRevision.current += 1;
+    if (!restoring) layoutAttempts.edited();
     const graph = graphOf(nextNodes, nextEdges);
     if (!restoring && graph.nodes.some((node) => node.execution_order !== undefined) && graph.nodes.some((node) => node.execution_order === undefined)) {
       try { graph.nodes = materializeExecutionOrder(graph.nodes); }
@@ -786,8 +790,7 @@ function ChannelCanvasBody({
   };
 
   const prepareGeometryEdit = () => {
-    layoutRequest.current += 1;
-    setLayoutPending(false);
+    layoutAttempts.invalidate("geometry");
     let ordered: Map<string, number | undefined>;
     try { ordered = executionPriorities(); }
     catch { setLayoutError(true); return false; }
@@ -822,9 +825,7 @@ function ChannelCanvasBody({
   };
 
   const restore = (snap: CanvasSnapshot) => {
-    historyReplay.current = true;
-    layoutRequest.current += 1;
-    setLayoutPending(false);
+    layoutAttempts.invalidate("restore");
     layoutRef.current = snap.layout;
     cancelOverlayCloseRef.current();
     const painted = paintProblems(snap.nodes, snap.edges);
@@ -867,35 +868,31 @@ function ChannelCanvasBody({
   const layoutMeasurements = JSON.stringify(nodes.filter(isChannelNode).map((node) =>
     [node.id, node.data.container == null ? node.measured : null]));
   const layoutReady = nodes.filter(isChannelNode).every((node) => node.measured?.width && node.measured?.height);
-  const latestLayoutState = useRef({ mutable, appearance });
-  latestLayoutState.current = { mutable, appearance };
-
-  const arrange = async (explicit: boolean) => {
-    if (latestLayoutState.current.appearance === "edit" && !latestLayoutState.current.mutable) return;
-    flushNudge();
-    flushCommit();
-    const request = ++layoutRequest.current;
-    const revision = editRevision.current;
-    const before = JSON.stringify(graphNow());
-    const measured = JSON.stringify(nodesRef.current.filter(isChannelNode).map((node) => [node.id, node.data.container == null ? node.measured : null]));
-    const byType = new Map(catalog.map((spec) => [spec.type, spec]));
-    setLayoutPending(true);
-    setLayoutError(false);
-    try {
+  const initialLayoutDone = useRef(false);
+  layoutAdapter.current = {
+    read: () => ({
+      graph: JSON.stringify(graphNow()),
+      measurements: JSON.stringify(nodesRef.current.filter(isChannelNode).map((node) => [node.id, node.data.container == null ? node.measured : null])),
+      auto: layoutRef.current?.mode === "auto",
+      ready: nodesRef.current.filter(isChannelNode).every((node) => Boolean(node.measured?.width && node.measured?.height)),
+      locked: appearance === "edit" && !mutable,
+    }),
+    prepare: () => {
+      flushNudge();
+      flushCommit();
+      const byType = new Map(catalog.map((spec) => [spec.type, spec]));
       const ordered = executionPriorities();
-      const result = await layoutGraph({
+      return { ordered, input: {
         nodes: nodesRef.current.filter(isChannelNode).map((node) => {
           const body = flowRootRef.current?.querySelector(`[data-id="${CSS.escape(node.id)}"] .channel-flow-node__body`);
           const headerHeight = body instanceof HTMLElement ? body.offsetHeight + 32 : undefined;
           return canvasLayoutNode(node, byType.get(node.data.nodeType), edgesRef.current.some((edge) => edge.source === node.id && edge.sourceHandle === "error"), headerHeight);
         }),
         edges: graphNow().edges,
-      });
-      if (request === layoutRequest.current && revision !== editRevision.current && layoutRef.current?.mode === "auto") setLayoutRetry((value) => value + 1);
-      if (request !== layoutRequest.current || revision !== editRevision.current || before !== JSON.stringify(graphNow()) ||
-        measured !== JSON.stringify(nodesRef.current.filter(isChannelNode).map((node) => [node.id, node.data.container == null ? node.measured : null])) ||
-        (latestLayoutState.current.appearance === "edit" && !latestLayoutState.current.mutable)) return;
-      if (result.status !== "laid-out") { setLayoutError(true); return; }
+      } };
+    },
+    run: (work) => layoutGraph(work.input),
+    apply: ({ ordered }, result, explicit, isCurrent) => {
       const placements = new Map(result.nodes.map((node) => [node.id, node]));
       const next = nodesRef.current.map((node) => {
         if (!isChannelNode(node)) return node;
@@ -911,26 +908,23 @@ function ChannelCanvasBody({
         else publishHistory({ ...historyRef.current, present: snapshotOf(nodesRef.current, edgesRef.current, layoutRef.current) });
       }
       if (explicit || !initialLayoutDone.current) {
-        requestAnimationFrame(() => { if (request === layoutRequest.current) void fitView({ duration: canvasViewportDuration() }); });
+        requestAnimationFrame(() => { if (isCurrent()) void fitView({ duration: canvasViewportDuration() }); });
       }
       initialLayoutDone.current = true;
-    } catch {
-      if (request === layoutRequest.current) setLayoutError(true);
-    } finally {
-      if (request === layoutRequest.current) setLayoutPending(false);
-    }
+    },
+    publish: ({ pending, error }) => {
+      setLayoutPending(pending);
+      setLayoutError(error);
+    },
   };
-  const initialLayoutDone = useRef(false);
-  useEffect(() => () => { layoutRequest.current += 1; }, []);
+  useEffect(() => () => { layoutAttempts.invalidate("unmount"); }, [layoutAttempts]);
 
   const adoptedToken = useRef(adoptToken);
   useEffect(() => {
     if (adoptedToken.current === adoptToken) return;
     adoptedToken.current = adoptToken;
-    historyReplay.current = false;
+    layoutAttempts.invalidate("adopt");
     const nextGraph = graph;
-    layoutRequest.current += 1;
-    setLayoutPending(false);
     if (JSON.stringify(graphNow()) === JSON.stringify(nextGraph)) return;
     cancelOverlayCloseRef.current();
     const selectedNodeIds = new Set(
@@ -972,16 +966,14 @@ function ChannelCanvasBody({
 
   useEffect(() => {
     if (appearance !== "edit" || mutable) return;
-    layoutRequest.current += 1;
-    setLayoutPending(false);
+    layoutAttempts.invalidate("lock");
   }, [appearance, mutable]);
 
   useEffect(() => {
-    if (historyReplay.current || layoutRef.current?.mode !== "auto" || !layoutReady) return;
-    void arrange(false);
+    layoutAttempts.observe({ topology: layoutTopology, measurements: layoutMeasurements, ready: layoutReady, adoptToken, mutable });
     // Coordinates, selection, camera and configuration are not layout triggers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layoutTopology, layoutMeasurements, layoutReady, adoptToken, mutable, layoutRetry]);
+  }, [layoutTopology, layoutMeasurements, layoutReady, adoptToken, mutable]);
 
   useEffect(() => {
     if (mutable) return;
@@ -2535,7 +2527,7 @@ function ChannelCanvasBody({
               editing={appearance === "edit"}
               mutable={mutable}
               canUndo={canUndo}
-              onArrange={() => { void arrange(true); }}
+              onArrange={() => { void layoutAttempts.request(); }}
               arrangePending={layoutPending}
               arrangeDisabled={!layoutReady || (appearance === "edit" && !mutable)}
               canRedo={canRedo}
