@@ -468,15 +468,15 @@ def test_join_create_invisible_endpoint_is_not_cross_source(world: _World) -> No
     assert_problem(hidden, status=404, code="CATALOG_COLUMN_NOT_FOUND")
 
 
-def test_join_create_visible_cross_source_stays_cross_source(world: _World) -> None:
+def test_join_create_visible_cross_source_succeeds(world: _World) -> None:
     world.login("steward")
-    refused = world.client.post(
+    created = world.client.post(
         "/joins",
         json=_join_body(world, to_column_id=world.column_b),
     )
-    assert_problem(refused, status=400, code="JOIN_CROSS_SOURCE")
-    created = world.client.post("/joins", json=_join_body(world))
     assert created.status_code == 201
+    local = world.client.post("/joins", json=_join_body(world))
+    assert local.status_code == 201
 
 
 def test_join_create_viewer_on_visible_pair_is_forbidden(world: _World) -> None:
@@ -500,7 +500,8 @@ def test_join_batch_invisible_endpoint_is_not_cross_source(world: _World) -> Non
         "/joins:batch",
         json={"joins": [_join_body(world, to_column_id=world.column_b)]},
     )
-    assert_problem(visible, status=400, code="JOIN_CROSS_SOURCE")
+    assert visible.status_code == 200
+    assert visible.json()["created_count"] == 1
 
 
 def test_join_amend_reject_restore_and_delete_follow_write_rule(world: _World) -> None:
@@ -571,7 +572,9 @@ def test_join_path_hidden_target_matches_unknown_target(world: _World) -> None:
         "/joins/path",
         params={"start": world.object_a, "target": world.object_b},
     )
-    assert_problem(crossed, status=400, code="JOIN_CROSS_SOURCE")
+    assert crossed.status_code == 200
+    assert crossed.json()["paths_found"] == 0
+    assert crossed.json()["reason"] == "TARGET_UNREACHABLE"
 
 
 def test_join_path_hidden_start_is_not_found(world: _World) -> None:

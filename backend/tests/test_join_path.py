@@ -61,12 +61,15 @@ def _table(
     object_id: str,
     name: str,
     columns: list[tuple[str, str]],
+    *,
+    source_id: str = "src_1",
+    source_key: str = "mes",
 ) -> CatalogObjectRecord:
     now = utc_now()
     return CatalogObjectRecord(
         id=object_id,
-        source_id="src_1",
-        locator_key=f"obj/postgresql/mes/public/table/{name}",
+        source_id=source_id,
+        locator_key=f"obj/postgresql/{source_key}/public/table/{name}",
         object_type="table",
         schema_name="public",
         name=name,
@@ -92,7 +95,7 @@ def _table(
             CatalogColumnRecord(
                 id=cid,
                 object_id=object_id,
-                locator_key=f"col/postgresql/mes/public/table/{name}/column/{cname}",
+                locator_key=f"col/postgresql/{source_key}/public/table/{name}/column/{cname}",
                 name=cname,
                 ordinal=i,
                 data_type="int",
@@ -240,6 +243,80 @@ def test_rejected_join_is_omitted_from_paths() -> None:
     assert hops.paths == []
 
 
+def test_explicit_target_path_crosses_sources() -> None:
+    now = utc_now()
+    get_source_store().create_source(
+        SourceRecord(
+            id="src_2",
+            key="erp",
+            locator_key="src/postgresql/erp",
+            name="ERP",
+            kind="database",
+            status="active",
+            description=None,
+            engine="postgresql",
+            access_ciphertext=None,
+            access_updated_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    store = get_catalog_store()
+    a = _table("obj_a", "a", [("col_a_id", "id"), ("col_a_b", "b_id")])
+    b = _table(
+        "obj_b",
+        "b",
+        [("col_b_id", "id"), ("col_b_c", "c_id")],
+        source_id="src_2",
+        source_key="erp",
+    )
+    c = _table(
+        "obj_c",
+        "c",
+        [("col_c_id", "id")],
+        source_id="src_2",
+        source_key="erp",
+    )
+    apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="j1",
+        collected=[a],
+        schema_scope=None,
+    )
+    apply_structure_snapshot(
+        source=require_source("src_2"),
+        job_id="j2",
+        collected=[b, c],
+        schema_scope=None,
+    )
+    store.write_insert_join(
+        from_column_id="col_a_b",
+        to_column_id="col_b_id",
+        evidence="cross_source_fk",
+        created_by_user_id=None,
+        attester="human",
+    )
+    store.write_insert_join(
+        from_column_id="col_b_c",
+        to_column_id="col_c_id",
+        evidence="erp_fk",
+        created_by_user_id=None,
+        attester="human",
+    )
+
+    result = find_join_paths(
+        store=store,
+        start_object_id="obj_a",
+        target_object_id="obj_c",
+        max_hops=2,
+        top_targets=3,
+    )
+
+    assert len(result.paths) == 1
+    assert result.paths[0].target_object_id == "obj_c"
+    assert len(result.paths[0].hops) == 2
+
+
 def test_explore_keeps_one_path_when_two_edges_share_an_object() -> None:
     store = get_catalog_store()
     a = _table(
@@ -275,4 +352,3 @@ def test_explore_keeps_one_path_when_two_edges_share_an_object() -> None:
     )
     assert [path.target_object_id for path in explore.paths] == ["obj_b"]
     assert len(explore.paths[0].hops) == 1
-

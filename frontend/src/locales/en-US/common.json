@@ -381,7 +381,6 @@
   "catalog.joins.deleted": "Join deleted",
   "catalog.joins.error.deleteAutomatic": "Automatic joins cannot be deleted. Reject the join to keep the pair out.",
   "catalog.joins.error.deleteRejected": "Rejected joins cannot be deleted. Restore first if you need to remove the edge.",
-  "catalog.joins.error.JOIN_CROSS_SOURCE": "Join endpoints must belong to the same Source.",
   "catalog.joins.error.JOIN_EVIDENCE_REQUIRED": "Evidence is required.",
   "catalog.joins.error.JOIN_INVALID": "This join edge is invalid.",
   "catalog.joins.error.JOIN_ALREADY_DEFINED": "This directed pair already has a join.",

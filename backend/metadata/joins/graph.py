@@ -10,7 +10,6 @@ from backend.metadata.catalog.store import (
     CatalogGraphStore,
     CatalogJoinRecord,
 )
-from backend.metadata.errors import JoinCrossSource
 
 __all__ = [
     "JoinPath",
@@ -94,19 +93,10 @@ def find_join_paths(
             reason="NO_START_COLUMNS",
         )
 
-    if target_column_id:
-        target_source = _source_for_column(store, target_column_id)
-        if target_source is not None and target_source != source_id:
-            raise JoinCrossSource()
-    elif target_object_id:
-        target_obj = store.get_object(target_object_id)
-        if target_obj is not None and target_obj.source_id != source_id:
-            raise JoinCrossSource()
-
     if not target_column_id and not target_object_id:
         raise ValueError("find_join_paths requires a target")
 
-    graph = _load_source_graph(store, source_id)
+    graph = _load_connected_graph(store, source_id)
     if target_column_id:
         target_ids = {target_column_id}
     else:
@@ -268,6 +258,40 @@ def find_reachable_object_paths(
 
 def _load_source_graph(store: CatalogGraphStore, source_id: str) -> _SourceGraph:
     objects = store.list_present_for_source(source_id)
+    joins = store.list_all_joins_for_source(source_id)
+    return _build_graph(objects=objects, joins=joins)
+
+
+def _load_connected_graph(store: CatalogGraphStore, source_id: str) -> _SourceGraph:
+    pending = deque([source_id])
+    seen_sources: set[str] = set()
+    objects_by_id: dict[str, object] = {}
+    joins_by_id: dict[str, CatalogJoinRecord] = {}
+    while pending:
+        current_source_id = pending.popleft()
+        if current_source_id in seen_sources:
+            continue
+        seen_sources.add(current_source_id)
+        for obj in store.list_present_for_source(current_source_id):
+            objects_by_id[obj.id] = obj
+        for join in store.list_all_joins_for_source(current_source_id):
+            joins_by_id[join.id] = join
+            for column_id in (join.from_column_id, join.to_column_id):
+                column = store.get_column(column_id)
+                if column is None:
+                    continue
+                obj = store.get_object(column.object_id)
+                if obj is None or obj.source_id in seen_sources:
+                    continue
+                pending.append(obj.source_id)
+    return _build_graph(objects=objects_by_id.values(), joins=joins_by_id.values())
+
+
+def _build_graph(
+    *,
+    objects,
+    joins,
+) -> _SourceGraph:
     col_to_object: dict[str, str] = {}
     col_locator: dict[str, str] = {}
     object_columns: dict[str, list[str]] = {}
@@ -278,13 +302,12 @@ def _load_source_graph(store: CatalogGraphStore, source_id: str) -> _SourceGraph
             col_to_object[col.id] = obj.id
             col_locator[col.id] = col.locator_key
 
-    joins = [
-        join
-        for join in store.list_all_joins_for_source(source_id)
-        if not join.is_rejected
-    ]
     adjacency: dict[str, list[tuple[str, CatalogJoinRecord]]] = {}
+    seen_join_ids: set[str] = set()
     for join in joins:
+        if join.is_rejected or join.id in seen_join_ids:
+            continue
+        seen_join_ids.add(join.id)
         adjacency.setdefault(join.from_column_id, []).append(
             (join.to_column_id, join)
         )

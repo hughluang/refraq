@@ -87,9 +87,6 @@ describe("joinDeleteErrorKey", () => {
 
 describe("joinWriteErrorKey", () => {
   it("maps write refusal codes to locale keys", () => {
-    expect(joinWriteErrorKey("JOIN_CROSS_SOURCE")).toBe(
-      "catalog.joins.error.JOIN_CROSS_SOURCE",
-    );
     expect(joinWriteErrorKey("JOIN_EVIDENCE_REQUIRED")).toBe(
       "catalog.joins.error.JOIN_EVIDENCE_REQUIRED",
     );

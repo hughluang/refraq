@@ -456,8 +456,8 @@ Rules:
 
 - A directed column pair has at most one join definition. Duplicate single create is `JOIN_ALREADY_DEFINED`; single create on a rejected pair is `JOIN_REJECTED`. Amend is `PATCH /joins/{id}` (evidence / kind / expression only) and does not write `created_by_user_id`. An automatic edge stays automatic after amend; keeping the directed pair out still requires **Join Rejection**. Restore is explicit.
 - Evidence required; name-similarity alone is insufficient (`JOIN_EVIDENCE_REQUIRED`).
-- Same-Source only (`JOIN_CROSS_SOURCE`); no self-loop (`JOIN_INVALID`).
-- Batch create limited to one Source per call. Asserted known pairs are skipped (`already_known_count`), not overwritten. Rejected pairs are reported (`rejected_count`), not overwritten and not restored; `items` include those rows (`is_rejected`, with `id`). Batch is not create-or-fail for rejection.
+- Human and MCP writes may create cross-Source edges; automatic SQL join detection remains same-Source only. Self-loop is still invalid (`JOIN_INVALID`).
+- Batch create may span Sources. Asserted known pairs are skipped (`already_known_count`), not overwritten. Rejected pairs are reported (`rejected_count`), not overwritten and not restored; `items` include those rows (`is_rejected`, with `id`). Batch is not create-or-fail for rejection.
 - Object join lists include rejected rows by default (no filter in this slice). **Join Path** omits rejected rows. Path walks a join when endpoint columns are present and the pair is not rejected.
 - **Join Rejection** refuses single HTTP/MCP create and amend on the pair. Batch / MCP `upsert_joins` report rejected pairs without restoring. Automatic Jobs skip an existing row (including rejected). It does not affect FK collection, object `foreign_keys`, or Structure Diff `fk_added` / `fk_removed`. A later collected FK does not restore.
 - Console, HTTP, and MCP delete are limited to non-rejected rows with `created_by_user_id` set. Automatic edges (`created_by_user_id` null) refuse delete with `JOIN_DELETE_AUTOMATIC` (reject instead), checked before rejection so a rejected automatic row still returns `JOIN_DELETE_AUTOMATIC`. Rejected human-created rows refuse delete with `JOIN_REJECTED` (restore first). Delete removes the edge only; it does not stop a later automatic Job from inserting the same directed pair again.
@@ -479,8 +479,8 @@ Rules:
   Query-text mode ranks columns of the reachable set (ADR 0043 / 0044); the path
   envelope includes `rank_mode` (`vector` | `lexical`) when `q` / `query_text`
   is set and no explicit target is present, and `null` otherwise. A serving-time embed or neighbor failure is the
-  same Problem Code as Catalog Search. An explicit target the caller has no level on is the unknown-object code (§6.1). `JOIN_CROSS_SOURCE` applies only to an
-  explicit target on another Source the caller can read. An open-ended path stays inside the start Source's graph.
+  same Problem Code as Catalog Search. An explicit target the caller has no level on is the unknown-object code (§6.1). An explicit target may be on another
+  Source when the caller can read both ends. An open-ended path and `query_text` mode stay inside the start Source's graph.
 
 ## 10.5 Catalog search
 

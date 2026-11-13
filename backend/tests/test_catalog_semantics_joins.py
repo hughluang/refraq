@@ -526,7 +526,7 @@ def test_joins_http_pages(client: TestClient) -> None:
     assert over.status_code == 422
 
 
-def test_join_cross_source_rejected(client: TestClient) -> None:
+def test_join_cross_source_allowed(client: TestClient) -> None:
     s1 = _make_source(client, key="s1")
     s2 = _make_source(client, key="s2")
     o1 = _seed_object(s1["id"], object_id="obj_1", col_a="col_1a", col_b="col_1b")
@@ -540,8 +540,10 @@ def test_join_cross_source_rejected(client: TestClient) -> None:
             "evidence": "looks similar",
         },
     )
-    assert resp.status_code == 400
-    assert resp.json()["code"] == "JOIN_CROSS_SOURCE"
+    assert resp.status_code == 201, resp.text
+    body = resp.json()["join"]
+    assert body["from_column_id"] == o1.columns[0].id
+    assert body["to_column_id"] == o2.columns[0].id
 
 
 def test_join_missing_column(client: TestClient) -> None:

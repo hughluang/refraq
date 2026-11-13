@@ -23,7 +23,7 @@ import { FillColumn } from "@/components/layout/FillColumn";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import {
   getCatalogObject,
-  listCatalogObjects,
+  searchCatalogObjects,
 } from "@/features/sources/api/catalog";
 import {
   deleteJoin,
@@ -113,9 +113,8 @@ export function JoinsTab({
     const query = debouncedToObjectSearch.trim();
     let cancelled = false;
     setToObjectLoading(true);
-    void listCatalogObjects(object.source_id, query || undefined, {
+    void searchCatalogObjects(query || object.name, {
       limit: 20,
-      include_absent: false,
     })
       .then((data) => {
         if (cancelled) return;
@@ -143,7 +142,7 @@ export function JoinsTab({
     return () => {
       cancelled = true;
     };
-  }, [debouncedToObjectSearch, object.id, object.source_id, toObjectId, open]);
+  }, [debouncedToObjectSearch, object.id, object.name, toObjectId, open]);
 
   useEffect(() => {
     if (!toObjectId) {

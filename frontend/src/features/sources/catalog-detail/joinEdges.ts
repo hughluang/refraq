@@ -62,9 +62,6 @@ export function joinDeleteErrorKey(code: string): string | null {
 }
 
 export function joinWriteErrorKey(code: string): string | null {
-  if (code === "JOIN_CROSS_SOURCE") {
-    return "catalog.joins.error.JOIN_CROSS_SOURCE";
-  }
   if (code === "JOIN_EVIDENCE_REQUIRED") {
     return "catalog.joins.error.JOIN_EVIDENCE_REQUIRED";
   }

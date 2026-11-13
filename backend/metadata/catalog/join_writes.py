@@ -24,7 +24,6 @@ from backend.metadata.errors import (
     CatalogJoinNotFound,
     JoinAlreadyDefined,
     JoinAlreadyRejected,
-    JoinCrossSource,
     JoinDeleteAutomatic,
     JoinEvidenceRequired,
     JoinInvalid,
@@ -60,10 +59,6 @@ def _validated_pair(
         raise JoinInvalid()
     from_col = require_column(from_column_id)
     to_col = require_column(to_column_id)
-    from_obj = require_object(from_col.object_id)
-    to_obj = require_object(to_col.object_id)
-    if from_obj.source_id != to_obj.source_id:
-        raise JoinCrossSource()
     expression = join_expression
     if expression is None:
         expression = f"{from_col.name} = {to_col.name}"
@@ -269,14 +264,10 @@ def upsert_joins_batch(
     actor_token_id: str | None,
     attester: str = HUMAN_JOIN_ORIGIN,
 ) -> tuple[list[CatalogJoinRecord], int, int, int]:
-    """Create many joins; skip asserted pairs; report rejected pairs; never restore.
-
-    All edges share one Source.
-    """
+    """Create many joins; skip asserted pairs; report rejected pairs; never restore."""
     if not joins:
         return [], 0, 0, 0
     store = get_catalog_store()
-    source_id: str | None = None
     created = 0
     known = 0
     rejected = 0
@@ -284,16 +275,6 @@ def upsert_joins_batch(
     for item in joins:
         from_id = str(item["from_column_id"])
         to_id = str(item["to_column_id"])
-        from_col = require_column(from_id)
-        to_col = require_column(to_id)
-        from_obj = require_object(from_col.object_id)
-        to_obj = require_object(to_col.object_id)
-        if from_obj.source_id != to_obj.source_id:
-            raise JoinCrossSource()
-        if source_id is None:
-            source_id = from_obj.source_id
-        elif from_obj.source_id != source_id:
-            raise JoinCrossSource()
         existing = store.get_join_by_pair(from_id, to_id)
         decision = decide_pair_write(
             pair_state(existing),

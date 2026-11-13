@@ -39,6 +39,30 @@ export function getCatalogObject(objectId: string) {
   return apiClient<{ object: CatalogObject }>(`/objects/${objectId}`);
 }
 
+export function searchCatalogObjects(
+  q: string,
+  opts?: {
+    source_id?: string;
+    object_type?: string;
+    limit?: number;
+    offset?: number;
+  },
+) {
+  const params = new URLSearchParams();
+  params.set("q", q);
+  if (opts?.source_id) params.set("source_id", opts.source_id);
+  if (opts?.object_type) params.set("object_type", opts.object_type);
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  return apiClient<{
+    items: CatalogObject[];
+    limit: number;
+    offset: number;
+    rank_mode: "vector" | "lexical";
+    truncated: boolean;
+  }>(`/catalog/objects/search?${params.toString()}`);
+}
+
 export function listSemanticsChanges(
   objectId: string,
   params?: { limit?: number; offset?: number },

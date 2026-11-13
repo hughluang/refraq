@@ -16,7 +16,6 @@ __all__ = [
     "JobSourceDisabled",
     "JoinAlreadyDefined",
     "JoinAlreadyRejected",
-    "JoinCrossSource",
     "JoinDeleteAutomatic",
     "JoinEvidenceRequired",
     "JoinInvalid",
@@ -201,14 +200,6 @@ class JoinInvalid(AppError):
         return "Join edge is invalid"
 
 
-class JoinCrossSource(AppError):
-    code = "JOIN_CROSS_SOURCE"
-    http_status = 400
-
-    def _default_message(self) -> str:
-        return "Join columns must belong to the same Source"
-
-
 class JoinAlreadyDefined(AppError):
     code = "JOIN_ALREADY_DEFINED"
     http_status = 409
@@ -390,5 +381,4 @@ class ScheduleKindInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Scheduled Task work kind is not in the closed catalog"
-
 

@@ -487,7 +487,8 @@ def test_hidden_join_path_target_is_not_cross_source(world: _World) -> None:
         start_locator_key=world.object_a_locator,
         target_locator_key=world.object_b_locator,
     )
-    assert _error(crossed)["code"] == "JOIN_CROSS_SOURCE"
+    assert crossed["paths_found"] == 0
+    assert crossed["reason"] == "TARGET_UNREACHABLE"
 
 
 def test_semantics_and_join_writes_require_steward(world: _World) -> None:
@@ -612,7 +613,7 @@ def test_semantics_and_join_writes_require_steward(world: _World) -> None:
         to_column_locator_key=world.column_b_locator,
         evidence="fk",
     )
-    assert _error(crossed)["code"] == "JOIN_CROSS_SOURCE"
+    assert "error" not in crossed
     created = world.tool(
         "steward",
         upsert_join,
@@ -645,7 +646,7 @@ def test_semantics_and_join_writes_require_steward(world: _World) -> None:
             }
         ],
     )
-    assert _error(crossed_batch)["code"] == "JOIN_CROSS_SOURCE"
+    assert crossed_batch["already_known_count"] == 1
     known = world.tool(
         "steward",
         upsert_joins,

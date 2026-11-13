@@ -66,7 +66,7 @@ Response: `{ updated_count, requested_count, skipped_columns }`.
 | --- | --- | --- |
 | `list_joins` | `metadata:read` | Joins for an object locator (`limit`, `offset`; **Offset Page**) |
 | `upsert_join` | `metadata:write` | Create a single edge (**Join Change** attester `mcp`); duplicate pair refused |
-| `upsert_joins` | `metadata:write` | Batch create; asserted known pairs skipped; rejected pairs reported; all same Source; evidence required |
+| `upsert_joins` | `metadata:write` | Batch create; asserted known pairs skipped; rejected pairs reported; evidence required |
 | `patch_join` | `metadata:write` | Amend evidence/kind/expression; does not change first attester or `created_by_user_id` (delete eligibility unchanged) |
 | `reject_join` | `metadata:write` | **Join Rejection** by join id |
 | `restore_join` | `metadata:write` | Lift **Join Rejection** |
@@ -76,7 +76,7 @@ Response: `{ updated_count, requested_count, skipped_columns }`.
 `list_joins` args: object locator plus `limit` (default **50**, max **200**) and `offset` (default **0**). Result is the same **Offset Page** as HTTP `GET /objects/{id}/joins`: `{ "items", "total", "limit", "offset" }`. Order: `created_at ASC`, `id ASC`. Rejected rows are included.
 
 `find_join_path` args: `start_locator_key` (required), optional `target_locator_key`, optional `query_text`, `max_hops` (1–5), `top_targets`.
-`query_text` ranks objects already reachable from start within `max_hops` (vector complete state or lexical process state on that set). Explicit `target_locator_key` still walks the shortest path and does not rank. Both omitted → graph exploration of the same reachable set (at most `max_hops`). `JOIN_CROSS_SOURCE` applies only to an explicit target on another Source.
+`query_text` ranks objects already reachable from start within `max_hops` (vector complete state or lexical process state on that set). Explicit `target_locator_key` still walks the shortest path and does not rank, and it may point to another Source when the caller can read both ends. Both omitted → graph exploration of the same reachable set (at most `max_hops`), which stays inside the start Source graph.
 Returns `paths_found`, per-target `path_summary` / `hops`, `direct_joins` when start is a column and `max_hops=1` (including `query_text` mode), optional `reason` when no usable path is available (e.g. `TARGET_UNREACHABLE`), and `rank_mode` (`vector` | `lexical`) when `query_text` is set and `target_locator_key` is omitted (`null` otherwise). A serving-time embed or neighbor failure is the same Problem Code as Catalog Search. A start that cannot expand is `JOIN_PATH_UNAVAILABLE` in every mode. Rejected rows are omitted.
 
 `upsert_joins` returns `created_count`, `already_known_count`, `rejected_count`, `skipped_count`, `skipped_joins` (missing endpoints), and `items`. Asserted known pairs are skipped, not overwritten. Rejected pairs increment `rejected_count` and appear in `items` with `is_rejected` (including `id`); they are not overwritten and not restored. To re-assert, call `restore_join`; to change evidence after restore, call `patch_join`. Single `upsert_join` on a rejected pair still returns `JOIN_REJECTED`.

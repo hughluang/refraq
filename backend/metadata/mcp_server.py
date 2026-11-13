@@ -1,4 +1,4 @@
-"""Metadata MCP tools — locator-first; same domain services/permissions as HTTP."""
+"""Metadata MCP tools — locator-first; same domain services and permissions as HTTP."""
 
 from __future__ import annotations
 
@@ -689,7 +689,7 @@ def restore_join(join_id: str) -> str:
 def upsert_joins(
     joins: list[dict[str, Any]],
 ) -> str:
-    """Batch upsert joins; all same Source (metadata:write, Join Change attester mcp).
+    """Batch upsert joins (metadata:write, Join Change attester mcp).
 
     Asserted known pairs are skipped. Rejected pairs are reported (rejected_count /
     items with is_rejected) and not restored. To re-assert, call restore_join; to
