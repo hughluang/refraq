@@ -9,8 +9,9 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { RepeatIcon } from "@/components/icons";
 import { Instant } from "@/components/display/Instant";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { PageTabs, useConsoleTab, type PageTabItem } from "@/components/layout/consoleTabs";
@@ -28,7 +29,7 @@ import {
   ModuleAction,
   ModuleId,
 } from "@/features/console/module-identity";
-import { getCatalogObject } from "@/features/sources/api/catalog";
+import { resolveCatalogObject } from "@/features/sources/api/catalog";
 import { ColumnsTab } from "@/features/sources/catalog-detail/ColumnsTab";
 import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
 import { HistoryTab } from "@/features/sources/catalog-detail/HistoryTab";
@@ -79,27 +80,35 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   }, [showSampleTab]);
   const { value: activeTab, setTab } = useConsoleTab(catalogTabs);
 
+  const request = useRef<AbortController | null>(null);
   const load = useCallback(
     async (opts?: { refresh?: boolean }) => {
+      request.current?.abort();
+      const controller = new AbortController();
+      request.current = controller;
       const refresh = Boolean(opts?.refresh);
       if (!refresh) {
         setLoading(true);
       }
       setFailed(false);
       try {
-        const objRes = await getCatalogObject(objectId);
+        const objRes = await resolveCatalogObject(objectId, controller.signal);
+        if (controller.signal.aborted) return;
         setObject(objRes.object);
         if (refresh) {
           setReloadEpoch((n) => n + 1);
         }
       } catch (err) {
+        if (controller.signal.aborted) return;
         setFailed(true);
         if (!refresh) {
           setObject(null);
         }
-        presentProblemNotification(t, err, { onRetry: () => void load() });
+        presentProblemNotification(t, err, { onRetry: () => {
+          if (!controller.signal.aborted) void load();
+        } });
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     },
     [objectId, t],
@@ -110,6 +119,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     setJoinsVisited(false);
     setHistoryVisited(false);
     void load();
+    return () => request.current?.abort();
   }, [load]);
 
   useEffect(() => {
@@ -212,82 +222,86 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   );
 
   return (
-    <PageTabs fill value={activeTab} onChange={setTab} tabs={detailTabs}>
+    <PageTabs fill scrollable value={activeTab} onChange={setTab} tabs={detailTabs}>
       {({ list, panels }) => (
-    <PageChrome
-      title={t("catalog.title")}
-      recordTitle={title}
-      description={object.business_name ?? undefined}
-      recent={{ moduleId: "catalog", title }}
-      fill
-      tabs={list}
-      actions={
-        <Group gap="xs">
-          <Button
-            component={ConsoleLink}
-            href="/console/catalog"
-            variant="default"
-            size="sm"
-          >
-            {t("catalog.backToList")}
-          </Button>
-          <Button
-            size="sm"
-            variant="light"
-            onClick={() => void load({ refresh: true })}
-          >
-            {t("catalog.refresh")}
-          </Button>
-        </Group>
-      }
-    >
-      <FillColumn gap="md">
-        <Group gap="sm" wrap="wrap">
-          <Badge variant="light">{objectTypeLabel(t, object.object_type)}</Badge>
-          <StatusBadge tone={presence.tone} labelKey={presence.labelKey} />
-          <StatusBadge tone={semanticsReady.tone} labelKey={semanticsReady.labelKey} />
-          <Text size="sm" c="dimmed">
-            {t("catalog.semantics.provenance")}:{" "}
-            {object.semantic_source
-              ? semanticSourceLabel(t, object.semantic_source)
-              : "—"}
-          </Text>
-          {object.semantics_updated_at ? (
-            <Text size="sm" c="dimmed">
-              {t("catalog.semantics.updatedAt")}:{" "}
-              <Instant value={object.semantics_updated_at} />
-            </Text>
-          ) : null}
-          {object.collected_at ? (
-            <Text size="sm" c="dimmed">
-              {t("catalog.structure.collectedAt")}:{" "}
-              <Instant value={object.collected_at} />
-            </Text>
-          ) : null}
-        </Group>
-        <Group gap="xs" wrap="nowrap">
-          <Text
-            size="xs"
-            c="dimmed"
-            style={{ wordBreak: "break-all", flex: 1 }}
-          >
-            {object.locator_key}
-          </Text>
-          <Tooltip label={t("catalog.copyLocator")}>
-            <ActionIcon
-              variant="subtle"
-              size="sm"
-              onClick={() => void copyLocator()}
-              aria-label={t("catalog.copyLocator")}
-            >
-              ⎘
-            </ActionIcon>
-          </Tooltip>
-        </Group>
-
-        {panels}
-      </FillColumn>
-    </PageChrome>
+        <PageChrome
+          title={t("catalog.title")}
+          recordTitle={title}
+          titleBasis="10rem"
+          description={object.business_name ?? undefined}
+          recent={{ moduleId: "catalog", title }}
+          fill
+          tabs={list}
+          actions={
+            <Group gap="xs">
+              <Button
+                component={ConsoleLink}
+                href="/console/catalog"
+                variant="default"
+                size="sm"
+                aria-label={t("catalog.backToList")}
+              >
+                <Text component="span" visibleFrom="sm">{t("catalog.backToList")}</Text>
+                <Text component="span" hiddenFrom="sm">←</Text>
+              </Button>
+              <Button
+                size="sm"
+                variant="light"
+                onClick={() => void load({ refresh: true })}
+                aria-label={t("catalog.refresh")}
+              >
+                <Text component="span" visibleFrom="sm">{t("catalog.refresh")}</Text>
+                <Text component="span" hiddenFrom="sm"><RepeatIcon /></Text>
+              </Button>
+            </Group>
+          }
+        >
+          <FillColumn gap="md">
+            <details style={{ flexShrink: 0 }}>
+              <summary style={{ cursor: "pointer" }}>
+                <Group gap="sm" wrap="wrap" component="span" display="inline-flex">
+                  <Badge variant="light">{objectTypeLabel(t, object.object_type)}</Badge>
+                  <StatusBadge tone={presence.tone} labelKey={presence.labelKey} />
+                  <StatusBadge tone={semanticsReady.tone} labelKey={semanticsReady.labelKey} />
+                </Group>
+              </summary>
+              <Group gap="sm" wrap="wrap" mt="sm">
+                <Text size="sm" c="dimmed">
+                  {t("catalog.semantics.provenance")}: {" "}
+                  {object.semantic_source ? semanticSourceLabel(t, object.semantic_source) : "—"}
+                </Text>
+                {object.semantics_updated_at ? (
+                  <Text size="sm" c="dimmed">
+                    {t("catalog.semantics.updatedAt")}: {" "}
+                    <Instant value={object.semantics_updated_at} />
+                  </Text>
+                ) : null}
+                {object.collected_at ? (
+                  <Text size="sm" c="dimmed">
+                    {t("catalog.structure.collectedAt")}:{" "}
+                    <Instant value={object.collected_at} />
+                  </Text>
+                ) : null}
+              </Group>
+              <Group gap="xs" wrap="nowrap">
+                <Text size="xs" c="dimmed" style={{ wordBreak: "break-all", flex: 1 }}>
+                  {object.locator_key}
+                </Text>
+                <Tooltip label={t("catalog.copyLocator")}>
+                  <ActionIcon
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => void copyLocator()}
+                    aria-label={t("catalog.copyLocator")}
+                  >
+                    ⎘
+                  </ActionIcon>
+                </Tooltip>
+              </Group>
+            </details>
+            {panels}
+          </FillColumn>
+        </PageChrome>
       )}
     </PageTabs>
   );

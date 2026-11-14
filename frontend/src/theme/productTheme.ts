@@ -108,10 +108,12 @@ export const productCssVariablesResolver: CSSVariablesResolver = (theme) => ({
     ...toneVariables(theme, "light"),
     "--mantine-color-dimmed": shade(theme, "gray", 7),
     "--mantine-color-placeholder": shade(theme, "gray", 7),
+    "--refraq-status-success-text": "#1b5e20",
     "--mantine-color-anchor": shade(theme, "blue", 8),
   },
   dark: {
     ...toneVariables(theme, "dark"),
+    "--refraq-status-success-text": shade(theme, "green", 4),
     "--mantine-color-dimmed": shade(theme, "dark", 1),
     "--mantine-color-placeholder": shade(theme, "dark", 1),
   },

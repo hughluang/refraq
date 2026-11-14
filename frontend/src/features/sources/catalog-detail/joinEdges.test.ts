@@ -1,43 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  columnLabel,
-  columnOptionLabel,
-  joinDeleteErrorKey,
   joinRowActions,
   joinRowState,
-  joinWriteErrorKey,
   mergeSelectedOption,
   objectRefFromColumnLocator,
-  retainSelectedOption,
-  validateJoinDraft,
 } from "@/features/sources/catalog-detail/joinEdges";
-
-describe("validateJoinDraft", () => {
-  it("requires evidence", () => {
-    expect(
-      validateJoinDraft({ evidence: "  ", fromId: "a", toId: "b" }),
-    ).toEqual({ ok: false, messageKey: "catalog.joins.evidenceRequired" });
-  });
-
-  it("requires both column ids", () => {
-    expect(
-      validateJoinDraft({ evidence: "fk", fromId: "a", toId: null }),
-    ).toEqual({ ok: false, messageKey: "catalog.joins.toColumnRequired" });
-  });
-
-  it("returns trimmed evidence on success", () => {
-    expect(
-      validateJoinDraft({ evidence: "  fk  ", fromId: "a", toId: "b" }),
-    ).toEqual({ ok: true, evidence: "fk", fromId: "a", toId: "b" });
-  });
-});
 
 describe("joinRowState", () => {
   it("classifies rejected, automated, and manual rows", () => {
-    expect(
-      joinRowState({ created_by_user_id: null, is_rejected: true }),
-    ).toBe("rejected");
+    expect(joinRowState({ created_by_user_id: null, is_rejected: true })).toBe("rejected");
     expect(joinRowState({ created_by_user_id: null })).toBe("automated");
     expect(joinRowState({ created_by_user_id: "user_1" })).toBe("manual");
   });
@@ -45,133 +17,41 @@ describe("joinRowState", () => {
 
 describe("joinRowActions", () => {
   it("exposes restore only for rejected rows", () => {
-    expect(joinRowActions("rejected")).toEqual({
-      amend: false,
-      reject: false,
-      restore: true,
-      delete: false,
-    });
+    expect(joinRowActions("rejected")).toEqual({ amend: false, reject: false, restore: true, delete: false });
   });
 
   it("lets operators amend or reject any asserted row, and delete only manual ones", () => {
-    expect(joinRowActions("automated")).toEqual({
-      amend: true,
-      reject: true,
-      restore: false,
-      delete: false,
-    });
-    expect(joinRowActions("manual")).toEqual({
-      amend: true,
-      reject: true,
-      restore: false,
-      delete: true,
-    });
-  });
-});
-
-describe("joinDeleteErrorKey", () => {
-  it("maps known delete refusal codes to locale keys", () => {
-    expect(joinDeleteErrorKey("JOIN_DELETE_AUTOMATIC")).toBe(
-      "catalog.joins.error.deleteAutomatic",
-    );
-    expect(joinDeleteErrorKey("JOIN_REJECTED")).toBe(
-      "catalog.joins.error.deleteRejected",
-    );
-  });
-
-  it("returns null for unrelated codes", () => {
-    expect(joinDeleteErrorKey("JOIN_ALREADY_DEFINED")).toBeNull();
-    expect(joinDeleteErrorKey("CATALOG_JOIN_NOT_FOUND")).toBeNull();
-  });
-});
-
-describe("joinWriteErrorKey", () => {
-  it("maps write refusal codes to locale keys", () => {
-    expect(joinWriteErrorKey("JOIN_EVIDENCE_REQUIRED")).toBe(
-      "catalog.joins.error.JOIN_EVIDENCE_REQUIRED",
-    );
-    expect(joinWriteErrorKey("JOIN_INVALID")).toBe(
-      "catalog.joins.error.JOIN_INVALID",
-    );
-    expect(joinWriteErrorKey("JOIN_ALREADY_DEFINED")).toBe(
-      "catalog.joins.error.JOIN_ALREADY_DEFINED",
-    );
-    expect(joinWriteErrorKey("JOIN_REJECTED")).toBe(
-      "catalog.joins.error.JOIN_REJECTED",
-    );
-  });
-
-  it("returns null for unrelated codes", () => {
-    expect(joinWriteErrorKey("JOIN_DELETE_AUTOMATIC")).toBeNull();
-    expect(joinWriteErrorKey("CATALOG_JOIN_NOT_FOUND")).toBeNull();
+    expect(joinRowActions("automated")).toEqual({ amend: true, reject: true, restore: false, delete: false });
+    expect(joinRowActions("manual")).toEqual({ amend: true, reject: true, restore: false, delete: true });
   });
 });
 
 describe("objectRefFromColumnLocator", () => {
   it("derives the object locator from a column locator", () => {
-    expect(
-      objectRefFromColumnLocator(
-        "col/postgresql/mes-a/public/table/orders/column/id",
-      ),
-    ).toBe("obj/postgresql/mes-a/public/table/orders");
+    expect(objectRefFromColumnLocator("col/postgresql/mes-a/public/table/orders/column/id"))
+      .toBe("obj/postgresql/mes-a/public/table/orders");
   });
 
-  it("returns null when the locator is missing or too short", () => {
-    expect(objectRefFromColumnLocator(null)).toBeNull();
-    expect(objectRefFromColumnLocator("col/too/short")).toBeNull();
-    expect(objectRefFromColumnLocator("obj/postgresql/mes/public/table/t")).toBeNull();
-  });
-});
-
-describe("column labels", () => {
-  it("formats name and locator", () => {
-    expect(columnOptionLabel("id", "col/id")).toBe("id · col/id");
-    expect(
-      columnLabel(
-        [{ id: "1", name: "id", locator_key: "col/id" }],
-        "1",
-      ),
-    ).toBe("id · col/id");
-    expect(columnLabel([], "missing")).toBe("missing");
+  it("does not invent links for malformed or missing locators", () => {
+    for (const locator of [null, "col/too/short", "obj/postgresql/mes/public/table/t", "col/pg/src/public/table/t/field/id", "col/pg/src/public/table/t/column/id/extra", "col/pg//public/table/t/column/id"]) {
+      expect(objectRefFromColumnLocator(locator)).toBeNull();
+    }
   });
 });
 
 describe("option merge", () => {
-  it("keeps the selected option when search is empty", () => {
-    expect(
-      retainSelectedOption(
-        [
-          { value: "a", label: "A" },
-          { value: "b", label: "B" },
-        ],
-        "b",
-      ),
-    ).toEqual([{ value: "b", label: "B" }]);
-    expect(retainSelectedOption([{ value: "a", label: "A" }], null)).toEqual(
-      [],
-    );
+  it("keeps selection when search is empty", () => {
+    expect(mergeSelectedOption([], "b", [{ value: "a", label: "A" }, { value: "b", label: "B" }])).toEqual([{ value: "b", label: "B" }]);
+    expect(mergeSelectedOption([], null, [{ value: "a", label: "A" }])).toEqual([]);
   });
 
   it("prepends the selected option when it drops out of results", () => {
     const prev = [{ value: "sel", label: "Selected" }];
-    expect(
-      mergeSelectedOption([{ value: "x", label: "X" }], "sel", prev),
-    ).toEqual([
-      { value: "sel", label: "Selected" },
-      { value: "x", label: "X" },
+    expect(mergeSelectedOption([{ value: "x", label: "X" }], "sel", prev)).toEqual([
+      { value: "sel", label: "Selected" }, { value: "x", label: "X" },
     ]);
-    expect(
-      mergeSelectedOption(
-        [
-          { value: "sel", label: "Selected" },
-          { value: "x", label: "X" },
-        ],
-        "sel",
-        prev,
-      ),
-    ).toEqual([
-      { value: "sel", label: "Selected" },
-      { value: "x", label: "X" },
+    expect(mergeSelectedOption([{ value: "sel", label: "Selected" }, { value: "x", label: "X" }], "sel", prev)).toEqual([
+      { value: "sel", label: "Selected" }, { value: "x", label: "X" },
     ]);
   });
 });

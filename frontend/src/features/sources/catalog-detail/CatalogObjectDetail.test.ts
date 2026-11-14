@@ -51,7 +51,7 @@ vi.mock("@/features/sources/api/catalog", async () => {
   const actual = await vi.importActual<typeof import("@/features/sources/api/catalog")>(
     "@/features/sources/api/catalog",
   );
-  return { ...actual, getCatalogObject };
+  return { ...actual, resolveCatalogObject: getCatalogObject };
 });
 
 function stubDomApis() {
@@ -123,6 +123,43 @@ describe("CatalogObjectDetail load", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(getCatalogObject).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps supplementary object metadata available behind a compact disclosure", async () => {
+    getCatalogObject.mockResolvedValue({ object: {
+      id: "obj_1", source_id: "source", schema_name: "public", name: "orders",
+      object_type: "table", locator_key: "obj/postgresql/demo/public/table/orders",
+      columns: [], is_present: true, business_semantics_ready: false,
+    } });
+    const { CatalogObjectDetail } = await import("@/features/sources/catalog-detail/CatalogObjectDetail");
+    render(shell(createElement(CatalogObjectDetail, { objectId: "obj_1" })));
+    await screen.findByRole("heading", { name: "public.orders" });
+    const locator = screen.getByText("obj/postgresql/demo/public/table/orders");
+    const details = locator.closest("details")!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toContain("Present");
+    fireEvent.click(details.querySelector("summary")!);
+    expect(details.open).toBe(true);
+    expect(screen.getByRole("button", { name: "Copy locator" })).toBeTruthy();
+    expect(screen.getByRole("tablist").style.flexWrap).toBe("nowrap");
+  });
+
+  it("ignores a prior object's late response after navigation", async () => {
+    let finish!: (value: unknown) => void;
+    getCatalogObject.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    getCatalogObject.mockResolvedValue({ object: {
+      id: "new", source_id: "source", schema_name: "public", name: "new",
+      object_type: "table", locator_key: "obj/postgresql/demo/public/table/new",
+      columns: [], is_present: true,
+    } });
+    const { CatalogObjectDetail } = await import("@/features/sources/catalog-detail/CatalogObjectDetail");
+    const view = render(shell(createElement(CatalogObjectDetail, { objectId: "old" })));
+    view.rerender(shell(createElement(CatalogObjectDetail, { objectId: "new" })));
+    await screen.findByRole("heading", { name: "public.new" });
+    expect(getCatalogObject.mock.calls[0][1].aborted).toBe(true);
+    finish({ object: { id: "old", schema_name: "public", name: "old", columns: [] } });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "public.new" })).toBeTruthy());
+    expect(screen.queryByRole("heading", { name: "public.old" })).toBeNull();
   });
 
   it("keeps a missing object on not-found", async () => {

@@ -53,6 +53,7 @@ export function PageTabs({
   value,
   onChange,
   fill = false,
+  scrollable = false,
   children,
 }: {
   tabs: readonly PageTabItem[];
@@ -60,6 +61,7 @@ export function PageTabs({
   onChange: (value: string) => void;
   /** Active panel fills a remaining-space column. */
   fill?: boolean;
+  scrollable?: boolean;
   children: (slots: { list: ReactNode; panels: ReactNode }) => ReactNode;
 }) {
   const setTab = onChange;
@@ -75,7 +77,7 @@ export function PageTabs({
         if (next) setTab(next);
       }}
     >
-      <Tabs.List>
+      <Tabs.List style={scrollable ? { flexWrap: "nowrap", overflowX: "auto" } : undefined}>
         {tabs.map((tab) => (
           <Tabs.Tab key={tab.value} value={tab.value}>
             {tab.label}

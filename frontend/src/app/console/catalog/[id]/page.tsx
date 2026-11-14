@@ -6,5 +6,5 @@ import { CatalogObjectDetail } from "@/features/sources/catalog-detail/CatalogOb
 
 export default function CatalogObjectPage() {
   const params = useParams<{ id: string }>();
-  return <CatalogObjectDetail objectId={params.id} />;
+  return <CatalogObjectDetail objectId={decodeURIComponent(params.id)} />;
 }

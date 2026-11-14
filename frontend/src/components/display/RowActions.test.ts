@@ -79,6 +79,7 @@ describe("RowActions", () => {
     fireEvent.click(screen.getByRole("button", { name: "More actions for Atlas" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
     expect(onArchive).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "More actions for Atlas" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(onEdit).toHaveBeenCalledTimes(1);

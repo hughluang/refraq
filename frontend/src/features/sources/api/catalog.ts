@@ -1,5 +1,6 @@
 import { apiClient } from "@/lib/api";
 import type { CatalogObject, SemanticsChange } from "@/features/sources/types";
+import { listSources } from "./sources";
 
 export function listCatalogObjects(
   sourceId: string,
@@ -10,6 +11,7 @@ export function listCatalogObjects(
     object_type?: string;
     include_absent?: boolean;
     business_semantics_ready?: boolean;
+    signal?: AbortSignal;
   },
 ) {
   const params = new URLSearchParams();
@@ -21,10 +23,7 @@ export function listCatalogObjects(
     params.set("include_absent", String(opts.include_absent));
   }
   if (opts?.business_semantics_ready != null) {
-    params.set(
-      "business_semantics_ready",
-      String(opts.business_semantics_ready),
-    );
+    params.set("business_semantics_ready", String(opts.business_semantics_ready));
   }
   const query = params.toString() ? `?${params.toString()}` : "";
   return apiClient<{
@@ -32,11 +31,41 @@ export function listCatalogObjects(
     total: number;
     limit: number;
     offset: number;
-  }>(`/sources/${sourceId}/objects${query}`);
+  }>(`/sources/${encodeURIComponent(sourceId)}/objects${query}`, { signal: opts?.signal });
 }
 
-export function getCatalogObject(objectId: string) {
-  return apiClient<{ object: CatalogObject }>(`/objects/${objectId}`);
+export function getCatalogObject(objectId: string, signal?: AbortSignal) {
+  return apiClient<{ object: CatalogObject }>(`/objects/${encodeURIComponent(objectId)}`, { signal });
+}
+
+export async function resolveCatalogObject(objectRef: string, signal?: AbortSignal): Promise<{ object: CatalogObject | null }> {
+  if (!objectRef.startsWith("obj/")) return getCatalogObject(objectRef, signal);
+  const parts = objectRef.split("/");
+  if (parts.length !== 6 || parts.some((part) => !part)) return { object: null };
+  const [, engine, sourceKey, , objectType, name] = parts;
+  const pageSize = 100;
+  let sourceTotal = Infinity;
+  for (let offset = 0; offset < sourceTotal; offset += pageSize) {
+    const page = await listSources({ q: sourceKey, limit: pageSize, offset, signal });
+    if (offset === 0) sourceTotal = page.total;
+    const source = page.items.find((item) => item.key === sourceKey && item.engine === engine);
+    if (source) {
+      let objectTotal = Infinity;
+      for (let objectOffset = 0; objectOffset < objectTotal; objectOffset += pageSize) {
+        const objects = await listCatalogObjects(source.id, decodeURIComponent(name), {
+          object_type: objectType, include_absent: true,
+          limit: pageSize, offset: objectOffset, signal,
+        });
+        if (objectOffset === 0) objectTotal = objects.total;
+        const exact = objects.items.find((item) => item.locator_key === objectRef);
+        if (exact) return getCatalogObject(exact.id, signal);
+        if (objects.items.length === 0) break;
+      }
+      return { object: null };
+    }
+    if (page.items.length === 0) break;
+  }
+  return { object: null };
 }
 
 export function searchCatalogObjects(

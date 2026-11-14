@@ -2,7 +2,7 @@
 
 import { ActionIcon, Box, Button, Group, Menu, Tooltip } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import type { ComponentType, ReactNode } from "react";
+import { useRef, type ComponentType, type ReactNode } from "react";
 
 import type { ActionSafety, ConsoleMutation } from "@/components/feedback/consoleAction";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
@@ -76,6 +76,7 @@ function InlineVerb({
       disabled={Boolean(verb.disabledReason)}
       loading={loading}
       leftSection={verb.icon ? <VerbIcon verb={verb} /> : undefined}
+      data-row-action={verb.key}
       onClick={onRun}
     >
       {verb.label}
@@ -86,13 +87,15 @@ function InlineVerb({
 export function RowActions({ recordName, verbs }: RowActionsProps) {
   const t = useTranslate();
   const mutation = useConsoleMutation();
+  const overflowRef = useRef<HTMLButtonElement>(null);
   const visible = verbs.filter((verb) => !verb.hidden);
   if (visible.length === 0) return null;
   const inline = visible.slice(0, INLINE_LIMIT);
   const overflow = visible.slice(INLINE_LIMIT);
 
-  function run(verb: RowActionVerb) {
+  function run(verb: RowActionVerb, fromOverflow = false) {
     if (verb.disabledReason) return;
+    if (fromOverflow) overflowRef.current?.focus();
     if (isActionVerb(verb)) {
       mutation.run({ ...verb.action, key: verb.key });
       return;
@@ -115,6 +118,7 @@ export function RowActions({ recordName, verbs }: RowActionsProps) {
           <Menu position="bottom-end">
             <Menu.Target>
               <ActionIcon
+                ref={overflowRef}
                 variant="subtle"
                 size="sm"
                 aria-label={t("common.rowActions.more", { record: recordName })}
@@ -130,7 +134,7 @@ export function RowActions({ recordName, verbs }: RowActionsProps) {
                       color={verb.color}
                       disabled={Boolean(verb.disabledReason) || mutation.isSubmitting(verb.key)}
                       leftSection={verb.icon ? <VerbIcon verb={verb} /> : undefined}
-                      onClick={() => run(verb)}
+                      onClick={() => run(verb, true)}
                     >
                       {verb.label}
                     </Menu.Item>

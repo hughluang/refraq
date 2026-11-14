@@ -33,7 +33,9 @@ export function StatusBadge({ tone, labelKey, size, freshness, explanation }: Pr
   const t = useTranslate();
   const formatInstant = useFormatInstant();
   const badge = explain(
-    <Badge color={toneMantineColor(tone)} variant="light" tt="none" size={size}>
+    <Badge color={toneMantineColor(tone)} variant="light" tt="none" size={size}
+      styles={tone === "success" ? { root: { color: "var(--refraq-status-success-text)" } } : undefined}
+    >
       {t(labelKey)}
     </Badge>,
     explanation,

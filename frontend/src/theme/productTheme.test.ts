@@ -48,6 +48,12 @@ describe("productTheme", () => {
     expect(vars.light["--refraq-tone-running"]).not.toBe(vars.dark["--refraq-tone-running"]);
   });
 
+  it("keeps light success status text readable on its badge background", () => {
+    const theme = mergeMantineTheme(DEFAULT_THEME, productTheme(null));
+    const vars = productCssVariablesResolver(theme);
+    expect(contrast(vars.light["--refraq-status-success-text"], theme.colors.green[1])).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("sets dimmed, placeholder, and anchor text to at least 4.5:1", () => {
     const theme = mergeMantineTheme(DEFAULT_THEME, productTheme(null));
     const vars = productCssVariablesResolver(theme);

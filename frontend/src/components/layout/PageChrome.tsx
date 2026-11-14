@@ -27,6 +27,7 @@ export type PageChromeProps = {
   title: string;
   /** Record name. Shown as the page heading; the module label stays in the document title. */
   recordTitle?: string;
+  titleBasis?: string;
   breadcrumbLabel?: string;
   titleSlot?: ReactNode;
   titleExtra?: ReactNode;
@@ -57,6 +58,7 @@ const RECORD_ACTIONS = new Set(["show", "edit", "create"]);
 export function PageChrome({
   title,
   recordTitle,
+  titleBasis = "16rem",
   breadcrumbLabel,
   titleSlot,
   titleExtra,
@@ -131,7 +133,7 @@ export function PageChrome({
       <Stack gap="md" data-page-header="" style={{ flex: "0 0 auto" }}>
         <PageBreadcrumb currentLabel={breadcrumbLabel} />
         <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
-          <Box style={{ flex: "1 1 16rem", minWidth: 0 }}>
+          <Box style={{ flex: `1 1 ${titleBasis}`, minWidth: 0 }}>
             <SectionHeader
               title={heading}
               titleSlot={titleSlot}

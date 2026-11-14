@@ -1,652 +1,157 @@
 "use client";
 
-import {
-  Badge,
-  Button,
-  Drawer,
-  Group,
-  Stack,
-  Table,
-  Text,
-} from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
-import { ConsoleLink } from "@/components/navigation/ConsoleLink";
-import { useCallback, useEffect, useState } from "react";
-
+import { Badge, Button, Drawer, Group, Stack, Table, Text } from "@mantine/core";
+import { useTranslate } from "@refinedev/core";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Instant } from "@/components/display/Instant";
 import { ListTable } from "@/components/display/ListTable";
-import { NumberField } from "@/components/form/NumberField";
-import { SelectField } from "@/components/form/SelectField";
-import { TextareaField } from "@/components/form/TextareaField";
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { SectionHeader } from "@/components/layout/SectionHeader";
-import {
-  getCatalogObject,
-  searchCatalogObjects,
-} from "@/features/sources/api/catalog";
-import {
-  deleteJoin,
-  createJoin,
-  getJoinPath,
-  listObjectJoins,
-  patchJoin,
-  rejectJoin,
-  restoreJoin,
-} from "@/features/sources/api/joins";
-import {
-  type JoinSelectOption,
-  columnLabel,
-  columnOptionLabel,
-  joinDeleteErrorKey,
-  joinRowActions,
-  joinRowState,
-  joinWriteErrorKey,
-  mergeSelectedOption,
-  objectRefFromColumnLocator,
-  retainSelectedOption,
-  validateJoinDraft,
-} from "@/features/sources/catalog-detail/joinEdges";
-import type { CatalogObject, JoinPathResult } from "@/features/sources/types";
-import { useConfirmAction } from "@/hooks/useConfirmAction";
+import { listObjectJoins } from "@/features/sources/api/joins";
+import type { CatalogJoin, CatalogObject } from "@/features/sources/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { useSearchDebounce } from "@/hooks/useSearchDebounce";
-import { ApiError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
+import { RelationActions } from "./RelationActions";
+import { RelationPathsDrawer } from "./RelationPathsDrawer";
+import { RelationSummary } from "./RelationSummary";
+import { RelationFormDialog } from "./RelationFormDialog";
 
-const PAGE_SIZE = 50;
+type JoinsTabProps = { object: CatalogObject; writable: boolean; listEnabled?: boolean };
 
-type JoinsTabProps = {
-  object: CatalogObject;
-  writable: boolean;
-  listEnabled?: boolean;
-};
-
-export function JoinsTab({
-  object,
-  writable,
-  listEnabled = true,
-}: JoinsTabProps) {
+export function JoinsTab({ object, writable, listEnabled = true }: JoinsTabProps) {
   const t = useTranslate();
-  const { open } = useNotification();
-  const [saving, setSaving] = useState(false);
-  const [joinFromId, setJoinFromId] = useState<string | null>(
-    object.columns[0]?.id ?? null,
-  );
-  const [joinToId, setJoinToId] = useState<string | null>(null);
-  const [joinEvidence, setJoinEvidence] = useState("");
-  const [joinKind, setJoinKind] = useState<string | null>("INNER");
-  const [joinExpression, setJoinExpression] = useState("");
-  const [editingJoinId, setEditingJoinId] = useState<string | null>(null);
-  const [toObjectSearch, setToObjectSearch] = useState("");
-  const debouncedToObjectSearch = useSearchDebounce(toObjectSearch);
-  const [toObjectId, setToObjectId] = useState<string | null>(null);
-  const [toObjectOptions, setToObjectOptions] = useState<JoinSelectOption[]>([]);
-  const [toObjectLoading, setToObjectLoading] = useState(false);
-  const [toColumnOptions, setToColumnOptions] = useState<JoinSelectOption[]>([]);
-  const [toColumnLoading, setToColumnLoading] = useState(false);
-  const [maxHops, setMaxHops] = useState(2);
-  const [pathLoading, setPathLoading] = useState(false);
-  const [pathResult, setPathResult] = useState<JoinPathResult | null>(null);
+  const [session, setSession] = useState<{ join?: CatalogJoin } | null>(null);
+  const [inspected, setInspected] = useState<CatalogJoin | null>(null);
   const [pathDrawerOpen, setPathDrawerOpen] = useState(false);
-  const deleteConfirm = useConfirmAction<string>();
-
-  const fetchPage = useCallback(
-    (query: PageQuery) => listObjectJoins(object.id, query),
-    [object.id],
-  );
-  const list = useConsolePagedList({
-    pageSize: PAGE_SIZE,
-    fetch: fetchPage,
-    resetDeps: [object.id],
-    enabled: listEnabled,
-  });
+  const fetchPage = useCallback((query: PageQuery) => listObjectJoins(object.id, query), [object.id]);
+  const list = useConsolePagedList({ pageSize: 50, fetch: fetchPage, resetDeps: [object.id], enabled: listEnabled });
   const { items: joins, reload } = list;
+  const rowsRef = useRef(new Map<string, HTMLTableRowElement>());
+  const [returnToJoin, setReturnToJoin] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (!returnToJoin || list.loading || session) return;
+    rowsRef.current.get(returnToJoin)?.querySelector<HTMLButtonElement>('[data-row-action="amend"]')?.focus();
+    setReturnToJoin(null);
+  }, [returnToJoin, list.loading, session, joins]);
 
-  useEffect(() => {
-    setJoinFromId(object.columns[0]?.id ?? null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- Overview save must not reset the from-column picker
-  }, [object.id]);
-
-  useEffect(() => {
-    const query = debouncedToObjectSearch.trim();
-    let cancelled = false;
-    setToObjectLoading(true);
-    void searchCatalogObjects(query || object.name, {
-      limit: 20,
-    })
-      .then((data) => {
-        if (cancelled) return;
-        const next = data.items
-          .filter((item) => item.id !== object.id)
-          .map((item) => ({
-            value: item.id,
-            label: `${item.schema_name}.${item.name} · ${item.locator_key}`,
-          }));
-        setToObjectOptions((prev) =>
-          mergeSelectedOption(next, toObjectId, prev),
-        );
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setToObjectOptions((prev) => retainSelectedOption(prev, toObjectId));
-        open?.({
-          type: "error",
-          message: problemMessage(t, err, t("common.error.loadFailed")),
-        });
-      })
-      .finally(() => {
-        if (!cancelled) setToObjectLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [debouncedToObjectSearch, object.id, object.name, toObjectId, open]);
-
-  useEffect(() => {
-    if (!toObjectId) {
-      setToColumnOptions((prev) => retainSelectedOption(prev, joinToId));
-      return;
-    }
-    let cancelled = false;
-    setToColumnLoading(true);
-    void getCatalogObject(toObjectId)
-      .then((data) => {
-        if (cancelled) return;
-        const next = data.object.columns
-          .filter((c) => c.is_present)
-          .map((c) => ({
-            value: c.id,
-            label: columnOptionLabel(c.name, c.locator_key),
-          }));
-        setToColumnOptions((prev) => mergeSelectedOption(next, joinToId, prev));
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setToColumnOptions((prev) => retainSelectedOption(prev, joinToId));
-        open?.({
-          type: "error",
-          message: problemMessage(t, err, t("common.error.loadFailed")),
-        });
-      })
-      .finally(() => {
-        if (!cancelled) setToColumnLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [toObjectId, joinToId, open]);
-
-  const saveJoinEdge = async () => {
-    const check = validateJoinDraft({
-      evidence: joinEvidence,
-      fromId: joinFromId,
-      toId: joinToId,
-    });
-    if (!check.ok) {
-      open?.({ type: "error", message: t(check.messageKey) });
-      return;
-    }
-    setSaving(true);
-    try {
-      if (editingJoinId) {
-        await patchJoin(editingJoinId, {
-          evidence: check.evidence,
-          join_kind: joinKind || "INNER",
-          join_expression: joinExpression.trim() || null,
-        });
-      } else {
-        await createJoin({
-          from_column_id: check.fromId,
-          to_column_id: check.toId,
-          evidence: check.evidence,
-          join_kind: joinKind || "INNER",
-          join_expression: joinExpression.trim() || null,
-        });
-      }
-      await reload();
-      setJoinEvidence("");
-      setJoinExpression("");
-      setEditingJoinId(null);
-      open?.({ type: "success", message: t("catalog.joins.saved") });
-    } catch (err) {
-      const messageKey =
-        err instanceof ApiError ? joinWriteErrorKey(err.code) : null;
-      open?.({
-        type: "error",
-        message:
-          messageKey != null
-            ? t(messageKey)
-            : problemMessage(t, err, t("common.error.loadFailed")),
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const removeJoinEdge = async (joinId: string) => {
-    setSaving(true);
-    try {
-      await deleteJoin(joinId);
-      deleteConfirm.close();
-      await reload();
-      open?.({ type: "success", message: t("catalog.joins.deleted") });
-    } catch (err) {
-      const messageKey =
-        err instanceof ApiError ? joinDeleteErrorKey(err.code) : null;
-      open?.({
-        type: "error",
-        message:
-          messageKey != null
-            ? t(messageKey)
-            : problemMessage(t, err, t("common.error.loadFailed")),
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const rejectJoinEdge = async (joinId: string) => {
-    setSaving(true);
-    try {
-      await rejectJoin(joinId);
-      await reload();
-      open?.({ type: "success", message: t("catalog.joins.rejected") });
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, t("common.error.loadFailed")),
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const restoreJoinEdge = async (joinId: string) => {
-    setSaving(true);
-    try {
-      await restoreJoin(joinId);
-      await reload();
-      open?.({ type: "success", message: t("catalog.joins.restored") });
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, t("common.error.loadFailed")),
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const explorePaths = async () => {
-    setPathLoading(true);
-    try {
-      const data = await getJoinPath({
-        start: object.id,
-        max_hops: maxHops,
-        top_targets: 10,
-      });
-      setPathResult(data);
-      setPathDrawerOpen(true);
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, t("common.error.loadFailed")),
-      });
-    } finally {
-      setPathLoading(false);
-    }
-  };
-
-  const pathActions = (
-    <Group gap="xs" align="flex-end" wrap="nowrap">
-      <NumberField
-        editable
-        label={t("catalog.joins.path.maxHops")}
-        value={maxHops}
-        onChange={(v) => setMaxHops(typeof v === "number" ? v : 2)}
-        min={1}
-        max={5}
-        w={110}
-        size="sm"
-      />
-      <Button size="sm" loading={pathLoading} onClick={() => void explorePaths()}>
-        {t("catalog.joins.path.explore")}
-      </Button>
-    </Group>
-  );
+  const addAction = writable ? (
+    <Button size="sm" onClick={() => setSession({})}>
+      {t("catalog.joins.add")}
+    </Button>
+  ) : null;
 
   return (
-    <FillColumn gap="md">
-      {writable ? (
-        <Stack gap="xs" style={{ flexShrink: 0 }}>
-          <Text size="sm" fw={500}>
-            {editingJoinId
-              ? t("catalog.joins.amending")
-              : t("catalog.joins.add")}
-          </Text>
-          <Group align="flex-end" grow>
-            <SelectField
-              label={t("catalog.joins.from")}
-              editable={editingJoinId == null}
-              data={object.columns.map((c) => ({
-                value: c.id,
-                label: columnOptionLabel(c.name, c.locator_key),
-              }))}
-              value={joinFromId}
-              onChange={setJoinFromId}
-              searchable
-              size="sm"
-            />
-            <SelectField
-              label={t("catalog.joins.toObject")}
-              editable={editingJoinId == null}
-              data={toObjectOptions}
-              value={toObjectId}
-              onChange={(value) => {
-                setToObjectId(value);
-                setJoinToId(null);
-              }}
-              searchable
-              searchValue={toObjectSearch}
-              onSearchChange={setToObjectSearch}
-              filter={({ options }) => options}
-              clearable
-              size="sm"
-              nothingFoundMessage={
-                toObjectLoading ? "…" : t("catalog.joins.toObjectPlaceholder")
-              }
-              placeholder={t("catalog.joins.toObjectPlaceholder")}
-            />
-            <SelectField
-              label={t("catalog.joins.toColumn")}
-              editable={editingJoinId == null && toObjectId != null}
-              data={toColumnOptions}
-              value={joinToId}
-              onChange={setJoinToId}
-              searchable
-              clearable
-              size="sm"
-              nothingFoundMessage={
-                toColumnLoading
-                  ? "…"
-                  : toObjectId
-                    ? undefined
-                    : t("catalog.joins.toColumnNeedObject")
-              }
-              placeholder={t("catalog.joins.toColumnPlaceholder")}
-            />
-          </Group>
-          <Group grow>
-            <SelectField
-              editable
-              label={t("catalog.joins.kind")}
-              data={["INNER", "LEFT", "RIGHT", "FULL"]}
-              value={joinKind}
-              onChange={setJoinKind}
-              size="sm"
-            />
-            <TextareaField
-              editable
-              label={t("catalog.joins.expression")}
-              value={joinExpression}
-              onChange={(e) => setJoinExpression(e.currentTarget.value)}
-              minRows={1}
-              size="sm"
-            />
-          </Group>
-          <TextareaField
-            editable
-            label={t("catalog.joins.evidence")}
-            value={joinEvidence}
-            onChange={(e) => setJoinEvidence(e.currentTarget.value)}
-            minRows={1}
-            required
-            size="sm"
-          />
-          <Button
-            size="sm"
-            w="fit-content"
-            loading={saving}
-            onClick={() => void saveJoinEdge()}
-          >
-            {t("catalog.joins.save")}
-          </Button>
-        </Stack>
-      ) : null}
-
+    <FillColumn gap="sm">
       <div style={{ flexShrink: 0 }}>
         <SectionHeader
           title={t("catalog.joins.title")}
-          actions={pathActions}
           order={4}
+          actions={
+            <Group gap="xs" align="flex-end">
+              <Button size="sm" variant="default" onClick={() => setPathDrawerOpen(true)}>
+                {t("catalog.joins.path.explore")}
+              </Button>
+              {addAction}
+            </Group>
+          }
         />
       </div>
-
       <ListTable
         list={list}
-        columnCount={writable ? 8 : 7}
+        columnCount={4}
+        minWidth={760}
         emptyMessage={t("catalog.joins.empty")}
+        emptyAction={addAction}
         head={
           <Table.Tr>
-            <Table.Th>{t("catalog.joins.from")}</Table.Th>
-            <Table.Th>{t("catalog.joins.to")}</Table.Th>
+            <Table.Th>{t("catalog.joins.endpoints")}</Table.Th>
             <Table.Th>{t("catalog.joins.kind")}</Table.Th>
-            <Table.Th>{t("catalog.joins.expression")}</Table.Th>
-            <Table.Th>{t("catalog.joins.evidence")}</Table.Th>
             <Table.Th>{t("catalog.joins.state")}</Table.Th>
-            <Table.Th>{t("catalog.joins.createdAt")}</Table.Th>
-            {writable ? <Table.Th /> : null}
+            <Table.Th />
           </Table.Tr>
         }
       >
-        {joins.map((join) => {
-          const state = joinRowState(join);
-          const actions = joinRowActions(state);
-          return (
-            <Table.Tr key={join.id}>
-              <Table.Td>
-                <Text size="xs" style={{ wordBreak: "break-all" }}>
-                  {join.from_column_locator_key ??
-                    columnLabel(object.columns, join.from_column_id)}
+        {joins.map((join) => (
+          <Table.Tr key={join.id} ref={(node) => {
+            if (node) rowsRef.current.set(join.id, node);
+            else rowsRef.current.delete(join.id);
+          }}>
+            <Table.Td><RelationSummary object={object} join={join} compact /></Table.Td>
+            <Table.Td>{join.join_kind ?? "INNER"}</Table.Td>
+            <Table.Td>
+              <Stack gap={4}>
+                {join.is_rejected ? (
+                  <Badge size="xs" color="red">{t("catalog.joins.state.rejected")}</Badge>
+                ) : null}
+                <Text size="xs" c="dimmed">
+                  {t(join.created_by_user_id ? "catalog.joins.state.manual" : "catalog.joins.state.automated")}
                 </Text>
-              </Table.Td>
-              <Table.Td>
-                <Text size="xs" style={{ wordBreak: "break-all" }}>
-                  {join.to_column_locator_key ??
-                    columnLabel(object.columns, join.to_column_id)}
-                </Text>
-              </Table.Td>
-              <Table.Td>{join.join_kind ?? "INNER"}</Table.Td>
-              <Table.Td>{join.join_expression ?? "—"}</Table.Td>
-              <Table.Td>{join.evidence}</Table.Td>
-              <Table.Td>
-                <Group gap={4}>
-                  {state === "rejected" ? (
-                    <Badge size="xs" color="red">
-                      {t("catalog.joins.state.rejected")}
-                    </Badge>
-                  ) : state === "automated" ? (
-                    <Badge size="xs" color="gray">
-                      {t("catalog.joins.state.automated")}
-                    </Badge>
-                  ) : (
-                    <Badge size="xs" color="blue">
-                      {t("catalog.joins.state.manual")}
-                    </Badge>
-                  )}
-                </Group>
-              </Table.Td>
-              <Table.Td>
-                <Instant value={join.created_at} />
-              </Table.Td>
-              {writable ? (
-                <Table.Td>
-                  <Group gap={4} wrap="nowrap">
-                    {actions.restore ? (
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        loading={saving}
-                        onClick={() => void restoreJoinEdge(join.id)}
-                      >
-                        {t("catalog.joins.restore")}
-                      </Button>
-                    ) : (
-                      <>
-                        {actions.amend ? (
-                          <Button
-                            size="xs"
-                            variant="subtle"
-                            loading={saving}
-                            onClick={() => {
-                              setEditingJoinId(join.id);
-                              setJoinFromId(join.from_column_id);
-                              setJoinToId(join.to_column_id);
-                              const objectRef = objectRefFromColumnLocator(
-                                join.to_column_locator_key,
-                              );
-                              if (objectRef) {
-                                void getCatalogObject(objectRef).then((data) => {
-                                  setToObjectId(data.object.id);
-                                  setToObjectOptions((prev) =>
-                                    mergeSelectedOption(prev, data.object.id, [
-                                      {
-                                        value: data.object.id,
-                                        label: `${data.object.schema_name}.${data.object.name} · ${data.object.locator_key}`,
-                                      },
-                                    ]),
-                                  );
-                                });
-                              }
-                              setToColumnOptions((prev) =>
-                                mergeSelectedOption(
-                                  prev,
-                                  join.to_column_id,
-                                  [
-                                    {
-                                      value: join.to_column_id,
-                                      label:
-                                        join.to_column_locator_key ??
-                                        join.to_column_id,
-                                    },
-                                  ],
-                                ),
-                              );
-                              setJoinKind(join.join_kind ?? "INNER");
-                              setJoinExpression(join.join_expression ?? "");
-                              setJoinEvidence(join.evidence);
-                            }}
-                          >
-                            {t("catalog.joins.amend")}
-                          </Button>
-                        ) : null}
-                        {actions.reject ? (
-                          <Button
-                            size="xs"
-                            variant="subtle"
-                            color="orange"
-                            loading={saving}
-                            onClick={() => void rejectJoinEdge(join.id)}
-                          >
-                            {t("catalog.joins.reject")}
-                          </Button>
-                        ) : null}
-                        {actions.delete ? (
-                          <Button
-                            size="xs"
-                            variant="subtle"
-                            color="red"
-                            loading={saving}
-                            onClick={() => deleteConfirm.open(join.id)}
-                          >
-                            {t("catalog.joins.delete")}
-                          </Button>
-                        ) : null}
-                      </>
-                    )}
-                  </Group>
-                </Table.Td>
-              ) : null}
-            </Table.Tr>
-          );
-        })}
+              </Stack>
+            </Table.Td>
+            <Table.Td>
+              <RelationActions
+                object={object}
+                join={join}
+                writable={writable}
+                onInspect={() => setInspected(join)}
+                onAmend={() => setSession({ join })}
+                onChanged={reload}
+              />
+            </Table.Td>
+          </Table.Tr>
+        ))}
       </ListTable>
-
+      {writable && session ? (
+        <RelationFormDialog
+          key={`${object.id}:${session.join?.id ?? "new"}`}
+          object={object}
+          join={session.join}
+          onClose={() => setSession(null)}
+          onSaved={async () => {
+            const editedId = session.join?.id;
+            setSession(null);
+            await reload();
+            if (editedId) setReturnToJoin(editedId);
+          }}
+        />
+      ) : null}
       <Drawer
-        opened={pathDrawerOpen}
-        onClose={() => setPathDrawerOpen(false)}
-        title={t("catalog.joins.path.title")}
+        opened={inspected != null}
+        onClose={() => setInspected(null)}
+        title={t("catalog.joins.inspect")}
         position="right"
         size="md"
       >
-        {pathResult == null ? null : (
-          <Stack gap="sm">
-            {pathResult.rank_mode ? (
-              <Text size="xs" c="dimmed">
-                {t("catalog.joins.path.rank", {
-                  mode: t(`catalog.joins.rank.${pathResult.rank_mode}`),
-                })}
+        {inspected ? (
+          <Stack gap="md">
+            <RelationSummary object={object} join={inspected} />
+            <Text size="sm" c="dimmed">{t("catalog.joins.storedDirection")}</Text>
+            <Text size="sm">{t("catalog.joins.kind")}: {inspected.join_kind ?? "INNER"}</Text>
+            <Stack gap={4}>
+              <Text fw={500} size="sm">{t("catalog.joins.expression")}</Text>
+              <Text size="sm" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                {inspected.join_expression ?? "—"}
               </Text>
-            ) : null}
-            {pathResult.paths.length === 0 ? (
-              <Text size="sm" c="dimmed">
-                {t("catalog.joins.path.empty")}
+            </Stack>
+            <Stack gap={4}>
+              <Text fw={500} size="sm">{t("catalog.joins.evidence")}</Text>
+              <Text size="sm" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                {inspected.evidence}
               </Text>
-            ) : (
-              <Stack gap="sm">
-                {pathResult.paths.map((path, idx) => (
-                  <Stack
-                    key={`${path.target_object_id ?? "t"}-${idx}`}
-                    gap={4}
-                    p="sm"
-                    style={{
-                      border: "1px solid var(--refraq-tone-neutral-border)",
-                      borderRadius: 8,
-                    }}
-                  >
-                    <Text size="sm" fw={500}>
-                      {t("catalog.joins.path.summary")}: {path.path_summary}
-                    </Text>
-                    {path.hops.map((hop) => (
-                      <Text key={hop.join_id} size="xs" c="dimmed">
-                        {hop.from_column_locator_key} → {hop.to_column_locator_key}{" "}
-                        ({hop.join_kind})
-                      </Text>
-                    ))}
-                    {path.target_object_id ? (
-                      <Button
-                        component={ConsoleLink}
-                        href={`/console/catalog/${path.target_object_id}`}
-                        size="xs"
-                        variant="light"
-                        w="fit-content"
-                      >
-                        {t("catalog.joins.path.openTarget")}
-                      </Button>
-                    ) : null}
-                  </Stack>
-                ))}
-              </Stack>
-            )}
+            </Stack>
+            <details>
+              <summary>{t("catalog.joins.locators")}</summary>
+              <Text size="xs" style={{ overflowWrap: "anywhere" }}>
+                {inspected.from_column_locator_key ?? inspected.from_column_id} → {inspected.to_column_locator_key ?? inspected.to_column_id}
+              </Text>
+            </details>
+            <Text size="sm">{t("catalog.joins.createdAt")}: <Instant value={inspected.created_at} /></Text>
           </Stack>
-        )}
+        ) : null}
       </Drawer>
-      <ConfirmActionModal
-        opened={deleteConfirm.opened}
-        onClose={deleteConfirm.close}
-        title={t("catalog.joins.deleteConfirm.title")}
-        body={t("catalog.joins.deleteConfirm.body")}
-        confirmColor="red"
-        loading={saving}
-        confirmLabel={t("catalog.joins.delete")}
-        onConfirm={() => {
-          if (deleteConfirm.pending != null) {
-            void removeJoinEdge(deleteConfirm.pending);
-          }
-        }}
-      />
+      {pathDrawerOpen ? (
+        <RelationPathsDrawer key={object.id} start={object.id} onClose={() => setPathDrawerOpen(false)} />
+      ) : null}
     </FillColumn>
   );
 }
