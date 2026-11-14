@@ -37,8 +37,6 @@ export function RelationSummary({ object, join, compact = false }: { object: Cat
   const t = useTranslate();
   const from = endpoint(object, join.from_column_id, join.from_column_locator_key);
   const to = endpoint(object, join.to_column_id, join.to_column_locator_key);
-  const localFrom = object.columns.some((column) => column.id === join.from_column_id);
-  const localTo = object.columns.some((column) => column.id === join.to_column_id);
 
   return (
     <Stack gap={4} style={{ minWidth: 0 }}>
@@ -65,9 +63,6 @@ export function RelationSummary({ object, join, compact = false }: { object: Cat
           </Group>
         ))}
       </Group>
-      <Text size="xs" c="dimmed">
-        {t(`catalog.joins.${localFrom && localTo ? "sameObject" : localFrom ? "outgoing" : "incoming"}`)}
-      </Text>
     </Stack>
   );
 }
