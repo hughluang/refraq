@@ -21,8 +21,8 @@ export function RelationActions({
   object: CatalogObject;
   join: CatalogJoin;
   writable: boolean;
-  onInspect: () => void;
-  onAmend: () => void;
+  onInspect?: (returnTarget: HTMLElement) => void;
+  onAmend: (returnTarget: HTMLElement) => void;
   onChanged: () => Promise<void>;
 }) {
   const t = useTranslate();
@@ -30,21 +30,21 @@ export function RelationActions({
   const policy = joinRowActions(joinRowState(join));
   const [rejectOpen, setRejectOpen] = useState(false);
   const rejection = useConsoleMutation();
-  const verbs: RowActionVerb[] = [
+  const verbs: RowActionVerb[] = onInspect ? [
     {
       key: "inspect",
       label: t("catalog.joins.inspect"),
       safety: "immediate",
-      onClick: onInspect,
+      onClick: (event) => onInspect(event.currentTarget),
     },
-  ];
+  ] : [];
 
   if (writable && policy.amend) {
     verbs.push({
       key: "amend",
       label: t("catalog.joins.amend"),
       safety: "immediate",
-      onClick: onAmend,
+      onClick: (event) => onAmend(event.currentTarget),
     });
   }
   if (writable && policy.restore) {

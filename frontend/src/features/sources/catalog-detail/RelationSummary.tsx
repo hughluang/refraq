@@ -1,7 +1,6 @@
 "use client";
 
 import { Group, Stack, Text } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import type { CatalogJoin, CatalogObject } from "@/features/sources/types";
 import { objectRefFromColumnLocator } from "./joinEdges";
@@ -34,23 +33,22 @@ export function relationName(object: CatalogObject, join: CatalogJoin) {
 }
 
 export function RelationSummary({ object, join, compact = false }: { object: CatalogObject; join: CatalogJoin; compact?: boolean }) {
-  const t = useTranslate();
   const from = endpoint(object, join.from_column_id, join.from_column_locator_key);
   const to = endpoint(object, join.to_column_id, join.to_column_locator_key);
 
   return (
     <Stack gap={4} style={{ minWidth: 0 }}>
-      <Group gap="sm" align="flex-start" wrap={compact ? "nowrap" : "wrap"}>
+      <Group gap="sm" align="flex-start" wrap="wrap">
         {[from, to].map((item, index) => (
           <Group key={index} gap="sm" align="flex-start" wrap="nowrap" style={{ minWidth: 0 }}>
-            {index === 1 ? <Text aria-label={t("catalog.joins.storedDirection")}>→</Text> : null}
+            {index === 1 ? <Text aria-hidden="true">→</Text> : null}
             <Stack gap={2} style={{ minWidth: 0, overflowWrap: "anywhere" }}>
               {item.href ? (
                 <Text
                   component={ConsoleLink}
                   href={`/console/catalog/${encodeURIComponent(item.href)}`}
                   size="sm"
-                  style={compact ? { whiteSpace: "nowrap" } : undefined}
+                  style={{ overflowWrap: "anywhere" }}
                   fw={500}
                 >
                   {item.label}

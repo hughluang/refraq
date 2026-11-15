@@ -26,7 +26,7 @@ def seed() -> None:
     if os.environ.get("REFRAQ_STORE_BACKEND") != "memory":
         raise RuntimeError("Relations fixtures require the memory backend")
     now = utc_now()
-    for case in ("author", "edit", "lifecycle", "failure", "paths", "en-light", "en-dark", "zh-light", "zh-dark"):
+    for case in ("author", "edit", "lifecycle", "failure", "paths", "dense", "en-light", "en-dark", "zh-light", "zh-dark"):
         key = f"relations-{case}"
         source = SourceRecord(
             id=f"src_{key}", key=key, locator_key=f"src/postgresql/{key}",
@@ -36,7 +36,10 @@ def seed() -> None:
         )
         get_source_store().create_source(source)
         objects = []
-        for name in ("orders", "customer_accounts_with_a_deliberately_long_catalog_object_name"):
+        names = ("orders", "customer_accounts_with_a_deliberately_long_catalog_object_name")
+        if case == "dense":
+            names += tuple(f"remote_{index}_with_a_deliberately_long_catalog_object_name" for index in range(3))
+        for name in names:
             oid = f"{key}-{name}"
             locator = f"obj/postgresql/{key}/public/table/{name}"
             columns = [CatalogColumnRecord(

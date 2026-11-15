@@ -1,9 +1,8 @@
 "use client";
 
-import { Badge, Button, Drawer, Group, Stack, Table, Text } from "@mantine/core";
+import { Badge, Button, Group, SegmentedControl, Stack, Table, Text, TextInput } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import { Instant } from "@/components/display/Instant";
 import { ListTable } from "@/components/display/ListTable";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { SectionHeader } from "@/components/layout/SectionHeader";
@@ -12,146 +11,152 @@ import type { CatalogJoin, CatalogObject } from "@/features/sources/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import type { PageQuery } from "@/lib/pagination";
 import { RelationActions } from "./RelationActions";
-import { RelationPathsDrawer } from "./RelationPathsDrawer";
-import { RelationSummary } from "./RelationSummary";
-import { RelationFormDialog } from "./RelationFormDialog";
+import { RelationPaths } from "./RelationPaths";
+import { RelationSummary, relationName } from "./RelationSummary";
+import { RelationBuilder } from "./RelationBuilder";
+import { RelationGraph } from "./RelationGraph";
+import styles from "./RelationGraph.module.css";
 
 type JoinsTabProps = { object: CatalogObject; writable: boolean; listEnabled?: boolean };
+type Workspace = { kind: "browse" | "new" | "paths" } | { kind: "relation"; id: string; mode: "view" | "edit" };
 
-export function JoinsTab({ object, writable, listEnabled = true }: JoinsTabProps) {
+export function JoinsTab(props: JoinsTabProps) {
+  return <JoinsWorkspace key={props.object.id} {...props} />;
+}
+
+function JoinsWorkspace({ object, writable, listEnabled = true }: JoinsTabProps) {
   const t = useTranslate();
-  const [session, setSession] = useState<{ join?: CatalogJoin } | null>(null);
-  const [inspected, setInspected] = useState<CatalogJoin | null>(null);
-  const [pathDrawerOpen, setPathDrawerOpen] = useState(false);
-  const fetchPage = useCallback((query: PageQuery) => listObjectJoins(object.id, query), [object.id]);
+  const [view, setView] = useState("graph");
+  const [workspace, setWorkspace] = useState<Workspace>({ kind: "browse" });
+  const [search, setSearch] = useState("");
+  const [column, setColumn] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const returnTarget = useRef<HTMLElement | SVGElement | null>(null);
+  const [restoreFocus, setRestoreFocus] = useState(false);
+  const loadedPages = useRef(new WeakMap<CatalogJoin[], number>());
+  const fetchPage = useCallback(async (query: PageQuery) => {
+    const result = await listObjectJoins(object.id, query);
+    loadedPages.current.set(result.items, Math.floor(result.offset / result.limit) + 1);
+    return result;
+  }, [object.id]);
   const list = useConsolePagedList({ pageSize: 50, fetch: fetchPage, resetDeps: [object.id], enabled: listEnabled });
   const { items: joins, reload } = list;
-  const rowsRef = useRef(new Map<string, HTMLTableRowElement>());
-  const [returnToJoin, setReturnToJoin] = useState<string | null>(null);
+  const relation = workspace.kind === "relation" ? joins.find((join) => join.id === workspace.id) : undefined;
+  const neighborhoodLoaded = listEnabled && list.presentation.state !== "unloaded" && list.presentation.state !== "loading";
+  const visibleJoins = joins.filter((join) => `${relationName(object, join)} ${join.evidence} ${join.join_kind ?? "INNER"}`.toLowerCase().includes(search.toLowerCase()) && (!column || join.from_column_id === column || join.to_column_id === column));
+  const openRelation = (join: CatalogJoin, mode: "view" | "edit", target: HTMLElement | SVGElement) => {
+    returnTarget.current = target;
+    setSelected(join.id);
+    setWorkspace({ kind: "relation", id: join.id, mode });
+  };
+  const exitRelation = () => { setWorkspace({ kind: "browse" }); setRestoreFocus(true); };
   useLayoutEffect(() => {
-    if (!returnToJoin || list.loading || session) return;
-    rowsRef.current.get(returnToJoin)?.querySelector<HTMLButtonElement>('[data-row-action="amend"]')?.focus();
-    setReturnToJoin(null);
-  }, [returnToJoin, list.loading, session, joins]);
+    if (list.loading) return;
+    if (selected && !joins.some((join) => join.id === selected)) setSelected(null);
+    if (workspace.kind === "relation") {
+      if (!relation) {
+        returnTarget.current = null;
+        setWorkspace({ kind: "browse" });
+        setRestoreFocus(true);
+      } else if (workspace.mode === "edit" && (!writable || relation.is_rejected)) {
+        setWorkspace({ kind: "relation", id: relation.id, mode: "view" });
+      }
+    }
+  }, [joins, list.loading, selected, workspace, relation, writable]);
+  useLayoutEffect(() => {
+    if (!restoreFocus || list.loading || workspace.kind !== "browse") return;
+    const target = returnTarget.current;
+    if (target?.isConnected && target.getClientRects().length && !target.closest("[hidden]")) target.focus();
+    if (!target || document.activeElement !== target) searchRef.current?.focus();
+    returnTarget.current = null;
+    setRestoreFocus(false);
+  }, [restoreFocus, list.loading, workspace, joins]);
 
-  const addAction = writable ? (
-    <Button size="sm" onClick={() => setSession({})}>
+  const exploreRef = useRef<HTMLButtonElement>(null);
+  const exitPaths = () => { setWorkspace({ kind: "browse" }); requestAnimationFrame(() => exploreRef.current?.focus()); };
+  const addRef = useRef<HTMLButtonElement>(null);
+  const addAction = writable && (workspace.kind === "browse" || workspace.kind === "paths") ? (
+    <Button ref={addRef} size="sm" onClick={() => setWorkspace({ kind: "new" })}>
       {t("catalog.joins.add")}
     </Button>
   ) : null;
 
   return (
-    <FillColumn gap="sm">
+    <div className={styles.frame} data-authoring={workspace.kind === "new" || workspace.kind === "relation"}><FillColumn gap="sm">
       <div style={{ flexShrink: 0 }}>
         <SectionHeader
           title={t("catalog.joins.title")}
           order={4}
           actions={
             <Group gap="xs" align="flex-end">
-              <Button size="sm" variant="default" onClick={() => setPathDrawerOpen(true)}>
+              {workspace.kind === "browse" ? <Button ref={exploreRef} size="sm" variant="default" onClick={() => setWorkspace({ kind: "paths" })}>
                 {t("catalog.joins.path.explore")}
-              </Button>
+              </Button> : null}
               {addAction}
             </Group>
           }
         />
       </div>
+      {workspace.kind === "paths" ? <RelationPaths object={object} joins={joins} onClose={exitPaths} /> : null}
+      {workspace.kind === "browse" || workspace.kind === "relation" ? <div className={styles.browse} hidden={workspace.kind === "relation"}>
+      <Text size="xs" c="dimmed">{t("catalog.joins.graph.legend")}</Text>
+      {neighborhoodLoaded ? <Text size="xs" c="dimmed" aria-live="polite">{t("catalog.joins.graph.coverage", { loaded: joins.length, total: list.total, page: loadedPages.current.get(joins) })}</Text> : null}
+      <div className={styles.viewSwitch}><SegmentedControl size="xs" value={view} onChange={setView} data={[{ value: "graph", label: t("catalog.joins.graph.title") }, { value: "index", label: t("catalog.joins.graph.index") }]} /></div>
+      <div className={styles.workspace} data-view={view} data-unloaded={!neighborhoodLoaded || undefined}>
+      {neighborhoodLoaded ? <RelationGraph key={object.id} object={object} joins={joins} selected={selected} onSelect={(join, target) => openRelation(join, "view", target)} column={column} onColumn={setColumn} /> : null}
+      <section className={styles.index} aria-label={t("catalog.joins.graph.index")}>
+      <TextInput ref={searchRef} size="xs" aria-label={t("catalog.joins.graph.search")} placeholder={t("catalog.joins.graph.search")} value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
       <ListTable
-        list={list}
-        columnCount={4}
-        minWidth={760}
+        list={list.presentation.state === "ready" && visibleJoins.length === 0 ? { ...list, presentation: { ...list.presentation, state: "no-match" } } : list}
+        columnCount={1}
+        minWidth={0}
         emptyMessage={t("catalog.joins.empty")}
         emptyAction={addAction}
-        head={
-          <Table.Tr>
-            <Table.Th>{t("catalog.joins.endpoints")}</Table.Th>
-            <Table.Th>{t("catalog.joins.kind")}</Table.Th>
-            <Table.Th>{t("catalog.joins.state")}</Table.Th>
-            <Table.Th />
-          </Table.Tr>
-        }
+        head={<Table.Tr><Table.Th>{t("catalog.joins.graph.index")}</Table.Th></Table.Tr>}
       >
-        {joins.map((join) => (
-          <Table.Tr key={join.id} ref={(node) => {
-            if (node) rowsRef.current.set(join.id, node);
-            else rowsRef.current.delete(join.id);
-          }}>
-            <Table.Td><RelationSummary object={object} join={join} compact /></Table.Td>
-            <Table.Td>{join.join_kind ?? "INNER"}</Table.Td>
+        {visibleJoins.map((join) => (
+          <Table.Tr key={join.id} aria-selected={selected === join.id}>
             <Table.Td>
+              <RelationSummary object={object} join={join} compact />
+              <Text size="xs">{join.join_kind ?? "INNER"} · <span>{t(object.columns.some((item) => item.id === join.from_column_id) ? (object.columns.some((item) => item.id === join.to_column_id) ? "catalog.joins.sameObject" : "catalog.joins.outgoing") : "catalog.joins.incoming")}</span></Text>
               <Stack gap={4}>
-                {join.is_rejected ? (
-                  <Badge size="xs" color="red">{t("catalog.joins.state.rejected")}</Badge>
-                ) : null}
-                <Text size="xs" c="dimmed">
-                  {t(join.created_by_user_id ? "catalog.joins.state.manual" : "catalog.joins.state.automated")}
-                </Text>
+                {join.is_rejected ? <Badge size="xs" color="red">{t("catalog.joins.state.rejected")}</Badge> : null}
+                <Text size="xs" c="dimmed">{t(join.created_by_user_id ? "catalog.joins.state.manual" : "catalog.joins.state.automated")}</Text>
               </Stack>
-            </Table.Td>
-            <Table.Td>
-              <RelationActions
-                object={object}
-                join={join}
-                writable={writable}
-                onInspect={() => setInspected(join)}
-                onAmend={() => setSession({ join })}
-                onChanged={reload}
-              />
+              <RelationActions object={object} join={join} writable={writable} onInspect={(target) => openRelation(join, "view", target)} onAmend={(target) => openRelation(join, "edit", target)} onChanged={reload} />
             </Table.Td>
           </Table.Tr>
         ))}
       </ListTable>
-      {writable && session ? (
-        <RelationFormDialog
-          key={`${object.id}:${session.join?.id ?? "new"}`}
-          object={object}
-          join={session.join}
-          onClose={() => setSession(null)}
-          onSaved={async () => {
-            const editedId = session.join?.id;
-            setSession(null);
-            await reload();
-            if (editedId) setReturnToJoin(editedId);
-          }}
-        />
-      ) : null}
-      <Drawer
-        opened={inspected != null}
-        onClose={() => setInspected(null)}
-        title={t("catalog.joins.inspect")}
-        position="right"
-        size="md"
-      >
-        {inspected ? (
-          <Stack gap="md">
-            <RelationSummary object={object} join={inspected} />
-            <Text size="sm" c="dimmed">{t("catalog.joins.storedDirection")}</Text>
-            <Text size="sm">{t("catalog.joins.kind")}: {inspected.join_kind ?? "INNER"}</Text>
-            <Stack gap={4}>
-              <Text fw={500} size="sm">{t("catalog.joins.expression")}</Text>
-              <Text size="sm" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                {inspected.join_expression ?? "—"}
-              </Text>
-            </Stack>
-            <Stack gap={4}>
-              <Text fw={500} size="sm">{t("catalog.joins.evidence")}</Text>
-              <Text size="sm" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                {inspected.evidence}
-              </Text>
-            </Stack>
-            <details>
-              <summary>{t("catalog.joins.locators")}</summary>
-              <Text size="xs" style={{ overflowWrap: "anywhere" }}>
-                {inspected.from_column_locator_key ?? inspected.from_column_id} → {inspected.to_column_locator_key ?? inspected.to_column_id}
-              </Text>
-            </details>
-            <Text size="sm">{t("catalog.joins.createdAt")}: <Instant value={inspected.created_at} /></Text>
-          </Stack>
-        ) : null}
-      </Drawer>
-      {pathDrawerOpen ? (
-        <RelationPathsDrawer key={object.id} start={object.id} onClose={() => setPathDrawerOpen(false)} />
-      ) : null}
-    </FillColumn>
+      </section>
+      </div>
+      </div> : null}
+      {workspace.kind === "relation" && relation ? <RelationBuilder
+        key={`${object.id}:${relation.id}:${workspace.mode}`}
+        object={object}
+        join={relation}
+        mode={workspace.mode}
+        writable={writable}
+        onAmend={() => setWorkspace({ kind: "relation", id: relation.id, mode: "edit" })}
+        onChanged={reload}
+        onClose={() => workspace.mode === "edit" ? setWorkspace({ kind: "relation", id: relation.id, mode: "view" }) : exitRelation()}
+        onSaved={async () => {
+          await reload();
+          setWorkspace((current) => current.kind === "relation" && current.id === relation.id ? { ...current, mode: "view" } : current);
+        }}
+      /> : null}
+      {writable && workspace.kind === "new" ? <RelationBuilder
+        key={`${object.id}:new`}
+        object={object}
+        localColumn={object.columns.find((item) => item.id === column && item.is_present)?.id}
+        onClose={() => { setWorkspace({ kind: "browse" }); requestAnimationFrame(() => addRef.current?.focus()); }}
+        onSaved={async () => {
+          setWorkspace({ kind: "browse" });
+          await reload();
+          addRef.current?.focus();
+        }}
+      /> : null}
+    </FillColumn></div>
   );
 }

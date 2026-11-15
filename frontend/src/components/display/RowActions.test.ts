@@ -2,7 +2,7 @@
 
 import { MantineProvider } from "@mantine/core";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createElement, type ReactNode } from "react";
+import { createElement, type MouseEvent, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RowActions, type RowActionVerb } from "@/components/display/RowActions";
@@ -83,6 +83,33 @@ describe("RowActions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(onEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the live click event synchronously through inline and menu verbs", () => {
+    const received: { event: MouseEvent<HTMLElement>; target: HTMLElement; native: Event }[] = [];
+    const onClick = (event: MouseEvent<HTMLElement>) => received.push({ event, target: event.currentTarget, native: event.nativeEvent });
+    const legacy = vi.fn(() => {});
+    const verbs: RowActionVerb[] = [
+      { key: "inspect", label: "Inspect", safety: "immediate", onClick },
+      { key: "legacy", label: "Legacy", safety: "immediate", onClick: legacy },
+      { key: "amend", label: "Amend", safety: "immediate", onClick },
+    ];
+    render(shell(createElement(RowActions, { recordName: "Atlas", verbs })));
+    const inline = screen.getByRole("button", { name: "Inspect" });
+    const inlineClick = new window.MouseEvent("click", { bubbles: true });
+    fireEvent(inline, inlineClick);
+    expect(received[0].target).toBe(inline);
+    expect(received[0].native).toBe(inlineClick);
+    expect(received[0].event.type).toBe("click");
+    fireEvent.click(screen.getByRole("button", { name: "Legacy" }));
+    expect(legacy).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "More actions for Atlas" }));
+    const menu = screen.getByRole("menuitem", { name: "Amend" });
+    const menuClick = new window.MouseEvent("click", { bubbles: true });
+    fireEvent(menu, menuClick);
+    expect(received[1].target).toBe(menu);
+    expect(received[1].native).toBe(menuClick);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "More actions for Atlas" }));
   });
 
   it("shows a disabled verb with its reason", async () => {

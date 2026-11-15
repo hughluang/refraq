@@ -1,0 +1,11 @@
+.builder { flex: 1; min-height: 0; overflow: auto; padding: var(--mantine-spacing-md); border: 1px solid var(--refraq-tone-neutral-border); border-radius: var(--mantine-radius-md); background: var(--mantine-color-body); }
+.layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(16rem, 1fr); gap: var(--mantine-spacing-lg); }
+.preview { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3rem; align-items: start; }
+.endpoint { min-width: 0; padding: var(--mantine-spacing-md); border: 2px solid var(--mantine-primary-color-filled); border-radius: var(--mantine-radius-md); background: var(--mantine-primary-color-light); }
+.connector { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; color: var(--mantine-primary-color-filled); z-index: 1; }
+.layout > * { min-width: 0; overflow-wrap: anywhere; }
+.locator { overflow-wrap: anywhere; }
+.port { border: 1px dashed var(--mantine-primary-color-filled); border-radius: var(--mantine-radius-sm); padding: var(--mantine-spacing-xs); overflow-wrap: anywhere; }
+.port[data-selected="true"] { border-style: solid; background: var(--mantine-color-body); }
+@media (max-width: 70rem) { .layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 40rem) { .preview { grid-template-columns: minmax(0, 1fr); gap: var(--mantine-spacing-lg); padding-right: 2rem; } }
