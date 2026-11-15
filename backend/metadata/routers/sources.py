@@ -116,6 +116,8 @@ def post_source(
         description=payload.description,
         engine=payload.engine,
         access=payload.access,
+        capture_credential=payload.capture_credential,
+        snapshot_window=payload.snapshot_window,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
     )
@@ -126,7 +128,16 @@ def post_source(
         resource_id=record.id,
         action="source.create",
         result="success",
-        detail={"key": record.key, "kind": record.kind, "engine": record.engine},
+        detail={
+            "key": record.key,
+            "kind": record.kind,
+            "engine": record.engine,
+            "capture_credential": "replace"
+            if payload.capture_credential
+            else "clear"
+            if "capture_credential" in payload.model_fields_set
+            else "retain",
+        },
     )
     return SourceResponse(source=_source_out(record))
 
@@ -207,6 +218,10 @@ def patch_source(
         status=data.get("status"),
         engine=data.get("engine"),
         access=data["access"] if "access" in data else ...,
+        capture_credential=payload.capture_credential
+        if "capture_credential" in data
+        else ...,
+        snapshot_window=payload.snapshot_window if "snapshot_window" in data else ...,
         actor_user_id=user.id,
         actor_token_id=actor_token_id,
     )
@@ -217,7 +232,14 @@ def patch_source(
         resource_id=record.id,
         action="source.update",
         result="success",
-        detail={"fields": sorted(data.keys())},
+        detail={
+            "fields": sorted(data.keys()),
+            "capture_credential": "retain"
+            if "capture_credential" not in data
+            else "clear"
+            if payload.capture_credential is None
+            else "replace",
+        },
     )
     if not seeded:
         return PatchSourceResponse(source=_source_out(record))

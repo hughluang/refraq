@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from backend.core.time import utc_now
 import json
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from typing import Any, Iterator
 
@@ -503,10 +503,11 @@ class SqlCatalogStore:
         engine: str | None,
         kind: str,
         source_key: str,
+        session: Session | None = None,
     ) -> int:
 
         changed = 0
-        with session_scope() as session:
+        with nullcontext(session) if session is not None else session_scope() as session:
             rows = list(
                 session.scalars(
                     select(CatalogObjectRow)

@@ -34,6 +34,7 @@ __all__ = [
     "SemanticColumnUnknown",
     "SourceAccessInvalid",
     "SourceAccessRequired",
+    "SourceCaptureScopeLocked",
     "SourceEngineUnsupported",
     "SourceKeyDuplicate",
     "SourceKindUnsupported",
@@ -46,6 +47,16 @@ __all__ = [
     "TypeMappingSeedImmutable",
     "TypeMappingUnknownForbidden",
 ]
+
+
+class SourceCaptureScopeLocked(AppError):
+    code = "SOURCE_CAPTURE_SCOPE_LOCKED"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return (
+            "Clear capture configuration before changing the Source endpoint or scope"
+        )
 
 
 class SourceNotFound(AppError):
@@ -224,9 +235,7 @@ class JoinDeleteAutomatic(AppError):
 
     def __init__(self, join_id: str) -> None:
         self.join_id = join_id
-        super().__init__(
-            f"Automatic join cannot be deleted; reject instead: {join_id}"
-        )
+        super().__init__(f"Automatic join cannot be deleted; reject instead: {join_id}")
 
 
 class JoinAlreadyRejected(AppError):
@@ -381,4 +390,3 @@ class ScheduleKindInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Scheduled Task work kind is not in the closed catalog"
-

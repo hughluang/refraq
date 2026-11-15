@@ -79,6 +79,7 @@ def get_engine() -> Engine:
         pool_timeout=cap.pool_timeout_sec,
         pool_recycle=cap.pool_recycle_sec or -1,
         pool_pre_ping=True,
+        hide_parameters=True,
         connect_args=_connect_args(settings.database_url),
     )
 

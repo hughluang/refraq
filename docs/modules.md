@@ -36,7 +36,7 @@ Responsibilities:
 - Shared kernel used by Foundation and capability packages
 - `core/config.py`: environment-driven settings via pydantic-settings (Store Backend, backing-service URLs)
 - `core/db.py`: SQLAlchemy `DeclarativeBase`, engine, and session factory for Postgres (sessions pin `TimeZone=UTC`; pool sizing from `core/runtime.py`)
-- `core/runtime.py` / `core/bulkhead.py` / `core/admission.py` / `core/load_shed.py` / `core/metrics.py` / `core/http_runtime.py` / `core/worker_runtime.py`: process-role capacity, admission pool, HTTP load-shed, intranet `/metrics`, worker/beat capacity banner (ADR 0040 / 0045)
+- `core/runtime.py` / `core/bulkhead.py` / `core/admission.py` / `core/load_shed.py` / `core/metrics.py` / `core/http_runtime.py` / `core/worker_runtime.py`: process-role capacity, admission pool, HTTP load-shed, intranet `/metrics`, worker/beat capacity banner (`docs/env.md`)
 - `core/time.py`: **unique Instant / Clock entry** — `Clock` / `utc_now`, Instant field type, `UtcDateTime`, format helpers; Schedule wall-clock DST helpers used by `worker`
 - `core/time_zones.py`: shared IANA zone catalog (`iana_zone_ids`, `zone_aliases`, `canonical_zone_id`) for **Display Timezone** and **Schedule Timezone**
 - `core/redis_client.py`: Redis client factory for Session storage
@@ -48,9 +48,9 @@ Responsibilities:
 - `core/entry.py`: official product start path (run Foundation Upgrade, then serve); exit non-zero if upgrade fails (does not serve)
 - Process probes (health/ready HTTP adapters)
 
-Time contract: [`docs/conventions-time.md`](conventions-time.md), ADR [`0022`](adr/0022-unified-time-contract.md).
-Error / request-id contract: [`docs/conventions-errors.md`](conventions-errors.md), ADR [`0023`](adr/0023-api-problem-details.md).
-Pagination contract: [`docs/conventions-pagination.md`](conventions-pagination.md), ADR [`0029`](adr/0029-offset-page-as-platform-list-envelope.md).
+Time contract: [`docs/conventions-time.md`](conventions-time.md).
+Error / request-id contract: [`docs/conventions-errors.md`](conventions-errors.md).
+Pagination contract: [`docs/conventions-pagination.md`](conventions-pagination.md).
 
 Must not contain:
 
@@ -119,6 +119,8 @@ Must not contain:
 Responsibilities:
 
 - Source domain models and services (embedded reachability for database kinds); `sources.access` interprets Connector Spec (validate / seal / project / endpoint)
+- Source capture foundation: separate encrypted write-only capture credential, durable credential revision, snapshot-window validation, and live Schedule Timezone projection. Capture readiness and connector lifecycle/signaling orchestration belong to a metadata language unit; generated connector configuration must not become a secret read surface. Configuration state is not component availability (`docs/business-metadata.md` §4.1.1; `docs/api-contracts-sources.md` §2)
+- Capture lifecycle retains Source-derived identity and continuity on rotation, clear, disable, delete, and last-mirror-close; cross-domain mirror/applier needs use ports bound by composition, not imports of `entity` or `channel`. This ownership rule introduces no published capture module or runtime entry
 - Source Access (`source_access/`): Source Membership persistence and the only resolution of a User's effective level on a Source, the effective Permission set on that Source, and the Source ids where the User holds a Permission
 - Connector adapters (PostgreSQL, MSSQL, Oracle) consume `SourceEndpoint`; outbound invocation shell in `connectors/runtime` binds an already-interpreted endpoint
 - Domain facade for structure and join-detection **Jobs** minted via **Scheduled Task** (run-now / Beat) and Source-scoped schedule **facade** (`POST/GET /sources/{id}/schedules`, `owner_ref` withdraw). Does not own the Scheduled Task table
@@ -385,7 +387,7 @@ To add a locale: add `locales/<code>/common.json`, register it in `i18n.config.t
 
 ### Backend
 
-See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
+See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §8. Summary:
 
 - `core` → no business packages except `upgrade` → published `admin` / `worker.api` / `worker.parameters`
 - `admin` → `core` (+ own modules)
@@ -436,7 +438,7 @@ For the login/permission slice, each concern should land here:
 - Role resource UI: `frontend/src/features/roles/`
 - Entity access control tab, preview, and Entity data page: `frontend/src/features/entities/`
 - Console navigation API: `backend/admin/routers/console.py` + `admin/console_modules.py`
-- Console Module Identity codegen: `scripts/gen_console_module_catalog.py` → `frontend/src/features/console/module-identity/generated-ids.ts`, `generated-catalog.ts`
+- Console Module Identity generated catalog: `frontend/src/features/console/module-identity/generated-ids.ts`, `generated-catalog.ts`; identity contract in `docs/business-management-console.md`
 - Console route ACL: `frontend/src/components/access/PageCanAccess.tsx` + `frontend/src/features/console/module-identity/adapters.ts` (`matchPath`)
 - Platform settings API: `backend/admin/system_parameters/` (mechanism HTTP) + `<package>/parameters.py` declarations
 - Settings UI: `frontend/src/features/settings/`

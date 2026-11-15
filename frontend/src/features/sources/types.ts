@@ -5,6 +5,9 @@ export type Engine = "postgresql" | "mssql" | "oracle";
 
 export type SourceAccess = Record<string, unknown>;
 
+export type CaptureCredential = { username: string; password: string };
+export type SnapshotWindow = { start: string; end: string };
+
 export type ConnectorSpec = {
   $id?: string;
   title?: string;
@@ -29,6 +32,11 @@ export type Source = {
   access?: SourceAccess | null;
   has_access?: boolean;
   access_updated_at?: string | null;
+  capture_credential_set?: boolean;
+  capture_credential_updated_at?: string | null;
+  capture_state?: "disabled" | "configured";
+  snapshot_window?: SnapshotWindow | null;
+  schedule_timezone?: string;
 };
 
 export type ObjectCategory =

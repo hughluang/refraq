@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from backend.worker.schemas.schedules import ScheduleOut
+from backend.metadata.capture.configuration import CaptureCredential, SnapshotWindow
 
 
 class SourceOut(BaseModel):
@@ -23,6 +24,11 @@ class SourceOut(BaseModel):
     access: dict[str, Any] | None = None
     has_access: bool | None = None
     access_updated_at: Instant | None = None
+    capture_credential_set: bool | None = None
+    capture_credential_updated_at: Instant | None = None
+    capture_state: Literal["disabled", "configured"] | None = None
+    snapshot_window: SnapshotWindow | None = None
+    schedule_timezone: str | None = None
 
 
 class SourceListResponse(OffsetPage[SourceOut]):
@@ -54,6 +60,8 @@ class CreateSourceRequest(BaseModel):
     description: str | None = None
     engine: Literal["postgresql", "mssql", "oracle"]
     access: dict[str, Any]
+    capture_credential: CaptureCredential | None = None
+    snapshot_window: SnapshotWindow | None = None
 
 
 class PatchSourceRequest(BaseModel):
@@ -62,6 +70,8 @@ class PatchSourceRequest(BaseModel):
     status: Literal["active", "disabled"] | None = None
     engine: Literal["postgresql", "mssql", "oracle"] | None = None
     access: dict[str, Any] | None = None
+    capture_credential: CaptureCredential | None = None
+    snapshot_window: SnapshotWindow | None = None
 
 
 class TestSourceDraftRequest(BaseModel):

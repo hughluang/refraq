@@ -31,6 +31,7 @@ from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.structure_diffs.store import get_structure_diff_store
 from backend.metadata.errors import (
     SourceAccessRequired,
+    SourceCaptureScopeLocked,
     SourceEngineUnsupported,
     SourceKindUnsupported,
     SourceNotDisabled,
@@ -58,6 +59,12 @@ from backend.metadata.source_schedules import (
     ensure_default_source_schedules_if_none,
     seed_default_source_schedules,
 )
+from backend.metadata.capture.configuration import (
+    CaptureCredential,
+    SnapshotWindow,
+    guard_capture_scope,
+)
+from backend.worker.api import current_schedule_timezone
 from backend.worker.schemas.schedules import ScheduleOut
 
 
@@ -164,6 +171,13 @@ def public_view(record: SourceRecord) -> dict[str, Any]:
         "access": access,
         "has_access": record.has_access,
         "access_updated_at": record.access_updated_at,
+        "capture_credential_set": bool(record.capture_credential_ciphertext),
+        "capture_credential_updated_at": record.capture_credential_updated_at,
+        "capture_state": "configured"
+        if record.capture_credential_ciphertext
+        else "disabled",
+        "snapshot_window": record.snapshot_window,
+        "schedule_timezone": current_schedule_timezone(),
     }
 
 
@@ -181,9 +195,15 @@ def create_source(
     description: str | None,
     engine: str | None,
     access: dict[str, Any] | None,
+    capture_credential: CaptureCredential | None = None,
+    snapshot_window: SnapshotWindow | None = None,
     actor_user_id: str | None = None,
     actor_token_id: str | None = None,
 ) -> SourceRecord:
+    if capture_credential is not None:
+        capture_credential = CaptureCredential.model_validate(capture_credential)
+    if snapshot_window is not None:
+        snapshot_window = SnapshotWindow.model_validate(snapshot_window)
     if kind not in SUPPORTED_KINDS:
         raise SourceKindUnsupported()
     ciphertext: str | None = None
@@ -205,6 +225,12 @@ def create_source(
         engine=engine,
         access_ciphertext=ciphertext,
         access_updated_at=access_updated_at,
+        capture_credential_ciphertext=capture_credential.seal()
+        if capture_credential
+        else None,
+        capture_credential_updated_at=now if capture_credential else None,
+        capture_revision=1 if capture_credential else 0,
+        snapshot_window=snapshot_window.model_dump() if snapshot_window else None,
         created_at=now,
         updated_at=now,
     )
@@ -316,6 +342,8 @@ def _source_business_changed(before: SourceRecord, after: SourceRecord) -> bool:
         or before.status != after.status
         or before.engine != after.engine
         or before.access_ciphertext != after.access_ciphertext
+        or before.capture_revision != after.capture_revision
+        or before.snapshot_window != after.snapshot_window
     )
 
 
@@ -345,13 +373,66 @@ def update_source(
     status: str | None = None,
     engine: str | None = None,
     access: dict[str, Any] | None | object = ...,
+    capture_credential: CaptureCredential | None | object = ...,
+    snapshot_window: SnapshotWindow | None | object = ...,
     actor_user_id: str | None = None,
     actor_token_id: str | None = None,
 ) -> tuple[SourceRecord, list[ScheduleOut]]:
+    if capture_credential is not ... and capture_credential is not None:
+        capture_credential = CaptureCredential.model_validate(capture_credential)
+    if snapshot_window is not ... and snapshot_window is not None:
+        snapshot_window = SnapshotWindow.model_validate(snapshot_window)
     store = get_source_store()
-    existing = store.get_source(source_id)
+    if get_settings().store_backend == "persistent":
+        with session_scope() as session:
+            existing = cast(SqlSourceStore, store).get_source_for_update(
+                session, source_id
+            )
+            return _update_source_on(
+                existing,
+                name=name,
+                description=description,
+                status=status,
+                engine=engine,
+                access=access,
+                capture_credential=capture_credential,
+                snapshot_window=snapshot_window,
+                actor_user_id=actor_user_id,
+                actor_token_id=actor_token_id,
+                session=session,
+            )
+    return _update_source_on(
+        store.get_source(source_id),
+        name=name,
+        description=description,
+        status=status,
+        engine=engine,
+        access=access,
+        capture_credential=capture_credential,
+        snapshot_window=snapshot_window,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+    )
+
+
+def _update_source_on(
+    existing: SourceRecord | None,
+    *,
+    name: str | None,
+    description: str | None | object,
+    status: str | None,
+    engine: str | None,
+    access: dict[str, Any] | None | object,
+    capture_credential: CaptureCredential | None | object,
+    snapshot_window: SnapshotWindow | None | object,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    session: Session | None = None,
+) -> tuple[SourceRecord, list[ScheduleOut]]:
     if existing is None:
         raise SourceNotFound()
+    store = get_source_store()
+    source_id = existing.id
     updated = replace(existing)
     if name is not None:
         updated.name = name
@@ -362,6 +443,8 @@ def update_source(
             raise SourceValidationError("Invalid status")
         updated.status = status
     if engine is not None:
+        if existing.capture_credential_ciphertext and engine != existing.engine:
+            raise SourceCaptureScopeLocked()
         if engine not in SUPPORTED_ENGINES:
             raise SourceEngineUnsupported()
         updated.engine = engine
@@ -375,34 +458,47 @@ def update_source(
         existing_access = decrypt_access_blob(updated.access_ciphertext)
         updated.access_ciphertext = seal_access(engine, existing_access)
         updated.access_updated_at = utc_now()
+    if existing.capture_credential_ciphertext and (
+        engine is not None or access is not ...
+    ):
+        guard_capture_scope(
+            existing.engine,
+            updated.engine,
+            decrypt_access_blob(existing.access_ciphertext),
+            decrypt_access_blob(updated.access_ciphertext),
+        )
+    if capture_credential is not ... and (
+        capture_credential is not None or existing.capture_credential_ciphertext
+    ):
+        updated.capture_credential_ciphertext = (
+            capture_credential.seal() if capture_credential else None
+        )
+        updated.capture_credential_updated_at = utc_now()
+        updated.capture_revision += 1
+    if snapshot_window is not ...:
+        updated.snapshot_window = (
+            snapshot_window.model_dump() if snapshot_window else None
+        )
     updated.updated_at = utc_now()
     changed = _source_business_changed(existing, updated)
-    seeded: list[ScheduleOut] = []
-    if get_settings().store_backend == "persistent":
-        sql_store = cast(SqlSourceStore, store)
-        with session_scope() as session:
-            saved = sql_store.save_source_on(session, updated)
-            seeded = _maybe_seed_after_update(
-                saved,
-                changed=changed,
-                actor_user_id=actor_user_id,
-                actor_token_id=actor_token_id,
-                session=session,
-            )
+    if session is not None:
+        saved = cast(SqlSourceStore, store).save_source_on(session, updated)
     else:
         saved = store.save_source(updated)
-        seeded = _maybe_seed_after_update(
-            saved,
-            changed=changed,
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
-        )
+    seeded = _maybe_seed_after_update(
+        saved,
+        changed=changed,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        session=session,
+    )
     if engine is not None and existing.engine != saved.engine:
         get_catalog_store().recompute_locators_for_source(
             source_id,
             engine=saved.engine,
             kind=saved.kind,
             source_key=saved.key,
+            **({"session": session} if session is not None else {}),
         )
     return saved, seeded
 

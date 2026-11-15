@@ -2,8 +2,10 @@ import { apiClient } from "@/lib/api";
 import type { ScheduledTask } from "@/features/schedules/types";
 import type { OffsetPage } from "@/lib/pagination";
 import type {
+  CaptureCredential,
   ConnectorSpec,
   Engine,
+  SnapshotWindow,
   Source,
   SourceAccess,
 } from "@/features/sources/types";
@@ -49,6 +51,8 @@ export function createSource(body: {
   description?: string | null;
   engine: Engine;
   access: SourceAccess;
+  capture_credential?: CaptureCredential | null;
+  snapshot_window?: SnapshotWindow | null;
 }) {
   return apiClient<{ source: Source }>("/sources", {
     method: "POST",
@@ -65,6 +69,8 @@ export function patchSource(
     status: "active" | "disabled";
     engine: Engine;
     access: SourceAccess;
+    capture_credential: CaptureCredential | null;
+    snapshot_window: SnapshotWindow | null;
   }>,
 ) {
   return apiClient<{ source: Source; schedules?: ScheduledTask[] }>(

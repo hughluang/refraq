@@ -34,10 +34,10 @@ Foundation P0 delivered people, permissions, and Console mount contract. Product
 
 ## 3. Principles
 
-1. **Source is the business/catalog identity and, for database kinds, owns live reachability and credentials** — `engine` and a per-engine validated **access** JSON document that carries both connectivity and catalog scope (engine-dialect keys; secrets inside that document), stored as one application-encrypted blob on the Source row (ADR 0011 / 0021).
+1. **Source is the business/catalog identity and, for database kinds, owns live reachability and credentials** — `engine` and a per-engine validated **access** JSON document that carries both connectivity and catalog scope (engine-dialect keys; secrets inside that document), stored as one application-encrypted blob on the Source row. Capture credentials are separate (§4.1.1).
 2. **Catalog Object identity is Source-scoped only**.
 3. **Long work never blocks the API process** — enqueue **Jobs**; workers execute.
-4. **Credentials are secrets** — the whole access document is encrypted at rest in Postgres; read APIs strip `x-secret` fields; write/edit APIs may return the full decrypted tree; never written to a **System Parameter** or logs.
+4. **Credentials are secrets** — the whole access document is encrypted at rest in Postgres; read APIs strip `x-secret` fields; write/edit APIs may return the ordinary access tree, never the separate capture credential; never written to a **System Parameter** or logs.
 5. **Backend Permission catalog is authoritative** for Console, REST, and MCP.
 6. **HTTP MCP authenticates a User via User PAT only**, not a Session cookie, not an anonymous service key, and not a Client in this phase. Catalog HTTP (`GET /mcp/catalog` and `GET /mcp/entity/catalog`) still accepts Session or PAT.
 7. **Write honesty** for semantics and joins — evidence-backed join edges; incomplete understanding stays incomplete (open questions allowed); do not invent business meaning.
@@ -69,15 +69,31 @@ APIs expose projected `access` (secrets stripped), plus `has_access` / `access_u
 Rules:
 
 - Distinct environments or physical instances are **distinct Sources** (separate keys, catalogs, and reachability).
-- For `kind=database`, **business/catalog scope** and **live reachability/credentials** both live in Source `access` (ADR 0021) — there is no separate Connection entity or credential reuse across Sources, and no fixed top-level `database_name` / `schema_filter` columns.
+- For `kind=database`, **business/catalog scope** and **live reachability/credentials** both live in ordinary Source `access` — there is no separate Connection entity or credential reuse across Sources, and no fixed top-level `database_name` / `schema_filter` columns.
 - Creating a database Source without `engine` and `access` is rejected (`SOURCE_ACCESS_REQUIRED`).
 - Creating a database Source also inserts two ordinary **Scheduled Task**s: one structure (product default: daily `0 2 * * *`, enabled, default name `structure · {source_key}`) and one join-detection (product default: daily `0 4 * * *`, enabled, default name `join_detection · {source_key}`). Cron uses the **Schedule Timezone** System Parameter. Create and both seeds succeed or fail together. The inserts are authorized by `sources:write` and do not require `jobs:run`. Source HTTP responses do not include the seeds. The seeds are not **Jobs**.
-- Endpoint or credential change updates the **same Source** (replace full `access`) — not a new Source row. Catalog Objects stay under that Source; the next structure Job uses the updated endpoint.
+- Subject to the capture scope guard (§4.1.1), endpoint or ordinary credential change updates the **same Source** (replace full `access`) — not a new Source row. Catalog Objects stay under that Source; the next structure Job uses the updated endpoint.
 - Prefer the authoritative / primary endpoint; do not register read replicas as alternate Sources for the same physical server.
 - Disabling a Source blocks new ingestion until re-enabled (existing catalog snapshots remain readable unless later retention rules say otherwise).
 - A Source may be **hard-deleted** only while `status=disabled` (`DELETE /sources/{id}`); soft delete remains out of scope. Hard-delete calls schedule **withdraw** with the same opaque `owner_ref` the facade wrote at create (e.g. `metadata:source:{id}`). That is not a Source FK cascade and not a scan of schedule kwargs for `source_id`. The scheduler never interprets Source.
 - Non-`database` kinds are out of scope for slice A implementation; models and APIs must not hard-code that every Source requires `engine` / `access`. Kind-specific scope fields for non-database kinds arrive with those kinds.
 - Pre-0011 rows that used plaintext access plus a separate secret column are **not** auto-migrated; operators re-enter connectivity after cutover.
+
+### 4.1.1 Source Capture Foundation
+
+A database Source owns an optional write-only **capture credential**, separate from ordinary `access`, and an optional daily `snapshot_window`. Capture configuration is not a Source Mirror, a Read Mirror node, a running connector, or evidence of engine readiness. The exact write/read shapes and validation errors are in `docs/api-contracts-sources.md` §2.
+
+- The credential is exactly a username/password pair, application-encrypted separately from `access`. Omission retains it, an object replaces it, and explicit null clears it. No HTTP read, including full-access edit, returns either member. Errors, logs, audit, and connector-configuration projections must not contain plaintext. Ordinary `access` editing does not fetch or replace capture credentials.
+- Full authorized Source views expose only `capture_credential_set`, `capture_credential_updated_at`, and configuration `capture_state` (`disabled` without a credential, `configured` with one), plus `snapshot_window` and the live `schedule_timezone`. Identity-only views omit all of them. `configured` does not assert running, available, or ready; Source status independently gates use. Source write authorization (§6.1) governs capture replacement and clear; access management alone grants neither write nor presence visibility.
+- Every replacement increments durable internal `capture_revision`, even when values match. Effective clear increments it too; initially the revision is zero and the update timestamp null. Credential change, revision, and last-change Instant commit together. Re-clearing an absent credential is a no-op. Rotation must not reset Source-id-derived capture identity or offsets.
+- A configured credential locks engine and endpoint/scope changes: every `access` property except ordinary username and Connector Spec secret fields is guarded, including TLS and `extra`. Reject changes with `SOURCE_CAPTURE_SCOPE_LOCKED`; clear in a separate request first. Where capture resources exist, clearing alone must not permit retained identity/offsets to be silently retargeted: reject retargeting until safe resource reconciliation/release. Ordinary access credential rotation and unchanged resubmission remain allowed.
+- Clear disables desired capture use, preserves continuity and existing mirror data, and must be reconciled before restart. Reconciliation must fence stale credential revisions. Source disable likewise stops capture use without silently deleting offsets or slots. Source delete and last-mirror-close are not destructive capture-resource cleanup: resources and continuity must be retained under a durable identity or deletion must be refused until an explicit safe release. Ordinary disabled Sources without capture resources retain the hard-delete rule above. No Source cascade may silently erase capture continuity, and no lifecycle operation silently drops a replication slot.
+- The snapshot window is null (any time) or distinct strict `HH:mm` endpoints, start-inclusive and end-exclusive, including midnight crossing. Its timezone is the live site Schedule Timezone, not the User's Display Timezone, a process zone, or a stored per-Source zone. Membership is evaluated at the actual Instant; both repeated DST occurrences count normally and skipped clock times create no extra Instant. The window gates dispatch, not completion. Startup/recovery starts use the same gate; only an explicit audited run-now override bypasses it. Window configuration is not a promise of scheduler execution.
+- A catalog scope does not establish a supported CDC database/container scope. Ordinary PostgreSQL/MSSQL/Oracle structure support is not a CDC version or topology matrix. Automatic onboarding requires an explicitly supported profile and evidence-backed readiness; absent inspection privileges mean unknown, not failed prerequisites or success. Configuration storage alone asserts neither readiness nor component health. Component availability is a separate concept: disabled means the optional CDC capability is not enabled; available requires required components/plugins and task/stream progress, not container liveness alone; configured but unreachable or faulty components are degraded, never silently reported as disabled.
+
+Connector lifecycle reconciliation and snapshot signaling are separate responsibilities. A manager uses Connect REST for lifecycle, generated allowlisted settings, stable per-Source identities, durable revisions, and convergent retry; it must not assume a snapshot REST endpoint. Signals require an explicitly configured supported channel, durable request identity, and independent completion/failure observation; successful submission is not completion. Private authenticated TLS and protected internal state/signal access are required at the selected deployment boundary; database encryption alone is insufficient. No version matrix, deployment profile, readiness endpoint, or manager status API is implied by the configuration projection.
+
+Mirror application with transactional target offsets and stale-owner fencing, mirror read surfaces, and recovery generations/history-gap handling are separate from Source capture configuration (`docs/business-data-channel.md` §9). Incremental signals do not guarantee recovery from expired source positions. Dispatch scheduling/serialization and rebaselining must not be inferred from window storage.
 
 ### 4.2 Structure Job and schedule facades
 
@@ -117,7 +133,7 @@ Semantics and join edges attach to these objects/columns (see §10).
 
 ### 4.3.1 Locator keys
 
-Every Source, Catalog Object, and column carries a stable readable **locator key** (stored, unique), derived from natural keys (ADR 0012):
+Every Source, Catalog Object, and column carries a stable readable **locator key** (stored, unique), derived from natural keys:
 
 | Kind | Format |
 | --- | --- |
@@ -134,7 +150,7 @@ Rules:
 
 ### 4.3.2 Type Mapping
 
-Global assignment of **Normalized Type** for one `engine` + canonical native type (ADR 0024). Not owned by a Source.
+Global assignment of **Normalized Type** for one `engine` + canonical native type. Not owned by a Source.
 
 | Field | Notes |
 | --- | --- |
@@ -185,7 +201,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 | Permission | Meaning |
 | --- | --- |
 | `sources:read` | List and view Sources the caller can open (projected `access`, Connector Spec). `GET /sources` also admits `sources:access_manage` for identity rows |
-| `sources:write` | Create/update/disable Sources; hard-delete disabled Sources; replace full `access`; fetch full access for edit; run Source reachability tests; creating a database Source, or a mutating update of one with a missing product-default schedule kind, also inserts the matching product-default **Scheduled Task** |
+| `sources:write` | Create/update/disable Sources; hard-delete disabled Sources subject to capture continuity; replace/clear capture credentials and configure snapshot windows; replace full ordinary `access`; fetch full access for edit; run Source reachability tests; creating a database Source, or a mutating update of one with a missing product-default schedule kind, also inserts the matching product-default **Scheduled Task** |
 | `sources:access_manage` | Manage **Source Membership**s and **Source Access Level**s. Not a level. Not implied by `sources:read`, `sources:write`, or `metadata:*`. Not seeded onto `operator`. A Role that effectively holds it cannot be an Identity Provider default Role |
 | `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, and joins on Sources the caller can read, and read global **Type Mapping** |
 | `metadata:write` | Write semantics and join edges; PATCH non-seed **Type Mapping** |
@@ -226,7 +242,7 @@ Catalog reads and writes, **Structure Diff**, **Controlled Query**, **Catalog Sa
 
 Operations Job and schedule lists include a Source-bound row when the caller holds `jobs:run` on that row's Source. A row with no Source stamp keeps the Role rule. The stamp is opaque, is not a Source foreign key, and is distinct from `owner_ref`. Get, logs, and cancel of a stamped Job are `404` `JOB_NOT_FOUND` when the stamp is outside the caller's `jobs:run` set, including when the caller has a level that does not include `jobs:run`. `GET` of a stamped schedule the caller cannot `jobs:run` is that schedule's not-found code, including when a level is held without that key. Update, delete, and run-now when the caller has a level and lacks `jobs:run` are `403` `AUTH_FORBIDDEN`.
 
-**Type Mapping** stays global: `metadata:read` and `metadata:write` on the Role, with no Source check. The audit list is not filtered by Source. There is no Source Mirror list. MCP `search_sources` returns Sources where the caller holds `sources:read` and does not add identity rows for `sources:access_manage`. A `channel:read` holder can still read channel run records from a Source they cannot open (`docs/business-data-channel.md` §11).
+**Type Mapping** stays global: `metadata:read` and `metadata:write` on the Role, with no Source check. The audit list is not filtered by Source. Source capture configuration does not add a Source Mirror list (§4.1.1). MCP `search_sources` returns Sources where the caller holds `sources:read` and does not add identity rows for `sources:access_manage`. A `channel:read` holder can still read channel run records from a Source they cannot open (`docs/business-data-channel.md` §11).
 
 The membership migration inserts one every-Source `maintainer` membership for each Role, other than `super_admin`, whose stored permissions at that migration include `sources:read` or `metadata:read`. A Role created afterwards receives no membership from that migration or from Foundation Upgrade. Identity Provider auto-provisioning creates no membership.
 
@@ -261,6 +277,7 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - The whole Source `access` JSON document (including passwords and other `x-secret` fields) is stored encrypted in Postgres using an application master key from environment (`REFRAQ_SECRETS_MASTER_KEY`).
 - Decryption occurs in worker/API paths that open a live endpoint, and on write-scoped edit fetch.
 - List/get return projected access (secrets stripped) plus `has_access` / `access_updated_at`.
+- Capture credentials use a distinct encrypted document and never the full-access read path (§4.1.1). Their replacement/clear and window-only changes count as mutating Source updates for default-schedule ensure.
 - External Vault/KMS is out of scope for this phase.
 
 ## 9. Structure Job Runtime (database)
@@ -310,7 +327,7 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
   Oracle `number`. Approximate natives stay `number` (`real`, `double precision`, `float`,
   `binary_float`, `binary_double`, and the aliases already seeded beside them).
   Native `data_type` remains the engine string. Assignment is a **Type Mapping** lookup
-  (ADR 0024): canonicalize, look up `(engine, native type)`, insert `unknown` (`origin=job`)
+  (§4.3.2): canonicalize, look up `(engine, native type)`, insert `unknown` (`origin=job`)
   if missing, never overwrite an existing row. Product seeds are Upgrade-occupied and
   immutable. Upgrade takes over an existing row on a seeded key. `type_changed` compares
   native `data_type` strings (exact inequality; not Normalized Type). A column already
@@ -353,7 +370,7 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
   kind and Source. Cross-kind may run together. Authority is the lock, not the Job table
   and not a **Scheduled Task** mutex. The schedule always mints; Beat does not swallow;
   run-now does not HTTP-409 for this reason. Re-run = new Job after the lock is free
-  (ADR 0032).
+  (§4.2).
 - Collectors read **Source `engine` / decrypted `access`** (scope and credentials together). Introspection uses
   engine-native catalogs (`pg_catalog`, `sys.*`, `ALL_`/`DBA_`).
 - Oracle schema scope is `access.owner` (required; same role as `schema` on PostgreSQL/MSSQL).
@@ -390,32 +407,32 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 Tie-breaks: source-system business entity → `master_data`, analytical derivative → `dimension`;
 rows carrying only `code → label` → `reference`.
 
-`model_routing_hint` is **not** delivered in this phase (see ADR 0013).
-`time_semantics`, `status_semantics`, `relation_summary`, and `confidence` are **removed** (ADR 0015);
+`model_routing_hint` is outside this semantics model.
+`time_semantics`, `status_semantics`, `relation_summary`, and `confidence` are not semantics fields;
 time and status meaning live on the relevant columns via `business_description` (and optional
-free-text `semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016), object
+free-text `semantic_type` / `enum_catalog`), object
 relationships in join edges, and write certainty in `evidence_summary` / `open_questions` /
-`business_semantics_ready`. Business Domain is removed (ADR 0064).
+`business_semantics_ready`. Business Domain is outside this model.
 
 ### 10.2 Column semantics
 
 | Field | Notes |
 | --- | --- |
 | `business_name` / `business_description` | Same write rules as object |
-| `column_semantics` | `{ semantic_type, value_pattern, unit }` only; `semantic_type` is free text in this phase (ADR 0016) |
+| `column_semantics` | `{ semantic_type, value_pattern, unit }` only; `semantic_type` is free text in this phase |
 | `enum_catalog` | List of `{ code, label, description }` when discrete enums are evidenced |
 | `semantic_source` | Same provenance values as object |
 | `field_kind` | Default `column`; held by structure collection; **not** writable via semantics APIs |
 
 `semantic_type` remains nullable free text. A closed vocabulary and derived `semantic_gaps` are
-**deferred** until a concrete reader exists (ADR 0016). Unclassified columns leave the field null
+outside this model. Unclassified columns leave the field null
 and explain roles in `business_description`. Several columns may each describe a time axis; there
 is no elected primary axis at object level.
 
 ### 10.3 Write rules
 
 - **HTTP** semantics PATCH: omitted keys leave fields unchanged; a present JSON `null`,
-  blank string (after trim), or empty list/object **clears** the field (ADR 0018).
+  blank string (after trim), or empty list/object **clears** the field.
 - **MCP** adapters strip `null`, blank strings, and empty collections before writing — agents
   cannot clear via MCP in this phase (fill gaps only).
 - An applied object or column semantics write appends **Semantics Change** (field, old value,
@@ -423,7 +440,7 @@ is no elected primary axis at object level.
 - Incomplete understanding stays incomplete — record `open_questions`, do not invent meaning.
 - Column-name references in semantics payloads (`business_primary_key`) must resolve to columns on
   the object; unknown names are rejected with `SEMANTIC_COLUMN_UNKNOWN`.
-- Adding a semantics field requires passing the ADR 0015 admission criteria — carrier ownership,
+- Adding a semantics field requires passing these admission criteria — carrier ownership,
   objective unique answer, falsifiability, structure paying for itself, and layer ownership.
   Object-level fields that elect one "primary" column out of several of the same kind, and free
   text read only by humans or agents, do not qualify.
@@ -476,7 +493,7 @@ Rules:
   `JOIN_PATH_UNAVAILABLE` in every mode, including query text. HTTP `q` and MCP
   `query_text` are the same mode. When start is a column and `max_hops=1`,
   `direct_joins` is the start's asserted neighbors (query text does not omit them).
-  Query-text mode ranks columns of the reachable set (ADR 0043 / 0044); the path
+  Query-text mode ranks columns of the reachable set; the path
   envelope includes `rank_mode` (`vector` | `lexical`) when `q` / `query_text`
   is set and no explicit target is present, and `null` otherwise. A serving-time embed or neighbor failure is the
   same Problem Code as Catalog Search. An explicit target the caller has no level on is the unknown-object code (§6.1). An explicit target may be on another
@@ -489,12 +506,12 @@ Rules:
   business_name, business_description) with optional `source_id` / `object_type` filters and
   `limit`/`offset`. Empty, omitted, or whitespace-only query is rejected for both object
   and column search with `CATALOG_SEARCH_QUERY_REQUIRED` (HTTP and MCP share that code).
-- Ranking is one declared path per request (ADR 0043), shared by HTTP Catalog Search
+- Ranking is one declared path per request, shared by HTTP Catalog Search
   and MCP `search_objects` / `search_columns`. When an embedding
   **Model Service** is in use, the purpose is not closed, and ready is true, the path is
   vector nearest-neighbor (complete state). Otherwise the path is the portable lexical
   ladder (process state): exact locator/name → prefix → name substring →
-  business name/description substring. The SQL adapter executes that ladder in SQL (ADR 0041);
+  business name/description substring. The SQL adapter executes that ladder in SQL;
   it does not change the tiers or same-tier item order (SQL tie-break uses `COLLATE "C"`).
   `source_id` and `object_type` constrain the lexical set and the neighbor query.
   Each page names the path (`rank_mode`: `vector` or `lexical`).
@@ -514,7 +531,7 @@ Rules:
   window may be empty. Exact locator resolve is `GET /objects/{ref}`, not Search.
   Per-Source list `q` is not this ranking. Model Service rules: `docs/business-model-services.md`.
 - Concurrent Catalog Search and other platform short reads are bounded by the runtime
-  capacity contract (ADR 0040 / 0045). Excess in-flight work, a full platform pool, or the
+  capacity contract (`docs/env.md`). Excess in-flight work, a full platform pool, or the
   platform database refusing a new connection returns `PLATFORM_CAPACITY_EXCEEDED`
   (HTTP 503 + `Retry-After`). A platform short read or short write canceled by
   `statement_timeout` returns `PLATFORM_TIMEOUT` (HTTP 504, no `Retry-After`) — not
@@ -559,8 +576,8 @@ Console, MCP, Catalog Sample, and a Data Channel live Source query use this guar
 
 - MCP tools are a first-class product surface backed by the same domain services and Permissions as HTTP APIs. They use the PAT User's **Source Access** (§6.1). `search_sources` lists Sources where that User holds `sources:read` and does not add identity rows for `sources:access_manage`. A locator on a Source the caller cannot open uses the same not-found code as an unknown locator.
 - Metadata MCP is the agent **inquiry and living-registry** face (catalog, admitted semantics, joins, controlled query). Server `instructions` and scene `prompts` are product surface. It is not a system-operations face: Job and Scheduled Task observe/mutate stay Console / HTTP.
-- `get_object` is the aggregate read (columns + DDL + object semantics). Cheaper projections `get_object_semantics`, `get_object_columns`, and `get_object_ddl` are admitted (ADR 0036). HTTP object detail stays one page.
-- Last-write-wins on semantics (ADR 0014). Each applied object or column semantics write appends **Semantics Change** (old/new values) visible on the Catalog Object (ADR 0038). Agents cannot clear via MCP; HTTP present-null still clears and still appends.
+- `get_object` is the aggregate read (columns + DDL + object semantics). Cheaper projections `get_object_semantics`, `get_object_columns`, and `get_object_ddl` are admitted. HTTP object detail stays one page.
+- Last-write-wins on semantics. Each applied object or column semantics write appends **Semantics Change** (old/new values) visible on the Catalog Object. Agents cannot clear via MCP; HTTP present-null still clears and still appends.
 - The product port is Console-origin `/mcp` (independent MCP process). HTTP MCP authenticates a **User PAT** in the `Authorization` header only. Session is not an MCP caller.
 - Agent `tools/list` and `GET /mcp/catalog` return the same Permission-cropped catalog. The Console surface for MCP is module `mcp` (`/console/mcp`), not Account Center.
 - Contract detail: `docs/api-contracts-metadata-mcp.md`. Topology: `docs/architecture.md`, `docs/env.md`.
@@ -569,7 +586,7 @@ Console, MCP, Catalog Sample, and a Data Channel live Source query use this guar
 
 Persist management-plane events for at least:
 
-- Source create/update/disable and access replace
+- Source create/update/disable and ordinary access replace; capture replacement/clear and snapshot-window changes use the same Source events. Detail is allowlisted field names and credential retain/replace/clear intent, never username, password, ciphertext, connector configuration, or raw validation/driver errors
 - Source reachability test (`source.test`) — success and failure; no secrets in detail
 - Job cancel / terminal failure (summary); structure minting via `schedule.run` / Beat (no Source Job enqueue)
 - Semantics and join writes
@@ -592,7 +609,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 5. Documentation under `docs/` matches behavior; refraq is the sole authoritative registry (no `dbmeta` dual-read).
 6. MCP addresses Sources/objects/columns by locator key; HTTP responses include `locator_key`.
 7. Structure Jobs collect PK/FK/indexes/comments/defaults (engine parity documented); FK-derived joins insert when the pair is missing.
-8. Object/column semantics persist across the admitted field set (including `open_questions`); every field passes the ADR 0015 admission criteria, column `semantic_type` is vocabulary-checked, and `semantic_source` records last-write provenance (field-level MCP protection deferred — ADR 0014).
+8. Object/column semantics persist across the admitted field set (including `open_questions`); every field passes §10.3 admission criteria, column `semantic_type` is vocabulary-checked, and `semantic_source` records last-write provenance (field-level MCP protection deferred).
 9. Cross-Source object/column search with pagination works; join path lookup returns reachable hop chains.
 
 ## 15. Non-Goals
@@ -614,9 +631,9 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - A separate reusable Connection entity or credential sharing across Sources
 - Treating read replicas as alternate Source targets for the same physical server
 - Delivering non-database Source kinds (CSV/file import, Attachment APIs, etc.) in this phase — foresight only in §4.4
-- Source soft delete / versioned credential history / audit-per-rotation (hard-delete of disabled Sources is delivered)
+- Source soft delete and versioned credential history; capture replacement/clear still writes secret-free Source audit, and hard-delete respects capture continuity (§4.1.1)
 - Query result type normalization / continuation tokens / data masking (deferred past depth)
-- Full-text search engines or PG-only FTS as the ranking authority (vector complete state is ADR 0043)
+- Full-text search engines or PG-only FTS as the ranking authority (vector complete state is defined in §10.5)
 - Catchup / backfill / RRule
 - Treating **Job** or **Scheduled Task** as Metadata domain entities (platform rules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`)
 

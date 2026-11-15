@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
@@ -33,6 +33,7 @@ ALL_SOURCES = AllVisibleSources()
 
 SUPPORTED_KINDS = frozenset({"database"})
 
+
 @dataclass
 class SourceRecord:
     id: str
@@ -43,17 +44,23 @@ class SourceRecord:
     status: str
     description: str | None
     engine: str | None
-    access_ciphertext: str | None
+    access_ciphertext: str | None = field(repr=False)
     access_updated_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    capture_credential_ciphertext: str | None = field(default=None, repr=False)
+    capture_credential_updated_at: datetime | None = None
+    capture_revision: int = 0
+    snapshot_window: dict[str, str] | None = None
 
     @property
     def has_access(self) -> bool:
         return bool(self.access_ciphertext)
 
+
 def new_source_id() -> str:
     return f"src_{uuid.uuid4().hex[:12]}"
+
 
 def ensure_source_locator(record: SourceRecord) -> SourceRecord:
     """Recompute locator_key from key/engine/kind."""
@@ -63,6 +70,7 @@ def ensure_source_locator(record: SourceRecord) -> SourceRecord:
     if record.locator_key == locator:
         return record
     return replace(record, locator_key=locator)
+
 
 class SourceStore(Protocol):
     def list_sources(
@@ -83,6 +91,7 @@ class SourceStore(Protocol):
     def save_source(self, record: SourceRecord) -> SourceRecord: ...
 
     def delete_source(self, source_id: str) -> bool: ...
+
 
 def _escape_like_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -118,7 +127,11 @@ def source_matches_query(record: SourceRecord, query_text: str | None) -> bool:
     if not needle:
         return True
     locator = (record.locator_key or "").lower()
-    return needle in record.key.lower() or needle in record.name.lower() or needle in locator
+    return (
+        needle in record.key.lower()
+        or needle in record.name.lower()
+        or needle in locator
+    )
 
 
 def _source_query_sql_filters(query_text: str | None) -> list:
@@ -226,6 +239,7 @@ class MemorySourceStore:
                 del self._by_locator[existing.locator_key]
             return True
 
+
 class SqlSourceStore:
     def list_sources(
         self,
@@ -261,11 +275,17 @@ class SqlSourceStore:
             row = session.get(SourceRow, source_id)
             return _row_to_source(row) if row else None
 
+    def get_source_for_update(
+        self, session: Session, source_id: str
+    ) -> SourceRecord | None:
+        row = session.scalars(
+            select(SourceRow).where(SourceRow.id == source_id).with_for_update()
+        ).first()
+        return _row_to_source(row) if row else None
+
     def get_source_by_key(self, key: str) -> SourceRecord | None:
         with session_scope() as session:
-            row = session.scalars(
-                select(SourceRow).where(SourceRow.key == key)
-            ).first()
+            row = session.scalars(select(SourceRow).where(SourceRow.key == key)).first()
             return _row_to_source(row) if row else None
 
     def get_source_by_locator(self, locator_key: str) -> SourceRecord | None:
@@ -292,6 +312,10 @@ class SqlSourceStore:
             engine=record.engine,
             access_ciphertext=record.access_ciphertext,
             access_updated_at=record.access_updated_at,
+            capture_credential_ciphertext=record.capture_credential_ciphertext,
+            capture_credential_updated_at=record.capture_credential_updated_at,
+            capture_revision=record.capture_revision,
+            snapshot_window=record.snapshot_window,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )
@@ -320,6 +344,10 @@ class SqlSourceStore:
         row.engine = record.engine
         row.access_ciphertext = record.access_ciphertext
         row.access_updated_at = record.access_updated_at
+        row.capture_credential_ciphertext = record.capture_credential_ciphertext
+        row.capture_credential_updated_at = record.capture_credential_updated_at
+        row.capture_revision = record.capture_revision
+        row.snapshot_window = record.snapshot_window
         row.updated_at = record.updated_at
         try:
             session.flush()
@@ -339,6 +367,7 @@ class SqlSourceStore:
         session.flush()
         return True
 
+
 def _row_to_source(row: object) -> SourceRecord:
     assert isinstance(row, SourceRow)
     return SourceRecord(
@@ -352,12 +381,18 @@ def _row_to_source(row: object) -> SourceRecord:
         engine=row.engine,
         access_ciphertext=row.access_ciphertext,
         access_updated_at=row.access_updated_at,
+        capture_credential_ciphertext=row.capture_credential_ciphertext,
+        capture_credential_updated_at=row.capture_credential_updated_at,
+        capture_revision=row.capture_revision,
+        snapshot_window=row.snapshot_window,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
 
+
 _memory_singleton: MemorySourceStore | None = None
 _memory_lock = threading.Lock()
+
 
 @lru_cache
 def get_source_store() -> MemorySourceStore | SqlSourceStore:
@@ -369,6 +404,7 @@ def get_source_store() -> MemorySourceStore | SqlSourceStore:
                 _memory_singleton = MemorySourceStore()
             return _memory_singleton
     return SqlSourceStore()
+
 
 def reset_source_store() -> None:
     global _memory_singleton

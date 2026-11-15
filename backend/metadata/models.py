@@ -23,7 +23,9 @@ from backend.core.time import UtcDateTime
 class TypeMappingRow(Base):
     __tablename__ = "type_mappings"
     __table_args__ = (
-        UniqueConstraint("engine", "native_type", name="uq_type_mappings_engine_native"),
+        UniqueConstraint(
+            "engine", "native_type", name="uq_type_mappings_engine_native"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -39,7 +41,9 @@ class SourceRow(Base):
     __tablename__ = "sources"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    key: Mapped[str] = mapped_column(
+        String(128), unique=True, nullable=False, index=True
+    )
     locator_key: Mapped[str] = mapped_column(
         String(512), unique=True, nullable=False, index=True
     )
@@ -49,7 +53,17 @@ class SourceRow(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     engine: Mapped[str | None] = mapped_column(String(64), nullable=True)
     access_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
-    access_updated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    access_updated_at: Mapped[datetime | None] = mapped_column(
+        UtcDateTime, nullable=True
+    )
+    capture_credential_ciphertext: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    capture_credential_updated_at: Mapped[datetime | None] = mapped_column(
+        UtcDateTime, nullable=True
+    )
+    capture_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    snapshot_window: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
@@ -77,7 +91,9 @@ class CatalogObjectRow(Base):
         nullable=False,
         index=True,
     )
-    locator_key: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    locator_key: Mapped[str] = mapped_column(
+        Text, unique=True, nullable=False, index=True
+    )
     object_type: Mapped[str] = mapped_column(String(64), nullable=False)
     schema_name: Mapped[str] = mapped_column(String(256), nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -96,7 +112,9 @@ class CatalogObjectRow(Base):
     business_semantics_ready: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    semantics_updated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    semantics_updated_at: Mapped[datetime | None] = mapped_column(
+        UtcDateTime, nullable=True
+    )
     last_structure_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     collected_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
@@ -150,7 +168,9 @@ class CatalogColumnRow(Base):
     column_semantics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     enum_catalog_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     semantic_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    field_kind: Mapped[str] = mapped_column(String(64), nullable=False, default="column")
+    field_kind: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="column"
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
@@ -281,9 +301,7 @@ class CatalogEmbeddingRow(Base):
 
 class StructureDiffRow(Base):
     __tablename__ = "structure_diffs"
-    __table_args__ = (
-        UniqueConstraint("job_id", name="uq_structure_diffs_job_id"),
-    )
+    __table_args__ = (UniqueConstraint("job_id", name="uq_structure_diffs_job_id"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     source_id: Mapped[str] = mapped_column(
@@ -341,4 +359,3 @@ class CatalogIndexStateRow(Base):
     progress: Mapped[str | None] = mapped_column(Text, nullable=True)
     failure_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     rebuild_owed: Mapped[bool] = mapped_column(Boolean, nullable=False)
-

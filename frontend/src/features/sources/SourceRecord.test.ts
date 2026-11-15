@@ -264,9 +264,15 @@ describe("SourceRecord", () => {
 
   it("shows fields as text and keeps a reader off the edit route", async () => {
     gate.canEdit = false;
+    getSource.mockResolvedValue({ source: { ...LEDGER, capture_credential_set: true, capture_state: "configured", snapshot_window: { start: "23:00", end: "02:00" }, schedule_timezone: "Asia/Tokyo" } });
     await renderRecord({ mode: "show", sourceId: "src_1" });
 
     expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
+    expect(screen.getByText(copy["sources.capture.set"])).toBeTruthy();
+    expect(screen.getByText("23:00")).toBeTruthy();
+    expect(screen.getByText("02:00")).toBeTruthy();
+    expect(screen.getByText("Asia/Tokyo")).toBeTruthy();
+    expect(screen.queryByLabelText(/^Capture password/)).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();
     expect(screen.queryByRole("button", { name: copy["common.save"] })).toBeNull();
@@ -297,6 +303,115 @@ describe("SourceRecord", () => {
     );
     expect(replace).not.toHaveBeenCalled();
     expect(getSourceAccess).toHaveBeenCalledWith("src_1");
+  });
+
+  it("retains capture credentials by default without loading a capture secret", async () => {
+    getSource.mockResolvedValue({ source: { ...LEDGER, capture_credential_set: true, capture_state: "configured", schedule_timezone: "Asia/Tokyo" } });
+    patchSource.mockResolvedValue({ source: LEDGER });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+
+    expect(await screen.findByText("Asia/Tokyo")).toBeTruthy();
+    expect(screen.getByText("Capture credential")).toBeTruthy();
+    expect(screen.queryByLabelText(/^Capture password/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenCalled());
+    expect(patchSource.mock.calls[0][1]).not.toHaveProperty("capture_credential");
+    expect(getSourceAccess).toHaveBeenCalledWith("src_1");
+  });
+
+  it("replaces capture credentials explicitly and clears the drafts after save", async () => {
+    patchSource.mockResolvedValue({ source: { ...LEDGER, capture_credential_set: true } });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    fireEvent.click(await screen.findByRole("button", { name: "Replace capture credential" }));
+    const username = screen.getByLabelText(/^Capture username/) as HTMLInputElement;
+    const password = screen.getByLabelText(/^Capture password/) as HTMLInputElement;
+    expect(username.value).toBe("");
+    expect(password.value).toBe("");
+    fireEvent.change(username, { target: { value: " capture-user " } });
+    fireEvent.change(password, { target: { value: " replacement-value " } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenCalledWith("src_1", expect.objectContaining({
+      capture_credential: { username: " capture-user ", password: " replacement-value " },
+    })));
+    await waitFor(() => expect(screen.queryByLabelText(/^Capture password/)).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Replace capture credential" }));
+    expect((screen.getByLabelText(/^Capture username/) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/^Capture password/) as HTMLInputElement).value).toBe("");
+  });
+
+  it("clears capture explicitly and retains it again on the next save", async () => {
+    getSource.mockResolvedValue({ source: { ...LEDGER, capture_credential_set: true } });
+    patchSource.mockResolvedValue({ source: { ...LEDGER, capture_credential_set: false } });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    fireEvent.click(await screen.findByRole("button", { name: "Clear capture credential" }));
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenCalledWith("src_1", expect.objectContaining({ capture_credential: null })));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Clear capture credential" })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenCalledTimes(2));
+    expect(patchSource.mock.calls[1][1]).not.toHaveProperty("capture_credential");
+  });
+
+  it("validates the window and saves a cross-midnight interval in the Schedule Timezone", async () => {
+    getSource.mockResolvedValue({ source: { ...LEDGER, schedule_timezone: "Pacific/Auckland" } });
+    patchSource.mockResolvedValue({ source: { ...LEDGER, snapshot_window: { start: "23:00", end: "02:00" }, schedule_timezone: "Pacific/Auckland" } });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    expect(await screen.findByText("Pacific/Auckland")).toBeTruthy();
+    fireEvent.click(screen.getByRole("switch", { name: "Any time" }));
+    const start = screen.getByRole("textbox", { name: /^Window start/ });
+    const end = screen.getByRole("textbox", { name: /^Window end/ });
+    fireEvent.change(start, { target: { value: "23:00" } });
+    fireEvent.change(end, { target: { value: "23:00" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    expect(await screen.findByText("Start and end must differ")).toBeTruthy();
+    expect(patchSource).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: /^Window end/ }), { target: { value: "24:00" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    expect(screen.getByRole("textbox", { name: /^Window end/ }).getAttribute("aria-invalid")).toBe("true");
+    expect(patchSource).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: /^Window end/ }), { target: { value: "02:00" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenCalledWith("src_1", expect.objectContaining({ snapshot_window: { start: "23:00", end: "02:00" } })));
+    expect(patchSource.mock.calls[0][1]).not.toHaveProperty("schedule_timezone");
+    fireEvent.click(screen.getByRole("switch", { name: "Any time" }));
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenCalledWith("src_1", expect.objectContaining({ snapshot_window: null })));
+  });
+
+  it("requires both capture fields and preserves the draft when scope locking rejects save", async () => {
+    patchSource.mockRejectedValue(new ApiError(409, "SOURCE_CAPTURE_SCOPE_LOCKED", "Capture scope is locked"));
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    fireEvent.click(await screen.findByRole("button", { name: "Replace capture credential" }));
+    fireEvent.change(screen.getByLabelText(/^Capture username/), { target: { value: "capture-user" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    expect(await screen.findByText("Required")).toBeTruthy();
+    expect(patchSource).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText(/^Capture password/, { selector: "input" }), { target: { value: "draft-value" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect((screen.getByLabelText(/^Capture password/, { selector: "input" }) as HTMLInputElement).value).toBe("draft-value");
+  });
+
+  it("creates with a separate capture credential and an any-time window", async () => {
+    const prior = window.location;
+    const locationReplace = vi.fn();
+    Object.defineProperty(window, "location", { configurable: true, value: { ...prior, replace: locationReplace } });
+    createSource.mockResolvedValue({ source: LEDGER });
+    try {
+      await renderRecord({ mode: "create" });
+      fireEvent.change(await screen.findByLabelText(/^Key/), { target: { value: "ledger" } });
+      fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "Ledger" } });
+      expect(screen.getByText(copy["sources.capture.timezonePending"])).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Replace capture credential" }));
+      fireEvent.change(screen.getByLabelText(/^Capture username/), { target: { value: "capture-user" } });
+      fireEvent.change(screen.getByLabelText(/^Capture password/), { target: { value: "draft-value" } });
+      fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+      await waitFor(() => expect(locationReplace).toHaveBeenCalledWith("/console/sources/src_1/edit"));
+      expect(createSource).toHaveBeenCalledWith(expect.objectContaining({ capture_credential: { username: "capture-user", password: "draft-value" }, snapshot_window: null, access: {} }));
+      expect(screen.queryByLabelText(/^Capture password/)).toBeNull();
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: prior });
+    }
   });
 
   it("sends an edit visit without write permission back to show and keeps the tab", async () => {
@@ -552,6 +667,8 @@ describe("SourceRecord", () => {
     expect(screen.getByText("ledger")).toBeTruthy();
     expect(screen.getByText(copy["sources.engines.postgresql"])).toBeTruthy();
     expect(screen.getByText(copy["sources.status.active"])).toBeTruthy();
+    expect(screen.queryByText(copy["sources.capture.credential"])).toBeNull();
+    expect(screen.queryByText(copy["sources.capture.timezone"])).toBeNull();
     expect(screen.queryByText(copy["sources.spec.section"])).toBeNull();
     expect(screen.queryByRole("button", { name: copy["sources.test"] })).toBeNull();
     expect(screen.queryByRole("tab", { name: copy["structureDiffs.title"] })).toBeNull();

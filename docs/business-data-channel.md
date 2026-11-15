@@ -4,7 +4,7 @@
 
 This document defines the **Data Channel** product domain: a user-orchestrated, versioned data workflow that reads from **Entity Table**s, entity **Change Log**s, and **Source**s, reshapes items, and writes rows into one or more Entity Tables. It defines the definition and its versions, the activation switch, the graph and its node families, write semantics and the match key, **Checkpoint**s, **Channel Run** semantics, triggers and the role of the **Scheduled Task**, **Global Variable**s, **Channel Variable**s, **Run Variable**s, the unattended-first principle, authorization, and audit.
 
-It states that **Source Mirror**s are not in the product (§9), the entity Change Log a write observes (§5.1), the **Webhook** resource an `action.webhook` node calls (§4.3), the **Email Account** an `action.email` node uses (§4.3), the **HTTP Account** an `action.http` node may reference (§4.3), and the **Inbound Credential** an **Inbound Trigger** names (§4.3). It does not define the HTTP shapes (`docs/api-contracts-data-channel.md`, `docs/api-contracts-webhooks.md`, `docs/api-contracts-email-accounts.md`, `docs/api-contracts-http-accounts.md`, `docs/api-contracts-inbound-credentials.md`) or the Console canvas layout.
+It defines the boundary between the Source capture foundation and **Source Mirror** consumption (§9), the entity Change Log a write observes (§5.1), the **Webhook** resource an `action.webhook` node calls (§4.3), the **Email Account** an `action.email` node uses (§4.3), the **HTTP Account** an `action.http` node may reference (§4.3), and the **Inbound Credential** an **Inbound Trigger** names (§4.3). It does not define the HTTP shapes (`docs/api-contracts-data-channel.md`, `docs/api-contracts-webhooks.md`, `docs/api-contracts-email-accounts.md`, `docs/api-contracts-http-accounts.md`, `docs/api-contracts-inbound-credentials.md`) or the Console canvas layout.
 
 Related boundaries:
 
@@ -93,7 +93,7 @@ Publish validates the current draft, then creates the next Channel Version from 
 
 | Section | Content |
 | --- | --- |
-| Mirrors to open | Always empty. The product has no **Source Mirror** to open |
+| Mirrors to open | Always empty. Mirror opening is outside this publish contract (§9) |
 | Runs to cancel | Running **Channel Run**s of this channel that execute an older version (§6.5) |
 | Missing run timeout | Present when the graph settings carry no run timeout |
 
@@ -102,7 +102,7 @@ The confirmation list is advisory; publish does not require any section to be em
 1. stores the new immutable version;
 2. reconciles the version's Scheduled nodes with **Scheduled Task** rows (§7.2), and reconciles the Inbound Trigger path (§7.1);
 3. requests cancel of this channel's running Channel Runs that execute an older version (§6.5);
-4. leaves `mirrors_to_open` empty. There is no Source Mirror to open.
+4. leaves `mirrors_to_open` empty; Source capture configuration does not open a mirror.
 
 Publish does not change the activation switch (§3.6).
 
@@ -506,7 +506,11 @@ The operations are get, set, delete, set-if-absent, and compare-and-set. There i
 
 ## 9. Source Mirrors And Change Logs
 
-The product has no Source Mirror list, no Read Mirror node, and no mirror Read Changes node, so none of those are filtered by Source access. Entity **Change Log** reads stay on `read.changes` and `volume.changes_dataset` (§4.3, §6.1).
+The **Source** capture foundation belongs to Metadata (`docs/business-metadata.md` §4.1.1; `docs/api-contracts-sources.md` §2). It permits separate encrypted capture credentials and snapshot-window configuration without adding mirror consumption to the channel graph. A configured credential is neither a running connector nor an available mirror.
+
+Source Mirror lists, Read Mirror nodes, mirror Read Changes nodes, and mirror opening on publish are outside this document's node and HTTP surfaces. `mirrors_to_open` remains empty. Entity **Change Log** reads stay on `read.changes` and `volume.changes_dataset` (§4.3, §6.1); their checkpoints are not CDC source positions.
+
+Capture connector lifecycle and explicit snapshot signal submission/observation are distinct from mirror application. Target application must own transactional mirror/log/offset commits and stale-owner fencing. Recovery must own capture generations, history-gap/checkpoint invalidation, safe rebaselining and mark-and-sweep, and snapshot dispatch scheduling/serialization. Credential rotation preserves capture identity and offsets; clear/disable/delete/last-close must not silently discard continuity or drop slots. Incremental snapshot signals do not themselves guarantee recovery from expired source positions. These boundaries do not introduce an applier, mirror node, recovery implementation, or supported engine/version matrix.
 
 ## 10. Unattended First
 
@@ -599,7 +603,7 @@ While the channel's latest draft **Channel Run** has not ended `succeeded`, `fai
 
 ## 13. Management Audit
 
-Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Channel Variable manual delete, Webhook create, update, delete, and test, Email Account create, update, delete, and test, HTTP Account create, update, and delete, **Inbound Credential** create, update, and delete. There is no Source Mirror operation to audit. An Inbound Credential change uses resource type `inbound_credential` and action `inbound_credential.create`, `inbound_credential.update`, or `inbound_credential.delete`. The detail holds `name`, `type`, and the non-secret `config`, and no secret (`docs/api-contracts-inbound-credentials.md`). An HTTP Account change uses resource type `http_account` and action `http_account.create`, `http_account.update`, or `http_account.delete`. The detail holds the name, the auth type, the basic username when set, the header names, the query names, and the allowed origins, and no secret value. A node execution does not write one. A Channel Variable manual delete uses resource type `channel_owned_variable`, resource id `{channel_id}/{name}`, and action `channel.owned_variable_delete`. A committed **Tag**-set change writes one event with resource type `channel`, action `tags.replace`, and the resulting Tag ids. An inline Tag create also writes the Tag create event. A replacement that does not change the set writes neither. A Tag change does not write a draft-save event. Each event records actor, **Instant**, resource, action, and result.
+Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Channel Variable manual delete, Webhook create, update, delete, and test, Email Account create, update, delete, and test, HTTP Account create, update, and delete, **Inbound Credential** create, update, and delete. Source capture configuration is audited by the Source contract (`docs/business-metadata.md` §13); this channel surface defines no mirror operation. An Inbound Credential change uses resource type `inbound_credential` and action `inbound_credential.create`, `inbound_credential.update`, or `inbound_credential.delete`. The detail holds `name`, `type`, and the non-secret `config`, and no secret (`docs/api-contracts-inbound-credentials.md`). An HTTP Account change uses resource type `http_account` and action `http_account.create`, `http_account.update`, or `http_account.delete`. The detail holds the name, the auth type, the basic username when set, the header names, the query names, and the allowed origins, and no secret value. A node execution does not write one. A Channel Variable manual delete uses resource type `channel_owned_variable`, resource id `{channel_id}/{name}`, and action `channel.owned_variable_delete`. A committed **Tag**-set change writes one event with resource type `channel`, action `tags.replace`, and the resulting Tag ids. An inline Tag create also writes the Tag create event. A replacement that does not change the set writes neither. A Tag change does not write a draft-save event. Each event records actor, **Instant**, resource, action, and result.
 
 ## 14. Non-Goals
 

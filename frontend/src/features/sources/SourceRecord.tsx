@@ -4,10 +4,12 @@ import { Box, Button, Modal, Stack, Tooltip } from "@mantine/core";
 import { useCan, useNotification, usePermissions, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { DisplayField } from "@/components/display/DisplayField";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { SelectField } from "@/components/form/SelectField";
+import { SwitchField } from "@/components/form/SwitchField";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 import { useConsoleForm, type UseConsoleFormReturn } from "@/components/form/useConsoleForm";
@@ -71,6 +73,12 @@ type Values = {
   status: "active" | "disabled";
   engine: Engine | "";
   access: SourceAccess;
+  captureIntent: "retain" | "replace" | "clear";
+  captureUsername: string;
+  capturePassword: string;
+  anyTime: boolean;
+  windowStart: string;
+  windowEnd: string;
 };
 
 type Props = { mode: "create" } | { mode: "show" | "edit"; sourceId: string };
@@ -82,6 +90,12 @@ const EMPTY: Values = {
   status: "active",
   engine: "",
   access: {},
+  captureIntent: "retain",
+  captureUsername: "",
+  capturePassword: "",
+  anyTime: true,
+  windowStart: "",
+  windowEnd: "",
 };
 
 function formEngine(engine: string | null | undefined): Engine {
@@ -90,12 +104,54 @@ function formEngine(engine: string | null | undefined): Engine {
 
 function valuesFrom(source: Source, access: SourceAccess): Values {
   return {
+    ...EMPTY,
     key: source.key,
     name: source.name,
     description: source.description ?? "",
     status: source.status === "disabled" ? "disabled" : "active",
     engine: formEngine(source.engine),
     access,
+    anyTime: source.snapshot_window == null,
+    windowStart: source.snapshot_window?.start ?? "",
+    windowEnd: source.snapshot_window?.end ?? "",
+  };
+}
+
+function snapshotWrite(values: Values) {
+  return { snapshot_window: values.anyTime ? null : { start: values.windowStart, end: values.windowEnd } };
+}
+
+function captureWrite(values: Values) {
+  if (values.captureIntent === "clear") return { capture_credential: null };
+  if (values.captureIntent === "replace") {
+    return { capture_credential: { username: values.captureUsername, password: values.capturePassword } };
+  }
+  return {};
+}
+
+const CAPTURE_ERROR_ALIASES = {
+  "capture_credential.username": "captureUsername",
+  "capture_credential.password": "capturePassword",
+  capture_credential: "captureUsername",
+  "snapshot_window.start": "windowStart",
+  "snapshot_window.end": "windowEnd",
+  snapshot_window: "windowStart",
+};
+
+function captureValidation(t: (key: string) => string) {
+  return {
+    windowStart: (value: string, values: Values) =>
+      !values.anyTime && !/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(value)
+        ? t("sources.capture.invalidTime") : null,
+    windowEnd: (value: string, values: Values) => {
+      if (values.anyTime) return null;
+      if (!/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(value)) return t("sources.capture.invalidTime");
+      return value === values.windowStart ? t("sources.capture.equalTime") : null;
+    },
+    captureUsername: (value: string, values: Values) =>
+      values.captureIntent === "replace" && !value ? t("sources.validation.required") : null,
+    capturePassword: (value: string, values: Values) =>
+      values.captureIntent === "replace" && !value ? t("sources.validation.required") : null,
   };
 }
 
@@ -133,6 +189,7 @@ function SourceCreate() {
     initialValues: EMPTY,
     validate: {
       key: (value) => (value.trim() ? null : t("sources.validation.required")),
+      ...captureValidation(t),
       name: (value) => (value.trim() ? null : t("sources.validation.required")),
       engine: (value) => (value ? null : t("sources.validation.required")),
     },
@@ -207,15 +264,18 @@ function SourceCreate() {
             description: values.description.trim() || null,
             engine,
             access: values.access,
+            ...captureWrite(values),
+            ...snapshotWrite(values),
           })
             .then((created) => {
+              form.setValues({ ...values, captureIntent: "retain", captureUsername: "", capturePassword: "" });
               form.markSaved();
               suppressLeaveGuard();
               open?.({ type: "success", message: t("sources.create.success") });
               window.location.replace(sourceEditPath(created.source.id));
             })
             .catch((err: unknown) => {
-              presentSaveFailure(t, err, form.applyApiError);
+              presentSaveFailure(t, err, (error) => form.applyApiError(error, CAPTURE_ERROR_ALIASES));
             });
         })}
       >
@@ -293,6 +353,7 @@ function SourceExisting({
   const form = useConsoleForm<Values>({
     initialValues: EMPTY,
     validate: {
+      ...captureValidation(t),
       name: (value) => (value.trim() ? null : t("sources.validation.required")),
       engine: (value) => (value ? null : t("sources.validation.required")),
     },
@@ -434,6 +495,8 @@ function SourceExisting({
         status: values.status,
         engine,
         access: values.access,
+        ...captureWrite(values),
+        ...snapshotWrite(values),
       });
       setRecord(updated.source);
       form.setValues(valuesFrom(updated.source, values.access));
@@ -443,7 +506,7 @@ function SourceExisting({
         open?.({ type: "success", message: t("schedules.seededOnSourceUpdate") });
       }
     } catch (err) {
-      presentSaveFailure(t, err, form.applyApiError);
+      presentSaveFailure(t, err, (error) => form.applyApiError(error, CAPTURE_ERROR_ALIASES));
     }
   };
 
@@ -454,6 +517,7 @@ function SourceExisting({
       mode={mode}
       editable={editable}
       identityOnly={identityOnly}
+      source={record}
       testing={testing}
       onEngineChange={(next) =>
         confirmEngine(
@@ -664,6 +728,7 @@ function SourceFields({
   mode,
   editable,
   identityOnly = false,
+  source,
   testing,
   onEngineChange,
   onTest,
@@ -673,6 +738,7 @@ function SourceFields({
   mode: "create" | "show" | "edit";
   editable: boolean;
   identityOnly?: boolean;
+  source?: Source;
   testing: boolean;
   onEngineChange: (next: Engine | null) => void;
   onTest: () => void;
@@ -734,6 +800,47 @@ function SourceFields({
           onChange={(next) => form.setFieldValue("access", next)}
           editable={editable}
         />
+      )}
+      {identityOnly ? null : (
+        <>
+          <DisplayField
+            label={t("sources.capture.credential")}
+            value={t(source?.capture_credential_set ? "sources.capture.set" : "sources.capture.unset")}
+            helper={t("sources.capture.helper")}
+          />
+          {editable ? (
+            <>
+              <Button type="button" variant="default" size="sm" onClick={() => form.setValues({ captureIntent: "replace", captureUsername: "", capturePassword: "" })}>
+                {t("sources.capture.replace")}
+              </Button>
+              {form.values.captureIntent !== "retain" ? (
+                <Button type="button" variant="default" size="sm" onClick={() => form.setValues({ captureIntent: "retain", captureUsername: "", capturePassword: "" })}>
+                  {t("sources.capture.retain")}
+                </Button>
+              ) : null}
+              {source?.capture_credential_set ? (
+                <Button type="button" variant="light" color="red" size="sm" onClick={() => form.setValues({ captureIntent: "clear", captureUsername: "", capturePassword: "" })}>
+                  {t("sources.capture.clear")}
+                </Button>
+              ) : null}
+              {form.values.captureIntent === "clear" ? <DisplayField label={t("sources.capture.clear")} value={t("sources.capture.clearHint")} /> : null}
+              {form.values.captureIntent === "replace" ? (
+                <>
+                  <TextField editable label={t("sources.capture.username")} required autoComplete="off" {...form.fieldProps("captureUsername")} />
+                  <TextField editable type="password" label={t("sources.capture.password")} required autoComplete="new-password" {...form.fieldProps("capturePassword")} />
+                </>
+              ) : null}
+            </>
+          ) : null}
+          <DisplayField label={t("sources.capture.timezone")} value={source?.schedule_timezone} helper={!source?.schedule_timezone ? t("sources.capture.timezonePending") : undefined} />
+          <SwitchField editable={editable} label={t("sources.capture.anyTime")} helper={t("sources.capture.windowHelper")} {...form.fieldProps("anyTime", { type: "checkbox" })} />
+          {!form.values.anyTime ? (
+            <>
+              <TextField editable={editable} label={t("sources.capture.start")} placeholder="HH:mm" required={editable} {...form.fieldProps("windowStart")} />
+              <TextField editable={editable} label={t("sources.capture.end")} placeholder="HH:mm" required={editable} {...form.fieldProps("windowEnd")} />
+            </>
+          ) : null}
+        </>
       )}
       {editable && !identityOnly ? (
         <Button

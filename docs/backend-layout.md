@@ -130,7 +130,9 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.metadata.tasks` | Job kind handler dispatch (`run_job`); discovered by `worker` |
 | `backend.metadata.routers.*` | Domain use-case HTTP; mounted by `main` |
 
-`backend.metadata.catalog.normalized_type` is an internal catalog module. **Attribute Type** does not import it (ADR 0049).
+`backend.metadata.catalog.normalized_type` is an internal catalog module. **Attribute Type** does not import it.
+
+**Source capture placement:** Source capture configuration, encrypted capture credential storage, snapshot-window rules, readiness policy, and connector lifecycle/signaling orchestration belong to a `metadata` language unit, not `core`, `channel`, or the ordinary query connector registry. Source HTTP remains under metadata's adapters. Runtime composition binds scheduling and external adapters; business modules do not import `worker.app`. Capture-to-mirror/applier collaboration uses composition-bound ports, not a reverse import of `entity` or `channel`. Physical placement in the entity database does not change package dependency rules. No capture leaf module is published by this contract alone; add it to this table only with a real cross-package consumer and implementation.
 
 ### `entity` published modules
 
@@ -221,7 +223,7 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell that binds an already-interpreted `SourceEndpoint`) |
 | Domain error types | That product domain (base in `core`) |
 | Site Branding singleton, assets, validation, cache policy, and HTTP | `admin/branding` language unit |
-| Config, engine, secrets crypto, Instant/Clock (`core.time`), shared IANA zone catalog (`core.time_zones`), Offset Page (`core.pagination`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes, runtime capacity (pool / limiter / admission / `/metrics`) | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md); pagination in [`docs/conventions-pagination.md`](conventions-pagination.md); capacity in ADR 0040 / 0045 |
+| Config, engine, secrets crypto, Instant/Clock (`core.time`), shared IANA zone catalog (`core.time_zones`), Offset Page (`core.pagination`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes, runtime capacity (pool / limiter / admission / `/metrics`) | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md); pagination in [`docs/conventions-pagination.md`](conventions-pagination.md); capacity in `docs/env.md` |
 | Celery app, Beat, **Scheduled Task**, system tasks, task registration | `worker` |
 | Domain async work units (`@shared_task` or equivalent) | Owning product domain; **discovered and registered by `worker`** |
 | Process probes (health/ready) | `core` (thin); not inside a product domain |
@@ -278,7 +280,7 @@ Default: **all imports live at module top level** (after module docstring / `fro
 2. **Optional process entry** dependencies that must not load when the module is imported for non-serve paths — currently only `uvicorn` inside `backend.core.entry.main`. Register each case in `backend/tests/test_no_inline_imports.py` (`INLINE_IMPORT_ALLOWLIST`).
 3. **`backend/tests/**`** — not enforced (tests may import inside fixtures/helpers).
 
-Enforcement: `backend/tests/test_no_inline_imports.py`. Rationale: ADR 0020.
+Enforcement: `backend/tests/test_no_inline_imports.py`.
 
 ## 8. Allowed dependencies (whitelist; acyclic)
 
