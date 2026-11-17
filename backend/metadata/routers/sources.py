@@ -129,6 +129,7 @@ def post_source(
         action="source.create",
         result="success",
         detail={
+            "fields": sorted(payload.model_fields_set),
             "key": record.key,
             "kind": record.kind,
             "engine": record.engine,
