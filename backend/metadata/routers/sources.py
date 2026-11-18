@@ -210,37 +210,19 @@ def patch_source(
     user: UserRecord = Depends(require_permission("sources:write")),
 ) -> PatchSourceResponse:
     source_service.require_source_permission(user.id, source_id, "sources:write")
-    data = payload.model_dump(exclude_unset=True)
-    actor_token_id = get_actor_token_id(request)
+    fields = payload.model_fields_set
     record, seeded = source_service.update_source(
         source_id,
-        name=data.get("name"),
-        description=data["description"] if "description" in data else ...,
-        status=data.get("status"),
-        engine=data.get("engine"),
-        access=data["access"] if "access" in data else ...,
-        capture_credential=payload.capture_credential
-        if "capture_credential" in data
-        else ...,
-        snapshot_window=payload.snapshot_window if "snapshot_window" in data else ...,
+        name=payload.name,
+        description=payload.description if "description" in fields else ...,
+        status=payload.status,
+        engine=payload.engine,
+        access=payload.access if "access" in fields else ...,
+        capture_credential=payload.capture_credential if "capture_credential" in fields else ...,
+        snapshot_window=payload.snapshot_window if "snapshot_window" in fields else ...,
         actor_user_id=user.id,
-        actor_token_id=actor_token_id,
-    )
-    persist_audit_event(
-        actor_user_id=user.id,
-        actor_token_id=actor_token_id,
-        resource_type="source",
-        resource_id=record.id,
-        action="source.update",
-        result="success",
-        detail={
-            "fields": sorted(data.keys()),
-            "capture_credential": "retain"
-            if "capture_credential" not in data
-            else "clear"
-            if payload.capture_credential is None
-            else "replace",
-        },
+        actor_token_id=get_actor_token_id(request),
+        patch_fields=fields,
     )
     if not seeded:
         return PatchSourceResponse(source=_source_out(record))

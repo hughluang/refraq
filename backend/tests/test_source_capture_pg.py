@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
+from backend.admin.audit_store import SqlAuditStore
 from backend.tests import test_integration_persistent as persistent
 from backend.tests.test_sources_jobs import _access
 from backend.metadata.capture.configuration import CaptureCredential
@@ -138,6 +139,62 @@ def test_capture_postgres_http_and_concurrent_revisions(capture_pg_client):
     again = client.patch(f"/sources/{source_id}", json={"capture_credential": None})
     assert again.json()["source"]["capture_credential_updated_at"] == timestamp
     assert get_source_store().get_source(source_id).capture_revision == 14
+
+
+@pytest.mark.parametrize("intent", ["replace", "clear"])
+def test_patch_and_success_audit_commit_together(capture_pg_client, monkeypatch, intent):
+    client = capture_pg_client
+    client.post("/auth/login", json={"account": "root", "password": "s3cret"})
+    actor = client.get("/auth/me").json()["user"]["id"]
+    token = client.post("/tokens", json={"name": "patch", "expires_at": None}).json()
+    client.cookies.clear()
+    client.headers.update({"Authorization": f"Bearer {token['secret']}"})
+    created = client.post("/sources", json={
+        "key": "atomic", "name": "Before", "engine": "postgresql", "access": _access(),
+        "capture_credential": {"username": "initial", "password": "initial-test"},
+    })
+    assert created.status_code == 201
+    source_id = created.json()["source"]["id"]
+    payload = {
+        "name": "After", "snapshot_window": {"start": "23:00", "end": "01:00"},
+        "capture_credential": {"username": "other", "password": "other-test"} if intent == "replace" else None,
+    }
+
+    def events():
+        with session_scope() as session:
+            return session.execute(text(
+                "SELECT actor_user_id, actor_token_id, detail FROM audit_events "
+                "WHERE resource_type='source' AND resource_id=:id "
+                "AND action='source.update' AND result='success'"
+            ), {"id": source_id}).all()
+
+    store = get_source_store()
+    before = store.get_source(source_id)
+    write = SqlAuditStore.create_on
+
+    def fail_after_insert(self, session, record):
+        result = write(self, session, record)
+        if record.action == "source.update":
+            raise RuntimeError("injected audit failure")
+        return result
+
+    with monkeypatch.context() as fault:
+        fault.setattr(SqlAuditStore, "create_on", fail_after_insert)
+        with pytest.raises(RuntimeError, match="injected audit failure"):
+            client.patch(f"/sources/{source_id}", json=payload)
+    assert events() == []
+    unchanged = store.get_source(source_id) == before
+    assert unchanged, "failed PATCH changed the stored Source"
+
+    assert client.patch(f"/sources/{source_id}", json=payload).status_code == 200
+    after = store.get_source(source_id)
+    assert after.capture_revision == before.capture_revision + 1
+    assert after.name == "After"
+    assert after.snapshot_window == payload["snapshot_window"]
+    assert (after.capture_credential_ciphertext is None) == (intent == "clear")
+    assert events() == [(actor, token["token"]["id"], {
+        "fields": ["capture_credential", "name", "snapshot_window"], "capture_credential": intent,
+    })]
 
 
 def test_capture_database_errors_and_engine_change_are_transactional(

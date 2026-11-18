@@ -377,6 +377,7 @@ def update_source(
     snapshot_window: SnapshotWindow | None | object = ...,
     actor_user_id: str | None = None,
     actor_token_id: str | None = None,
+    patch_fields: set[str] | None = None,
 ) -> tuple[SourceRecord, list[ScheduleOut]]:
     if capture_credential is not ... and capture_credential is not None:
         capture_credential = CaptureCredential.model_validate(capture_credential)
@@ -397,6 +398,7 @@ def update_source(
                 access=access,
                 capture_credential=capture_credential,
                 snapshot_window=snapshot_window,
+                patch_fields=patch_fields,
                 actor_user_id=actor_user_id,
                 actor_token_id=actor_token_id,
                 session=session,
@@ -410,6 +412,7 @@ def update_source(
         access=access,
         capture_credential=capture_credential,
         snapshot_window=snapshot_window,
+        patch_fields=patch_fields,
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
     )
@@ -425,6 +428,7 @@ def _update_source_on(
     access: dict[str, Any] | None | object,
     capture_credential: CaptureCredential | None | object,
     snapshot_window: SnapshotWindow | None | object,
+    patch_fields: set[str] | None,
     actor_user_id: str | None,
     actor_token_id: str | None,
     session: Session | None = None,
@@ -499,6 +503,21 @@ def _update_source_on(
             kind=saved.kind,
             source_key=saved.key,
             **({"session": session} if session is not None else {}),
+        )
+    if patch_fields is not None:
+        persist_audit_event(
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            resource_type="source",
+            resource_id=source_id,
+            action="source.update",
+            result="success",
+            detail={
+                "fields": sorted(patch_fields),
+                "capture_credential": "retain" if capture_credential is ...
+                else "clear" if capture_credential is None else "replace",
+            },
+            session=session,
         )
     return saved, seeded
 
