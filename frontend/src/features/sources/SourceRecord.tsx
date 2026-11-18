@@ -117,8 +117,11 @@ function valuesFrom(source: Source, access: SourceAccess): Values {
   };
 }
 
-function snapshotWrite(values: Values) {
-  return { snapshot_window: values.anyTime ? null : { start: values.windowStart, end: values.windowEnd } };
+function snapshotWrite(values: Values, existing?: Source) {
+  const window = values.anyTime ? null : { start: values.windowStart, end: values.windowEnd };
+  const previous = existing?.snapshot_window;
+  if (existing && window?.start === previous?.start && window?.end === previous?.end) return {};
+  return { snapshot_window: window };
 }
 
 function captureWrite(values: Values) {
@@ -496,7 +499,7 @@ function SourceExisting({
         engine,
         access: values.access,
         ...captureWrite(values),
-        ...snapshotWrite(values),
+        ...snapshotWrite(values, record),
       });
       setRecord(updated.source);
       form.setValues(valuesFrom(updated.source, values.access));

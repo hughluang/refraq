@@ -305,6 +305,20 @@ describe("SourceRecord", () => {
     expect(getSourceAccess).toHaveBeenCalledWith("src_1");
   });
 
+  it.each([null, { start: "23:00", end: "02:00" }])(
+    "omits the unchanged snapshot window (%j) when renaming a Source",
+    async (snapshot_window) => {
+      const source = { ...LEDGER, snapshot_window };
+      getSource.mockResolvedValue({ source });
+      patchSource.mockResolvedValue({ source: { ...source, name: "Ledger West" } });
+      await renderRecord({ mode: "edit", sourceId: "src_1" });
+      fireEvent.change(await screen.findByLabelText(/^Name/), { target: { value: "Ledger West" } });
+      fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+      await waitFor(() => expect(patchSource).toHaveBeenCalledWith("src_1", expect.objectContaining({ name: "Ledger West" })));
+      expect(patchSource.mock.calls[0][1]).not.toHaveProperty("snapshot_window");
+    },
+  );
+
   it("retains capture credentials by default without loading a capture secret", async () => {
     getSource.mockResolvedValue({ source: { ...LEDGER, capture_credential_set: true, capture_state: "configured", schedule_timezone: "Asia/Tokyo" } });
     patchSource.mockResolvedValue({ source: LEDGER });
@@ -350,6 +364,16 @@ describe("SourceRecord", () => {
     fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
     await waitFor(() => expect(patchSource).toHaveBeenCalledTimes(2));
     expect(patchSource.mock.calls[1][1]).not.toHaveProperty("capture_credential");
+  });
+
+  it("replaces the loaded snapshot window when only its end changes", async () => {
+    getSource.mockResolvedValue({ source: { ...LEDGER, snapshot_window: { start: "23:00", end: "01:00" } } });
+    const replacement = { start: "23:00", end: "02:00" };
+    patchSource.mockResolvedValue({ source: { ...LEDGER, snapshot_window: replacement } });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    fireEvent.change(await screen.findByRole("textbox", { name: /^Window end/ }), { target: { value: "02:00" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenCalledWith("src_1", expect.objectContaining({ snapshot_window: replacement })));
   });
 
   it("validates the window and saves a cross-midnight interval in the Schedule Timezone", async () => {
