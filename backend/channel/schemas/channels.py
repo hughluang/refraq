@@ -122,6 +122,7 @@ class GraphSettingsIn(BaseModel):
     run_timeout_sec: int | None = None
     run_retry_limit: int | None = None
     error_channel_id: str | None = None
+    mirror_execution_user_id: str | None = Field(default=None, pattern=_ID_RE.pattern)
     keep_succeeded_runs: bool = True
     keep_failed_runs: bool = True
     keep_test_runs: bool = True
@@ -330,10 +331,19 @@ class DraftPutRequest(BaseModel):
     graph: GraphIn
 
 
+class MirrorOpenConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(min_length=1)
+    object_id: str = Field(min_length=1)
+    mirror_id: str = Field(min_length=1)
+
+
 class PublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     draft_revision: int = Field(ge=1)
+    mirrors_to_open: list[MirrorOpenConfirmation] | None = None
 
 
 class ValidateRequest(BaseModel):

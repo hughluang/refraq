@@ -179,7 +179,7 @@ def test_project_access_strips_x_secret() -> None:
 
 
 VIEWER_KEYS = frozenset(
-    {"sources:read", "metadata:read", "catalog:sample", "query:run"}
+    {"sources:read", "sources:data_read", "metadata:read", "catalog:sample", "query:run"}
 )
 STEWARD_KEYS = VIEWER_KEYS | frozenset({"metadata:write"})
 MAINTAINER_KEYS = STEWARD_KEYS | frozenset({"sources:write", "jobs:run"})

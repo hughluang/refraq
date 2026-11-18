@@ -6,6 +6,7 @@ export const SOURCE_ENGINES = [
   "postgresql",
   "mssql",
   "oracle",
+  "mysql",
 ] as const satisfies readonly Engine[];
 
 export function selectedEngine(value: string): Engine | undefined {

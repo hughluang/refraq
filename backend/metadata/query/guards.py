@@ -11,6 +11,7 @@ from backend.core.sql_ast import READ_QUERY_ROOTS, WRITE_OR_DDL, iter_function_n
 from backend.metadata.errors import QueryMultiStatement, QueryNotReadonly
 
 _DIALECT_BY_ENGINE: dict[str, str] = {
+    "mysql": "mysql",
     "postgresql": "postgres",
     "mssql": "tsql",
     "oracle": "oracle",
@@ -168,6 +169,8 @@ def assert_readonly_single_statement(sql: str, *, engine: str) -> str:
         raise QueryNotReadonly("SQL statement is empty")
 
     dialect = dialect_for_engine(engine)
+    if dialect == "mysql" and re.search(r"/\*\s*[!+]", body):
+        raise QueryNotReadonly("MySQL executable comments and optimizer hints are not allowed")
     try:
         statements = parse(body, read=dialect)
     except ParseError as exc:
@@ -183,6 +186,8 @@ def assert_readonly_single_statement(sql: str, *, engine: str) -> str:
         raise QueryNotReadonly()
 
     for node in statement.walk():
+        if engine == "mysql" and isinstance(node, (exp.PropertyEQ, exp.SessionParameter)):
+            raise QueryNotReadonly("Session variables are not allowed")
         if isinstance(node, WRITE_OR_DDL):
             if isinstance(node, exp.Lock):
                 raise QueryNotReadonly("Row locking (FOR UPDATE) is not allowed")
@@ -191,7 +196,11 @@ def assert_readonly_single_statement(sql: str, *, engine: str) -> str:
             raise QueryNotReadonly("SELECT INTO is not allowed")
 
     for function_name in iter_function_names(statement):
-        if function_name in _BLOCKED_FUNCTION_NAMES:
+        if function_name in _BLOCKED_FUNCTION_NAMES or (
+            dialect == "mysql" and function_name in {
+                "get_lock", "release_lock", "release_all_locks", "sleep", "benchmark", "load_file",
+            }
+        ):
             raise QueryNotReadonly(
                 f"Function {function_name} is not allowed in readonly SQL"
             )

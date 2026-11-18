@@ -13,6 +13,7 @@ from sqlalchemy.engine import make_url
 from backend.admin.audit_store import SqlAuditStore
 from backend.tests import test_integration_persistent as persistent
 from backend.tests.test_sources_jobs import _access
+from backend.metadata.capture.control import capture_status
 from backend.metadata.capture.configuration import CaptureCredential
 from backend.metadata.sources.service import update_source
 from backend.metadata.sources.store import get_source_store
@@ -115,6 +116,10 @@ def test_capture_postgres_http_and_concurrent_revisions(capture_pg_client):
     with ThreadPoolExecutor(max_workers=6) as executor:
         list(executor.map(rotate, range(12)))
     assert get_source_store().get_source(source_id).capture_revision == 13
+    control = capture_status(source_id)
+    assert control['control']['control_revision'] == 13
+    assert len(control['operations']) == 13
+    assert len({op['operation_id'] for op in control['operations']}) == 13
     for path in (
         "/sources",
         f"/sources/{source_id}",
@@ -170,6 +175,7 @@ def test_patch_and_success_audit_commit_together(capture_pg_client, monkeypatch,
 
     store = get_source_store()
     before = store.get_source(source_id)
+    control_before = capture_status(source_id)
     write = SqlAuditStore.create_on
 
     def fail_after_insert(self, session, record):
@@ -185,6 +191,7 @@ def test_patch_and_success_audit_commit_together(capture_pg_client, monkeypatch,
     assert events() == []
     unchanged = store.get_source(source_id) == before
     assert unchanged, "failed PATCH changed the stored Source"
+    assert capture_status(source_id) == control_before
 
     assert client.patch(f"/sources/{source_id}", json=payload).status_code == 200
     after = store.get_source(source_id)

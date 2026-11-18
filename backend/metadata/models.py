@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -70,6 +71,28 @@ class SourceRow(Base):
     catalog_objects: Mapped[list[CatalogObjectRow]] = relationship(
         back_populates="source",
     )
+
+
+class SourceCaptureBindingRow(Base):
+    __tablename__ = "source_capture_bindings"
+
+    source_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("sources.id", ondelete="RESTRICT"), primary_key=True
+    )
+    binding_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    state: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+class SourceCaptureOperationRow(Base):
+    __tablename__ = "source_capture_operations"
+
+    operation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("source_capture_bindings.source_id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    command: Mapped[dict] = mapped_column(JSON, nullable=False)
+    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class CatalogObjectRow(Base):

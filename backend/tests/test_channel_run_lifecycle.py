@@ -655,6 +655,7 @@ def test_on_demand_run_persists_draft_and_published_records_and_dispatches_once(
             "run_timeout_sec": None,
             "run_retry_limit": None,
             "error_channel_id": None,
+            "mirror_execution_user_id": None,
             "keep_succeeded_runs": True,
             "keep_failed_runs": True,
             "keep_test_runs": True,

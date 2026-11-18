@@ -144,8 +144,24 @@ _ORACLE = {
     "json": "json",
 }
 
+_MYSQL = {
+    **{name: "string" for name in (
+        "char", "varchar", "tinytext", "text", "mediumtext", "longtext", "enum", "set",
+    )},
+    **{name: "integer" for name in ("tinyint", "smallint", "mediumint", "int", "integer", "bigint", "year")},
+    **{name + " unsigned": "integer" for name in ("tinyint", "smallint", "mediumint", "int", "integer")},
+    "bigint unsigned": "decimal",
+    "decimal": "decimal", "numeric": "decimal",
+    "decimal unsigned": "decimal", "numeric unsigned": "decimal",
+    "float": "number", "double": "number", "double precision": "number", "real": "number",
+    "date": "date", "datetime": "timestamp", "timestamp": "timestamp", "time": "interval",
+    **{name: "binary" for name in ("binary", "varbinary", "bit", "tinyblob", "blob", "mediumblob", "longblob")},
+    "json": "json",
+}
+
 PRODUCT_TYPE_MAPPING_SEEDS: tuple[tuple[str, str, str], ...] = (
-    _pairs("postgresql", _POSTGRESQL)
+    _pairs("mysql", _MYSQL)
+    + _pairs("postgresql", _POSTGRESQL)
     + _pairs("mssql", _MSSQL)
     + _pairs("oracle", _ORACLE)
 )

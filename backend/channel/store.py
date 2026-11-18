@@ -114,6 +114,7 @@ class ChannelStore(Protocol):
         draft_revision: int,
         published_at: datetime,
         published_by_user_id: str,
+        after: Callable[[Session | None, ChannelVersionRecord], None] | None = None,
     ) -> ChannelVersionRecord: ...
 
     def latest_versions(
@@ -270,6 +271,7 @@ class MemoryChannelStore:
         draft_revision: int,
         published_at: datetime,
         published_by_user_id: str,
+        after: Callable[[Session | None, ChannelVersionRecord], None] | None = None,
     ) -> ChannelVersionRecord:
         with self._lock:
             record = self._channels.get(channel_id)
@@ -288,6 +290,8 @@ class MemoryChannelStore:
                 published_at=published_at,
                 published_by_user_id=published_by_user_id,
             )
+            if after is not None:
+                after(None, version)
             self._versions[(channel_id, number)] = version
             record.updated_at = published_at
             return _clone_version(version)
@@ -481,6 +485,7 @@ class SqlChannelStore:
         draft_revision: int,
         published_at: datetime,
         published_by_user_id: str,
+        after: Callable[[Session | None, ChannelVersionRecord], None] | None = None,
     ) -> ChannelVersionRecord:
         with session_scope() as session:
             row = _locked_channel(session, channel_id)
@@ -502,6 +507,8 @@ class SqlChannelStore:
             session.add(version)
             row.updated_at = published_at
             session.flush()
+            if after is not None:
+                after(session, _version_from_row(version))
             return _version_from_row(version)
 
     def latest_versions(

@@ -10,8 +10,12 @@ from sqlalchemy import engine_from_config, pool
 from backend.core.db import Base
 import backend.admin.models  # noqa: F401 — register Foundation tables
 import backend.admin.branding.models  # noqa: F401 — register branding tables
+import backend.admin.notifications.models  # noqa: F401 — register notification tables
 import backend.jobs.models  # noqa: F401 — register Job tables
 import backend.metadata.models  # noqa: F401 — register Source/Catalog tables
+import backend.metadata.mirrors.models  # noqa: F401 — register mirror registry
+import backend.metadata.mirrors.history_models  # noqa: F401 — register history gates
+import backend.metadata.mirrors.recovery_store  # noqa: F401 — register recovery journal
 import backend.entity.models  # noqa: F401 — register Business Entity tables
 import backend.entity.projection  # noqa: F401 — register Entity embedding table
 import backend.entity.embed_jobs.index_state  # noqa: F401 — register Entity index state
@@ -58,6 +62,7 @@ def run_migrations_online() -> None:
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        hide_parameters=True,
     )
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)

@@ -5,8 +5,9 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -25,11 +26,62 @@ _ENV_FILES = tuple(
 )
 
 
+class NotificationDeliverySettings(BaseModel):
+    """Deployer-approved bounds; no production capacity is inferred."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    max_attempts_per_route: int = Field(gt=0, strict=True)
+    retry_delays_seconds: tuple[float, ...]
+    timeout_seconds: float = Field(gt=0)
+    batch_size: int = Field(gt=0, strict=True)
+    interval_seconds: int = Field(gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def _validate_retry_delays(self) -> NotificationDeliverySettings:
+        if (
+            len(self.retry_delays_seconds) != self.max_attempts_per_route - 1
+            or any(delay <= 0 for delay in self.retry_delays_seconds)
+        ):
+            raise ValueError("Explicit notification retry delays must match attempts")
+        return self
+
+
+class MirrorTargetSettings(BaseModel):
+    """Explicit protected target identities and bounded connection policy."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    gateway_url: SecretStr
+    applier_url: SecretStr
+    timeout_ms: int = Field(gt=0, le=2147483647, strict=True)
+    connect_timeout_seconds: int = Field(gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def _validate_target_identities(self) -> MirrorTargetSettings:
+        try:
+            urls = [make_url(value.get_secret_value()) for value in (self.gateway_url, self.applier_url)]
+            for url, role in zip(urls, ("refraq_mirror_gateway", "refraq_mirror_applier"), strict=True):
+                if (
+                    url.drivername != "postgresql+psycopg" or url.username != role
+                    or not url.password or not url.host or not url.database
+                    or url.query.get("sslmode") != "verify-full"
+                    or set(url.query) - {"sslmode", "sslrootcert"}
+                ):
+                    raise ValueError
+            if _database_target(str(urls[0])) != _database_target(str(urls[1])):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise ValueError("Mirror target requires distinct restricted identities on one verified TLS PostgreSQL database") from None
+        return self
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=_ENV_FILES or None,
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     refraq_env: str = Field(default="dev", validation_alias="REFRAQ_ENV")
@@ -86,6 +138,43 @@ class Settings(BaseSettings):
         default="http://prometheus:9090",
         validation_alias="REFRAQ_PROMETHEUS_URL",
     )
+    mirror_target: MirrorTargetSettings | None = Field(
+        default=None, validation_alias="REFRAQ_MIRROR_TARGET", repr=False,
+    )
+    notification_reviewed_origins: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias="REFRAQ_NOTIFICATION_REVIEWED_ORIGINS",
+        repr=False,
+    )
+    notification_delivery: NotificationDeliverySettings | None = Field(
+        default=None,
+        validation_alias="REFRAQ_NOTIFICATION_DELIVERY",
+        repr=False,
+    )
+
+    @field_validator("notification_reviewed_origins")
+    @classmethod
+    def _validate_notification_origins(cls, value: dict[str, str]) -> dict[str, str]:
+        for origin, domain in value.items():
+            try:
+                parsed = urlsplit(origin)
+                host = (parsed.hostname or "").lower()
+                if ":" in host:
+                    host = f"[{host}]"
+                canonical = f"https://{host}"
+                if parsed.port and parsed.port != 443:
+                    canonical += f":{parsed.port}"
+                if (
+                    not host or origin != canonical or not domain.strip()
+                    or domain != domain.strip()
+                    or any(ord(char) <= 32 or ord(char) >= 127 for char in origin)
+                    or "\\" in origin
+                ):
+                    raise ValueError
+            except ValueError:
+                raise ValueError("Notification policy requires canonical HTTPS origins and reviewed failure domains") from None
+        return value
+
     @field_validator("refraq_browser_facing_host", mode="before")
     @classmethod
     def _normalize_browser_facing_host(cls, value: object) -> str | None:

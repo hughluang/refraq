@@ -6,14 +6,12 @@ import time
 from typing import Any
 
 from backend.admin.user_store import get_user_store
-from backend.channel.channel_run import (
-    SYSTEM_TRIGGER_KINDS,
-    execute_channel_run,
-    expression_context,
-    trigger_node_id,
-)
+from backend.channel import channel_run
 from backend.channel.dataset_registry import seal_dataset_expiry
-from backend.channel.recovery import settle_failure, settle_success
+from backend.channel.checkpoints import advance_from_run_in_session
+from backend.channel.mirror_reads import mirror_graph, require_run_data_access, authorize_graph
+from backend.core.db import session_scope
+from backend.channel import recovery
 from backend.channel.run_store import get_run_store, note_killed_run
 from backend.channel.sandbox import SandboxFailed
 from backend.channel.store import get_channel_store
@@ -29,6 +27,16 @@ from backend.jobs.store import (
 )
 
 __all__ = ["note_killed_run", "run_channel_job"]
+
+
+def complete_mirror_success(run: Any, result: dict) -> Any:
+    with session_scope() as session:
+        if mirror_graph(getattr(run, "graph", None)):
+            authorize_graph(run.graph, run.mirror_execution_user_id, session=session)
+        done = mark_succeeded(run.job_id, result=result, session=session)
+        if done is not None and done.status == "succeeded":
+            advance_from_run_in_session(session, run)
+        return done
 
 
 def run_channel_job(job_id: str) -> dict[str, str]:
@@ -50,7 +58,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     if graph is None:
         _cancel(job_id, run, None)
         return {"status": "cancelled"}
-    trigger = trigger_node_id(graph)
+    trigger = channel_run.trigger_node_id(graph)
     trigger_node = next((node for node in graph["nodes"] if node["id"] == trigger), None)
     if trigger is None or trigger_node is None:
         _cancel(job_id, run, None)
@@ -71,7 +79,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     run.trigger_node_id = trigger
     started = utc_now()
     actor = _actor(claimed)
-    context = expression_context(channel, run, started, actor, claimed.trigger_kind)
+    context = channel_run.expression_context(channel, run, started, actor, claimed.trigger_kind)
     run.context = context
     store.update_run(run)
     elapsed = 0.0
@@ -82,7 +90,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
         )
     timeout = (graph.get("settings") or {}).get("run_timeout_sec")
     try:
-        outcome = execute_channel_run(
+        outcome = channel_run.execute_channel_run(
             graph=graph,
             trigger_node_id=trigger,
             trigger_node=trigger_node,
@@ -100,7 +108,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
             job_id, error_code="CHANNEL_SANDBOX_FAILED", error_summary=str(exc)
         )
         if failed is not None and failed.status == "failed":
-            settle_failure(
+            recovery.settle_failure(
                 job=failed,
                 run=run,
                 error_code="CHANNEL_SANDBOX_FAILED",
@@ -121,19 +129,26 @@ def run_channel_job(job_id: str) -> dict[str, str]:
             message=f"stopped at node {outcome.stopped_node_id}",
         )
     if outcome.status == "succeeded":
-        done = mark_succeeded(
-            job_id,
-            result={
-                "schema": "channel_run.v1",
-                "channel_id": run.channel_id,
-                "version": run.version,
-                "outcome": outcome.outcome,
-            },
-        )
+        result = {
+            "schema": "channel_run.v1", "channel_id": run.channel_id,
+            "version": run.version, "outcome": outcome.outcome,
+        }
+        is_mirror = mirror_graph(run.graph) or run.mirror_state is not None
+        if is_mirror:
+            try:
+                require_run_data_access(run, run.mirror_execution_user_id)
+                done = complete_mirror_success(run, result)
+            except Exception:
+                mark_failed(job_id, error_code="MIRROR_SETTLEMENT_FAILED",
+                            error_summary="Mirror checkpoint settlement failed")
+                seal_dataset_expiry(job_id)
+                return {"status": "failed"}
+        else:
+            done = mark_succeeded(job_id, result=result)
         if done is not None and done.status == "succeeded":
-            settle_success(run)
+            recovery.settle_success(run, checkpoints_settled=is_mirror)
         seal_dataset_expiry(job_id)
-        return {"status": "succeeded"}
+        return {"status": done.status if done is not None else "missing"}
     if outcome.status == "cancelled":
         mark_cancelled(job_id)
         seal_dataset_expiry(job_id)
@@ -142,7 +157,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     message = outcome.error_message or "Channel run failed"
     failed = mark_failed(job_id, error_code=code, error_summary=message)
     if failed is not None and failed.status == "failed":
-        settle_failure(
+        recovery.settle_failure(
             job=failed,
             run=run,
             error_code=code,
@@ -188,7 +203,7 @@ def _note_error_source(job: Any, message: str) -> None:
 
 
 def _actor(job: Any) -> dict[str, str]:
-    if job.trigger_kind in SYSTEM_TRIGGER_KINDS:
+    if job.trigger_kind in channel_run.SYSTEM_TRIGGER_KINDS:
         return {"id": "usr_system", "name": "System"}
     ref = job.trigger_ref or "usr_system"
     user = get_user_store().get_by_id(ref) if job.trigger_ref else None

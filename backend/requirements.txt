@@ -16,6 +16,7 @@ pyjwt[crypto]>=2.9.0
 pytest>=8.2.0
 hypothesis>=6.100.0
 pymssql>=2.2.0
+PyMySQL[rsa]==1.1.2
 oracledb>=2.0.0
 jsonschema>=4.23.0
 sqlglot>=30.18,<31

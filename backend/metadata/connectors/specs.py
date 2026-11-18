@@ -157,6 +157,16 @@ def _engine_schema(
 
 
 CONNECTOR_SPECS: dict[str, dict[str, Any]] = {
+    "mysql": _engine_schema(
+        schema_id="mysql.access.v1",
+        title="MySQL access",
+        default_port=3306,
+        ssl_modes=SSL_MODE_ENUM_PLAIN,
+        default_ssl_mode="disable",
+        include_cert_fields=False,
+        scope_properties={"database": _DATABASE_PROP},
+        scope_required=["database"],
+    ),
     "postgresql": _engine_schema(
         schema_id="postgresql.access.v1",
         title="PostgreSQL access",
@@ -196,6 +206,10 @@ CONNECTOR_SPECS: dict[str, dict[str, Any]] = {
         },
         scope_required=["service_name", "owner"],
     ),
+}
+
+CONNECTOR_SPECS["mysql"]["properties"]["extra"] = {
+    "type": "object", "additionalProperties": False, "default": {},
 }
 
 SUPPORTED_ENGINES = frozenset(CONNECTOR_SPECS.keys())

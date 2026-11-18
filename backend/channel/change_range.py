@@ -23,7 +23,7 @@ from backend.entity.history.service import (
     IncrementalPosition,
     read_incremental,
 )
-from backend.entity.access.plan import load_head
+from backend.entity.heads import get_entity_head
 from backend.entity.errors import EntityNotFound
 
 if TYPE_CHECKING:
@@ -83,7 +83,8 @@ def open_change_range(
     before recording is consulted, so an id with no log row is not "recording off".
     """
     with _range_errors():
-        load_head(entity_id)
+        if get_entity_head(entity_id) is None:
+            raise EntityNotFound()
         if not recording_enabled(entity_id):
             raise ChangeRangeError("CHANNEL_CHANGE_LOG_OFF", _OFF)
         if not ignore_checkpoints:

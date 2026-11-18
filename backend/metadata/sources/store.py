@@ -150,6 +150,9 @@ def _source_query_sql_filters(query_text: str | None) -> list:
 
 class MemorySourceStore:
     def __init__(self) -> None:
+        self.capture_bindings: dict[str, dict] = {}
+        self.capture_operations: dict[str, dict] = {}
+        self.capture_lock = threading.RLock()
         self._sources: dict[str, SourceRecord] = {}
         self._by_key: dict[str, str] = {}
         self._by_locator: dict[str, str] = {}

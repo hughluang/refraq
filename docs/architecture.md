@@ -99,6 +99,10 @@ flowchart LR
 
 The Session cookie's `Secure` flag follows browser-facing HTTPS stamped by the web `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO`, default `http`), not `REFRAQ_ENV` and not client-supplied `X-Forwarded-Proto`. HTTP sites must keep the Session. OIDC callback origin uses the same rewrite for proto plus `REFRAQ_BROWSER_FACING_HOST` (or a loopback Host when unset); client-supplied public `Host` values are not used as `redirect_uri`.
 
+### 3.1 Optional Source Capture And Mirrors
+
+The approved design uses independently deployed Connect/Kafka and a product-owned applier/control-agent process, supervised by the deployer, not API/Beat/Channel Jobs. Metadata owns capture and the `source_mirror`/`source_mirror_state` schemas in the entity database; dedicated restricted non-superuser identities and a Metadata administrative bootstrap are separate from Entity/query credentials. Management owns intent/outboxes/history gates; the target owns transactional rows/log/progress, publication and durable reader pins. Channel's existing checkpoints settle under management gate locks, without assuming atomic transactions across databases. Foundation owns site HTTPS notification routing, not workflow external actions. Exact invariants, qualification gates and published seams are `docs/business-source-mirrors.md` and `docs/api-contracts-source-mirrors.md`. Approval of this architecture is not runtime qualification; absent ownership/barrier/safety evidence blocks admission.
+
 ## 4. Auth Architecture
 
 The Management Console uses server-managed sessions with cookie transport.

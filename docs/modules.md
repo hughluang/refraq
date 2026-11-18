@@ -83,6 +83,7 @@ Recommended modules:
 - `admin/parameters.py` (admin-owned System Parameter specs and typed accessors)
 - `admin/roles.py` (Role domain: System Role ensure, Site Bootstrap seed, write invariants)
 - `admin/audit.py` (audit write facade)
+- `admin/notifications/` (site authenticated HTTPS primary/fallback Notification Channel, encrypted routes, redacted transactional enqueue, bounded delivery outbox and visible failure; no Metadata/Channel imports). Contract: `docs/api-contracts-source-mirrors.md` §5
 - Foundation stores: `user_store`, `role_store`, `session_store`, `token_store`, `audit_store`
 
 Must not contain:
@@ -120,9 +121,10 @@ Responsibilities:
 
 - Source domain models and services (embedded reachability for database kinds); `sources.access` interprets Connector Spec (validate / seal / project / endpoint)
 - Source capture foundation: separate encrypted write-only capture credential, durable credential revision, snapshot-window validation, and live Schedule Timezone projection. Capture readiness and connector lifecycle/signaling orchestration belong to a metadata language unit; generated connector configuration must not become a secret read surface. Configuration state is not component availability (`docs/business-metadata.md` §4.1.1; `docs/api-contracts-sources.md` §2)
-- Capture lifecycle retains Source-derived identity and continuity on rotation, clear, disable, delete, and last-mirror-close; cross-domain mirror/applier needs use ports bound by composition, not imports of `entity` or `channel`. This ownership rule introduces no published capture module or runtime entry
+- Capture lifecycle retains Source-derived identity and continuity on rotation, clear, disable, delete, and last-mirror-close; cross-domain mirror/applier needs use ports bound by composition, not imports of `entity` or `channel`. Approved real-code seams and the independent process/bootstrap entries are specified in `docs/api-contracts-source-mirrors.md` §3 and `docs/backend-layout.md`; no empty modules are authorized
+- Source Mirrors (`mirrors/`): target schemas/bootstrap, sole fenced transactional applier, isolated generations/publication/pins, authorized rows/history and management invalidation gates; Channel retains consumer checkpoints. Physical database placement grants no Entity ownership. Recovery follows `docs/business-source-mirrors.md`; cross-domain adapters are composition-bound
 - Source Access (`source_access/`): Source Membership persistence and the only resolution of a User's effective level on a Source, the effective Permission set on that Source, and the Source ids where the User holds a Permission
-- Connector adapters (PostgreSQL, MSSQL, Oracle) consume `SourceEndpoint`; outbound invocation shell in `connectors/runtime` binds an already-interpreted endpoint
+- Connector adapters (PostgreSQL, MSSQL, Oracle, MySQL) consume `SourceEndpoint`; MySQL registration is not real-engine/CDC qualification (`docs/api-contracts-sources.md` §2); outbound invocation shell in `connectors/runtime` binds an already-interpreted endpoint
 - Domain facade for structure and join-detection **Jobs** minted via **Scheduled Task** (run-now / Beat) and Source-scoped schedule **facade** (`POST/GET /sources/{id}/schedules`, `owner_ref` withdraw). Does not own the Scheduled Task table
 - Source work Job execution shell in `source_job_runner` (`run_source_work_job`: claim, kind check, **Kind execution lock** with memory / Postgres adapters, Source lookup and usability). `source_jobs` mints; kind bodies live in `structure_jobs/service` (`run_structure_job`: collect → Normalized Type → structure refresh) and `join_detection_jobs/` (parse stored DDL → resolve column endpoints → insert missing joins)
 - Domain Celery work units (`@shared_task`); discovered by `worker`: structure and join-detection minting in `source_jobs`, site `catalog_embed` schedule and runner in `catalog_embed_jobs`, Job kind dispatch in `tasks.py`. `entity_embed` is not a metadata kind

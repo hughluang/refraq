@@ -387,6 +387,10 @@ def _stub_change_log(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda entity_id: EntityHeadShape(attributes=()),
     )
     monkeypatch.setattr(
+        "backend.channel.change_range.get_entity_head",
+        lambda entity_id: EntityHeadShape(attributes=()),
+    )
+    monkeypatch.setattr(
         "backend.channel.change_range.recording_enabled",
         lambda entity_id: True,
     )
@@ -394,7 +398,7 @@ def _stub_change_log(monkeypatch: pytest.MonkeyPatch) -> None:
         "backend.channel.change_range.purge_mark",
         lambda entity_id: None,
     )
-    monkeypatch.setattr("backend.entity.changes.capture_bound", lambda _entity_id: 100)
+    monkeypatch.setattr("backend.channel.checkpoints.capture_bound", lambda _entity_id: 100)
 
     def read_incremental(entity_id: str, *, after: object, bound: int, limit: int) -> IncrementalPage:
         del entity_id, after, bound, limit

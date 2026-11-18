@@ -25,6 +25,8 @@ from backend.channel.inbound_paths import (
 )
 from backend.channel.ids import new_channel_id
 from backend.channel.nodes import list_node_types
+from backend.channel.mirror_reads import object_ids, resolve_object, authorize_graph, mirror_graph
+from backend.metadata.mirrors.service import ensure_open_intent, reconcile_references
 from backend.channel.nodes.spec import Problem
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import get_run_store
@@ -357,8 +359,14 @@ def delete_channel(
     withdraw_schedules_by_owner_ref(owner_ref_for(channel_id))
     get_inbound_path_store().withdraw_channel(channel_id)
     cancel_channel_jobs(channel_id)
+    versions, _ = get_channel_store().list_versions(channel_id, limit=1, offset=0)
 
     def _clear(session: Any) -> None:
+        if versions and mirror_graph(versions[0].graph):
+            if session is None:
+                raise ChannelRequestInvalid("Mirror withdrawal requires a SQL transaction")
+            reconcile_references(session, channel_id=channel_id,
+                                 channel_version=versions[0].number + 1, object_ids=[])
         clear_assignment(kind=KIND_CHANNEL, subject_id=channel_id, session=session)
 
     if not get_channel_store().delete(channel_id, after=_clear):
@@ -424,6 +432,7 @@ def publish_channel(
     actor_user_id: str,
     actor_token_id: str | None,
     permissions: Sequence[str] = (),
+    mirrors_to_open: list[dict[str, str]] | None = None,
 ) -> tuple[ChannelVersionRecord, dict[str, Any]]:
     record = _require(channel_id)
     if record.draft_revision != draft_revision:
@@ -435,13 +444,41 @@ def publish_channel(
     if errors:
         raise ChannelGraphInvalid(errors[0].detail, problems=errors)
     require_inbound_publish(channel_id, record.draft_graph)
+    confirmation = _confirmation(record)
+    if object_ids(record.draft_graph) and mirrors_to_open is None:
+        raise ChannelRequestInvalid("Mirror publication requires explicit open confirmation")
+    previous, _ = get_channel_store().list_versions(channel_id, limit=1, offset=0)
+
+    def _publish_mirrors(session: Any, version: ChannelVersionRecord) -> None:
+        ids = object_ids(version.graph)
+        if not ids and not any(mirror_graph(item.graph) for item in previous):
+            return
+        if session is None:
+            raise ChannelRequestInvalid("Mirror publication requires a SQL transaction")
+        if ids:
+            authorize_graph(version.graph, actor_user_id, session=session)
+            selected = (version.graph.get("settings") or {}).get("mirror_execution_user_id")
+            unattended = any(node.get("type") in {"trigger.scheduled", "trigger.inbound", "trigger.error"}
+                             for node in version.graph.get("nodes", []))
+            if unattended and selected is None:
+                raise ChannelRequestInvalid("Unattended mirror graphs require an execution identity")
+            if selected is not None:
+                authorize_graph(version.graph, selected, session=session)
+        ensure_open_intent(
+            session, operation_id=f"channel:{channel_id}:{version.number}",
+            channel_id=channel_id, channel_version=version.number, object_ids=ids,
+            confirmed_mirrors_to_open=mirrors_to_open or [],
+        )
+        reconcile_references(session, channel_id=channel_id,
+                             channel_version=version.number, object_ids=ids)
+
     version = get_channel_store().publish_version(
         channel_id,
         draft_revision=draft_revision,
         published_at=utc_now(),
         published_by_user_id=actor_user_id,
+        after=_publish_mirrors,
     )
-    confirmation = _confirmation(record)
     confirmation["draft_revision"] = draft_revision
     sync_published_schedule(record, version.graph)
     sync_published_inbound_path(channel_id, version.graph)
@@ -653,9 +690,14 @@ def _require(channel_id: str) -> ChannelRecord:
 
 def _confirmation(record: ChannelRecord) -> dict[str, Any]:
     timeout = record.draft_graph["settings"]["run_timeout_sec"]
+    mirrors = [resolve_object(object_id) for object_id in object_ids(record.draft_graph)]
     return {
         "draft_revision": record.draft_revision,
-        "mirrors_to_open": [],
+        "mirrors_to_open": [
+            {"source_id": mirror["source_id"], "object_id": mirror["object_id"],
+             "mirror_id": mirror["id"]}
+            for mirror in mirrors if mirror["needs_open"]
+        ],
         "runs_to_cancel": _runs_to_cancel(record.id),
         "missing_run_timeout": timeout is None,
     }

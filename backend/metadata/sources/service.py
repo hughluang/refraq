@@ -59,6 +59,9 @@ from backend.metadata.source_schedules import (
     ensure_default_source_schedules_if_none,
     seed_default_source_schedules,
 )
+from backend.metadata.capture.control import record_source_intent, source_control_transaction
+from backend.metadata.capture.store import load_binding
+from backend.metadata.errors import SourceCaptureResourcesRetained
 from backend.metadata.capture.configuration import (
     CaptureCredential,
     SnapshotWindow,
@@ -238,6 +241,8 @@ def create_source(
         store = cast(SqlSourceStore, get_source_store())
         with session_scope() as session:
             stored = store.create_source_on(session, record)
+            record_source_intent(session, None, stored, actor_user_id=actor_user_id,
+                                 actor_token_id=actor_token_id)
             membership = _creator_membership(session, stored.id, actor_user_id)
             seed_default_source_schedules(
                 stored,
@@ -272,6 +277,8 @@ def _insert_source_and_seed(
     actor_token_id: str | None,
 ) -> SourceRecord:
     stored = get_source_store().create_source(record)
+    record_source_intent(None, None, stored, actor_user_id=actor_user_id,
+                         actor_token_id=actor_token_id)
     membership = _creator_membership(None, stored.id, actor_user_id)
     seed_default_source_schedules(
         stored,
@@ -331,8 +338,14 @@ def _audit_creator_membership(
 
 
 def _delete_memory_source_row(source_id: str) -> bool:
+    store = get_source_store()
+    store.capture_bindings.pop(source_id, None)
+    store.capture_operations = {
+        key: value for key, value in store.capture_operations.items()
+        if value['command']['source_id'] != source_id
+    }
     delete_for_source(source_id)
-    return get_source_store().delete_source(source_id)
+    return store.delete_source(source_id)
 
 
 def _source_business_changed(before: SourceRecord, after: SourceRecord) -> bool:
@@ -383,39 +396,21 @@ def update_source(
         capture_credential = CaptureCredential.model_validate(capture_credential)
     if snapshot_window is not ... and snapshot_window is not None:
         snapshot_window = SnapshotWindow.model_validate(snapshot_window)
-    store = get_source_store()
-    if get_settings().store_backend == "persistent":
-        with session_scope() as session:
-            existing = cast(SqlSourceStore, store).get_source_for_update(
-                session, source_id
-            )
-            return _update_source_on(
-                existing,
-                name=name,
-                description=description,
-                status=status,
-                engine=engine,
-                access=access,
-                capture_credential=capture_credential,
-                snapshot_window=snapshot_window,
-                patch_fields=patch_fields,
-                actor_user_id=actor_user_id,
-                actor_token_id=actor_token_id,
-                session=session,
-            )
-    return _update_source_on(
-        store.get_source(source_id),
-        name=name,
-        description=description,
-        status=status,
-        engine=engine,
-        access=access,
-        capture_credential=capture_credential,
-        snapshot_window=snapshot_window,
-        patch_fields=patch_fields,
-        actor_user_id=actor_user_id,
-        actor_token_id=actor_token_id,
-    )
+    with source_control_transaction(source_id) as (session, existing):
+        return _update_source_on(
+            existing,
+            name=name,
+            description=description,
+            status=status,
+            engine=engine,
+            access=access,
+            capture_credential=capture_credential,
+            snapshot_window=snapshot_window,
+            patch_fields=patch_fields,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            session=session,
+        )
 
 
 def _update_source_on(
@@ -437,6 +432,7 @@ def _update_source_on(
         raise SourceNotFound()
     store = get_source_store()
     source_id = existing.id
+    bound = load_binding(session, source_id) is not None
     updated = replace(existing)
     if name is not None:
         updated.name = name
@@ -447,7 +443,7 @@ def _update_source_on(
             raise SourceValidationError("Invalid status")
         updated.status = status
     if engine is not None:
-        if existing.capture_credential_ciphertext and engine != existing.engine:
+        if (bound or existing.capture_credential_ciphertext) and engine != existing.engine:
             raise SourceCaptureScopeLocked()
         if engine not in SUPPORTED_ENGINES:
             raise SourceEngineUnsupported()
@@ -462,7 +458,7 @@ def _update_source_on(
         existing_access = decrypt_access_blob(updated.access_ciphertext)
         updated.access_ciphertext = seal_access(engine, existing_access)
         updated.access_updated_at = utc_now()
-    if existing.capture_credential_ciphertext and (
+    if (bound or existing.capture_credential_ciphertext) and (
         engine is not None or access is not ...
     ):
         guard_capture_scope(
@@ -489,6 +485,8 @@ def _update_source_on(
         saved = cast(SqlSourceStore, store).save_source_on(session, updated)
     else:
         saved = store.save_source(updated)
+    record_source_intent(session, existing, saved, actor_user_id=actor_user_id,
+                         actor_token_id=actor_token_id)
     seeded = _maybe_seed_after_update(
         saved,
         changed=changed,
@@ -523,22 +521,18 @@ def _update_source_on(
 
 
 def delete_source(source_id: str) -> SourceRecord:
-    store = get_source_store()
-    existing = store.get_source(source_id)
-    if existing is None:
-        raise SourceNotFound()
-    if existing.status != "disabled":
-        raise SourceNotDisabled()
-
-    get_catalog_store().delete_objects_for_source(source_id)
-    get_structure_diff_store().delete_for_source(source_id)
-    delete_source_schedules_by_source_id(source_id)
-    if get_settings().store_backend == "persistent":
-        sql_store = cast(SqlSourceStore, store)
-        with session_scope() as session:
+    with source_control_transaction(source_id) as (session, existing):
+        if load_binding(session, source_id) is not None:
+            raise SourceCaptureResourcesRetained()
+        if existing.status != "disabled":
+            raise SourceNotDisabled()
+        get_catalog_store().delete_objects_for_source(source_id)
+        get_structure_diff_store().delete_for_source(source_id)
+        delete_source_schedules_by_source_id(source_id)
+        if session is not None:
             delete_for_source_on(session, source_id)
-            if not sql_store.delete_source_on(session, source_id):
+            if not cast(SqlSourceStore, get_source_store()).delete_source_on(session, source_id):
                 raise SourceNotFound()
-    elif not _delete_memory_source_row(source_id):
-        raise SourceNotFound()
-    return existing
+        elif not _delete_memory_source_row(source_id):
+            raise SourceNotFound()
+        return existing

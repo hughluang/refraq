@@ -22,6 +22,8 @@ from backend.metadata.parameters import METADATA_PARAMETER_SPECS
 __all__ = [
     "BEAT_MAX_INTERVAL_SEC",
     "BEAT_SYNC_EVERY_SEC",
+    "NOTIFICATION_SCHEDULE_KEY",
+    "NOTIFICATION_TASK_NAME",
     "WORKER_PARAMETER_SPECS",
     "assemble_system_parameters",
 ]
@@ -31,6 +33,9 @@ logger = logging.getLogger(__name__)
 # In-code constants. Changing them is a release (docs/business-system-parameters.md §5.2).
 BEAT_SYNC_EVERY_SEC = 30
 BEAT_MAX_INTERVAL_SEC = 5
+
+NOTIFICATION_SCHEDULE_KEY = "system.notification_delivery"
+NOTIFICATION_TASK_NAME = "backend.worker.tasks.deliver_notifications"
 
 _GROUP_ORDER = (
     "session",

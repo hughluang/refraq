@@ -16,6 +16,7 @@ from backend.channel.errors import (
     ChannelRequestInvalid,
     ChannelRunNotFound,
 )
+from backend.channel.mirror_reads import require_run_data_access
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import NodeType
 from backend.channel.run_store import (
@@ -271,7 +272,7 @@ def http_list_executions(
     status: Literal["running", "succeeded", "failed", "skipped", "cancelled"] | None = None,
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> dict[str, Any]:
-    _owned(channel_id, job_id)
+    require_run_data_access(_owned(channel_id, job_id), _actor.id)
     items, total = get_run_store().query_executions(
         job_id,
         node_id=node_id,
@@ -299,7 +300,7 @@ def http_execution_output(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
-    _owned(channel_id, job_id)
+    require_run_data_access(_owned(channel_id, job_id), _actor.id)
     record = get_run_store().get_execution(job_id, seq)
     if record is None:
         raise ChannelRunNotFound()
@@ -318,6 +319,7 @@ def http_execution_rounds(
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> dict[str, Any]:
     run = _owned(channel_id, job_id)
+    require_run_data_access(run, _actor.id)
     record = get_run_store().get_execution(job_id, seq)
     if record is None:
         raise ChannelRunNotFound()
@@ -345,7 +347,7 @@ def http_dataset_rows(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
     """Page dataset rows. This read does not consult the capacity ceiling."""
-    _owned(channel_id, job_id)
+    require_run_data_access(_owned(channel_id, job_id), _actor.id)
     record = get_dataset_store().get(dataset_id)
     if record is None:
         raise ChannelDatasetUnavailable("not_found")
@@ -383,6 +385,7 @@ def http_preview_template(
     body: TemplatePreviewRequest,
     _actor: UserRecord = Depends(require_permission("channel:write")),
 ) -> dict[str, Any]:
+    require_run_data_access(_owned(channel_id, job_id), _actor.id)
     return preview_template(
         channel_id=channel_id,
         job_id=job_id,
@@ -406,6 +409,7 @@ def http_node_sample(
     catalog: Sequence[NodeType] = Depends(get_node_catalog),
 ) -> dict[str, Any]:
     """Read a Node Sample. The request executes no node and writes nothing."""
+    require_run_data_access(_owned(channel_id, job_id), _actor.id)
     return node_sample(
         channel_id=channel_id,
         job_id=job_id,
@@ -541,6 +545,8 @@ def _present(
         "trigger_actor_name": actor_name,
         "trigger_schedule_name": schedule_name,
         "ignore_checkpoints": record.ignore_checkpoints,
+        "mirror_execution_user_id": record.mirror_execution_user_id,
+        "mirror_state": record.mirror_state,
         "stop_at_node_id": record.stop_at_node_id,
         "failed_node_id": record.failed_node_id,
         "stopped_node_id": record.stopped_node_id,

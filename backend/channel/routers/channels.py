@@ -542,6 +542,7 @@ def http_publish(
     version, confirmation = publish_channel(
         channel_id=channel_id,
         draft_revision=body.draft_revision,
+        mirrors_to_open=None if body.mirrors_to_open is None else [item.model_dump() for item in body.mirrors_to_open],
         actor_user_id=user.id,
         actor_token_id=actor_token_id,
         permissions=resolve_user_permissions(user, roles),

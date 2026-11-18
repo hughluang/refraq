@@ -4,6 +4,13 @@ import type { ModuleIdentity } from "@/features/console/module-identity/types";
 
 export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
+    id: "mirrors",
+    label_key: "mirrors.title",
+    icon: "database",
+    routes: { list: "/console/mirrors", create: null, edit: null, show: "/console/mirrors/:id", aliases: [] },
+    actions: { list: "mirror:read", create: null, edit: "mirror:write", delete: "mirror:write", show: "mirror:read", sample: null },
+  },
+  {
     "id": "dashboard",
     "label_key": "layout.nav.home",
     "icon": "layout-dashboard",
@@ -406,7 +413,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
       "create": null,
       "edit": null,
       "show": null,
-      "aliases": []
+      "aliases": [{ "path": "/console/settings/notification-channel", "action": "list" }]
     },
     "actions": {
       "list": "settings:read",

@@ -35,6 +35,8 @@ __all__ = [
     "SourceAccessInvalid",
     "SourceAccessRequired",
     "SourceCaptureScopeLocked",
+    "SourceCaptureResourcesRetained",
+    "SourceCaptureControlConflict",
     "SourceEngineUnsupported",
     "SourceKeyDuplicate",
     "SourceKindUnsupported",
@@ -47,6 +49,22 @@ __all__ = [
     "TypeMappingSeedImmutable",
     "TypeMappingUnknownForbidden",
 ]
+
+
+class SourceCaptureResourcesRetained(AppError):
+    code = "SOURCE_CAPTURE_RESOURCES_RETAINED"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Source capture resources are retained; safe release is required"
+
+
+class SourceCaptureControlConflict(AppError):
+    code = "MIRROR_CONTROL_CONFLICT"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Capture authority or independently observed evidence is not current"
 
 
 class SourceCaptureScopeLocked(AppError):

@@ -51,6 +51,8 @@ class ChannelRunRecord:
     context: dict[str, Any] | None = None
     # node id -> stream -> {"xact", "seq"}. None until a node proposes a position.
     checkpoint_proposals: dict[str, Any] | None = None
+    mirror_execution_user_id: str | None = None
+    mirror_state: dict[str, Any] | None = None
 
 
 @dataclass
@@ -180,7 +182,7 @@ def _due_runs_clause(cutoff: datetime) -> tuple[str, dict[str, Any]]:
     }
     params["cutoff"] = cutoff
     clause = (
-        "created_at < :cutoff "
+        "created_at < :cutoff AND (mirror_state IS NULL OR CAST(mirror_state AS TEXT) = 'null') "
         f"AND job_id IN (SELECT id FROM jobs WHERE status IN ({holders}))"
     )
     return clause, params
@@ -464,6 +466,8 @@ class SqlRunStore:
             row.skipped_node_ids = list(record.skipped_node_ids)
             row.context = record.context
             row.checkpoint_proposals = record.checkpoint_proposals
+            row.mirror_execution_user_id = record.mirror_execution_user_id
+            row.mirror_state = record.mirror_state
 
     def set_checkpoint_proposals(self, job_id: str, proposals: dict[str, Any]) -> None:
         with session_scope() as session:
@@ -812,6 +816,8 @@ def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
         skipped_node_ids=list(record.skipped_node_ids),
         context=record.context,
         checkpoint_proposals=record.checkpoint_proposals,
+        mirror_execution_user_id=record.mirror_execution_user_id,
+        mirror_state=record.mirror_state,
         created_at=record.created_at,
     )
 
@@ -834,6 +840,8 @@ def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
         stop_at_node_id=row.stop_at_node_id,
         context=row.context,
         checkpoint_proposals=row.checkpoint_proposals,
+        mirror_execution_user_id=row.mirror_execution_user_id,
+        mirror_state=row.mirror_state,
     )
 
 

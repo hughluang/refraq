@@ -137,4 +137,4 @@ def compile_sample_sql(
     if offset > 0:
         statement = statement.offset(offset)
 
-    return statement.sql(dialect=dialect)
+    return statement.sql(dialect=dialect, identify=engine == "mysql")

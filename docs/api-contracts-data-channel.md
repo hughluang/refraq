@@ -4,7 +4,7 @@
 
 This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, container rounds of a container execution, a **Node Sample** of one node against a run, **Template Preview**, dataset-row reads, the **Channel Variable** list and manual delete, the public **Inbound Trigger** hook, and the **Inbound Rejection** list. Paths address a channel by opaque `id`.
 
-**Source Mirror**s are not defined here. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. **HTTP Account** HTTP is `docs/api-contracts-http-accounts.md`. **Inbound Credential** HTTP is `docs/api-contracts-inbound-credentials.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
+**Source Mirror** extensions (explicit execution identity, `read.mirror`, mirror change-stream discrimination, real `mirrors_to_open`, pins, provenance and atomic history-gated checkpoint settlement) are defined in `docs/api-contracts-source-mirrors.md`; its targeted mirror rules override empty-open and unfiltered-output defaults here, without changing Entity/SQL semantics. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. **HTTP Account** HTTP is `docs/api-contracts-http-accounts.md`. **Inbound Credential** HTTP is `docs/api-contracts-inbound-credentials.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
 Related boundaries:
 
@@ -440,7 +440,7 @@ A configuration schema failure uses one entry per failing property:
 {
   "draft_revision": 12,
   "mirrors_to_open": [
-    { "object_id": "obj_01HZX", "locator": "obj/u9-prod/dbo/cbo_itemmaster" }
+    { "source_id": "src_01HZX", "object_id": "obj_01HZX", "mirror_id": "mir_01HZX" }
   ],
   "runs_to_cancel": [
     { "job_id": "job_01HZX", "version": 2, "started_at": "2026-10-09T07:58:00Z" }

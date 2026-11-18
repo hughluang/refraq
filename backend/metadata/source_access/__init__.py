@@ -15,6 +15,7 @@ from backend.metadata.source_access.records import (
 )
 from backend.metadata.source_access.service import (
     allows,
+    authorize_source_read_on,
     change_level,
     change_level_on,
     create_membership,
@@ -34,6 +35,7 @@ from backend.metadata.source_access.store import reset_source_access_store
 __all__ = [
     "ACCESS_LEVELS",
     "allows",
+    "authorize_source_read_on",
     "EVERY_SOURCE_TARGET",
     "AccessContribution",
     "ExplainedSource",

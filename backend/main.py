@@ -14,7 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from backend.admin.role_store import get_role_store
 from backend.admin.roles import SUPER_ADMIN_KEY, seed_roles
 from backend.admin.security import hash_password
-from backend.admin.user_store import get_user_store
+from backend.admin.user_store import ensure_system_user, get_user_store
 from backend.core.config import Settings, get_settings
 from backend.core.errors import (
     CODE_INTERNAL_ERROR,
@@ -50,6 +50,8 @@ from backend.admin.model_services import (
     bind_entity_embed_jobs,
 )
 from backend.admin.model_services.router import router as model_services_router
+from backend.admin.notifications.configuration import EgressPolicy
+from backend.admin.notifications.router import create_router as create_notification_router
 from backend.admin.routers.console import router as console_router
 from backend.admin.routers.roles import router as roles_router
 from backend.admin.system_parameters.router import router as settings_router
@@ -76,6 +78,14 @@ from backend.metadata.routers.source_memberships import (
     explained_sources_for_user,
     router as source_memberships_router,
 )
+from backend.metadata.mirrors.router import router as mirrors_router
+from backend.metadata.mirrors.composition import compose_mirrors
+from backend.metadata.mirrors.history import bind_history
+from backend.metadata.mirrors.recovery import bind_recovery
+from backend.core.db import get_session_factory
+from backend.channel.mirror_reads import bind_reads, validate_terminal_proof
+from backend.metadata.mirrors.service import bind_source_read_authorizer
+from backend.metadata.source_access import authorize_source_read_on
 from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
@@ -158,8 +168,6 @@ def _bootstrap_site(target_settings: Settings) -> None:
     users = get_user_store()
     humans, _total = users.list_users(limit=1, offset=0, include_system=False)
     if humans:
-        from backend.admin.user_store import ensure_system_user
-
         ensure_system_user(users)
         return
     super_admin = roles.get_by_key(SUPER_ADMIN_KEY)
@@ -173,23 +181,34 @@ def _bootstrap_site(target_settings: Settings) -> None:
         role_id=super_admin.id,
         status="active",
     )
-    from backend.admin.user_store import ensure_system_user
-
     ensure_system_user(users)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    _bootstrap_site(settings)
-    apply_http_runtime()
-    open_entity_pool_when_persistent()
+    bind_reads(None)
+    bind_recovery(None)
+    bind_source_read_authorizer(authorize_source_read_on)
+    adapters = None
     try:
-        enqueue_stale_view_jobs()
-    except Exception:
-        logger.exception("entity access view reconciliation failed")
-    try:
+        adapters = compose_mirrors(settings, verify_terminal_proof=validate_terminal_proof)
+        if adapters is not None:
+            bind_history(session_factory=get_session_factory(), target=adapters.history_target)
+            bind_reads(adapters.reads)
+        _bootstrap_site(settings)
+        apply_http_runtime()
+        open_entity_pool_when_persistent()
+        try:
+            enqueue_stale_view_jobs()
+        except Exception:
+            logger.exception("entity access view reconciliation failed")
         yield
     finally:
+        bind_source_read_authorizer(None)
+        bind_reads(None)
+        bind_recovery(None)
+        if adapters is not None:
+            adapters.close()
         reset_entity_engine()
         reset_peek_bulkhead()
 
@@ -266,12 +285,16 @@ app.include_router(subjects_router)
 app.include_router(roles_router)
 app.include_router(console_router)
 app.include_router(settings_router)
+app.include_router(
+    create_notification_router(policy=EgressPolicy(settings.notification_reviewed_origins))
+)
 app.include_router(branding_router)
 app.include_router(host_router)
 app.include_router(model_services_router)
 app.include_router(tokens_router)
 app.include_router(audit_router)
 app.include_router(sources_router)
+app.include_router(mirrors_router)
 app.include_router(source_memberships_router)
 app.include_router(metadata_catalog_router)
 app.include_router(type_mappings_router)

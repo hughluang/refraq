@@ -136,6 +136,8 @@ def _scope_keys_from_spec(engine: str, spec: dict[str, Any]) -> tuple[str, str]:
             raise RuntimeError(
                 f"Connector Spec for {engine} has unknown x-scope={role!r} on {name}"
             )
+    if engine == "mysql" and catalog_key is not None and schema_key is None:
+        schema_key = catalog_key
     if catalog_key is None or schema_key is None:
         raise RuntimeError(
             f"Connector Spec for {engine} must mark x-scope catalog and schema"

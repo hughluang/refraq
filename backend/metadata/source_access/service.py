@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.admin.errors import AuthForbidden
@@ -40,7 +42,7 @@ from backend.metadata.source_access.store import (
 from backend.metadata.sources.store import get_source_store
 
 _VIEWER_KEYS = frozenset(
-    {"sources:read", "metadata:read", "catalog:sample", "query:run"}
+    {"sources:read", "metadata:read", "catalog:sample", "query:run", "sources:data_read"}
 )
 _STEWARD_KEYS = _VIEWER_KEYS | frozenset({"metadata:write"})
 _MAINTAINER_KEYS = _STEWARD_KEYS | frozenset({"sources:write", "jobs:run"})
@@ -183,6 +185,36 @@ def allows(user_id: str, source_id: str, permission: str, *more_source_ids: str)
     if missing_key:
         raise AuthForbidden()
     return True
+
+
+def authorize_source_read_on(*, session: Session, execution_user_id: str, source_id: str) -> None:
+    """Resolve current identity, Role and Source grants in the caller transaction."""
+    actor = session.execute(text(
+        "SELECT u.id, u.status, u.identity_source, r.id AS role_id, r.key, r.permissions "
+        "FROM users u LEFT JOIN roles r ON r.id = u.role_id WHERE u.id = :user"
+    ), {"user": execution_user_id}).mappings().one_or_none()
+    if actor is None or actor["status"] != "active" or actor["identity_source"] == "system":
+        raise AuthForbidden()
+    if actor["role_id"] is None:
+        raise AuthForbidden()
+    if actor["key"] == SUPER_ADMIN_KEY:
+        return
+    permissions = actor["permissions"]
+    if isinstance(permissions, str):
+        permissions = json.loads(permissions)
+    if "sources:data_read" not in permissions:
+        raise AuthForbidden()
+    granted = session.execute(text(
+        "SELECT m.level FROM source_memberships m WHERE m.target IN (:source, :every) AND ("
+        "(m.subject_type = 'user' AND m.subject_id = :user) OR "
+        "(m.subject_type = 'role' AND m.subject_id = :role) OR "
+        "(m.subject_type = 'group' AND EXISTS (SELECT 1 FROM user_group_members gm "
+        "JOIN user_groups g ON g.id = gm.group_id "
+        "WHERE gm.user_id = :user AND gm.group_id = m.subject_id)))"
+    ), {"source": source_id, "every": EVERY_SOURCE_TARGET,
+        "user": execution_user_id, "role": actor["role_id"]}).scalars().all()
+    if not any("sources:data_read" in _LEVEL_KEYS.get(level, ()) for level in granted):
+        raise AuthForbidden()
 
 
 def effective_level(user_id: str, source_id: str) -> str | None:

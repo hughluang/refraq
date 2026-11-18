@@ -9,10 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
+from sqlalchemy import select
+
+from backend.channel.models import ChannelVersionRow, ChannelRunRow
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
 from backend.channel.checkpoints import LocalCheckpoints, RunCheckpoints
 from backend.channel.context import channel_context, platform_context, run_context
 from backend.channel.engine import RunOutcome, execute
+from backend.channel.mirror_reads import execution_identity, read_run_page, require_run_data_access, resolve_object, authorize_graph, mirror_graph
 from backend.channel.node_support import (
     InputCapture,
     bind_execution_input,
@@ -29,8 +33,12 @@ from backend.channel.run_store import (
 )
 from backend.channel.sandbox import SandboxSession
 from backend.channel.store import get_channel_store
-from backend.channel.tasks import run_job
+from backend.channel import tasks
 from backend.core.time import format_instant, utc_now
+from backend.core.config import get_settings
+from backend.core.db import session_scope
+from backend.channel.models import ChannelRow
+from backend.channel.mirror_reads import MirrorReadUnavailable
 from backend.jobs.store import (
     JobRecord,
     UniqueScheduledForError,
@@ -104,28 +112,86 @@ def mint_on_demand_run(
     if pin_version and version is not None:
         payload["pin_version"] = True
         payload["version"] = version
-    job = create_queued_job(
-        kind="channel_run",
-        input=payload,
-        trigger_kind="user",
-        trigger_ref=actor_id,
-        summary=f"channel_run {channel_name}",
-        created_by=actor_id,
+    return _mint_run(
+        channel_id=channel_id, channel_name=channel_name, target=target,
+        version=version, draft_revision=draft_revision, graph=graph,
+        trigger_node=trigger_node_id, ignore_checkpoints=ignore_checkpoints,
+        stop_at_node_id=stop_at_node_id, payload=payload,
+        trigger_kind="user", trigger_ref=actor_id,
     )
-    record = _channel_run_record(
-        job_id=job.id,
-        channel_id=channel_id,
-        target=target,
-        version=version if target == "published" else None,
-        draft_revision=draft_revision,
-        graph=graph if target == "draft" else None,
-        trigger_node_id=trigger_node_id,
-        ignore_checkpoints=ignore_checkpoints,
-        created_at=utc_now(),
-        stop_at_node_id=stop_at_node_id,
-    )
-    get_run_store().insert_run(record)
+
+
+def _mint_run(*, channel_id, channel_name, target, version, draft_revision,
+              graph, trigger_node, ignore_checkpoints, stop_at_node_id,
+              payload, trigger_kind, trigger_ref):
+    with _mint_session() as session:
+        admitted_graph = graph
+        admitted_version = version
+        if session is not None:
+            channel = session.get(ChannelRow, channel_id, with_for_update=True)
+            if channel is None:
+                raise MirrorReadUnavailable()
+            if target == "draft":
+                if channel.draft_revision != draft_revision or channel.draft_graph != graph:
+                    raise MirrorReadUnavailable()
+                admitted_graph = channel.draft_graph
+            else:
+                query = select(ChannelVersionRow).where(ChannelVersionRow.channel_id == channel_id)
+                if version is not None:
+                    query = query.where(ChannelVersionRow.number == version)
+                published = session.scalar(query.order_by(ChannelVersionRow.number.desc()).limit(1))
+                if published is None:
+                    raise MirrorReadUnavailable()
+                admitted_graph, admitted_version = published.graph, published.number
+            identity = (trigger_ref if trigger_kind == "user" else
+                        (admitted_graph.get("settings") or {}).get("mirror_execution_user_id"))
+            if mirror_graph(admitted_graph) and trigger_kind == "retry":
+                parent = session.get(ChannelRunRow, trigger_ref, with_for_update=True)
+                if parent is None or parent.channel_id != channel_id or parent.version != admitted_version:
+                    raise MirrorReadUnavailable()
+                identity = parent.mirror_execution_user_id
+            authorize_graph(admitted_graph, identity, session=session)
+            if not mirror_graph(admitted_graph):
+                identity = None
+        else:
+            if trigger_kind == "retry":
+                published = get_channel_store().get_version(channel_id, version)
+                admitted_graph = published.graph if published is not None else None
+            if mirror_graph(admitted_graph) and trigger_kind == "retry":
+                parent = get_run_store().get_run(trigger_ref)
+                if parent is None or parent.channel_id != channel_id or parent.version != version:
+                    raise MirrorReadUnavailable()
+                identity = parent.mirror_execution_user_id
+                authorize_graph(admitted_graph, identity)
+            else:
+                identity = _preflight_identity(channel_id, graph, version, trigger_kind,
+                                               trigger_ref if trigger_kind == "user" else None)
+        if mirror_graph(admitted_graph) and target == "published":
+            payload = {**payload, "pin_version": True, "version": admitted_version}
+        job = create_queued_job(
+            kind="channel_run", input=payload, trigger_kind=trigger_kind,
+            trigger_ref=trigger_ref, summary=f"channel_run {channel_name}",
+            created_by=trigger_ref if trigger_kind == "user" else None, session=session,
+        )
+        record = _channel_run_record(
+            job_id=job.id, channel_id=channel_id, target=target,
+            version=admitted_version if target == "published" else None,
+            draft_revision=draft_revision, graph=admitted_graph if target == "draft" else None,
+            trigger_node_id=trigger_node, ignore_checkpoints=ignore_checkpoints,
+            created_at=utc_now(), stop_at_node_id=stop_at_node_id,
+            admitted=True, admitted_identity=identity,
+        )
+        get_run_store().insert_run(record, session=session)
     return job, record
+
+
+@contextmanager
+def _mint_session():
+    if get_settings().store_backend == "persistent":
+        with session_scope() as session:
+            yield session
+    else:
+        yield None
 
 
 def mint_followup_run(
@@ -139,27 +205,13 @@ def mint_followup_run(
     job_input: dict[str, Any],
 ) -> tuple[JobRecord, ChannelRunRecord]:
     """Queue a pinned retry or an error-workflow run. The caller dispatches it."""
-    job = create_queued_job(
-        kind="channel_run",
-        input=job_input,
-        trigger_kind=trigger_kind,
-        trigger_ref=trigger_ref,
-        summary=f"channel_run {channel_name}",
-        created_by=None,
+    return _mint_run(
+        channel_id=channel_id, channel_name=channel_name, target="published",
+        version=version, draft_revision=None, graph=None,
+        trigger_node=trigger_node, ignore_checkpoints=False,
+        stop_at_node_id=None, payload=job_input,
+        trigger_kind=trigger_kind, trigger_ref=trigger_ref,
     )
-    record = _channel_run_record(
-        job_id=job.id,
-        channel_id=channel_id,
-        target="published",
-        version=version,
-        draft_revision=None,
-        graph=None,
-        trigger_node_id=trigger_node,
-        ignore_checkpoints=False,
-        created_at=utc_now(),
-    )
-    get_run_store().insert_run(record)
-    return job, record
 
 
 def mint_inbound_run(
@@ -171,32 +223,14 @@ def mint_inbound_run(
     request: dict[str, Any],
 ) -> tuple[JobRecord, ChannelRunRecord]:
     """Queue one published run for an accepted inbound call. The caller dispatches it."""
-    job = create_queued_job(
-        kind="channel_run",
-        input={
-            "channel_id": channel_id,
-            "target": "published",
-            "ignore_checkpoints": False,
-            "request": request,
-        },
-        trigger_kind="inbound",
-        trigger_ref=path,
-        summary=f"channel_run {channel_name}",
-        created_by=None,
+    return _mint_run(
+        channel_id=channel_id, channel_name=channel_name, target="published",
+        version=None, draft_revision=None, graph=None,
+        trigger_node=trigger_node_id, ignore_checkpoints=False,
+        stop_at_node_id=None, trigger_kind="inbound", trigger_ref=path,
+        payload={"channel_id": channel_id, "target": "published",
+                 "ignore_checkpoints": False, "request": request},
     )
-    record = _channel_run_record(
-        job_id=job.id,
-        channel_id=channel_id,
-        target="published",
-        version=None,
-        draft_revision=None,
-        graph=None,
-        trigger_node_id=trigger_node_id,
-        ignore_checkpoints=False,
-        created_at=utc_now(),
-    )
-    get_run_store().insert_run(record)
-    return job, record
 
 
 def mint_scheduled_run(
@@ -209,8 +243,29 @@ def mint_scheduled_run(
     now: datetime,
     session: Any,
 ) -> ScheduledMint:
+    if session is None and get_settings().store_backend == "persistent":
+        with session_scope() as mint_session:
+            return mint_scheduled_run(
+                schedule_id=schedule_id, channel_id=channel_id, node_id=node_id,
+                scheduled_for=scheduled_for, is_delayed_recovery=is_delayed_recovery,
+                now=now, session=mint_session,
+            )
     if not channel_id:
         return ScheduledMint("missing_channel", "", None, None)
+    scheduled_graph = None
+    scheduled_identity = None
+    scheduled_version = None
+    if session is not None:
+        published = session.scalar(select(ChannelVersionRow).where(
+            ChannelVersionRow.channel_id == channel_id
+        ).order_by(ChannelVersionRow.number.desc()).limit(1).with_for_update())
+        scheduled_graph = published.graph if published is not None else None
+        if scheduled_graph is not None:
+            scheduled_version = published.number
+            scheduled_identity = (scheduled_graph.get("settings") or {}).get("mirror_execution_user_id")
+            authorize_graph(scheduled_graph, scheduled_identity, session=session)
+    else:
+        _preflight_identity(channel_id, None, None, "schedule")
     already = False
     try:
         job = create_queued_job(
@@ -219,6 +274,8 @@ def mint_scheduled_run(
                 "channel_id": channel_id,
                 "target": "published",
                 "ignore_checkpoints": False,
+                **({"pin_version": True, "version": scheduled_version}
+                   if mirror_graph(scheduled_graph) else {}),
             },
             created_by=None,
             summary=f"channel_run {channel_id}",
@@ -241,18 +298,20 @@ def mint_scheduled_run(
                 "already_minted", exc.existing_job_id or "", None, None
             )
         job = found
-    if not already and get_channel_store().get(channel_id) is not None:
+    if not already and (scheduled_graph is not None if session is not None else get_channel_store().get(channel_id) is not None):
         get_run_store().insert_run(
             _channel_run_record(
                 job_id=job.id,
                 channel_id=channel_id,
                 target="published",
-                version=None,
+                version=scheduled_version if mirror_graph(scheduled_graph) else None,
                 draft_revision=None,
                 graph=None,
                 trigger_node_id=node_id or "",
                 ignore_checkpoints=False,
                 created_at=now,
+                admitted_identity=scheduled_identity,
+                admitted=session is not None,
             ),
             session=session,
         )
@@ -262,6 +321,21 @@ def mint_scheduled_run(
         job,
         job.created_at if already else now,
     )
+
+
+def _preflight_identity(channel_id: str, graph: Any, version: int | None,
+                        trigger_kind: str, actor_id: str | None = None) -> str | None:
+    if graph is None:
+        if version is not None:
+            published = get_channel_store().get_version(channel_id, version)
+            graph = published.graph if published is not None else None
+        else:
+            versions, _ = get_channel_store().list_versions(channel_id, limit=1, offset=0)
+            graph = versions[0].graph if versions else None
+    identity = execution_identity(graph, trigger_kind=trigger_kind, actor_id=actor_id)
+    if identity is not None:
+        authorize_graph(graph, identity)
+    return identity
 
 
 def _channel_run_record(
@@ -276,8 +350,33 @@ def _channel_run_record(
     ignore_checkpoints: bool,
     created_at: datetime,
     stop_at_node_id: str | None = None,
+    admitted_identity: str | None = None,
+    admitted: bool = False,
 ) -> ChannelRunRecord:
+    if admitted:
+        return ChannelRunRecord(
+            job_id=job_id, channel_id=channel_id, target=target, version=version,
+            draft_revision=draft_revision, graph=graph, trigger_node_id=trigger_node_id,
+            ignore_checkpoints=ignore_checkpoints, outcome=None, failed_node_id=None,
+            skipped_node_ids=[], created_at=created_at, stop_at_node_id=stop_at_node_id,
+            mirror_execution_user_id=admitted_identity,
+        )
+    identity_graph = graph
+    if identity_graph is None:
+        if version is not None:
+            published = get_channel_store().get_version(channel_id, version)
+            identity_graph = published.graph if published is not None else None
+        else:
+            versions, _total = get_channel_store().list_versions(channel_id, limit=1, offset=0)
+            identity_graph = versions[0].graph if versions else None
+    job = get_job_store().get(job_id)
+    identity = execution_identity(
+        identity_graph,
+        trigger_kind=job.trigger_kind if job is not None else "schedule",
+        actor_id=job.trigger_ref if job is not None and job.trigger_kind == "user" else None,
+    )
     return ChannelRunRecord(
+        mirror_execution_user_id=identity,
         job_id=job_id,
         channel_id=channel_id,
         target=target,
@@ -295,7 +394,7 @@ def _channel_run_record(
 
 
 def _enqueue(job_id: str) -> None:
-    task: Any = run_job
+    task: Any = tasks.run_job
     task.apply_async(args=[job_id], task_id=job_id)
 
 
@@ -370,6 +469,10 @@ def execute_channel_run(
     pinned: bool = False,
 ) -> RunOutcome:
     user = ensure_system_user(get_user_store())
+    if run.mirror_state is not None:
+        require_run_data_access(run, run.mirror_execution_user_id)
+    if run.mirror_execution_user_id is not None:
+        authorize_graph(graph, run.mirror_execution_user_id)
     schedule = schedule_context(
         channel_id=run.channel_id,
         node=trigger_node,
@@ -420,6 +523,7 @@ class _RunHooks:
         run: Any | None = None,
     ) -> None:
         self._sandbox = sandbox
+        self._run = run
         self.run_id = run_id
         self.actor = actor
         self.started_at = started_at
@@ -435,6 +539,10 @@ class _RunHooks:
         self.checkpoints = (
             RunCheckpoints(channel_id, run) if run is not None else LocalCheckpoints()
         )
+
+    def read_mirror_page(self, *, object_id: str, after_key: Any, limit: int) -> dict:
+        mirror = resolve_object(object_id)
+        return read_run_page(self._run, mirror_id=mirror["id"], after_key=after_key, limit=limit)
 
     def evaluate(self, expression: str) -> Any:
         return self._sandbox.evaluate(expression)

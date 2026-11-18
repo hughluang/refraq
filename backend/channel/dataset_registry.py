@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 
 from backend.channel.errors import TemporalTargetIncompatible
+from backend.channel.mirror_reads import require_run_data_access, MirrorDataForbidden
 from backend.channel.models import ChannelDatasetRow
 from backend.channel.parameters import (
     channel_dataset_max_total_gb,
@@ -378,8 +379,13 @@ class DatasetRegistry:
         return self._ready(record, columns=stored_columns, row_count=row_count, size=size)
 
     def read_page(self, dataset_id: str, *, after_ord: int, limit: int) -> list[dict[str, Any]]:
+        record = self._require(dataset_id)
+        run = get_run_store().get_run(record.job_id)
+        if run is None:
+            raise MirrorDataForbidden()
+        require_run_data_access(run, run.mirror_execution_user_id)
         return read_keyset_page(
-            self._require(dataset_id).relation, after_ord=after_ord, limit=limit
+            record.relation, after_ord=after_ord, limit=limit
         )
 
     def is_lost(self, dataset_id: str) -> bool:

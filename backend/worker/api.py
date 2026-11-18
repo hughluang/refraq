@@ -50,6 +50,7 @@ from backend.entity.tasks import (
     CHANGE_LOG_TASK_NAME,
 )
 from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
+from backend.worker.parameters import NOTIFICATION_SCHEDULE_KEY, NOTIFICATION_TASK_NAME
 from backend.worker.schemas.schedules import ScheduleOut, ScheduleRecentJobOut
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 
@@ -82,6 +83,7 @@ def ensure_system_schedules() -> None:
     Interval follows the declared lost-detection tolerance; an existing row is aligned.
     """
     store = get_schedule_store()
+    _ensure_notification_schedule(store, utc_now())
     interval = job_lost_detection_sec()
     existing = store.get_by_key(REAPER_SCHEDULE_KEY)
     now = utc_now()
@@ -128,6 +130,38 @@ def ensure_system_schedules() -> None:
     _ensure_run_record_schedule(store, now)
     _ensure_inbound_rejection_schedule(store, now)
     _ensure_inbound_dedup_schedule(store, now)
+
+
+def _ensure_notification_schedule(store: object, now: datetime) -> None:
+    settings = get_settings()
+    budget = settings.notification_delivery
+    existing = store.get_by_key(NOTIFICATION_SCHEDULE_KEY)
+    if budget is None or not settings.notification_reviewed_origins:
+        logger.warning("notification delivery blocked: reviewed policy and explicit budget required")
+        if existing is not None and existing.enabled:
+            store.upsert(replace(existing, enabled=False, next_run_at=None, updated_at=now))
+        return
+    if existing is not None:
+        if not existing.enabled or existing.interval_seconds != budget.interval_seconds:
+            store.upsert(replace(
+                existing, enabled=True, interval_seconds=budget.interval_seconds,
+                next_run_at=now, updated_at=now,
+            ))
+        return
+    store.upsert(ScheduledTaskRecord(
+        id=f"sched_{uuid.uuid4().hex[:12]}",
+        key=NOTIFICATION_SCHEDULE_KEY,
+        name="Deliver Foundation notifications",
+        enabled=True,
+        interval_seconds=budget.interval_seconds,
+        cron=None,
+        commitment_timezone=current_schedule_timezone(),
+        task_name=NOTIFICATION_TASK_NAME,
+        args_json=[], kwargs_json={},
+        hidden=True, locked=True, undeletable=True, store_only=True,
+        owner_ref=None,
+        last_run_at=now, next_run_at=now, created_at=now, updated_at=now,
+    ))
 
 
 def _ensure_access_log_schedule(store: object, now: datetime) -> None:

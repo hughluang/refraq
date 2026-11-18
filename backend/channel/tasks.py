@@ -7,6 +7,7 @@ from datetime import timedelta
 
 from celery import shared_task
 
+from backend.channel import recovery, runner
 from backend.channel.dataset_registry import (
     drop_datasets_for_due_runs,
     drop_expired_datasets,
@@ -27,6 +28,7 @@ from backend.channel.parameters import (
     inbound_rejection_retention_days,
 )
 from backend.channel.run_store import get_run_store, note_killed_run
+from backend.core.config import get_settings
 from backend.core.time import utc_now
 from backend.jobs.store import TERMINAL, get_job_store, mark_failed
 from backend.jobs.supervise import supervise
@@ -36,10 +38,19 @@ from backend.worker.schedules import get_schedule_store
 logger = logging.getLogger(__name__)
 
 
+def seal_mirror_run(job_id: str) -> None:
+    if get_settings().store_backend == "persistent":
+        recovery.seal_supervised_run(job_id)
+
+
+def execute_run(job_id: str) -> dict[str, str]:
+    return runner.run_channel_job(job_id)
+
+
 @shared_task(name="backend.channel.tasks.run_job")
 def run_job(job_id: str) -> dict[str, str]:
     try:
-        result = supervise(job_id, "backend.channel.runner:run_channel_job")
+        result = supervise(job_id, "backend.worker.tasks:execute_channel_run", after_exit=seal_mirror_run)
         seal_dataset_expiry(job_id)
         if result.get("status") == "cancelled":
             note_killed_run(job_id)

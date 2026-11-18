@@ -1,7 +1,7 @@
 import type { JsonSchemaProperty } from "@/lib/json-schema";
 export type { JsonSchemaProperty };
 
-export type Engine = "postgresql" | "mssql" | "oracle";
+export type Engine = "postgresql" | "mssql" | "oracle" | "mysql";
 
 export type SourceAccess = Record<string, unknown>;
 

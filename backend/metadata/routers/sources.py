@@ -19,6 +19,7 @@ from backend.admin.errors import AuthForbidden
 from backend.admin.permissions import permissions_include
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.user_store import UserRecord
+from backend.metadata.capture.control import capture_status
 from backend.metadata.connectors.specs import get_connector_spec
 from backend.metadata.errors import (
     SourceAccessRequired,
@@ -74,7 +75,7 @@ def list_sources(
     user: UserRecord = Depends(require_source_list_access),
     page: PageParams = Depends(page_params(SOURCE_LIST)),
     q: str | None = Query(default=None),
-    engine: Literal["postgresql", "mssql", "oracle"] | None = Query(default=None),
+    engine: Literal["postgresql", "mssql", "oracle", "mysql"] | None = Query(default=None),
 ) -> SourceListResponse:
     items, total = source_service.list_sources_for_user(
         user,
@@ -185,6 +186,15 @@ def get_source(
         user.id, source_id, "sources:read"
     )
     return SourceResponse(source=_source_out(record))
+
+
+@router.get("/sources/{source_id}/capture-status")
+def get_source_capture_status(
+    source_id: str,
+    user: UserRecord = Depends(require_permission("sources:read")),
+) -> dict:
+    source_service.require_source_permission(user.id, source_id, "sources:read")
+    return capture_status(source_id)
 
 
 @router.get("/sources/{source_id}/access", response_model=SourceAccessResponse)

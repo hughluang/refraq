@@ -16,7 +16,7 @@ import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
-import { engineLabel } from "@/features/sources/engineLabel";
+import { engineLabel, SOURCE_ENGINES } from "@/features/sources/engineLabel";
 
 import { listTypeMappings, patchTypeMapping } from "./api";
 import type { PatchableNormalizedType, TypeMapping } from "./types";
@@ -112,7 +112,7 @@ export function TypeMappingList() {
             {
               key: "engine",
               label: t("typeMappings.fields.engine"),
-              options: ["postgresql", "mssql", "oracle"].map((value) => ({
+              options: SOURCE_ENGINES.map((value) => ({
                 value,
                 label: engineLabel(t, value),
               })),

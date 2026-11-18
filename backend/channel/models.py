@@ -64,6 +64,8 @@ class ChannelRunRow(Base):
     checkpoint_proposals: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
     )
+    mirror_execution_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mirror_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
@@ -77,6 +79,11 @@ class ChannelCheckpointRow(Base):
     )
     node_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     stream: Mapped[str] = mapped_column(String(64), primary_key=True)
+    stream_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="entity"
+    )
+    history_epoch: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     position_xact: Mapped[int] = mapped_column(BigInteger, nullable=False)
     position_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)

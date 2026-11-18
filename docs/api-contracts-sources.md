@@ -40,8 +40,9 @@ For `kind=database`: `engine` and `access` are required on create. Catalog scope
 - PostgreSQL: required `database` and `schema`
 - MSSQL: required `database` and `schema`
 - Oracle: required `service_name` and `owner`
+- MySQL: required `database` only; the same value is its catalog and schema scope (no invented `schema` field)
 `access` is a per-engine JSON document validated against the **Connector Spec** (`additionalProperties` forbidden at the root; `extra` may allow string KV). Secrets (fields marked `x-secret` in the Spec, e.g. `password`) live **inside** `access`. At rest the whole ordinary `access` document is application-encrypted; its secrets are not split into separate columns. The capture credential is a distinct encrypted document (§2 Capture Configuration).
-Slice A engines: `postgresql`, `mssql`, `oracle`. PostgreSQL Spec allows full TLS modes; mssql/oracle Specs accept `ssl_mode=disable` only until those connectors wire TLS.
+Registered Metadata engines: `postgresql`, `mssql`, `oracle`, `mysql`. PostgreSQL Spec allows full TLS modes; mssql/oracle/mysql accept `ssl_mode=disable` only. MySQL rejects certificate fields and nonempty `extra`; deployments requiring TLS cannot use this adapter. MySQL structure collection covers tables/views, not routines; unsupported expression indexes fail collection. Controlled Query preserves outer ordering/offset and caps its top-level LIMIT without a derived-table wrapper. MySQL TIME is a signed duration (Normalized Type `interval`), not a time of day. Author statement/stream execution is unsupported. These adapter/API contracts do not qualify a real MySQL version, topology, timeout behavior or CDC profile.
 
 **Read projection:** list/get/`SourceOut` decrypt then **strip** every `x-secret` property before returning `access`. Decrypt failure surfaces as `SOURCE_SECRET_REQUIRED` (does not silently null `access` while `has_access` stays true). Non-secret fields (host, port, username, ssl_mode, dialect scope keys, extra, …) remain.
 **Write/edit full tree:** `GET /sources/{id}/access` (`sources:write`) returns the decrypted document including secrets.
@@ -76,7 +77,7 @@ Authorized full Source views (including list rows with Source access and create/
 
 Capture writes require the same `sources:write` Role and instance checks as ordinary Source updates (create uses the Role check only). `sources:access_manage` alone grants neither capture writes nor capture presence. Identity-only rows omit all five fields above.
 
-While a stored capture credential exists, a patch that changes `engine` or any `access` property except ordinary access `username` and Connector Spec `x-secret` properties is rejected with `409 SOURCE_CAPTURE_SCOPE_LOCKED`. Compare validated documents, not ciphertext; resubmitting the same access is permitted. This conservative guard includes host, port, TLS, database/schema, service/owner, and `extra`; a credential replacement or clear in that same patch does not bypass it. Clear first in a separate successful request. If capture resources exist, clearing is not permission to retarget retained continuity: safe resource reconciliation/release must precede an endpoint or scope change. Such a change is rejected with the same code while retained resources remain bound. Never silently rebind a stable capture identity to another endpoint.
+The first capture credential configuration reserves a durable binding in the Source transaction, before any external allocation. The reservation is conservative even if no connector, slot or topic exists. While a credential or retained binding exists, a patch changing `engine` or any `access` property except ordinary access `username` and Connector Spec `x-secret` properties returns `409 SOURCE_CAPTURE_SCOPE_LOCKED`. Compare validated documents, not ciphertext; unchanged resubmission is permitted. This includes host, port, TLS, database/schema, service/owner, and `extra`. Credential replacement, clear (in the same or a separate request), disable and confirmed stop do not release the binding or permit retargeting. There is no automatic release or ordinary Source release endpoint. Safe explicit resource reconciliation/release requires a separately authorized protocol; never silently rebind a stable capture identity.
 
 Replacement preserves stable Source-id-derived capture identity, topics, slots, and offsets. Clear records disabled desired capture while preserving continuity and any mirror data; a manager must reconcile that revision before any restart and must not apply a stale replacement after a clear. Saving configuration makes no claim that a manager has run. Disable, delete, and last-mirror-close must not silently discard continuity or drop replication slots (`docs/business-metadata.md` §4.1.1).
 
@@ -122,7 +123,7 @@ A successful `POST /sources` writes a `user` **Source Membership** for the creat
 
 **Offset Page** (`key ASC`, `id ASC`). Query params: `limit` (default **100**, max **500**), `offset` (default **0**), optional `q`, optional `engine`.
 
-`q` is a case-insensitive substring of `key`, `name`, or `locator_key`. A blank or whitespace-only `q` is the same as omitting it. `%` and `_` match themselves. `engine`, when present, is an exact match of a supported engine code (`postgresql`, `mssql`, `oracle`). Any other value is `422 REQUEST_INVALID`. It combines with `q`. `total` counts the filtered set. Ordering and the envelope are unchanged.
+`q` is a case-insensitive substring of `key`, `name`, or `locator_key`. A blank or whitespace-only `q` is the same as omitting it. `%` and `_` match themselves. `engine`, when present, is an exact match of a supported engine code (`postgresql`, `mssql`, `oracle`, `mysql`). Any other value is `422 REQUEST_INVALID`. It combines with `q`. `total` counts the filtered set. Ordering and the envelope are unchanged.
 
 Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. The page is filtered before pagination. An empty visible set is an empty page.
 
@@ -184,7 +185,7 @@ Missing / undecryptable blob → `SOURCE_ACCESS_REQUIRED` or `SOURCE_SECRET_REQU
 
 Hard-delete. Allowed only when `status` is `disabled`.
 
-- Capture resources and continuity must not be silently cascade-deleted or dropped. Retain them under a durable identity or refuse deletion until an explicit safe release (`docs/business-metadata.md` §4.1.1). A disabled Source without capture resources follows the ordinary hard-delete rule.
+- Under the same Source lock used by allocation/PATCH, check retained capture bindings before any catalog/schedule destruction. A bound Source returns `409 SOURCE_CAPTURE_RESOURCES_RETAINED`, even when disabled. Clearing credentials does not release bindings. Explicit safe DBA/deployer release is outside normal deletion; no release endpoint is implied. A disabled unbound Source follows the ordinary hard-delete rule.
 - Success: `204` with empty body. Catalog Objects (and columns) under the Source are removed. Historical Jobs that referenced the Source in `input` are retained (no FK).
 - `status=active` (or any non-disabled) → `409` `SOURCE_NOT_DISABLED`.
 - Unknown id, or a Source the caller has no level on → `404` `SOURCE_NOT_FOUND`. A level without `sources:write` is `403` `AUTH_FORBIDDEN` and is not `SOURCE_NOT_DISABLED`.
@@ -281,7 +282,7 @@ Duplicate, unknown subject, and unknown level write no audit event. A successful
 - Non-database Source kinds (CSV/file) and their attachment APIs
 - A separate Connection resource or credential reuse across Sources
 - Soft delete and versioned credential history (capture replacements still use secret-free Source audit; see §2 and `DELETE /sources/{id}`)
-- Mirror lists/read nodes, applier/recovery, readiness/status endpoints, and a CDC version or deployment support matrix
+- Mirror lists/read nodes, applier/recovery and capture-status shapes are defined separately in `docs/api-contracts-source-mirrors.md`; no CDC version or deployment support matrix is inferred
 - Source test that returns query row data (reachability-only responses only)
 - Persisting probe results (last-tested timestamp, auto status flip, or blocking save until tested)
 - Free-form YAML authoring; hand-written per-engine forms (use SpecTree)

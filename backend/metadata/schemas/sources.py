@@ -58,7 +58,7 @@ class CreateSourceRequest(BaseModel):
     name: str = Field(min_length=1, max_length=256)
     kind: Literal["database"] = "database"
     description: str | None = None
-    engine: Literal["postgresql", "mssql", "oracle"]
+    engine: Literal["postgresql", "mssql", "oracle", "mysql"]
     access: dict[str, Any]
     capture_credential: CaptureCredential | None = None
     snapshot_window: SnapshotWindow | None = None
@@ -68,19 +68,19 @@ class PatchSourceRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=256)
     description: str | None = None
     status: Literal["active", "disabled"] | None = None
-    engine: Literal["postgresql", "mssql", "oracle"] | None = None
+    engine: Literal["postgresql", "mssql", "oracle", "mysql"] | None = None
     access: dict[str, Any] | None = None
     capture_credential: CaptureCredential | None = None
     snapshot_window: SnapshotWindow | None = None
 
 
 class TestSourceDraftRequest(BaseModel):
-    engine: Literal["postgresql", "mssql", "oracle"]
+    engine: Literal["postgresql", "mssql", "oracle", "mysql"]
     access: dict[str, Any]
 
 
 class TestSourceRequest(BaseModel):
-    engine: Literal["postgresql", "mssql", "oracle"] | None = None
+    engine: Literal["postgresql", "mssql", "oracle", "mysql"] | None = None
     access: dict[str, Any] | None = None
 
 

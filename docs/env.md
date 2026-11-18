@@ -6,6 +6,60 @@ This document records the current environment variables and the expected local-d
 
 These conventions serve the **Management Console**, **Management Foundation**, and the **metadata foundation** phase (secrets master key, Celery worker/beat). Data Product catalog capabilities may add further variables later.
 
+### 1.1 Optional Capture Deployment Boundary
+
+Source Mirror deployment follows `docs/business-source-mirrors.md` and `docs/api-contracts-source-mirrors.md`. The deployer pins Connect/Kafka/applier artifacts, private mTLS agent transport and secret mounts, distinct target mirror-owner/applier/read-gateway identities, durable command/delivery storage and independent alarm routes. Metadata's administrative mirror bootstrap installs `source_mirror`/`source_mirror_state` and guarded functions; it must not reuse runtime Entity owner/query credentials or expose admin credentials to serving processes. API/worker target gateways have no raw mirror grants. The independent capture process has its own declared capacity and pools, never an implicit API/worker default. Startup validates schema/function versions and refuses unbootstrapped optional capability. No production WAL/binlog, disk, buffer, scan, observation or retry limits are invented here: a redacted DBA/deployer-approved profile sheet is mandatory for admission. The exact optional serving and notification settings are defined below; they do not establish profile qualification or start capture. No credentials belong in chat, audit or connector projections.
+
+### 1.2 Optional Mirror Target Settings
+
+`REFRAQ_MIRROR_TARGET` is a protected JSON object, unset by default. Every field is required when the object is present:
+
+| Field | Required Value And Ownership |
+| --- | --- |
+| `gateway_url` | Secret `postgresql+psycopg` URL with username `refraq_mirror_gateway`, password, host and database |
+| `applier_url` | Secret `postgresql+psycopg` URL with username `refraq_mirror_applier`, password, host and the same target database |
+| `timeout_ms` | Explicit positive integer, at most 2147483647; target statement and lock timeout |
+| `connect_timeout_seconds` | Explicit positive integer; target connection timeout |
+
+Both URLs require `sslmode=verify-full`; only `sslmode` and optional `sslrootcert` query options are accepted. The target must not be the management database. These identities are distinct from Entity owner/reader credentials. Treat the whole object as a secret; never print Settings dumps or validation-error inputs. No production timeout is supplied by default.
+
+Persistent API, Celery worker parent/prefork processes and the supervised Channel job child independently assemble restricted Reads/History adapters. They use separate `NullPool` engines, hidden SQL parameters and explicit timeouts, validate target role/schema versions and History function version before binding, and dispose adapters on shutdown or assembly failure. Missing policy or memory mode does not open target connections; missing binding refuses mirror reads. Optional target connections are additional connection demand, not included in the ordinary entity-pool banner/budget: budget for concurrent API/worker/job-child calls separately. Beat and MCP entries do not assemble these mirror gateways.
+
+Serving assembly neither installs target DDL nor creates a capture/applier data-plane consumer. Run Metadata administrative bootstrap with an independently protected administrative URL selected by `python -m backend.metadata.mirrors.bootstrap --admin-url-env <variable-name>`; do not give that URL to serving processes. Bootstrap owns `source_mirror`/`source_mirror_state` roles and functions; login passwords are provisioned separately. Apply the management migrations through Foundation Upgrade before starting code that uses the changed registry, history, recovery, checkpoint and run schemas, then restart API/worker/Beat. Role/version validation is not exhaustive deployment privilege or network qualification.
+
+### 1.3 Optional Notification Deployment Settings
+
+These are deployer-owned process environment settings, not System Parameters. They contain policy/bounds, never route credentials. Encrypted primary/fallback endpoints, credentials and responder are configured through `/settings/notification-channel` with `settings:write`.
+
+| Variable | Value And Missing-Configuration Behavior |
+| --- | --- |
+| `REFRAQ_NOTIFICATION_REVIEWED_ORIGINS` | JSON object mapping canonical HTTPS origins to independently reviewed failure-domain labels; unset defaults to an empty deny-all mapping |
+| `REFRAQ_NOTIFICATION_DELIVERY` | Optional JSON object requiring every budget field below; unset provides no delivery budget or invented cadence |
+
+A canonical origin has no path/trailing slash, userinfo, query, fragment or explicit default port 443. Primary/fallback require distinct approved origins and distinct failure-domain labels. Labels record an independent deployment review; different labels/DNS names alone do not prove independence. Redirects and ambient HTTP proxy settings are not used; deployment still owns egress isolation and DNS protections.
+
+The delivery budget requires exactly these fields:
+
+| Field | Constraint |
+| --- | --- |
+| `max_attempts_per_route` | Positive integer |
+| `retry_delays_seconds` | Positive finite numeric array of exactly `max_attempts_per_route - 1` entries; empty for one attempt |
+| `timeout_seconds` | Positive finite remote timeout |
+| `batch_size` | Positive integer; bounds work while management row locks are held |
+| `interval_seconds` | Positive integer; delivery duty cadence |
+
+All values require approved retry/capacity/lock-duration evidence; there are no production defaults. API needs the reviewed-origin mapping for route writes. Worker needs both settings to deliver; schedule assembly used by Upgrade and Beat/worker enables the hidden, locked, undeletable, store-only `system.notification_delivery` duty only with both settings. Missing either disables an existing duty, does not invent a new row/cadence, and produces a fixed blocked warning. The registered task is `backend.worker.tasks.deliver_notifications`; due-tick consumption and delivery share the management transaction. Configure API/worker/Beat consistently and restart affected processes after env changes.
+
+Queued route tests are not delivery confirmation: both routes must have observed successful delivery for the current configuration. Remote acceptance before a local crash may repeat; receivers must deduplicate the event-id `Idempotency-Key`. Failed terminal deliveries remain visible. This management outbox is not management-independent source protection, a CDC observation producer, or proof of production alarm reachability.
+
+### 1.4 Independent Capture Process Configuration
+
+`python -m backend.metadata.capture.runtime --config-file <protected-path> [--once]` reads an explicit private JSON file, not `REFRAQ_MIRROR_TARGET`. Its executable command boundary is proven stop only; non-stop commands are refused. Configuring this process does not assign a management owner, implement start/reconcile, or install a Kafka-to-target consumer.
+
+The configuration contains `management_database_url_file` (private PostgreSQL URL file requiring `sslmode=verify-full`), `state_directory` (pre-created private effective-user-owned durable journal/lock directory), `poll_interval_seconds` (positive, at most 3600), and `sources` (1..100 unique assignments). Each Source entry requires `source_id`, generated `connector_name`, `connect_tls`, `signals_tls` and `readiness_policy`. Each TLS object supplies HTTPS-only `origin`, private `ca_file`/`cert_file`/`key_file`, positive `timeout_seconds` at most 120 and positive `max_response_bytes` at most 1048576. Readiness supplies `runtime_instance_id`, positive `max_age_seconds` at most 3600 and mandatory checks including profile, pressure, bounded delivery, credential validity, alarm drill, owner exclusion and target fence. These are transport resource bounds, not production pressure thresholds.
+
+The observation adapter requires an independently authenticated deployment-private gateway backed by real facts; a client protocol or hash-shaped proof is not a deployed verifier. No public management evidence-ingestion route exists. Preserve journal/lock files across restart, never place secrets in argv, and do not mistake host-local flock for cross-host exclusion. The deployer supervises this independent process; API/Beat/Channel do not launch it.
+
 ## 2. Current Files
 
 ### Backend
@@ -210,6 +264,8 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_HTTP_MAX_INFLIGHT`, `REFRAQ_THREAD_TOKENS`, `REFRAQ_ADMISSION_SLOTS`, `REFRAQ_ADMISSION_ACTOR_SHARE` (API/MCP runtime capacity; ADR 0040 / 0045)
 - Postgres `shared_buffers` / `effective_cache_size` / `work_mem` / container `shm_size` (database supply; ADR 0040; set on the Compose `postgres` service, not as process env)
 - `REFRAQ_PROMETHEUS_URL` (optional series-store URL; default `http://prometheus:9090`. Not a capacity knob and not one of `REFRAQ_HTTP_MAX_INFLIGHT`, `REFRAQ_THREAD_TOKENS`, `REFRAQ_ADMISSION_SLOTS`, or `REFRAQ_ADMISSION_ACTOR_SHARE`)
+
+The optional deployer-supplied backend settings `REFRAQ_MIRROR_TARGET`, `REFRAQ_NOTIFICATION_REVIEWED_ORIGINS` and `REFRAQ_NOTIFICATION_DELIVERY` follow §§1.2-1.3. They are not browser settings and must never use a `NEXT_PUBLIC_` name. Backend dotenv loading accepts them. The site Compose environment must explicitly pass the applicable settings to API/worker/Beat, using a site-owned override or protected process environment; putting an arbitrary key in the Compose interpolation `.env` alone does not inject it into containers. The repository backend/deploy examples and site Compose do not supply these optional policies or approved numeric values.
 
 ### Frontend-Owned Variables
 

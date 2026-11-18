@@ -51,6 +51,17 @@ class ConsoleModuleSeed:
 
 CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
     ConsoleModuleSeed(
+        id="mirrors",
+        group_id="operations",
+        group_label_key="layout.navGroup.operations",
+        label_key="mirrors.title",
+        icon="database",
+        routes=ModuleRoutes(list="/console/mirrors", show="/console/mirrors/:id"),
+        actions=ModuleActions(list="mirror:read", show="mirror:read", edit="mirror:write", delete="mirror:write"),
+        group_order=27,
+        module_order=40,
+    ),
+    ConsoleModuleSeed(
         id="dashboard",
         group_id="workbench",
         group_label_key="layout.navGroup.workbench",
@@ -405,7 +416,10 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_label_key="layout.navGroup.settings",
         label_key="settings.title",
         icon="settings",
-        routes=ModuleRoutes(list="/console/settings"),
+        routes=ModuleRoutes(
+            list="/console/settings",
+            aliases=(RouteAlias(path="/console/settings/notification-channel", action="list"),),
+        ),
         actions=ModuleActions(
             list="settings:read",
             edit="settings:write",

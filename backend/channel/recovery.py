@@ -5,14 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from backend.admin.user_store import get_user_store
-from backend.channel.channel_run import (
-    SYSTEM_TRIGGER_KINDS,
-    dispatch,
-    mint_followup_run,
-    trigger_node_id,
-)
+from backend.channel import channel_run
+from backend.channel.models import ChannelRunRow
+from backend.core.db import session_scope
 from backend.channel.checkpoints import advance_from_run
 from backend.channel.dataset_registry import drop_datasets_for_jobs
+from backend.channel.mirror_reads import require_run_data_access, release_completed_run
+from backend.core.errors import AppError
 from backend.channel.run_store import get_run_store
 from backend.channel.store import get_channel_store
 from backend.core.time import format_instant, utc_now
@@ -28,7 +27,34 @@ PERSISTENT_FAILURE_STREAK = 3
 _SYSTEM = {"id": "usr_system", "name": "System"}
 
 
-def settle_success(run: Any) -> None:
+def seal_supervised_run(job_id: str) -> None:
+    """Called only after supervise has waited for the execution process to exit."""
+    job_before = get_job_store().get(job_id)
+    run_before = get_run_store().get_run(job_id)
+    if job_before is None or run_before is None:
+        return
+    if job_before.status == "succeeded":
+        release_completed_run(run_before)
+        return
+    if (job_before.status == "failed" and job_before.trigger_kind != "error"
+            and run_before.target == "published" and run_before.version is not None
+            and _ancestors(job_before) < _limit(run_before)):
+        return
+    with session_scope() as session:
+        run = session.get(ChannelRunRow, job_id, with_for_update=True)
+        job = get_job_store().get(job_id, session=session)
+        if run is None or job is None or not run.mirror_state:
+            return
+        if job.status not in {"failed", "cancelled"} or job.finished_at is None:
+            return
+        run.mirror_state = {**run.mirror_state, "terminal_seal": {
+            "status": job.status, "nonresumable": True,
+        }}
+    record = get_run_store().get_run(job_id)
+    release_completed_run(record)
+
+
+def settle_success(run: Any, *, checkpoints_settled: bool = False) -> None:
     """A completed run advances checkpoints. A published success ends the failure episode.
 
     Advance runs for a draft too: the run's writes and deliveries already happened.
@@ -36,7 +62,14 @@ def settle_success(run: Any) -> None:
     that rule. Discarding, when a keeping setting asks for it, happens only after
     that advance has returned.
     """
-    advance_from_run(run)
+    if not checkpoints_settled:
+        advance_from_run(run)
+    if checkpoints_settled:
+        try:
+            release_completed_run(run)
+        except AppError:
+            # Retain both durable evidence and pins when release cannot be proven.
+            return
     if run.target == "published":
         _write_streak(run.channel_id, 0)
     _discard_job(getattr(run, "job_id", None))
@@ -112,6 +145,9 @@ def _discard_jobs(job_ids: list[str]) -> None:
     runs = get_run_store()
     jobs = get_job_store()
     for job_id in job_ids:
+        run = runs.get_run(job_id)
+        if getattr(run, "mirror_state", None) is not None:
+            continue
         runs.delete_run(job_id)
         jobs.delete(job_id)
 
@@ -178,7 +214,8 @@ def _queue_retry(job: JobRecord, run: Any) -> None:
     channel = get_channel_store().get(run.channel_id)
     name = channel.name if channel is not None else run.channel_id
     try:
-        queued, _record = mint_followup_run(
+        require_run_data_access(run, getattr(run, "mirror_execution_user_id", None))
+        queued, _record = channel_run.mint_followup_run(
             channel_id=run.channel_id,
             channel_name=name,
             trigger_kind="retry",
@@ -194,7 +231,7 @@ def _queue_retry(job: JobRecord, run: Any) -> None:
                 "retry_of_job_id": job.id,
             },
         )
-        dispatch(queued.id)
+        channel_run.dispatch(queued.id)
     except Exception as exc:
         append_job_log(
             job.id,
@@ -221,10 +258,10 @@ def _start_error_workflow(
     target = get_channel_store().get(target_id)
     versions, _total = get_channel_store().list_versions(target_id, limit=1, offset=0)
     graph = versions[0].graph
-    node = trigger_node_id(graph) or ""
+    node = channel_run.trigger_node_id(graph) or ""
     source = get_channel_store().get(run.channel_id)
     try:
-        queued, _record = mint_followup_run(
+        queued, _record = channel_run.mint_followup_run(
             channel_id=target_id,
             channel_name=target.name if target is not None else target_id,
             trigger_kind="error",
@@ -253,7 +290,7 @@ def _start_error_workflow(
                 },
             },
         )
-        dispatch(queued.id)
+        channel_run.dispatch(queued.id)
     except Exception as exc:
         append_job_log(
             job.id,
@@ -271,7 +308,7 @@ def _error_target_problem(channel_id: str) -> str | None:
     versions, _total = get_channel_store().list_versions(channel_id, limit=1, offset=0)
     if not versions:
         return "Error workflow was not started: channel has no published version"
-    node_id = trigger_node_id(versions[0].graph)
+    node_id = channel_run.trigger_node_id(versions[0].graph)
     nodes = versions[0].graph.get("nodes") or []
     node = next((item for item in nodes if item.get("id") == node_id), None)
     if node is None or node.get("type") != "trigger.error":
@@ -280,7 +317,7 @@ def _error_target_problem(channel_id: str) -> str | None:
 
 
 def _triggered_by(job: JobRecord) -> dict[str, str]:
-    if job.trigger_kind in SYSTEM_TRIGGER_KINDS or not job.trigger_ref:
+    if job.trigger_kind in channel_run.SYSTEM_TRIGGER_KINDS or not job.trigger_ref:
         return dict(_SYSTEM)
     user = get_user_store().get_by_id(job.trigger_ref)
     name = user.display_name if user is not None else job.trigger_ref

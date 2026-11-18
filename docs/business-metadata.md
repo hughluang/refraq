@@ -59,8 +59,8 @@ Fields (business meaning):
 | kind | Collection modality; slice A: `database`. Catalog may grow (e.g. `file`) without renaming Source |
 | status | `active` / `disabled` |
 | description | Optional |
-| engine | Required when `kind=database`; wire/protocol family — slice A: `postgresql` \| `mssql` \| `oracle` |
-| access | Required when `kind=database`; per-engine Connector Spec–validated JSON (includes dialect catalog scope — PostgreSQL / MSSQL: required `database` and `schema`; Oracle: required `service_name` and `owner` — schema/owner is always required so object names are unique within the Source; plus `password` and other secrets, optional `extra`; TLS fields only where the engine Spec wires them — PostgreSQL full modes, mssql/oracle `disable` only in slice A); unknown root keys rejected; stored encrypted as a whole document |
+| engine | Required when `kind=database`; registered Metadata protocol family: `postgresql` \| `mssql` \| `oracle` \| `mysql`; registration does not establish runtime or CDC qualification |
+| access | Required when `kind=database`; Connector Spec-validated JSON including scope (PostgreSQL/MSSQL: `database` and `schema`; Oracle: `service_name` and `owner`; MySQL: one `database` for both dimensions), credentials and allowed options. PostgreSQL wires full TLS modes; mssql/oracle/mysql accept only `disable`. MySQL rejects certificate fields and nonempty `extra`. Unknown root keys are rejected; store the whole document encrypted |
 
 APIs expose projected `access` (secrets stripped), plus `has_access` / `access_updated_at`. Full decrypted `access` is available only on the write-scoped edit endpoint. Non-database kinds may omit `engine` and `access`.
 
@@ -86,14 +86,14 @@ A database Source owns an optional write-only **capture credential**, separate f
 - The credential is exactly a username/password pair, application-encrypted separately from `access`. Omission retains it, an object replaces it, and explicit null clears it. No HTTP read, including full-access edit, returns either member. Errors, logs, audit, and connector-configuration projections must not contain plaintext. Ordinary `access` editing does not fetch or replace capture credentials.
 - Full authorized Source views expose only `capture_credential_set`, `capture_credential_updated_at`, and configuration `capture_state` (`disabled` without a credential, `configured` with one), plus `snapshot_window` and the live `schedule_timezone`. Identity-only views omit all of them. `configured` does not assert running, available, or ready; Source status independently gates use. Source write authorization (§6.1) governs capture replacement and clear; access management alone grants neither write nor presence visibility.
 - Every replacement increments durable internal `capture_revision`, even when values match. Effective clear increments it too; initially the revision is zero and the update timestamp null. Credential change, revision, and last-change Instant commit together. Re-clearing an absent credential is a no-op. Rotation must not reset Source-id-derived capture identity or offsets.
-- A configured credential locks engine and endpoint/scope changes: every `access` property except ordinary username and Connector Spec secret fields is guarded, including TLS and `extra`. Reject changes with `SOURCE_CAPTURE_SCOPE_LOCKED`; clear in a separate request first. Where capture resources exist, clearing alone must not permit retained identity/offsets to be silently retargeted: reject retargeting until safe resource reconciliation/release. Ordinary access credential rotation and unchanged resubmission remain allowed.
+- First capture credential configuration conservatively reserves a durable binding in the Source transaction before external allocation, even if no connector, slot or topic exists. A credential or retained binding locks engine and endpoint/scope changes: every `access` property except ordinary username and Connector Spec secret fields is guarded, including TLS and `extra`. Reject changes with `SOURCE_CAPTURE_SCOPE_LOCKED`. Clear (including a separate request), disable and confirmed stop never release this reservation; there is no automatic release or ordinary Source release endpoint. Safe explicit reconciliation/release needs a separately authorized protocol. Ordinary access credential rotation and unchanged resubmission remain allowed.
 - Clear disables desired capture use, preserves continuity and existing mirror data, and must be reconciled before restart. Reconciliation must fence stale credential revisions. Source disable likewise stops capture use without silently deleting offsets or slots. Source delete and last-mirror-close are not destructive capture-resource cleanup: resources and continuity must be retained under a durable identity or deletion must be refused until an explicit safe release. Ordinary disabled Sources without capture resources retain the hard-delete rule above. No Source cascade may silently erase capture continuity, and no lifecycle operation silently drops a replication slot.
 - The snapshot window is null (any time) or distinct strict `HH:mm` endpoints, start-inclusive and end-exclusive, including midnight crossing. Its timezone is the live site Schedule Timezone, not the User's Display Timezone, a process zone, or a stored per-Source zone. Membership is evaluated at the actual Instant; both repeated DST occurrences count normally and skipped clock times create no extra Instant. The window gates dispatch, not completion. Startup/recovery starts use the same gate; only an explicit audited run-now override bypasses it. Window configuration is not a promise of scheduler execution.
 - A catalog scope does not establish a supported CDC database/container scope. Ordinary PostgreSQL/MSSQL/Oracle structure support is not a CDC version or topology matrix. Automatic onboarding requires an explicitly supported profile and evidence-backed readiness; absent inspection privileges mean unknown, not failed prerequisites or success. Configuration storage alone asserts neither readiness nor component health. Component availability is a separate concept: disabled means the optional CDC capability is not enabled; available requires required components/plugins and task/stream progress, not container liveness alone; configured but unreachable or faulty components are degraded, never silently reported as disabled.
 
 Connector lifecycle reconciliation and snapshot signaling are separate responsibilities. A manager uses Connect REST for lifecycle, generated allowlisted settings, stable per-Source identities, durable revisions, and convergent retry; it must not assume a snapshot REST endpoint. Signals require an explicitly configured supported channel, durable request identity, and independent completion/failure observation; successful submission is not completion. Private authenticated TLS and protected internal state/signal access are required at the selected deployment boundary; database encryption alone is insufficient. No version matrix, deployment profile, readiness endpoint, or manager status API is implied by the configuration projection.
 
-Mirror application with transactional target offsets and stale-owner fencing, mirror read surfaces, and recovery generations/history-gap handling are separate from Source capture configuration (`docs/business-data-channel.md` §9). Incremental signals do not guarantee recovery from expired source positions. Dispatch scheduling/serialization and rebaselining must not be inferred from window storage.
+Mirror application, history and recovery are Metadata-owned capabilities distinct from Source configuration. Their approved rules and interfaces are `docs/business-source-mirrors.md` and `docs/api-contracts-source-mirrors.md`; configuration alone is not runtime qualification. Retained bindings refuse Source deletion with `SOURCE_CAPTURE_RESOURCES_RETAINED` before catalog/schedule destruction. Source mutations and resource allocation share the Source row lock. Incremental signals do not guarantee recovery from expired positions; dispatch/rebaselining follow the explicit mirror contract.
 
 ### 4.2 Structure Job and schedule facades
 
@@ -202,6 +202,9 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 | --- | --- |
 | `sources:read` | List and view Sources the caller can open (projected `access`, Connector Spec). `GET /sources` also admits `sources:access_manage` for identity rows |
 | `sources:write` | Create/update/disable Sources; hard-delete disabled Sources subject to capture continuity; replace/clear capture credentials and configure snapshot windows; replace full ordinary `access`; fetch full access for edit; run Source reachability tests; creating a database Source, or a mutating update of one with a missing product-default schedule kind, also inserts the matching product-default **Scheduled Task** |
+| `sources:data_read` | Read all columns of all admitted mirror tables/history in a Source; Role capability intersected with viewer-or-higher membership; not granted by catalog visibility or mirror administration |
+| `mirror:read` | Read global Operations mirror metadata, not rows |
+| `mirror:write` | Manage mirror lifecycle/recovery, not rows |
 | `sources:access_manage` | Manage **Source Membership**s and **Source Access Level**s. Not a level. Not implied by `sources:read`, `sources:write`, or `metadata:*`. Not seeded onto `operator`. A Role that effectively holds it cannot be an Identity Provider default Role |
 | `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, and joins on Sources the caller can read, and read global **Type Mapping** |
 | `metadata:write` | Write semantics and join edges; PATCH non-seed **Type Mapping** |
@@ -226,7 +229,7 @@ A membership names one subject (`user`, `role`, or `group`), one target (one Sou
 
 | Level | Allows |
 | --- | --- |
-| `viewer` | `sources:read`, `metadata:read`, `catalog:sample`, `query:run` |
+| `viewer` | `sources:read`, `metadata:read`, `catalog:sample`, `query:run`, `sources:data_read` |
 | `steward` | `viewer` plus `metadata:write` |
 | `maintainer` | `steward` plus `sources:write`, `jobs:run` |
 
@@ -242,7 +245,7 @@ Catalog reads and writes, **Structure Diff**, **Controlled Query**, **Catalog Sa
 
 Operations Job and schedule lists include a Source-bound row when the caller holds `jobs:run` on that row's Source. A row with no Source stamp keeps the Role rule. The stamp is opaque, is not a Source foreign key, and is distinct from `owner_ref`. Get, logs, and cancel of a stamped Job are `404` `JOB_NOT_FOUND` when the stamp is outside the caller's `jobs:run` set, including when the caller has a level that does not include `jobs:run`. `GET` of a stamped schedule the caller cannot `jobs:run` is that schedule's not-found code, including when a level is held without that key. Update, delete, and run-now when the caller has a level and lacks `jobs:run` are `403` `AUTH_FORBIDDEN`.
 
-**Type Mapping** stays global: `metadata:read` and `metadata:write` on the Role, with no Source check. The audit list is not filtered by Source. Source capture configuration does not add a Source Mirror list (§4.1.1). MCP `search_sources` returns Sources where the caller holds `sources:read` and does not add identity rows for `sources:access_manage`. A `channel:read` holder can still read channel run records from a Source they cannot open (`docs/business-data-channel.md` §11).
+**Type Mapping** stays global: `metadata:read` and `metadata:write` on the Role, with no Source check. The audit list is not filtered by Source. Source capture configuration does not add a Source Mirror list (§4.1.1). MCP `search_sources` returns Sources where the caller holds `sources:read` and does not add identity rows for `sources:access_manage`. Non-mirror Channel outputs retain the `channel:read` rule; mirror-derived stored outputs, samples, datasets and cache reuse additionally require current `sources:data_read` on every provenance Source (`docs/business-source-mirrors.md` §6). New data/mirror permissions are not automatically granted to existing custom Roles or `operator`.
 
 The membership migration inserts one every-Source `maintainer` membership for each Role, other than `super_admin`, whose stored permissions at that migration include `sources:read` or `metadata:read`. A Role created afterwards receives no membership from that migration or from Foundation Upgrade. Identity Provider auto-provisioning creates no membership.
 
@@ -622,9 +625,9 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Console P1: scope switcher implementation, global search implementation, theme workshops, notification center
 - Access below the Source (per Catalog Object, schema, column, or row) and data masking on Controlled Query or Catalog Sample
 - Filtering the audit list by Source
-- A Source Mirror list or Read Mirror nodes
+- Source Mirror details are defined separately in `docs/business-source-mirrors.md`; Source detail does not host a mirror list
 - Per-Source **Type Mapping**
-- Filtering channel run records by Source access (`docs/business-data-channel.md` §11)
+- General Source filtering of non-mirror channel records; mirror-derived payloads follow provenance authorization (`docs/business-data-channel.md` §11)
 - Write SQL / unrestricted SQL consoles
 - Migrating or dual-reading legacy `dbmeta` datasets
 - Pre-creating empty domain packages before implementation code arrives

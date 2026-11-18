@@ -45,6 +45,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "admin.model_services",
             "admin.subjects",
             "admin.host",
+            "admin.notifications.service",
             "admin.routers",
         }
     ),
@@ -63,6 +64,9 @@ PUBLISHED: dict[str, frozenset[str]] = {
         {
             "metadata.errors",
             "metadata.source_access",
+            "metadata.mirrors.service",
+            "metadata.mirrors.reads",
+            "metadata.mirrors.history",
             "metadata.source_jobs",
             "metadata.catalog_embed_jobs",
             "metadata.source_schedules",
@@ -338,6 +342,12 @@ def test_layout_imports(path: Path) -> None:
                     f"{importer} must not import {imported} "
                     "(only entity and channel may import tags.api)"
                 )
+            continue
+
+        # Notification runtime adapters are assembly-only, not product facades.
+        if importer == "worker.tasks" and imported in {
+            "admin.notifications.configuration", "admin.notifications.delivery",
+        }:
             continue
 
         # Cross-package into another tiered package: published only.

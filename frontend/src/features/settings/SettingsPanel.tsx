@@ -16,6 +16,8 @@ import { presentProblemNotification } from "@/components/feedback/presentProblem
 import { presentSaveFailure } from "@/components/feedback/presentSaveFailure";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
+import { HeaderActions } from "@/components/layout/HeaderActions";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { useLeaveGuardRegistration } from "@/components/navigation/leaveGuard";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
@@ -165,8 +167,8 @@ export function SettingsPanel() {
       description={t("settings.description")}
       status={!loading && failed ? "unloaded" : "ready"}
       onRetry={() => void load()}
-      actions={
-        canWrite?.can ? (
+      actions={<HeaderActions navigation={<Button component={ConsoleLink} href="/console/settings/notification-channel" size="sm" variant="light">{t("notificationChannel.title")}</Button>}
+        standard={canWrite?.can ? (
           <Button
             size="sm"
             loading={saving}
@@ -175,7 +177,7 @@ export function SettingsPanel() {
           >
             {t("settings.save")}
           </Button>
-        ) : undefined
+        ) : undefined} />
       }
     >
       <Stack gap="lg">

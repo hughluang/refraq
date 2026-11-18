@@ -156,7 +156,7 @@ def test_capture_scope_guard_and_ordinary_rotation(client):
         assert response.json()["code"] == "SOURCE_CAPTURE_SCOPE_LOCKED"
     assert client.patch(path, json={"capture_credential": None}).status_code == 200
     assert (
-        client.patch(path, json={"access": _access(host="new-host")}).status_code == 200
+        client.patch(path, json={"access": _access(host="new-host")}).status_code == 409
     )
 
 
@@ -255,7 +255,7 @@ def test_window_dst_actual_instants(monkeypatch):
         None, datetime.fromisoformat("2026-03-08T07:00:00+00:00")
     )
     with pytest.raises(ValueError, match="aware"):
-        snapshot_dispatch_allowed(None, datetime(2026, 1, 1))
+        snapshot_dispatch_allowed(None, datetime(2026, 1, 1))  # noqa: DTZ001 -- Reject naive input.
 
 
 @pytest.mark.parametrize(
