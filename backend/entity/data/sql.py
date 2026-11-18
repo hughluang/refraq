@@ -23,7 +23,7 @@ from backend.core.config import get_settings
 from backend.core.db import map_platform_db_error
 from backend.core.errors import PlatformCapacityExceeded
 from backend.entity.attribute_type import resolve
-from backend.entity.data.capabilities import PAGE_LIMIT_MAX, ROW_WRITE_LIMIT
+from backend.entity.data.capabilities import ROW_WRITE_LIMIT
 from backend.entity.data.filters import CompiledFilter, filter_is_leakproof
 from backend.entity.data.head import HeadTarget
 from backend.entity.data.values import decode_row, reference_value_attr
@@ -536,10 +536,6 @@ def select_stored_matching(
     ]
 
 
-# Keyset reads one extra row. The page function rejects anything larger.
-_PROFILE_PAGE_LIMIT = PAGE_LIMIT_MAX + 1
-
-
 def query_offset(
     conn: Connection,
     target: HeadTarget,
@@ -664,51 +660,9 @@ def _profile_page_rows(
     offset: int,
     after: int | None,
 ) -> list[dict[str, Any]]:
-    """Read through the page function. A limit above its cap is several calls."""
+    """Read one page through the profile function."""
     if limit < 1:
         raise EntityRowInvalid()
-    if limit <= _PROFILE_PAGE_LIMIT:
-        return _profile_page_once(
-            conn,
-            target,
-            fields=fields,
-            filters=filters,
-            limit=limit,
-            offset=offset,
-            after=after,
-        )
-    items: list[dict[str, Any]] = []
-    cursor = offset
-    remaining = limit
-    while remaining:
-        take = min(_PROFILE_PAGE_LIMIT, remaining)
-        batch = _profile_page_once(
-            conn,
-            target,
-            fields=fields,
-            filters=filters,
-            limit=take,
-            offset=cursor,
-            after=None,
-        )
-        items.extend(batch)
-        if len(batch) < take:
-            break
-        remaining -= len(batch)
-        cursor += len(batch)
-    return items
-
-
-def _profile_page_once(
-    conn: Connection,
-    target: HeadTarget,
-    *,
-    fields: list[str],
-    filters: Any,
-    limit: int,
-    offset: int,
-    after: int | None,
-) -> list[dict[str, Any]]:
     record = _record_definition(fields, target)
     select_cols = ", ".join(ident(name) for name in fields)
     sql = (

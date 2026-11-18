@@ -41,6 +41,7 @@ REGISTERED_KEYS = {
     "query_max_rows",
     "query_timeout_sec",
     "access_log_retention_days",
+    "entity_page_limit_max",
     "entity_query_max_rows",
     "entity_query_timeout_sec",
     "max_profile_combinations",
@@ -62,6 +63,7 @@ CATALOG_KEY_ORDER = [
     "query_timeout_sec",
     "access_log_retention_days",
     "max_profile_combinations",
+    "entity_page_limit_max",
     "entity_query_max_rows",
     "entity_query_timeout_sec",
     "channel_dataset_max_total_gb",
@@ -183,6 +185,32 @@ def test_entity_query_parameters_are_seeded_in_the_catalog(client: TestClient) -
     keys = [item["key"] for item in body["parameters"]]
     assert keys.index("max_profile_combinations") < keys.index("entity_query_max_rows")
     assert keys.index("entity_query_timeout_sec") < keys.index("channel_dataset_max_total_gb")
+
+
+def test_entity_page_limit_catalog_write_reset_and_audit(client: TestClient) -> None:
+    from backend.admin.audit_store import get_audit_store
+
+    _login_root(client)
+    key = "entity_page_limit_max"
+    item = _by_key(client.get("/settings").json(), key)
+    assert item["value"] == item["seed"] == 200
+    assert item["group"] == "entity"
+    assert item["operator_action_required"] is False
+    assert item["constraint"] == {"type": "integer", "minimum": 50, "maximum": 10000}
+    for value in (49, 10001):
+        assert_problem(client.patch("/settings", json={"values": {key: value}}),
+                       status=422, code="SYSTEM_PARAMETER_INVALID")
+    for value in (50, 10000):
+        response = client.patch("/settings", json={"values": {key: value}})
+        assert response.status_code == 200
+        assert _by_key(response.json(), key)["value"] == value
+    restored = client.post("/settings/reset", json={"keys": [key]})
+    assert restored.status_code == 200
+    assert _by_key(restored.json(), key)["value"] == 200
+    events, _ = get_audit_store().list_events(resource_type="system_parameter")
+    assert {event.action for event in events if event.resource_id == key} == {
+        "parameter.set", "parameter.reset",
+    }
 
 
 def test_patch_and_reset(client: TestClient) -> None:

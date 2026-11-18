@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.exc import DataError, ProgrammingError
 
-from backend.entity.bootstrap import run_bootstrap
+from backend.entity.bootstrap import profile_page_statements, run_bootstrap
 from backend.entity.ddl import (
     ACL_OWNER_ROLE,
     ENTITY_OWNER_ROLE,
@@ -122,6 +122,11 @@ def test_bootstrap_is_idempotent_and_reader_cannot_bypass_rls() -> None:
         physical = "widget__v1__0123456789abcdef"
         try:
             with admin.begin() as conn:
+                old_page = profile_page_statements()[1].replace(
+                    "p_limit IS NULL OR p_limit < 1 THEN",
+                    "p_limit IS NULL OR p_limit < 1 OR p_limit > 201 THEN",
+                )
+                conn.exec_driver_sql(old_page)
                 conn.execute(
                     text(
                         f'CREATE TABLE public."{physical}" '
@@ -148,6 +153,16 @@ def test_bootstrap_is_idempotent_and_reader_cannot_bypass_rls() -> None:
         third = run_bootstrap(admin_url, owner_url, reader_url, signer_url)
         assert third.moved == 0
         assert third.secured_tables >= 1
+        admin = create_engine(admin_url)
+        try:
+            with admin.connect() as conn:
+                definition = conn.execute(text(
+                    "SELECT pg_get_functiondef('entity_access.profile_page_sql"
+                    "(regclass,text[],integer,integer,bigint,jsonb)'::regprocedure)"
+                )).scalar_one()
+                assert "p_limit >" not in definition
+        finally:
+            admin.dispose()
 
         _assert_moved_and_closed(admin_url, reader_url, owner_url, physical)
         leakproof = _leakproof_operators(admin_url)
@@ -422,6 +437,15 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
                 text("SELECT acl.install_key(:kid, :secret)"),
                 {"kid": "k1", "secret": secret},
             )
+            conn.execute(text(
+                "CREATE VIEW entity_access.page_private AS SELECT row_id, name FROM entity_data.page_probe"
+            ))
+            conn.execute(text('ALTER VIEW entity_access.page_private OWNER TO "refraq_exposure_owner"'))
+            conn.execute(text(
+                "CREATE VIEW acl.page_wrong_schema AS SELECT row_id, name FROM entity_data.page_probe"
+            ))
+            conn.execute(text('ALTER VIEW acl.page_wrong_schema OWNER TO "refraq_exposure_owner"'))
+            conn.execute(text('GRANT SELECT ON acl.page_wrong_schema TO "refraq_reader"'))
         good = _sign(
             secret,
             {
@@ -463,6 +487,8 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
             page = _read_page(conn, limit=2, offset=0, after=None, filt=None)
             assert _read_count(conn, filt=None) == 3
             assert page == [10, 30]
+            for limit in (202, 10001, 10002):
+                assert _read_page(conn, limit=limit, offset=0, after=None, filt=None) == [10, 30, 40]
             assert _read_page(conn, limit=2, offset=0, after=10, filt=None) == [30, 40]
             assert _read_page(
                 conn,
@@ -485,6 +511,32 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
             assert _read_page(conn, limit=5, offset=0, after=None, filt=None) == []
             assert _read_count(conn, filt=None) == 0
         with reader.connect() as conn:
+            for limit, offset, after, message in (
+                (None, 0, None, "limit"), (0, 0, None, "limit"),
+                (-1, 0, None, "limit"), (2, None, None, "offset"),
+                (2, -1, None, "offset"), (2, 0, 0, "after"),
+            ):
+                with pytest.raises(DataError, match=f"page {message} out of range"):
+                    _read_page(conn, limit=limit, offset=offset, after=after, filt=None)
+                conn.rollback()
+            for view, message in (
+                ("entity_access.page_private", "not selectable"),
+                ("acl.page_wrong_schema", "not an exposure profile"),
+            ):
+                with pytest.raises(ProgrammingError, match=message):
+                    conn.execute(text(
+                        "SELECT row_id FROM entity_access.profile_page("
+                        "CAST(:view AS regclass), ARRAY['row_id'], "
+                        "10002, 0, NULL, NULL) AS page(row_id bigint)"
+                    ), {"view": view})
+                conn.rollback()
+            with pytest.raises(DataError, match="column is not on the view"):
+                conn.execute(text(
+                    "SELECT row_id FROM entity_access.profile_page("
+                    "'entity_access.page_probe'::regclass, ARRAY['missing'], "
+                    "10002, 0, NULL, NULL) AS page(row_id bigint)"
+                ))
+            conn.rollback()
             with pytest.raises(DataError, match="not an identifier"):
                 conn.execute(
                     text(

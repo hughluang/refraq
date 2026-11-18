@@ -6,14 +6,11 @@ This document defines the platform **Scheduled Task** mechanism: the scheduling 
 
 Related boundaries:
 
-- Terminology: `docs/glossary.md` and root `CONTEXT.md`.
+- Terminology: `docs/glossary.md`.
 - HTTP: `docs/api-contracts-schedules.md`.
 - **Job** mechanism: `docs/business-jobs.md`.
 - Metadata structure schedule **facade** (`POST/GET /sources/{id}/schedules`), Source create-time seed, **owner_ref** withdraw on Source delete, and mutating Source-update ensure: `docs/business-metadata.md`.
 - Data Channel publish sync of `channel_run` schedules, activation, and delete withdraw: `docs/business-data-channel.md` §3.6, §3.7, §7.2.
-- Schedule-first minting: `docs/adr/0025-clock-first-structure-jobs.md`.
-- Create-time seed: `docs/adr/0026-seed-structure-schedule-on-source-create.md`.
-- **Running Time Limit**: `docs/adr/0027-running-time-limit-on-schedule.md`.
 - Time / due rules: `docs/conventions-time.md`.
 
 ## 2. Service outline

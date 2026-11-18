@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.entity.data.capabilities import (
-    PAGE_LIMIT_DEFAULT,
-    PAGE_LIMIT_MAX,
-)
+from backend.entity.data.capabilities import PAGE_LIMIT_DEFAULT
 from backend.entity.errors import EntityRequestInvalid
 
 __all__ = [
@@ -17,18 +14,20 @@ __all__ = [
 ]
 
 
-def resolve_limit(raw: Any) -> int:
+def resolve_limit(raw: Any, *, maximum: int) -> int:
     if raw is None:
         return PAGE_LIMIT_DEFAULT
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
         raise EntityRequestInvalid("limit must be an integer >= 1")
-    if raw > PAGE_LIMIT_MAX:
-        raise EntityRequestInvalid(f"limit must be <= {PAGE_LIMIT_MAX}")
+    if raw > maximum:
+        raise EntityRequestInvalid(f"limit must be <= {maximum}")
     return raw
 
 
-def resolve_offset_query(body: dict[str, Any]) -> tuple[int, int, bool]:
-    limit = resolve_limit(body.get("limit"))
+def resolve_offset_query(
+    body: dict[str, Any], *, maximum: int
+) -> tuple[int, int, bool]:
+    limit = resolve_limit(body.get("limit"), maximum=maximum)
     offset_raw = body.get("offset", 0)
     if offset_raw is None:
         offset_raw = 0
@@ -40,8 +39,10 @@ def resolve_offset_query(body: dict[str, Any]) -> tuple[int, int, bool]:
     return limit, offset_raw, include_total
 
 
-def resolve_keyset_query(body: dict[str, Any]) -> tuple[int, int | None]:
-    limit = resolve_limit(body.get("limit"))
+def resolve_keyset_query(
+    body: dict[str, Any], *, maximum: int
+) -> tuple[int, int | None]:
+    limit = resolve_limit(body.get("limit"), maximum=maximum)
     after = body.get("after_row_id")
     if after is not None:
         if isinstance(after, bool) or not isinstance(after, int) or after < 1:

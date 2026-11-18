@@ -61,6 +61,17 @@ ENTITY_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
         label_key="settings.parameter.entity_query_max_rows.label",
         help_key="settings.parameter.entity_query_max_rows.help",
     ),
+    ParameterSpec(
+        key="entity_page_limit_max",
+        constraint=IntConstraint(minimum=50, maximum=10_000),
+        seed=200,
+        owner="entity",
+        group="entity",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.entity_page_limit_max.apply",
+        label_key="settings.parameter.entity_page_limit_max.label",
+        help_key="settings.parameter.entity_page_limit_max.help",
+    ),
 )
 
 

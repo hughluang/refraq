@@ -1,8 +1,7 @@
 # Time Conventions
 
 Authoritative Instant / Schedule Timezone contract for refraq.
-Hard trade-offs and rationale: [`docs/adr/0022-unified-time-contract.md`](adr/0022-unified-time-contract.md).
-Domain terms: root `CONTEXT.md`, [`docs/glossary.md`](glossary.md).
+Domain terms: `docs/glossary.md`.
 
 ## 1. Two concepts (do not mix)
 

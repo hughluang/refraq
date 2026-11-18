@@ -244,6 +244,26 @@ def test_constraint_fragment_uses_only_profile_keywords() -> None:
         assert keys <= JSON_SCHEMA_PROFILE_KEYWORDS
 
 
+def test_entity_page_limit_parameter_occupy_constraints_and_reset() -> None:
+    assemble_system_parameters()
+    spec = get_parameter_spec("entity_page_limit_max")
+    assert spec.owner == spec.group == "entity"
+    assert spec.seed == resolve_int(spec.key).value == 200
+    assert spec.operator_action_required is False
+    assert spec.constraint.to_json_schema() == {
+        "type": "integer", "minimum": 50, "maximum": 10000,
+    }
+    for value in (49, 10001, True, "200"):
+        assert not spec.constraint.admit(value)
+    for value in (50, 10000):
+        set_parameter(spec.key, value, actor_user_id=None)
+        occupy_registered_parameters()
+        assert resolve_int(spec.key).value == value
+    reset_parameter(spec.key, actor_user_id=None)
+    assert resolve_int(spec.key).value == 200
+    assert resolve_int(spec.key).source == "seed"
+
+
 def test_entity_query_parameters_resolve_their_seeds() -> None:
     assemble_system_parameters()
     specs = {spec.key: spec for spec in list_registered_specs()}
@@ -276,6 +296,9 @@ _ENTITY_LOCALE_KEYS = (
     "settings.parameter.entity_query_timeout_sec.label",
     "settings.parameter.entity_query_timeout_sec.help",
     "settings.parameter.entity_query_timeout_sec.apply",
+    "settings.parameter.entity_page_limit_max.label",
+    "settings.parameter.entity_page_limit_max.help",
+    "settings.parameter.entity_page_limit_max.apply",
     "settings.parameter.entity_query_max_rows.label",
     "settings.parameter.entity_query_max_rows.help",
     "settings.parameter.entity_query_max_rows.apply",

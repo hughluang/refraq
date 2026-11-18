@@ -16,7 +16,7 @@ Related boundaries:
 - Entity Data API shapes that `get_row` and `query_rows` reuse: `docs/api-contracts-entity-data.md`, `docs/api-contracts-entity-access.md` §5
 - Metadata MCP, a different host at `/mcp`: `docs/api-contracts-metadata-mcp.md`
 - Problem Codes: `docs/conventions-errors.md`
-- System Parameters `entity_query_timeout_sec` and `entity_query_max_rows`: `docs/business-system-parameters.md` §5
+- System Parameters `entity_page_limit_max`, `entity_query_timeout_sec`, and `entity_query_max_rows`: `docs/business-system-parameters.md` §5
 - Process role, pools, and the signer login: `docs/env.md`
 - Terminology: `docs/glossary.md`
 
@@ -147,7 +147,7 @@ On a reference attribute, `target` is `null` when the caller has no effective `r
 
 Inbound references are collected from each Entity's latest published head. A deprecated Entity that still has a published head is included. An unpublished current version is not the source. The caller's effective `read` grant then drops hidden referrers. Of a visible referrer, only attributes in that referrer's un-narrowed read shape are listed. An over-limit combination or an empty shape omits that referrer's attributes. When the serving head cannot be loaded, the attribute name is kept. `entity:write` does not widen this list.
 
-Both this tool and `list_dictionary_codes` call the schema path, so the Entity Access Log verb is `schema`.
+Both this tool and `list_dictionary_codes` call the schema path, so the Entity Access Log verb is `schema`. `limits.page_limit_max` reflects the effective `entity_page_limit_max` at schema read time, while `limits.page_limit_default` remains 50. The maximum may change before a subsequent `query_rows` call.
 
 ### 5.3 `list_dictionary_codes`
 
@@ -187,9 +187,11 @@ Result: `{ "row": <Entity Data API get object> }`.
 
 Arguments: `table_name`, and the Entity Data API query fields `filters`, `fields`, `limit`, `offset`, `include_total`, `after_row_id`. A null optional field is omitted, so an omitted `after_row_id` stays offset mode. JSON `null` for `after_row_id` is the first keyset page. `after_row_id` together with `offset` or `include_total` is `REQUEST_INVALID`.
 
-`limit` defaults to 50 and must be an integer from 1 through 200. `offset` must be an integer >= 0 and has no maximum. A `limit` outside that range, or an `offset` that is not an integer >= 0, is `REQUEST_INVALID`. These tools do not clamp either value.
+`limit` defaults to 50 and must be an integer from 1 through the effective `entity_page_limit_max`, shared with HTTP Entity Data offset/keyset queries and access preview. The parameter belongs to owner/group `entity`, has seed 200, and is configurable from 50 through 10000; requests of 1–49 remain valid. Pagination validation reads the effective maximum once per call. Changes apply to subsequent calls without restart or another Entity bootstrap, not to in-flight calls. Excess returns the tool-error envelope with code `REQUEST_INVALID` (AppError status 422) and message `limit must be <= {effective_max}`; the corresponding HTTP Entity Data failure uses that text as `detail`. Tool descriptions describe a configurable maximum rather than caching its current value.
 
-The result is the Entity Data envelope unchanged: offset mode `{ "items", "total", "limit", "offset" }`, or keyset mode `{ "items", "limit", "next_after_row_id" }` (`docs/api-contracts-entity-data.md` §7).
+`offset` must be an integer >= 0 and has no maximum. An invalid `limit` or `offset` is `REQUEST_INVALID`. These tools do not clamp either value. Management/discovery list limits are unchanged; `run_sql` uses the unrelated `entity_query_max_rows` (§9). Larger pages increase database work, memory use, and response size; the configurable range is not a capacity guarantee.
+
+The result is the Entity Data envelope unchanged: offset mode `{ "items", "total", "limit", "offset" }`, or keyset mode `{ "items", "limit", "next_after_row_id" }` (`docs/api-contracts-entity-data.md` §7). Page data is read once without artificial batching; keyset reads `limit + 1` for its probe. An offset `include_total` count remains a separate query.
 
 ## 7. SQL Gate And Name Binding
 

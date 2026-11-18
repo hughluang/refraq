@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.admin.system_parameters import resolve_int
 from backend.admin.user_store import UserRecord
 from backend.entity.change_log import SOURCE_USER
 from backend.entity.access.compiler import predicate_depends_on_row
@@ -63,6 +64,7 @@ def schema_for(
             )
         schema = build_schema(
             access.target,
+            page_limit_max=resolve_int("entity_page_limit_max").value,
             visible_entity_ids=_visible_reference_targets(access),
         )
         _annotate_schema(schema, access)
@@ -254,8 +256,9 @@ def query_rows(
     row_dependent = predicate_depends_on_row(access.outcome.shape)
     try:
         ctx = read_context(access)
+        page_limit_max = resolve_int("entity_page_limit_max").value
         if keyset:
-            limit, after = resolve_keyset_query(body)
+            limit, after = resolve_keyset_query(body, maximum=page_limit_max)
             with data_sql.entity_read_connection(ctx) as conn:
                 items, next_after = data_sql.query_keyset(
                     conn,
@@ -273,7 +276,7 @@ def query_rows(
                 "limit": limit,
                 "next_after_row_id": next_after,
             }
-        limit, offset, include_total = resolve_offset_query(body)
+        limit, offset, include_total = resolve_offset_query(body, maximum=page_limit_max)
         with data_sql.entity_read_connection(ctx) as conn:
             items, total = data_sql.query_offset(
                 conn,

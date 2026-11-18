@@ -7,8 +7,7 @@ from fastapi import APIRouter, Depends, Response
 from backend.admin.deps import get_actor_token_id, require_permission, resolve_user_permissions
 from backend.admin.role_store import get_role_store
 from backend.admin.user_store import UserRecord
-from backend.core.pagination import PageParams, page_params
-from backend.entity.data.capabilities import PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX
+from backend.core.pagination import ENTITY_LIST, PageParams, page_params
 from backend.entity.schemas.access import (
     AccessSummaryResponse,
     GrantCreate,
@@ -161,9 +160,7 @@ def http_delete_profile(
 @router.get("/entities/{entity_id}/access/grants", response_model=GrantListResponse)
 def http_list_grants(
     entity_id: str,
-    page: PageParams = Depends(
-        page_params(default_limit=PAGE_LIMIT_DEFAULT, max_limit=PAGE_LIMIT_MAX)
-    ),
+    page: PageParams = Depends(page_params(ENTITY_LIST)),
     _: UserRecord = Depends(require_permission("entity:access_manage")),
 ) -> dict:
     return service.list_grants(entity_id, limit=page.limit, offset=page.offset)

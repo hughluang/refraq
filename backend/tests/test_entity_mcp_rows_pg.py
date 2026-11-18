@@ -418,6 +418,28 @@ def _serve(monkeypatch: pytest.MonkeyPatch, urls: Any):
         reset_settings_cache()
 
 
+def test_query_rows_live_parameter_on_reader_connection(rows_world) -> None:
+    from backend.admin.system_parameters import reset_parameter, set_parameter
+
+    query = rows_world["query_rows"]
+    secret = rows_world["masked_secret"]
+    stem = rows_world["stem"]
+    for paging in ({}, {"after_row_id": None}):
+        assert _call(query, secret, table_name=stem, limit=201, **paging)["error"]["code"] == "REQUEST_INVALID"
+    set_parameter("entity_page_limit_max", 1000, actor_user_id=None)
+    for paging in ({}, {"after_row_id": None}):
+        for limit in (201, 1000):
+            result = _call(query, secret, table_name=stem, limit=limit, **paging)
+            assert "error" not in result, result
+            assert result["limit"] == limit
+            assert len(result["items"]) == 2
+        assert _call(query, secret, table_name=stem, limit=1001, **paging)["error"] == {
+            "code": "REQUEST_INVALID", "message": "limit must be <= 1000",
+        }
+    reset_parameter("entity_page_limit_max", actor_user_id=None)
+    assert _call(query, secret, table_name=stem, limit=201)["error"]["message"] == "limit must be <= 200"
+
+
 def test_two_users_see_different_rows_columns_masks_and_withheld_cells(
     rows_world: dict[str, Any],
 ) -> None:

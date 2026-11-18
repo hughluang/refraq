@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.core.time import Instant
-from backend.entity.data.capabilities import OFFSET_MAX, PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX
+from backend.entity.data.capabilities import OFFSET_MAX, PAGE_LIMIT_DEFAULT
 
 
 class SubjectIn(BaseModel):
@@ -160,5 +160,5 @@ class PreviewIn(BaseModel):
     narrow: NarrowIn | None = None
     include_rows: bool = False
     filters: dict[str, Any] | None = None
-    limit: int = Field(default=PAGE_LIMIT_DEFAULT, ge=1, le=PAGE_LIMIT_MAX)
+    limit: int = Field(default=PAGE_LIMIT_DEFAULT, ge=1)
     offset: int = Field(default=0, ge=0, le=OFFSET_MAX)

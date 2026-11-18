@@ -26,7 +26,6 @@ from backend.entity.data.capabilities import (  # noqa: E402
     FILTER_IN_VALUES_MAX,
     FILTER_LEAVES_MAX,
     PAGE_LIMIT_DEFAULT,
-    PAGE_LIMIT_MAX,
     ROW_WRITE_LIMIT,
     upsert_key_for,
 )
@@ -147,12 +146,71 @@ def test_schema_returns_head_metadata_and_shared_limits(client: TestClient) -> N
     assert by_name["note"]["upsert_key"] is False
     assert body["limits"] == {
         "page_limit_default": PAGE_LIMIT_DEFAULT,
-        "page_limit_max": PAGE_LIMIT_MAX,
+        "page_limit_max": 200,
         "filter_leaves_max": FILTER_LEAVES_MAX,
         "filter_depth_max": FILTER_DEPTH_MAX,
         "filter_in_values_max": FILTER_IN_VALUES_MAX,
         "row_write_max": ROW_WRITE_LIMIT,
     }
+
+
+def test_schema_page_limit_changes_without_restart(client: TestClient) -> None:
+    from backend.admin.system_parameters import reset_parameter, set_parameter
+
+    _seed_serving()
+    for value in (1000, 50, 10000):
+        set_parameter("entity_page_limit_max", value, actor_user_id=None)
+        response = client.post("/entities/material/schema", json={})
+        assert response.status_code == 200, response.text
+        assert response.json()["limits"]["page_limit_max"] == value
+        assert response.json()["limits"]["page_limit_default"] == 50
+    reset_parameter("entity_page_limit_max", actor_user_id=None)
+    assert client.post("/entities/material/schema", json={}).json()["limits"]["page_limit_max"] == 200
+
+
+@pytest.mark.parametrize("body", [{"limit": 1000}, {"limit": 1000, "after_row_id": None}])
+def test_query_resolves_page_limit_once(client: TestClient, monkeypatch, body) -> None:
+    from contextlib import nullcontext
+    from unittest.mock import Mock
+
+    from backend.admin.system_parameters import resolve_int, set_parameter
+    from backend.entity.data import service
+
+    _seed_serving()
+    set_parameter("entity_page_limit_max", 1000, actor_user_id=None)
+    resolver = Mock(wraps=resolve_int)
+    monkeypatch.setattr(service, "resolve_int", resolver)
+    monkeypatch.setattr(service.data_sql, "entity_read_connection", lambda ctx: nullcontext(None))
+    offset = Mock(return_value=([], 0))
+    keyset = Mock(return_value=([], None))
+    monkeypatch.setattr(service.data_sql, "query_offset", offset)
+    monkeypatch.setattr(service.data_sql, "query_keyset", keyset)
+
+    response = client.post("/entities/material/query", json=body)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["limit"] == 1000
+    resolver.assert_called_once_with("entity_page_limit_max")
+    query = keyset if "after_row_id" in body else offset
+    assert query.call_args.kwargs["limit"] == 1000
+
+
+def test_schema_resolves_page_limit_once(client: TestClient, monkeypatch) -> None:
+    from unittest.mock import Mock
+
+    from backend.admin.system_parameters import resolve_int, set_parameter
+    from backend.entity.data import service
+
+    _seed_serving()
+    set_parameter("entity_page_limit_max", 1000, actor_user_id=None)
+    resolver = Mock(wraps=resolve_int)
+    monkeypatch.setattr(service, "resolve_int", resolver)
+
+    response = client.post("/entities/material/schema", json={})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["limits"]["page_limit_max"] == 1000
+    resolver.assert_called_once_with("entity_page_limit_max")
 
 
 def test_schema_unknown_table_name_is_404(client: TestClient) -> None:
@@ -499,6 +557,7 @@ def test_schema_names_business_key_and_reference_operators(client: TestClient) -
         "supplier_code": {"attribute": "code", "type": "string", "max_length": 16}
     }
     get_entity_store().save_version(version)
+    prepare_legacy_entity(linked.id)
     response = client.post("/entities/linked/schema", json={})
     assert response.status_code == 200, response.text
     body = response.json()
@@ -587,6 +646,7 @@ def test_schema_reference_business_key_comes_from_snapshot(
         }
     }
     get_entity_store().save_version(version)
+    prepare_legacy_entity(linked.id)
     response = client.post("/entities/frozen_link/schema", json={})
     assert response.status_code == 200, response.text
     by_name = {item["name"]: item for item in response.json()["attributes"]}
@@ -682,6 +742,7 @@ def test_schema_hides_reference_target_without_a_read_grant(
         "supplier_code": {"attribute": "code", "type": "string", "max_length": 16}
     }
     get_entity_store().save_version(version)
+    prepare_legacy_entity(linked.id)
     string_operators = list(resolve("string").operators)
     for account in ("admin", "refreader", "refwriter"):
         client.post("/auth/logout")
@@ -743,6 +804,7 @@ def test_schema_names_a_self_reference(client: TestClient) -> None:
         "parent_sku": {"attribute": "sku", "type": "string", "max_length": 32}
     }
     get_entity_store().save_version(stored)
+    prepare_legacy_entity(entity.id)
     response = client.post("/entities/self_link/schema", json={})
     assert response.status_code == 200, response.text
     by_name = {item["name"]: item for item in response.json()["attributes"]}

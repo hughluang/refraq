@@ -26,7 +26,6 @@ from backend.entity.data.capabilities import (
     FILTER_DEPTH_MAX,
     FILTER_IN_VALUES_MAX,
     FILTER_LEAVES_MAX,
-    PAGE_LIMIT_MAX,
 )
 from backend.entity.ddl import (
     ACL_OWNER_ROLE,
@@ -500,8 +499,6 @@ def acl_statements(*, pgcrypto_schema: str | None) -> list[str]:
     return statements
 
 
-_PROFILE_PAGE_LIMIT = PAGE_LIMIT_MAX + 1
-
 # psycopg treats "%" as a placeholder, so each LIKE percent in this body is "%%".
 _PROFILE_PAGE_SQL = r"""
 CREATE OR REPLACE FUNCTION entity_access.profile_filter(
@@ -694,7 +691,7 @@ DECLARE
   where_sql text := '';
   skip_filter boolean;
 BEGIN
-  IF p_limit IS NULL OR p_limit < 1 OR p_limit > __LIMIT_CAP__ THEN
+  IF p_limit IS NULL OR p_limit < 1 THEN
     RAISE EXCEPTION 'page limit out of range' USING ERRCODE = '22023';
   END IF;
   IF p_offset IS NULL OR p_offset < 0 THEN
@@ -893,7 +890,6 @@ def profile_page_statements() -> list[str]:
         .replace("__LEAVES_CAP__", str(FILTER_LEAVES_MAX))
         .replace("__IN_CAP__", str(FILTER_IN_VALUES_MAX))
     )
-    sql_fn = _PROFILE_PAGE_SQL_FN.replace("__LIMIT_CAP__", str(_PROFILE_PAGE_LIMIT))
     exposure = ident(EXPOSURE_OWNER_ROLE)
     reader = ident(READER_ROLE)
     signatures = (
@@ -903,7 +899,7 @@ def profile_page_statements() -> list[str]:
         "entity_access.profile_count_sql(regclass, jsonb)",
         "entity_access.profile_count(regclass, jsonb)",
     )
-    statements = [body, sql_fn, _PROFILE_PAGE_FN, _PROFILE_COUNT_SQL_FN, _PROFILE_COUNT_FN]
+    statements = [body, _PROFILE_PAGE_SQL_FN, _PROFILE_PAGE_FN, _PROFILE_COUNT_SQL_FN, _PROFILE_COUNT_FN]
     for signature in signatures:
         statements.append(f"ALTER FUNCTION {signature} OWNER TO {exposure}")
         statements.append(f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC")

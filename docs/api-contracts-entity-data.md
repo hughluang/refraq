@@ -17,6 +17,7 @@ Related boundaries:
 - User PAT: `docs/business-user-tokens.md`
 - Entity database connection and pool: `docs/env.md`
 - Entity MCP tools that call this service, and Entity SQL: `docs/api-contracts-entity-mcp.md`
+- System Parameter policy: `docs/business-system-parameters.md` §5
 - Terminology: `docs/glossary.md`
 
 ## 2. Positioning And Scale
@@ -93,6 +94,8 @@ Withdrawn names that must not appear as product Permission keys: `entity:consume
 
 Persistent API opens process-local entity owner and reader pools separate from the metadata pool (`docs/env.md`). Reads run on the reader connection against the caller's **Profile View** with the signed access context set for the transaction; writes run on the owner connection in one transaction with the attribution check. The Metadata MCP process and Beat do not open those pools. The Entity MCP process opens the reader pool for its row tools and for Entity SQL, and a separate signer pool to sign the context. It does not open the owner pool. `schema` uses only the metadata engine and the compiled policy. Memory store mode: `schema` succeeds; row verbs that need the entity database return `503 PLATFORM_CAPACITY_EXCEEDED`. Missing `ENTITY_DATABASE_URL` or `ENTITY_READER_DATABASE_URL` on persistent API fails fast at startup. A persistent API or worker also fails fast when `entity_data`, `entity_access`, `acl`, or `channel_dataset` is absent on the entity database. Startup does not create those schemas. `/readyz` does not probe the entity database.
 
+The application validates the public page-size policy; `entity_access.profile_page_sql` and the `SECURITY DEFINER` execution wrapper `entity_access.profile_page` do not duplicate a business row cap or read System Parameters. They retain type, non-null, positive-limit, offset/after, schema, owner, `session_user` SELECT privilege, column, and filter checks, controlled SQL construction, and the fixed security context and `search_path`. Removing the duplicate cap is not a security enhancement or a complete resource quota. Existing installations must update these functions through Entity bootstrap before running the application (`docs/development.md`).
+
 ## 4. Verb Table
 
 Core logic lives under `backend/entity/data/` (capabilities, head, schema, values, filters, paging, sql, service). HTTP adapters are `backend/entity/routers/data.py`; request shapes are `backend/entity/schemas/data.py` — same `routers/` / `schemas/` layer as definition, with published surface still `backend.entity.routers.*`. There is no REST `/rows` collection. Reads use `POST` (single-method data plane; no GET cache contract).
@@ -122,7 +125,7 @@ The attribute set is the caller's shape on the head: only attributes in the call
 
 Lifecycle matches reads: schema `200` if and only if get/query are available; deprecated or missing head → `422`; publishing → `200` with `entity.writable=false`.
 
-Schema is read-only metadata plus Dictionary; it does not open an entity-database connection. Cache key is `head.version_id` plus `access.policy_revision` and the caller's effective grant set. `operators`, `upsert_key`, and `limits` share the same constants as the filter compiler, pagination, and upsert.
+Schema is read-only metadata plus Dictionary; it does not open an entity-database connection. Shape cache identity is `head.version_id` plus `access.policy_revision` and the caller's effective grant set. `operators`, `upsert_key`, and fixed `limits` share the rules used by the filter compiler, pagination, and upsert. `limits.page_limit_max` is read from the effective `entity_page_limit_max` on each schema request, not frozen with the shape cache.
 
 ### 5.1 Response Shape
 
@@ -177,6 +180,7 @@ Rules:
 - Top-level `business_key` is the head attribute name marked `business_key`, or `null` when the head has none.
 - Attribute objects keep the definition attribute keys (`docs/api-contracts-entity.md` §3.1): `name`, `type`, `required`, `unique`, `indexed`, `business_key`, `description`, `config`.
 - Additional keys: `operators`; `upsert_key` (true when `unique` and type is not `number` or `json`, **including** `boolean`); for `dictionary`, `dictionary` plus `codes` as `[{ "code", "label", "writable" }]`; for `reference`, `target` as on definition reads except that `target.business_key` is the attribute name stored in the head reference snapshot, `target` is `null` when the caller has no effective `read` grant on the target Entity, and `operators` are the operators of the snapshotted target Business Key type (`string` or `integer`). `entity:write` and `entity:access_manage` do not make a target visible. A self-reference is visible, because the caller is already reading that Entity.
+- `limits.page_limit_default` stays 50. `limits.page_limit_max` is the effective System Parameter value at read time; 200 in the example is the seed, not a fixed ceiling. Clients must still handle a later parameter change before their query.
 - `limits.row_write_max` is 1000 and is shared by `create-many` and conditional writes.
 
 ## 6. Row Write And Read Bodies
@@ -220,7 +224,13 @@ Stable order is `row_id ASC`. Mode is decided by whether the body contains the t
 | Offset (no `after_row_id` key) | `filters?`, `fields?`, `limit?`, `offset?`, `include_total?` | **Offset Page** `{ "items", "total", "limit", "offset" }`. `include_total` defaults to **true**. `false` → `total: null` and skip `COUNT` |
 | Keyset (key `after_row_id` present) | `filters?`, `fields?`, `limit?`, `after_row_id` (`null` = first page; integer = exclusive lower bound) | **Entity Data Keyset Page** `{ "items", "limit", "next_after_row_id" }`. Implementation fetches `limit + 1` to probe |
 
-Bulkheads: `limit` default 50, max 200. `offset` is an integer >= 0 and has no maximum. Empty `filters` is allowed. Wide filters with exact `total`, or `contains`, may hit `504 PLATFORM_TIMEOUT` on large tables. A large `offset` may also hit that timeout. Entity Data Keyset Page is not the platform **Cursor Page** and not a serving opaque cursor (`docs/conventions-pagination.md`).
+Both modes share `entity_page_limit_max` with Entity MCP `query_rows` and access preview: owner/group `entity`, seed 200, configurable 50–10000. Omitted `limit` stays 50. Explicit `limit` must be an integer from 1 through the effective maximum; 50 is the administrator's configuration minimum, not a request minimum. Booleans and non-integers are invalid. Excess is rejected, not clamped: `422 REQUEST_INVALID` with `detail` `limit must be <= {effective_max}`.
+
+Pagination validation reads the effective maximum once per query. A parameter change applies to subsequent requests without restart or another Entity bootstrap and does not cancel in-flight requests. Schema advertises the value at read time (§5). Management lists (including access grants, default 50 / maximum 200), Entity MCP `run_sql` (`entity_query_max_rows`), write limits, and internal Data Channel read limits are independent of this parameter.
+
+Page data uses one query, without artificial batching to work around a database page cap. Keyset reads `limit + 1` once, drops the probe row, and sets `next_after_row_id` from the last returned row when another page exists. With `include_total: true`, count is a separate query; one page-data query does not mean one SQL statement for the entire request.
+
+`offset` is an integer >= 0 and has no maximum. Empty `filters` is allowed. Larger pages increase database work, memory use, and response size; the configurable range is not a capacity guarantee. Wide filters with exact `total`, or `contains`, may hit `504 PLATFORM_TIMEOUT` on large tables. A large `offset` may also hit that timeout. Entity Data Keyset Page is not the platform **Cursor Page** and not a serving opaque cursor (`docs/conventions-pagination.md`).
 
 ## 8. Filters
 

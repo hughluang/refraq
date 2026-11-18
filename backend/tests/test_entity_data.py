@@ -169,6 +169,64 @@ def _serve(monkeypatch: pytest.MonkeyPatch, urls):
         reset_settings_cache()
 
 
+def test_large_pages_follow_live_parameter_and_internal_read_limit(data_client) -> None:
+    from backend.admin.system_parameters import reset_parameter, set_parameter
+    from backend.admin.user_store import get_user_store
+    from backend.entity.entity_db import get_entity_engine
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows
+
+    client, stem, physical, entity_id = data_client
+    with get_entity_engine().begin() as conn:
+        conn.execute(text(
+            f'INSERT INTO entity_data."{physical}" (sku, qty) '
+            "SELECT 'SKU-' || i, i FROM generate_series(1, 650) AS i"
+        ))
+    url = f"/entities/{stem}/query"
+    assert client.post(url, json={"limit": 201}).status_code == 422
+    set_parameter("entity_page_limit_max", 1000, actor_user_id=None)
+    for limit in (201, 1000):
+        response = client.post(url, json={"limit": limit, "offset": 10})
+        assert response.status_code == 200, response.text
+        assert len(response.json()["items"]) == min(limit, 640)
+        assert response.json()["total"] == 650
+    assert client.post(url, json={"limit": 1001}).json()["detail"] == "limit must be <= 1000"
+    seen = []
+    after = None
+    while True:
+        page = client.post(url, json={"limit": 250, "after_row_id": after})
+        assert page.status_code == 200, page.text
+        body = page.json()
+        seen.extend(item["row_id"] for item in body["items"])
+        after = body["next_after_row_id"]
+        if after is None:
+            break
+        assert after == body["items"][-1]["row_id"]
+    assert seen == list(range(1, 651))
+    filtered = client.post(url, json={"limit": 250, "after_row_id": 250,
+        "filters": {"field": "qty", "op": "gte", "value": 300}})
+    assert filtered.status_code == 200, filtered.text
+    assert [row["row_id"] for row in filtered.json()["items"]] == list(range(300, 550))
+    empty = client.post(url, json={"limit": 250, "after_row_id": 650})
+    assert empty.json()["items"] == []
+    assert empty.json()["next_after_row_id"] is None
+    projection = client.post(url, json={"limit": 250, "offset": 250, "fields": ["sku"]})
+    assert projection.status_code == 200, projection.text
+    assert len(projection.json()["items"]) == 250
+    assert projection.json()["items"][0] == {"sku": "SKU-251"}
+    set_parameter("entity_page_limit_max", 50, actor_user_id=None)
+    assert client.post(url, json={"limit": 201}).status_code == 422
+    assert client.post(url, json={}).json()["limit"] == 50
+    assert len(client.post(url, json={"limit": 1}).json()["items"]) == 1
+    admin = get_user_store().get_by_account("admin")
+    rows, total = read_rows(entity_id, filters=[], user=admin, limit=650)
+    assert len(rows) == total == 650
+    with pytest.raises(EntityRowWriteFailed, match="Read returned more than 649 rows"):
+        read_rows(entity_id, filters=[], user=admin, limit=649)
+    reset_parameter("entity_page_limit_max", actor_user_id=None)
+    assert client.post(url, json={"limit": 201}).json()["detail"] == "limit must be <= 200"
+
+
 def test_create_get_update_delete_query_and_upsert(data_client) -> None:
     client, stem, _physical, entity_id = data_client
 

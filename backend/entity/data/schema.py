@@ -10,7 +10,6 @@ from backend.entity.data.capabilities import (
     FILTER_IN_VALUES_MAX,
     FILTER_LEAVES_MAX,
     PAGE_LIMIT_DEFAULT,
-    PAGE_LIMIT_MAX,
     ROW_WRITE_LIMIT,
     upsert_key_for,
 )
@@ -27,6 +26,7 @@ __all__ = ["build_schema"]
 def build_schema(
     target: HeadTarget,
     *,
+    page_limit_max: int,
     visible_entity_ids: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Assemble the schema document.
@@ -61,7 +61,7 @@ def build_schema(
         "attributes": attributes,
         "limits": {
             "page_limit_default": PAGE_LIMIT_DEFAULT,
-            "page_limit_max": PAGE_LIMIT_MAX,
+            "page_limit_max": page_limit_max,
             "filter_leaves_max": FILTER_LEAVES_MAX,
             "filter_depth_max": FILTER_DEPTH_MAX,
             "filter_in_values_max": FILTER_IN_VALUES_MAX,

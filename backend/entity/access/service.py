@@ -20,6 +20,7 @@ from backend.admin.subjects import (
     user_group_ids,
     user_labels,
 )
+from backend.admin.system_parameters import resolve_int
 from backend.admin.user_store import get_user_store
 from backend.core.request_id import get_request_id
 from backend.core.time import format_instant, utc_now
@@ -68,6 +69,7 @@ from backend.entity.access.records import (
 from backend.entity.access.store import get_access_store
 from backend.entity.data.filters import compile_filters
 from backend.entity.data.head import HeadTarget
+from backend.entity.data.paging import resolve_limit
 from backend.entity.data.schema import build_schema
 from backend.entity.entity_db import get_entity_engine
 from backend.entity.errors import EntityNotServing, EntityRowInvalid
@@ -578,6 +580,7 @@ def update_restriction(
     if "applies_to" in fields and applies_to is not None:
         current.applies_to = _applies(applies_to)
     if "row_rule" in fields:
+        _check_rule(head, row_rule)
         current.row_rule = row_rule
     if "deny_columns" in fields and deny_columns is not None:
         current.deny_columns = deny_columns
@@ -653,6 +656,8 @@ def preview(
     user_id = str(subject.get("id") or "")
     if user_id not in existing_user_ids([user_id]):
         raise EntityAccessInvalid(f"unknown user '{user_id}'")
+    page_limit_max = resolve_int("entity_page_limit_max").value
+    limit = resolve_limit(limit, maximum=page_limit_max)
     head, compiled, revision = _live(entity_id)
     person = _person(user_id)
     parsed_narrow = _narrow(person, narrow)
@@ -676,7 +681,10 @@ def preview(
         raise EntityAccessCombinationLimit(
             "access configuration over limit for this subject"
         )
-    schema = _schema(head, compiled, policy, person, parsed_narrow, outcome, revision)
+    schema = _schema(
+        head, compiled, policy, person, parsed_narrow, outcome, revision,
+        page_limit_max=page_limit_max,
+    )
     body: dict[str, Any] = {
         "policy_revision": revision,
         "effective_grants": list(outcome.grant_ids),
@@ -947,17 +955,10 @@ def _restriction_out(
 ) -> dict[str, Any]:
     del head
     reasons = list(compiled.broken_restrictions.get(record.id, ()))
-    applies = {
-        "mode": record.applies_to.get("mode"),
-        "subjects": [
-            _subject_out(str(item["type"]), str(item["id"]))
-            for item in record.applies_to.get("subjects") or []
-        ],
-    }
     return {
         "id": record.id,
         "entity_id": record.entity_id,
-        "applies_to": applies,
+        "applies_to": record.applies_to,
         "row_rule": record.row_rule,
         "deny_columns": list(record.deny_columns),
         "ceilings": list(record.ceilings),
@@ -998,6 +999,8 @@ def _schema(
     narrow: Narrow | None,
     outcome: Outcome,
     revision: int,
+    *,
+    page_limit_max: int,
 ) -> dict[str, Any]:
     write = subject_outcome(compiled, policy, person, action="write", narrow=narrow)
     writable: set[str] = set()
@@ -1013,7 +1016,7 @@ def _schema(
     target = _target(head)
     if target is not None:
         try:
-            full = build_schema(target)
+            full = build_schema(target, page_limit_max=page_limit_max)
         except EntityNotServing:
             full = None
     by_name = {}
@@ -1244,7 +1247,7 @@ def _attr(head: _Head, attribute_id: str) -> AttributeRecord:
 
 def _check_key(key: str) -> None:
     if not _KEY.fullmatch(key):
-        raise EntityAccessInvalid("key must match [a-z][a-z0-9_]* and be at most 63 characters")
+        raise EntityAccessInvalid("key must match [a-z][a-z0-9_]{0,62}")
 
 
 def _check_columns(head: _Head, columns: list[dict[str, str]]) -> None:

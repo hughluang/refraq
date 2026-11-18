@@ -104,6 +104,81 @@ def _entity() -> str:
     return entity.id
 
 
+@pytest.mark.parametrize("include_rows", [False, True])
+def test_preview_dynamic_limit_precedes_empty_results(
+    client: TestClient, include_rows: bool,
+) -> None:
+    from backend.admin.system_parameters import set_parameter
+
+    _login(client, "admin")
+    entity_id = _entity()
+    subject = get_user_store().get_by_account("op")
+    assert subject is not None
+    body = {"subject": {"type": "user", "id": subject.id},
+            "include_rows": include_rows, "limit": 201}
+    url = f"/entities/{entity_id}/access/preview"
+    refused = client.post(url, json=body)
+    assert refused.status_code == 422
+    assert refused.json()["code"] == "REQUEST_INVALID"
+    assert refused.json()["detail"] == "limit must be <= 200"
+    set_parameter("entity_page_limit_max", 1000, actor_user_id=None)
+    for value in (201, 1000):
+        body["limit"] = value
+        accepted = client.post(url, json=body)
+        assert accepted.status_code == 200, accepted.text
+        if include_rows:
+            assert accepted.json()["rows"] == {"items": [], "total": 0, "limit": value, "offset": 0}
+    body["limit"] = 1001
+    assert client.post(url, json=body).json()["detail"] == "limit must be <= 1000"
+    assert client.get(f"/entities/{entity_id}/access/grants?limit=201").status_code == 422
+    assert client.get(f"/entities/{entity_id}/access/grants").json()["limit"] == 50
+    set_parameter("entity_page_limit_max", 50, actor_user_id=None)
+    body["limit"] = 201
+    assert client.post(url, json=body).json()["detail"] == "limit must be <= 50"
+
+
+@pytest.mark.parametrize("include_rows", [False, True])
+def test_preview_resolves_page_limit_once_for_validation_and_schema(
+    client: TestClient, monkeypatch, include_rows: bool,
+) -> None:
+    from unittest.mock import Mock
+
+    from backend.admin.system_parameters import resolve_int, set_parameter
+    from backend.entity.access import service
+    from backend.tests.entity_access_oracle import prepare_legacy_entity
+
+    _login(client, "admin")
+    entity_id = _entity()
+    prepare_legacy_entity(entity_id)
+    subject = get_user_store().get_by_account("admin")
+    assert subject is not None
+    set_parameter("entity_page_limit_max", 1000, actor_user_id=None)
+    resolver = Mock(wraps=resolve_int)
+    schema_builder = Mock(wraps=service.build_schema)
+    read_rows = Mock(return_value=([{"row_id": 1}], 1))
+    monkeypatch.setattr(service, "resolve_int", resolver)
+    monkeypatch.setattr(service, "build_schema", schema_builder)
+    monkeypatch.setattr(service, "_ensure_generated", lambda *args, **kwargs: None)
+    monkeypatch.setattr(service, "_read_rows", read_rows)
+
+    response = client.post(
+        f"/entities/{entity_id}/access/preview",
+        json={"subject": {"type": "user", "id": subject.id},
+              "include_rows": include_rows, "limit": 1000},
+    )
+
+    assert response.status_code == 200, response.text
+    resolver.assert_called_once_with("entity_page_limit_max")
+    schema_builder.assert_called_once()
+    assert schema_builder.call_args.kwargs["page_limit_max"] == 1000
+    if include_rows:
+        assert response.json()["rows"]["limit"] == 1000
+        assert read_rows.call_args.args[-2] == 1000
+    else:
+        assert response.json()["rows"] is None
+        read_rows.assert_not_called()
+
+
 def test_access_manage_is_required_before_entity_lookup(client: TestClient) -> None:
     _login(client, "op")
     denied = client.get("/entities/ent_missing/access")

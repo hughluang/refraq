@@ -211,6 +211,8 @@ Wrapped single-resource responses use the resource name as key (`{ "ladder": …
 
 `POST` bodies carry every writable field of §3.5 or §3.6; `status` defaults to `active`, `valid_until` to `null`, restriction `actions` to all four. `PATCH` accepts any subset of writable fields except `subject` on a grant, which is immutable. Success `201` / `200` with the resource and `policy_revision`; `DELETE` is `204`.
 
+The grants list keeps the management-list bounds: omitted `limit` is 50, accepted integers are 1–200, and excess is `422 REQUEST_INVALID`. `entity_page_limit_max` does not change these bounds.
+
 ### 4.4 Preview
 
 `POST /entities/{id}/access/preview` body:
@@ -231,6 +233,8 @@ Wrapped single-resource responses use the resource name as key (`{ "ladder": …
 ```
 
 `schema` follows §5.2 for the subject, except a reference `target` is still named when that subject has no effective `read` grant on the target Entity. Entity Data API schema and Entity MCP `describe_entity` return `target: null` in that case. `include_rows: true` additionally requires `entity:data_read` and returns `rows` as an **Offset Page** of that subject's rows, each row adding `__sources`: per column, the grant ids that contributed the presented level. When the shape withholds, those rows include `__withheld`. A preview with rows appends an Entity Access Log record naming the caller and the subject. Filters and limits follow the Entity Data API query rules.
+
+Preview shares `entity_page_limit_max` with HTTP Entity Data offset/keyset queries and Entity MCP `query_rows` (`docs/business-system-parameters.md` §5): seed 200, configurable 50–10000. Omitted `limit` stays 50; an explicit integer from 1 through the effective maximum is accepted, including 1–49. The effective maximum is read once at pagination validation for each preview; changes apply to subsequent requests without a restart or another Entity bootstrap, and do not cancel in-flight requests. Excess is rejected, not clamped: `422 REQUEST_INVALID` with `detail` `limit must be <= {effective_max}`. This validation also applies when `include_rows` is false or no effective rows are available. Preview offset bounds and access semantics are unchanged. Larger pages increase database work, memory use, and response size; the configurable range is not a capacity guarantee.
 
 ## 5. Entity Data API Behavior Under Access Control
 
@@ -316,6 +320,7 @@ The first successful publish of an Entity that has no published version creates 
 
 | Problem Code | HTTP status | When |
 | --- | --- | --- |
+| `REQUEST_INVALID` | 422 | Preview pagination or body structure is invalid; a limit above the effective maximum has `detail` `limit must be <= {effective_max}` |
 | `ENTITY_ACCESS_INVALID` | 422 | Ladder, profile, grant, restriction, rule, subject, or preview body breaks a rule; `detail` names it |
 | `ENTITY_ACCESS_PROFILE_NOT_FOUND` | 404 | Unknown profile id on this Entity, or unknown copy source |
 | `ENTITY_ACCESS_GRANT_NOT_FOUND` | 404 | Unknown grant id on this Entity |

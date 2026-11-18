@@ -218,13 +218,68 @@ def test_query_rows_rejects_limits_outside_the_data_api(
     assert {item.pat_id for item in logs} == {token_id}
 
 
+@pytest.mark.parametrize("keyset", [False, True])
+def test_http_and_mcp_read_live_page_limits(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, keyset: bool,
+) -> None:
+    from contextlib import nullcontext
+    from backend.admin.system_parameters import reset_parameter, set_parameter
+    from backend.entity.data import sql
+    from backend.entity.mcp.guidance import TOOL_DESCRIPTIONS
+
+    _seed_material()
+    secret, _ = _pat(client)
+    seen = []
+    monkeypatch.setattr(sql, "entity_read_connection", lambda ctx: nullcontext(None))
+    def offset(conn, target, **kwargs):
+        seen.append(kwargs["limit"])
+        return [], 0
+    def keyset_page(conn, target, **kwargs):
+        seen.append(kwargs["limit"])
+        return [], None
+    monkeypatch.setattr(sql, "query_offset", offset)
+    monkeypatch.setattr(sql, "query_keyset", keyset_page)
+    paging = {"after_row_id": None} if keyset else {}
+    def request(limit):
+        body = dict(paging)
+        if limit is not None:
+            body["limit"] = limit
+        http = client.post("/entities/material/query", json=body)
+        mcp = _call(query_rows, secret, table_name="material", **body)
+        return http, mcp
+    http, mcp = request(201)
+    assert http.status_code == 422
+    assert http.json()["code"] == mcp["error"]["code"] == "REQUEST_INVALID"
+    assert mcp["error"]["message"] == "limit must be <= 200"
+    set_parameter("entity_page_limit_max", 1000, actor_user_id=None)
+    for value in (201, 1000, None, 1):
+        http, mcp = request(value)
+        assert http.status_code == 200, http.text
+        assert http.json()["limit"] == mcp["limit"] == (50 if value is None else value)
+    assert seen == [201, 201, 1000, 1000, 50, 50, 1, 1]
+    http, mcp = request(1001)
+    assert http.status_code == 422
+    assert http.json()["detail"] == mcp["error"]["message"] == "limit must be <= 1000"
+    set_parameter("entity_page_limit_max", 50, actor_user_id=None)
+    http, mcp = request(201)
+    assert http.status_code == 422
+    assert mcp["error"]["message"] == "limit must be <= 50"
+    reset_parameter("entity_page_limit_max", actor_user_id=None)
+    assert request(201)[1]["error"]["message"] == "limit must be <= 200"
+    guidance = TOOL_DESCRIPTIONS["query_rows"]
+    assert "defaults to 50" in guidance
+    assert "initially 200" in guidance
+    assert "site-configurable" in guidance
+    assert "must be <= 200" not in guidance
+
+
 def test_query_offset_has_no_maximum() -> None:
     from backend.entity.data.paging import resolve_offset_query
     from backend.entity.errors import EntityRequestInvalid
 
-    assert resolve_offset_query({"offset": 10001, "limit": 50}) == (50, 10001, True)
+    assert resolve_offset_query({"offset": 10001, "limit": 50}, maximum=200) == (50, 10001, True)
     with pytest.raises(EntityRequestInvalid, match="offset must be an integer >= 0"):
-        resolve_offset_query({"offset": -1})
+        resolve_offset_query({"offset": -1}, maximum=200)
 
 
 def test_get_row_and_query_rows_log_the_calling_request_id(client: TestClient) -> None:
