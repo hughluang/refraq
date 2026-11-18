@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Index, Integer, String, Text
+from sqlalchemy import Boolean, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,6 +32,7 @@ class JobRow(Base):
     trigger_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
     log_body: Mapped[str] = mapped_column(Text, nullable=False, default="")
     log_updated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    is_delayed_recovery: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     scheduled_for: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     running_timeout_sec: Mapped[int | None] = mapped_column(Integer, nullable=True)
     claimed_by: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)

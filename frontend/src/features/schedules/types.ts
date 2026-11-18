@@ -8,6 +8,8 @@ export type ScheduleTarget = {
 };
 
 export type ScheduleRecentJob = {
+  is_delayed_recovery: boolean;
+  scheduled_for: string | null;
   id: string;
   status: string;
   created_at: string | null;

@@ -151,6 +151,44 @@ def test_domain_entry_kwargs_include_due_at_system_does_not() -> None:
         reset_clock()
 
 
+def test_beat_message_keeps_due_identity_after_worker_queue_delay() -> None:
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.schedules import fire_scheduled_channel_run, ENQUEUE_TASK_NAME
+    from backend.jobs.store import get_job_store
+
+    due = parse_instant("2026-08-16T10:00:00Z")
+    clock = FixedClock(due)
+    set_clock(clock)
+    calls = []
+    previous = set_dispatcher(calls.append)
+    try:
+        get_schedule_store().upsert(ScheduledTaskRecord(
+            id="sched_message", key="channel_run:chn_message", name="Message",
+            enabled=True, interval_seconds=None, cron="* * * * *",
+            task_name=ENQUEUE_TASK_NAME,
+            kwargs_json={"schedule_id": "sched_message", "channel_id": "chn_message", "node_id": "nd_tick"},
+            next_run_at=due, commitment_timezone="UTC",
+        ))
+        scheduler = DatabaseScheduler(app=celery_app, lazy=True)
+        entry = scheduler._load_entries()["channel_run:chn_message"]
+        message = dict(entry.kwargs)
+        assert message["due_at"] == "2026-08-16T10:00:00.000000Z"
+        clock.advance(timedelta(minutes=5))
+        result = fire_scheduled_channel_run(**message)
+        assert result["status"] == "queued"
+        job = get_job_store().get(result["job_id"])
+        assert job is not None
+        assert job.scheduled_for == due
+        assert job.created_at == clock.now()
+        assert job.is_delayed_recovery is True
+        assert calls == [job.id]
+        cursor = get_schedule_store().get_by_id("sched_message")
+        assert cursor.next_run_at == parse_instant("2026-08-16T10:06:00Z")
+    finally:
+        set_dispatcher(previous)
+        reset_clock()
+
+
 def test_scheduler_sync_aligns_reaper_interval_without_recomputing_next() -> None:
     from backend.admin.system_parameters import reset_parameter, set_parameter
     from backend.worker.parameters import assemble_system_parameters

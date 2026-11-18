@@ -471,6 +471,8 @@ Sections are empty lists, or `false`, when there is nothing to show.
   "failed_node_id": null,
   "stopped_node_id": null,
   "created_at": "2026-10-09T08:00:00Z",
+  "is_delayed_recovery": false,
+  "scheduled_for": null,
   "started_at": "2026-10-09T08:00:01Z",
   "finished_at": "2026-10-09T08:00:41Z",
   "error_code": null,
@@ -487,7 +489,9 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - `stop_at_node_id` is the optional on-demand stop node, or `null` when the run executes every node reachable from the trigger.
 - `stopped_node_id` names the node that was next when a timeout or a newer version stopped the run between nodes, or the node a user cancel interrupted, or `null` when cancel killed the process before that node was recorded.
 - `trigger_kind` is `user` for an on-demand run or a rerun, `schedule` for a Scheduled node, `retry` for a Job minted by `run_retry_limit`, `error` for an error workflow, `system` for platform-event and change-arrival triggers, and `inbound` for an accepted **Inbound Trigger** call. `trigger_ref` is the acting User for `user`, the source Job id for `error`, the published path for `inbound`, and otherwise follows the Job contract. `trigger_actor_name` and `trigger_schedule_name` follow the Job contract. An inbound run's actor is the **System Identity**. The path is not looked up as a user id.
-- Duration is derived by clients from `started_at` and `finished_at`.
+- `is_delayed_recovery` is a required Boolean and `scheduled_for` a required nullable Instant in Run list/detail projections. Both come from the associated Job; they are not duplicated on the Channel Run record. The planned time preserves the original consumed due identity; manual runs have null. Recovery is classified only at a new enabled-cron mint at least 60 seconds after due, using the Clock sampled after the schedule row lock. Interval, manual runs, retries, and paused/deleted cancelled mints are not classified by this mechanism. Later failure/cancellation preserves true; historical false does not prove no delay. Full rules: `docs/api-contracts-jobs.md`.
+- `created_at` is actual creation; `started_at` is the actual successful Job execution claim, not scheduled time or a creation-time fallback. Queued and cancelled-before-claim runs have null start; failure/cancellation after claim retains start. Duration is derived from `started_at` and `finished_at` (or now while running), excludes scheduling delay and queue wait, and is absent before start.
+- Console Run lists show the same visible Delayed recovery badge as Job lists only for true, independent of status. One Time column contains labeled Created and Started lines, with "Not started" for null start; no separate planned-time column. Run detail shows original Scheduled, Created, Started, and Finished times separately, with a placeholder for null scheduled time. Use Display Timezone, shared `jobs.*` copy, and keyboard/hover badge explanation (`docs/business-jobs.md` §3). Preserve existing list ordering and filters.
 
 ### 3.7 Node Type
 

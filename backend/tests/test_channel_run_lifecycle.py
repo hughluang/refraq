@@ -130,13 +130,14 @@ def _activated_schedule(client: TestClient) -> tuple[str, str]:
     row = get_schedule_store().get_by_key(f"channel_run:{channel_id}")
     assert row is not None
     assert row.enabled is True
+    get_schedule_store().upsert(replace(row, next_run_at=SLOT, last_run_at=EARLIER))
     return channel_id, row.id
 
 
 def _rewind_last_run(schedule_id: str) -> None:
     record = get_schedule_store().get_by_id(schedule_id)
     assert record is not None
-    get_schedule_store().upsert(replace(record, last_run_at=EARLIER))
+    get_schedule_store().upsert(replace(record, last_run_at=EARLIER, next_run_at=SLOT if record.enabled else None))
 
 
 def _fire(schedule_id: str, channel_id: str) -> dict[str, str]:
@@ -146,6 +147,337 @@ def _fire(schedule_id: str, channel_id: str) -> dict[str, str]:
         channel_id=channel_id,
         node_id="nd_hourly",
     )
+
+
+def test_late_committed_channel_tick_recovers_original_identity(
+    client: TestClient, dispatched: list[str]
+) -> None:
+    set_clock(FixedClock(NOW))
+    try:
+        channel_id, schedule_id = _activated_schedule(client)
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        get_schedule_store().upsert(replace(record, next_run_at=SLOT, last_run_at=EARLIER))
+        late = parse_instant("2026-08-15T02:05:00Z")
+        set_clock(FixedClock(late))
+        minted = _fire(schedule_id, channel_id)
+        assert minted["status"] == "queued"
+        jobs, total = get_job_store().list(kind="channel_run", trigger_ref=schedule_id)
+        assert total == 1
+        job = jobs[0]
+        assert job.scheduled_for == SLOT
+        assert job.created_at == late
+        assert job.started_at is None
+        runs, total = get_run_store().list_runs(
+            channel_id, status=None, target=None, limit=10, offset=0
+        )
+        assert total == 1
+        assert runs[0].job_id == job.id
+        assert runs[0].created_at == late
+        cursor = get_schedule_store().get_by_id(schedule_id)
+        assert cursor is not None
+        assert cursor.last_run_at == late
+        assert cursor.next_run_at == parse_instant("2026-08-15T03:00:00Z")
+        assert dispatched == [job.id]
+    finally:
+        reset_clock()
+
+
+@pytest.mark.parametrize("delay", [5, 59, 60, 300, 10800, 259200])
+def test_delayed_recovery_times_and_public_projections(
+    client: TestClient, dispatched: list[str], delay: int
+) -> None:
+    from datetime import timedelta
+    from backend.jobs.store import claim_queued, mark_failed
+
+    set_clock(FixedClock(NOW))
+    try:
+        channel_id, schedule_id = _activated_schedule(client)
+        mint = SLOT + timedelta(seconds=delay)
+        set_clock(FixedClock(mint))
+        result = _fire(schedule_id, channel_id)
+        assert result["status"] == "queued"
+        job_id = result["job_id"]
+        expected = delay >= 60
+        for path, key in (
+            (f"/jobs/{job_id}", "job"),
+            (f"/channels/{channel_id}/runs/{job_id}", "run"),
+        ):
+            response = client.get(path)
+            assert response.status_code == 200, response.text
+            body = response.json()[key]
+            assert body["is_delayed_recovery"] is expected
+            assert body["scheduled_for"] == "2026-08-15T02:00:00Z"
+            assert body["started_at"] is None
+        recent = client.get(f"/schedules/{schedule_id}").json()["schedule"]["recent_jobs"]
+        assert len(recent) == 1
+        assert recent[0]["is_delayed_recovery"] is expected
+        assert recent[0]["scheduled_for"] == "2026-08-15T02:00:00Z"
+        cursor = get_schedule_store().get_by_id(schedule_id)
+        assert cursor is not None and cursor.next_run_at > mint
+        assert _fire(schedule_id, channel_id)["status"] == "commitment_replaced"
+        assert dispatched == [job_id]
+        claim_at = mint + timedelta(minutes=2)
+        set_clock(FixedClock(claim_at))
+        claimed = claim_queued(job_id, claimed_by="recovery-test")
+        assert claimed is not None
+        assert claimed.created_at == mint
+        assert claimed.started_at == claim_at
+        assert claimed.is_delayed_recovery is expected
+        set_clock(FixedClock(claim_at + timedelta(seconds=10)))
+        assert claim_queued(job_id, claimed_by="duplicate") is None
+        mark_failed(job_id, error_code="TEST_FAILURE", error_summary="test failure")
+        stored = get_job_store().get(job_id)
+        assert stored is not None
+        assert stored.started_at == claim_at
+        assert stored.is_delayed_recovery is expected
+    finally:
+        reset_clock()
+
+
+@pytest.mark.parametrize("consumer", ["structure", "join_detection", "catalog_embed", "entity_embed"])
+def test_all_scheduled_consumers_persist_recovery(consumer, monkeypatch):
+    from datetime import timedelta
+    from backend.metadata.source_jobs import fire_scheduled_structure, fire_scheduled_join_detection
+    from backend.metadata.catalog_embed_jobs.schedule import fire_scheduled_catalog_embed
+    from backend.entity.embed_jobs.schedule import fire_scheduled_entity_embed
+
+    monkeypatch.setattr("backend.metadata.source_jobs.dispatch_queued_job", lambda job: None)
+    monkeypatch.setattr("backend.metadata.catalog_embed_jobs.schedule.dispatch_queued_job", lambda job: None)
+    monkeypatch.setattr("backend.entity.embed_jobs.schedule.dispatch_entity_job", lambda job: None)
+    tasks = {"structure": fire_scheduled_structure, "join_detection": fire_scheduled_join_detection,
+             "catalog_embed": fire_scheduled_catalog_embed, "entity_embed": fire_scheduled_entity_embed}
+    get_schedule_store().upsert(ScheduledTaskRecord(
+        id="sched_consumer", key="consumer", name="Consumer", enabled=True,
+        cron="0 * * * *", interval_seconds=None, task_name="test",
+        next_run_at=SLOT, last_run_at=EARLIER,
+        kwargs_json={"source_id": "src_recovery"}, commitment_timezone="UTC",
+    ))
+    set_clock(FixedClock(SLOT + timedelta(minutes=5)))
+    try:
+        result = tasks[consumer](schedule_id="sched_consumer", due_at=SLOT)
+        assert result["status"] == "queued"
+        job = get_job_store().get(result["job_id"])
+        assert job.is_delayed_recovery is True
+        assert job.scheduled_for == SLOT
+        assert job.started_at is None
+    finally:
+        reset_clock()
+
+
+@pytest.mark.parametrize("state, expected", [
+    ("future", "not_due"), ("missing", "no_commitment"),
+    ("replaced", "commitment_replaced"), ("consumed", "already_consumed"),
+    ("start", "commitment_replaced"), ("invalid", "commitment_replaced"),
+    ("paused", "cancelled"),
+])
+def test_cron_delivery_boundaries_preserve_commitment(client, dispatched, state, expected):
+    from datetime import timedelta
+    set_clock(FixedClock(NOW))
+    try:
+        channel_id, schedule_id = _activated_schedule(client)
+        row = get_schedule_store().get_by_id(schedule_id)
+        changes = {
+            "future": {"next_run_at": SLOT + timedelta(hours=1)},
+            "missing": {"next_run_at": None},
+            "replaced": {"next_run_at": SLOT + timedelta(hours=1)},
+            "consumed": {"last_run_at": NOW},
+            "start": {"start_at": SLOT + timedelta(hours=1)},
+            "invalid": {"cron": "30 * * * *"},
+            "paused": {"enabled": False, "next_run_at": None},
+        }[state]
+        updated = replace(row, **changes)
+        get_schedule_store().upsert(updated)
+        due = updated.next_run_at if state == "future" else SLOT
+        result = fire_scheduled_channel_run(schedule_id=schedule_id, due_at=due,
+                                            channel_id=channel_id, node_id="nd_hourly")
+        assert result["status"] == expected
+        after = get_schedule_store().get_by_id(schedule_id)
+        if state != "paused":
+            assert after.next_run_at == updated.next_run_at
+            assert after.last_run_at == updated.last_run_at
+            assert get_job_store().list(trigger_ref=schedule_id)[1] == 0
+        else:
+            job = get_job_store().get(result["job_id"])
+            assert job.started_at is None
+            assert job.is_delayed_recovery is False
+            assert _fire(schedule_id, channel_id)["status"] == "already_consumed"
+            assert after.next_run_at is None
+        assert dispatched == []
+    finally:
+        reset_clock()
+
+
+@pytest.mark.parametrize("terminal", ["succeeded", "cancelled", "cancel_before_claim"])
+def test_recovery_provenance_survives_terminal_status(client, dispatched, terminal):
+    from datetime import timedelta
+    from backend.jobs.store import claim_queued, mark_cancelled, mark_succeeded
+    set_clock(FixedClock(NOW))
+    try:
+        channel_id, schedule_id = _activated_schedule(client)
+        mint = SLOT + timedelta(minutes=5)
+        set_clock(FixedClock(mint))
+        result = _fire(schedule_id, channel_id)
+        job_id = result["job_id"]
+        claim_at = mint + timedelta(minutes=2)
+        set_clock(FixedClock(claim_at))
+        if terminal != "cancel_before_claim":
+            assert claim_queued(job_id) is not None
+        if terminal == "succeeded":
+            mark_succeeded(job_id)
+        else:
+            mark_cancelled(job_id)
+        stored = get_job_store().get(job_id)
+        assert stored.is_delayed_recovery is True
+        assert stored.created_at == mint
+        assert stored.scheduled_for == SLOT
+        assert stored.started_at == (None if terminal == "cancel_before_claim" else claim_at)
+        assert claim_queued(job_id) is None
+    finally:
+        reset_clock()
+
+
+@pytest.mark.parametrize("cron, due_text, next_text", [
+    ("30 2 * * *", "2025-03-09T10:00:00Z", "2025-03-10T09:30:00Z"),
+    ("30 1 * * *", "2025-11-02T09:30:00Z", "2025-11-03T09:30:00Z"),
+])
+def test_delayed_dst_commitment_uses_existing_cron_resolution(cron, due_text, next_text, monkeypatch):
+    from datetime import timedelta
+    import backend.worker.due as due_module
+    monkeypatch.setattr(due_module, "current_schedule_timezone", lambda: "America/Los_Angeles")
+    due = parse_instant(due_text)
+    get_schedule_store().upsert(ScheduledTaskRecord(
+        id="sched_dst", key="dst", name="DST", enabled=True,
+        cron=cron, interval_seconds=None, task_name="test",
+        next_run_at=due, last_run_at=due - timedelta(days=1),
+        commitment_timezone="America/Los_Angeles",
+    ))
+    previous = set_dispatcher(lambda job_id: None)
+    set_clock(FixedClock(due + timedelta(minutes=5)))
+    try:
+        result = fire_scheduled_channel_run(schedule_id="sched_dst", due_at=due,
+                                            channel_id="chn_dst", node_id="nd_tick")
+        assert result["status"] == "queued"
+        job = get_job_store().get(result["job_id"])
+        assert job.scheduled_for == due
+        assert job.is_delayed_recovery is True
+        assert get_schedule_store().get_by_id("sched_dst").next_run_at == parse_instant(next_text)
+    finally:
+        set_dispatcher(previous)
+        reset_clock()
+
+
+@pytest.fixture
+def persistent_channel_client(monkeypatch):
+    from backend.tests.test_integration_persistent import persistent_client
+    yield from persistent_client.__wrapped__(monkeypatch)
+
+
+@pytest.mark.integration
+def test_postgres_recovery_atomicity_roundtrip_and_lock_clock(persistent_channel_client, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import timedelta
+    from threading import Event
+    from sqlalchemy import text
+    from backend.core.db import session_scope
+    from backend.jobs.store import claim_queued, mark_succeeded
+
+    client = persistent_channel_client
+    login = client.post("/auth/login", json={"account": "root", "password": "s3cret"})
+    assert login.status_code == 200
+    set_clock(FixedClock(NOW))
+    calls = []
+    previous = set_dispatcher(calls.append)
+    try:
+        channel_id, schedule_id = _activated_schedule(client)
+        import backend.channel.schedules as schedules_module
+        original = schedules_module.commit_due_mint
+
+        def abort(*args, **kwargs):
+            raise RuntimeError("cursor failure")
+
+        monkeypatch.setattr(schedules_module, "commit_due_mint", abort)
+        with pytest.raises(RuntimeError, match="cursor failure"):
+            _fire(schedule_id, channel_id)
+        jobs, total = get_job_store().list(trigger_ref=schedule_id)
+        assert total == 0
+        assert get_run_store().list_runs(channel_id, status=None, target=None, limit=10, offset=0)[1] == 0
+        assert get_schedule_store().get_by_id(schedule_id).next_run_at == SLOT
+        monkeypatch.setattr(schedules_module, "commit_due_mint", original)
+        run_store = get_run_store()
+        insert_run = run_store.insert_run
+
+        def abort_mint(record, *, session=None):
+            insert_run(record, session=session)
+            raise RuntimeError("mint failure")
+
+        monkeypatch.setattr(run_store, "insert_run", abort_mint)
+        with pytest.raises(RuntimeError, match="mint failure"):
+            _fire(schedule_id, channel_id)
+        assert get_job_store().list(trigger_ref=schedule_id)[1] == 0
+        assert run_store.list_runs(
+            channel_id, status=None, target=None, limit=10, offset=0
+        )[1] == 0
+        assert get_schedule_store().get_by_id(schedule_id).next_run_at == SLOT
+        assert calls == []
+        monkeypatch.setattr(run_store, "insert_run", insert_run)
+        waiting = Event()
+        store = get_schedule_store()
+        get_by_id = store.get_by_id
+
+        def observed(*args, **kwargs):
+            if kwargs.get("for_update"):
+                waiting.set()
+            return get_by_id(*args, **kwargs)
+
+        monkeypatch.setattr(store, "get_by_id", observed)
+        late = SLOT + timedelta(minutes=5)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            with session_scope() as session:
+                session.execute(text("SELECT id FROM scheduled_tasks WHERE id = :id FOR UPDATE"), {"id": schedule_id})
+                first = pool.submit(_fire, schedule_id, channel_id)
+                assert waiting.wait(5)
+                set_clock(FixedClock(late))
+            second = pool.submit(_fire, schedule_id, channel_id)
+            results = [first.result(timeout=10), second.result(timeout=10)]
+        assert sorted(result["status"] for result in results) == ["commitment_replaced", "queued"]
+        jobs, total = get_job_store().list(trigger_ref=schedule_id)
+        assert total == 1
+        job = jobs[0]
+        assert job.is_delayed_recovery is True
+        assert job.scheduled_for == SLOT
+        assert job.created_at == late
+        assert job.started_at is None
+        for path, key in (
+            (f"/jobs/{job.id}", "job"),
+            (f"/channels/{channel_id}/runs/{job.id}", "run"),
+        ):
+            response = client.get(path)
+            assert response.status_code == 200, response.text
+            projected = response.json()[key]
+            assert projected["is_delayed_recovery"] is True
+            assert projected["scheduled_for"] == "2026-08-15T02:00:00Z"
+            assert projected["started_at"] is None
+        recent = client.get(f"/schedules/{schedule_id}")
+        assert recent.status_code == 200, recent.text
+        projected = recent.json()["schedule"]["recent_jobs"][0]
+        assert projected["is_delayed_recovery"] is True
+        assert projected["scheduled_for"] == "2026-08-15T02:00:00Z"
+        assert get_run_store().list_runs(channel_id, status=None, target=None, limit=10, offset=0)[1] == 1
+        job.summary = "Saved recovery"
+        get_job_store().save(job)
+        set_clock(FixedClock(late + timedelta(minutes=2)))
+        claimed = claim_queued(job.id, claimed_by="integration")
+        assert claimed.started_at == late + timedelta(minutes=2)
+        mark_succeeded(job.id)
+        stored = get_job_store().get(job.id)
+        assert stored.is_delayed_recovery is True
+        assert stored.created_at == late
+        assert get_schedule_store().get_by_id(schedule_id).next_run_at == parse_instant("2026-08-15T03:00:00Z")
+        assert calls == [job.id]
+    finally:
+        set_dispatcher(previous)
+        reset_clock()
 
 
 def test_due_tick_mints_one_queued_channel_run_and_dispatches_once(
@@ -203,7 +535,7 @@ def test_due_tick_mints_one_queued_channel_run_and_dispatches_once(
         again = _fire(schedule_id, channel_id)
     finally:
         reset_clock()
-    assert again["status"] == "skip_cross_slot"
+    assert again["status"] == "commitment_replaced"
     jobs_after, _ = get_job_store().list(kind="channel_run", trigger_ref=schedule_id)
     assert [item.id for item in jobs_after] == [job.id]
     runs_after, total_after = get_run_store().list_runs(

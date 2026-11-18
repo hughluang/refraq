@@ -91,6 +91,8 @@ export type RunNodeLabel = {
 };
 
 export type ChannelRun = {
+  is_delayed_recovery: boolean;
+  scheduled_for: string | null;
   job_id: string;
   status: string;
   outcome: string | null;

@@ -8,63 +8,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.core.time import ensure_aware_utc, utc_now
-from backend.worker.cron import (
-    compute_next_run_at,
-    cron_start_floor,
-    current_cron_slot_instant,
-    next_interval_grid_point,
-)
+from backend.core.time import utc_now
 from backend.worker.api import current_schedule_timezone
+from backend.worker.cron import compute_next_run_at, next_interval_grid_point
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
-
-
-def _advance_cross_slot(
-    record: ScheduledTaskRecord,
-    *,
-    now: datetime,
-    session: Session | None,
-    slot: datetime | None,
-    last: datetime | None,
-    schedule_timezone: str,
-) -> dict[str, Any]:
-    """Skip a stale cron Instant without catch-up mint.
-
-    Paused rows must not regain a next_run_at. When the current legal wall-clock
-    slot is still unconsumed, rewrite the commitment to that slot Instant and
-    consume it in the same due handling (second consume) — do not remap the
-    stale delivered Instant onto a different scheduled_for.
-    """
-    if not record.enabled:
-        return {"status": "skip_cross_slot"}
-    if slot is not None and (last is None or slot > last):
-        get_schedule_store().upsert(
-            replace(
-                record,
-                next_run_at=slot,
-                commitment_timezone=schedule_timezone,
-                updated_at=now,
-            ),
-            session=session,
-        )
-        return consume_due_tick(record.id, due_at=slot, session=session)
-    advanced = compute_next_run_at(
-        cron=record.cron,
-        schedule_timezone=schedule_timezone,
-        interval_seconds=None,
-        after=now,
-        start_at=record.start_at,
-    )
-    get_schedule_store().upsert(
-        replace(
-            record,
-            next_run_at=advanced,
-            commitment_timezone=schedule_timezone,
-            updated_at=now,
-        ),
-        session=session,
-    )
-    return {"status": "skip_cross_slot", "next_run_at": advanced.isoformat()}
 
 
 def consume_due_tick(
@@ -73,21 +20,13 @@ def consume_due_tick(
     due_at: datetime | None = None,
     session: Session | None = None,
 ) -> dict[str, Any]:
-    """Process one Beat due for a schedule row.
-
-    Domain path: ``due_at`` is the commitment Instant Beat dispatched. Honor that
-    Instant — do not skip at the door because the row is paused or gone. Returns
-    ``mint`` when the caller should insert a Job (``cancel_immediately`` when the
-    tick must end cancelled). Cross-slot skip only when the definition still exists.
-
-    System path (no ``due_at``): advance the store commitment only; no Job.
-    """
+    """Decide whether the delivered commitment may mint in the caller's transaction."""
     store = get_schedule_store()
+    record = store.get_by_id(
+        schedule_id, session=session, for_update=session is not None
+    )
     now = utc_now()
-
-    # System work: no Job; just advance commitment from the live row.
     if due_at is None:
-        record = store.get_by_id(schedule_id, session=session)
         if record is None:
             return {"status": "missing"}
         if not record.store_only:
@@ -96,8 +35,7 @@ def consume_due_tick(
             return {"status": "disabled"}
         if record.next_run_at is None:
             return {"status": "no_commitment"}
-        next_at = ensure_aware_utc(record.next_run_at)
-        if next_at > now:
+        if record.next_run_at > now:
             return {"status": "not_due"}
         advanced = compute_next_run_at(
             cron=record.cron,
@@ -107,22 +45,12 @@ def consume_due_tick(
             start_at=record.start_at,
         )
         store.upsert(
-            replace(
-                record,
-                last_run_at=now,
-                next_run_at=advanced,
-                updated_at=now,
-            ),
+            replace(record, last_run_at=now, next_run_at=advanced, updated_at=now),
             session=session,
         )
         return {"status": "system", "ran_at": now.isoformat()}
 
-    due = ensure_aware_utc(due_at)
-    record = store.get_by_id(
-        schedule_id, session=session, for_update=session is not None
-    )
-
-    # Deleted: always mint cancelled for the delivered Instant (no cross-slot gate).
+    due = due_at
     if record is None:
         return {
             "status": "mint",
@@ -130,80 +58,41 @@ def consume_due_tick(
             "record": None,
             "now": now,
             "cancel_immediately": True,
+            "is_delayed_recovery": False,
         }
-
     if record.store_only:
         return {"status": "invalid_due_at_for_system"}
-
-    # Premature delivery of a future commitment (Beat would not have sent yet).
     if due > now:
         return {"status": "not_due"}
-
-    if record.interval_seconds and record.interval_seconds > 0:
-        if not record.enabled:
-            # Pause cleared next; the delivered Instant still consumes as cancelled.
-            return {
-                "status": "mint",
-                "scheduled_for": due,
-                "record": record,
-                "now": now,
-                "cancel_immediately": True,
-            }
+    if record.enabled:
         if record.next_run_at is None:
             return {"status": "no_commitment"}
-        live_next = ensure_aware_utc(record.next_run_at)
-        if due != live_next:
-            # Cadence rewrite replaced the commitment this delivery referred to.
+        if due != record.next_run_at:
             return {"status": "commitment_replaced"}
-        # due == live_next; due > now already returned not_due at the door.
-        return {
-            "status": "mint",
-            "scheduled_for": due,
-            "record": record,
-            "now": now,
-            "cancel_immediately": False,
-        }
-
     if record.cron:
-        zone = current_schedule_timezone()
-        slot = current_cron_slot_instant(
+        legal = compute_next_run_at(
             cron=record.cron,
-            schedule_timezone=zone,
-            now=now,
+            schedule_timezone=current_schedule_timezone(),
+            interval_seconds=None,
+            after=due - timedelta(microseconds=1),
+            start_at=record.start_at,
         )
-        # A slot before the start anchor is not legal yet (start_at may have moved later).
-        if (
-            slot is not None
-            and record.start_at is not None
-            and slot < cron_start_floor(record.start_at)
-        ):
-            slot = None
-        last = (
-            ensure_aware_utc(record.last_run_at) if record.last_run_at is not None else None
-        )
-        # Current legal slot still due: mint that delivered Instant (gate only).
-        if (
-            slot is not None
-            and due == slot
-            and (last is None or due > last)
-        ):
-            return {
-                "status": "mint",
-                "scheduled_for": due,
-                "record": record,
-                "now": now,
-                "cancel_immediately": not record.enabled,
-            }
-        return _advance_cross_slot(
-            record,
-            now=now,
-            session=session,
-            slot=slot,
-            last=last,
-            schedule_timezone=zone,
-        )
-
-    return {"status": "invalid_cadence"}
+        if legal != due:
+            return {"status": "commitment_replaced"}
+        if record.last_run_at is not None and due <= record.last_run_at:
+            return {"status": "already_consumed"}
+    elif not record.interval_seconds or record.interval_seconds <= 0:
+        return {"status": "invalid_cadence"}
+    return {
+        "status": "mint",
+        "scheduled_for": due,
+        "record": record,
+        "now": now,
+        "cancel_immediately": not record.enabled,
+        "is_delayed_recovery": bool(
+            record.enabled and record.cron and now >= due + timedelta(seconds=60)
+        ),
+    }
 
 
 def commit_due_mint(
@@ -213,7 +102,7 @@ def commit_due_mint(
     session: Session | None = None,
     mint_at: datetime | None = None,
 ) -> ScheduledTaskRecord | None:
-    """Consume the due event: write last_run_at and next from the live enabled flag."""
+    """Consume one commitment without creating a backlog of historical slots."""
     consumed_at = mint_at or now
     seconds = record.interval_seconds
     if seconds and seconds > 0 and record.start_at is not None:
@@ -221,19 +110,16 @@ def commit_due_mint(
         nxt = next_interval_grid_point(record.start_at, seconds, after=now)
     elif seconds and seconds > 0:
         zone = None
-        nxt = consumed_at + timedelta(seconds=seconds)
+        nxt = max(consumed_at + timedelta(seconds=seconds), now)
     else:
         zone = current_schedule_timezone()
         nxt = compute_next_run_at(
             cron=record.cron,
             schedule_timezone=zone,
             interval_seconds=None,
-            after=consumed_at,
+            after=now,
             start_at=record.start_at,
         )
-    # Clamp interval next to >= wall-clock now on re-entry.
-    if nxt < now:
-        nxt = now
     return get_schedule_store().consume_due_cursor(
         record.id,
         last_run_at=consumed_at,

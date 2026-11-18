@@ -5,7 +5,8 @@ import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { Instant } from "@/components/display/Instant";
+import { JobTimes } from "@/features/jobs/JobTimes";
+import { DelayedRecoveryBadge } from "@/features/jobs/DelayedRecoveryBadge";
 import { CopyIcon } from "@/components/icons";
 import { historyContext, historyReturn } from "@/features/channels/channelHistory";
 import { formatJobDuration } from "@/lib/datetime";
@@ -304,17 +305,14 @@ export function ChannelRunDetail({
         moduleId: "channels",
         title: subject || detail.run.job_id,
       }}
-      titleExtra={<JobStatusBadge status={detail.run.status} freshness={freshness} />}
+      titleExtra={<Group gap="xs"><JobStatusBadge status={detail.run.status} freshness={freshness} /><DelayedRecoveryBadge recovery={detail.run.is_delayed_recovery} /></Group>}
       actions={back}
       fill
     >
     <Stack gap="sm" flex={1} mih={0} style={{ minHeight: 0, overflow: "hidden" }}>
       <LiveStatusAnnouncer text={t(presentJobStatus(detail.run.status).labelKey)} />
       <Group gap="xs" wrap="wrap" align="center" style={{ minWidth: 0 }}>
-        <Group gap={4} wrap="nowrap" align="baseline">
-          {detail.run.started_at ? null : <Text size="xs" c="dimmed">{t("jobs.fields.created")}</Text>}
-          <Text size="xs" c="dimmed"><Instant value={detail.run.started_at ?? detail.run.created_at} /></Text>
-        </Group>
+        <JobTimes job={detail.run} detail />
         <Text size="xs" c="dimmed">{t("jobs.fields.duration")}: {formatJobDuration(detail.run)}</Text>
         <Text size="xs" c="dimmed">{triggerLabel}</Text>
         {detail.run.target === "draft" && detail.run.draft_revision != null ? (

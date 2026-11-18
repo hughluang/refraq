@@ -193,7 +193,7 @@ class MemoryRunStore:
         self._rounds: dict[tuple[str, int, int], ContainerRoundRecord] = {}
         self._lock = threading.Lock()
 
-    def insert_run(self, record: ChannelRunRecord) -> None:
+    def insert_run(self, record: ChannelRunRecord, *, session: Any = None) -> None:
         with self._lock:
             self._runs[record.job_id] = record
 
@@ -442,7 +442,10 @@ class MemoryRunStore:
 
 
 class SqlRunStore:
-    def insert_run(self, record: ChannelRunRecord) -> None:
+    def insert_run(self, record: ChannelRunRecord, *, session: Any = None) -> None:
+        if session is not None:
+            session.add(_run_row(record))
+            return
         with session_scope() as session:
             session.add(_run_row(record))
 

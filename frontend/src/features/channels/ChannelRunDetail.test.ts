@@ -161,6 +161,8 @@ const viewer: CurrentUser = {
 function run(status: string, jobId = "job_1"): ChannelRun {
   return {
     job_id: jobId,
+    scheduled_for: null,
+    is_delayed_recovery: false,
     status,
     outcome: null,
     target: "published",
@@ -296,6 +298,18 @@ describe("ChannelRunDetail load feedback", () => {
     resetSessionStoreForTests();
     bindClientI18n({ t: (key: string) => key } as never);
     vi.useRealTimers();
+  });
+
+  it.each([true, false])("shows the full lifecycle with recovery=%s before claim", async (recovery) => {
+    api.getRun.mockResolvedValue({ ...detail("cancelled"), run: { ...run("cancelled"), is_delayed_recovery: recovery,
+      scheduled_for: "2026-10-11T05:46:00Z", created_at: "2026-10-11T05:51:00Z", started_at: null } });
+    renderDetail();
+    await advance(0);
+    expect(screen.queryByText("jobs.delayedRecovery") !== null).toBe(recovery);
+    expect(screen.getByText("jobs.fields.scheduled: 10/11/2026, 5:46:00 AM")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.created: 10/11/2026, 5:51:00 AM")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.started: jobs.notStarted")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.finished: —")).toBeTruthy();
   });
 
   it("updates the return link when retained detail receives a new history context", async () => {

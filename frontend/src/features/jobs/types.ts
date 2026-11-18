@@ -17,7 +17,8 @@ export type Job = {
   error_code: string | null;
   error_message: string | null;
   log_updated_at?: string | null;
-  scheduled_for?: string | null;
+  scheduled_for: string | null;
+  is_delayed_recovery: boolean;
 };
 
 export type JobLogs = {

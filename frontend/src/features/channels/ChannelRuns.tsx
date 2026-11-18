@@ -4,7 +4,8 @@ import { ActionIcon, Anchor, Button, Group, Select, Stack, Table, Text, Tooltip 
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useRef } from "react";
 
-import { Instant } from "@/components/display/Instant";
+import { JobTimes } from "@/features/jobs/JobTimes";
+import { DelayedRecoveryBadge } from "@/features/jobs/DelayedRecoveryBadge";
 import { CopyIcon } from "@/components/icons";
 import { ListTable } from "@/components/display/ListTable";
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
@@ -126,7 +127,7 @@ export function ChannelRuns({ channelId, origin = "show" }: { channelId: string;
       </Group>
       <ListTable list={list} columnCount={1} minWidth={280} emptyMessage={t("channels.runs.empty")} onClearFilters={query.isFiltered ? query.clear : undefined}
         head={<Table.Tr><Table.Th scope="col"><div className="channel-history-row">
-          <span>{t("channels.runs.started")}</span>
+          <span>{t("jobs.fields.time")}</span>
           <span>{t("jobs.fields.status")}</span>
           <span className="channel-history-row__subject">{t("channels.runs.target")} / {t("jobs.fields.trigger")}</span>
         </div></Table.Th></Table.Tr>}>
@@ -149,8 +150,7 @@ export function ChannelRuns({ channelId, origin = "show" }: { channelId: string;
               <div className="channel-history-row">
                 <Stack gap={4} className="channel-history-when">
                   <Group gap={6} wrap="nowrap" align="baseline">
-                    {run.started_at ? null : <Text size="xs" c="dimmed">{t("jobs.fields.created")}</Text>}
-                    <Anchor className="channel-history-when__link" component={ConsoleLink} href={`/console/channels/${channelId}/runs/${run.job_id}?${historyContext(`run_origin=${origin}&run_status=${status}&run_target=${target}&run_page=${query.page}`)}`} size="sm" aria-label={name}><Instant value={run.started_at ?? run.created_at} /></Anchor>
+                    <Anchor className="channel-history-when__link" component={ConsoleLink} href={`/console/channels/${channelId}/runs/${run.job_id}?${historyContext(`run_origin=${origin}&run_status=${status}&run_target=${target}&run_page=${query.page}`)}`} size="sm" aria-label={name}><JobTimes job={run} /></Anchor>
                   </Group>
                   <Group gap={4} wrap="nowrap" align="center" className="channel-history-id">
                     <Tooltip label={run.job_id}>
@@ -179,6 +179,7 @@ export function ChannelRuns({ channelId, origin = "show" }: { channelId: string;
                   })}>{t("channels.run.stop")}</Button></div> : null}
                 </Stack>
                 <Stack gap={2} className="channel-history-row__subject">
+                  <DelayedRecoveryBadge recovery={run.is_delayed_recovery} />
                   <Text size="sm" fw={500}>{formatRunSubject(run, t) || t("channels.runs.subject.unresolved")}{run.target === "draft" && run.draft_revision != null ? ` · ${t("channels.runs.revision", { number: run.draft_revision })}` : ""}</Text>
                   <Text size="xs" c="dimmed">{t("jobs.fields.trigger")}: {trigger}</Text>
                   {run.ignore_checkpoints ? <Text size="xs" c="dimmed">{t("channels.runs.ignoreCheckpoints")}</Text> : null}

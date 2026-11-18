@@ -81,8 +81,8 @@ vi.mock("@refinedev/core", () => ({
 }));
 
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: ReactNode }) =>
-    createElement("a", { href }, children),
+  default: ({ href, children, ...props }: { href: string; children: ReactNode }) =>
+    createElement("a", { href, ...props }, children),
   useLinkStatus: () => ({ pending: false }),
 }));
 
@@ -111,6 +111,8 @@ const viewer: CurrentUser = {
 function run(status: string, message: string | null = null): ChannelRun {
   return {
     job_id: "job_1",
+    scheduled_for: null,
+    is_delayed_recovery: false,
     status,
     outcome: null,
     target: "published",
@@ -226,6 +228,16 @@ describe("ChannelRuns load feedback", () => {
     resetSessionStoreForTests();
     bindClientI18n({ t: (key: string) => key } as never);
     vi.useRealTimers();
+  });
+
+  it.each([true, false])("shows recovery=%s without inventing a start for a cancelled run", async (recovery) => {
+    api.listRuns.mockResolvedValue(page([{ ...run("cancelled"), is_delayed_recovery: recovery, started_at: null }]));
+    renderRuns();
+    await advance(0);
+    expect(screen.queryByText("jobs.delayedRecovery") !== null).toBe(recovery);
+    expect(screen.getByText("jobs.fields.started: jobs.notStarted")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.created: 10/11/2026, 6:00:29 AM")).toBeTruthy();
+    expect(screen.getByText("status.job.cancelled")).toBeTruthy();
   });
 
   it("does not request an unaccepted status, target, or page", async () => {

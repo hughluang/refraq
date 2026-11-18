@@ -634,7 +634,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Source soft delete and versioned credential history; capture replacement/clear still writes secret-free Source audit, and hard-delete respects capture continuity (§4.1.1)
 - Query result type normalization / continuation tokens / data masking (deferred past depth)
 - Full-text search engines or PG-only FTS as the ranking authority (vector complete state is defined in §10.5)
-- Catchup / backfill / RRule
+- Historical slot backfill / RRule; the platform's single stored-commitment recovery remains governed by `docs/business-scheduled-tasks.md`
 - Treating **Job** or **Scheduled Task** as Metadata domain entities (platform rules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`)
 
 ## 16. References

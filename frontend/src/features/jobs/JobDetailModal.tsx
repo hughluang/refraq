@@ -25,6 +25,7 @@ import { getJob, getJobLogs } from "@/features/jobs/api";
 import { JobCancelButton } from "@/features/jobs/JobCancelButton";
 import { formatJobError } from "@/features/jobs/formatJobError";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
+import { DelayedRecoveryBadge } from "@/features/jobs/DelayedRecoveryBadge";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useLiveStatus, type LiveRefreshResult } from "@/hooks/useLiveStatus";
@@ -124,6 +125,7 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
         <Stack gap="md">
           <Group gap="sm" wrap="wrap">
             <JobStatusBadge status={job.status} freshness={freshness} />
+            <DelayedRecoveryBadge recovery={job.is_delayed_recovery} />
             <Text size="sm" ff="monospace">
               {job.id}
             </Text>
@@ -148,22 +150,18 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
               </Text>
               {showInstant(job.created_at)}
             </Text>
-            {job.started_at ? (
-              <Text size="sm">
-                <Text span c="dimmed">
-                  {t("jobs.fields.started")}:{" "}
-                </Text>
-                {showInstant(job.started_at)}
-              </Text>
-            ) : null}
-            {job.finished_at ? (
-              <Text size="sm">
-                <Text span c="dimmed">
-                  {t("jobs.fields.finished")}:{" "}
-                </Text>
-                {showInstant(job.finished_at)}
-              </Text>
-            ) : null}
+            <Text size="sm">
+              <Text span c="dimmed">{t("jobs.fields.scheduled")}: </Text>
+              {showInstant(job.scheduled_for)}
+            </Text>
+            <Text size="sm">
+              <Text span c="dimmed">{t("jobs.fields.started")}: </Text>
+              {job.started_at === null ? t("jobs.notStarted") : showInstant(job.started_at)}
+            </Text>
+            <Text size="sm">
+              <Text span c="dimmed">{t("jobs.fields.finished")}: </Text>
+              {showInstant(job.finished_at)}
+            </Text>
             <Text size="sm">
               <Text span c="dimmed">
                 {t("jobs.fields.duration")}:{" "}

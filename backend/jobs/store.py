@@ -56,6 +56,7 @@ class JobRecord:
     finished_at: datetime | None
     running_timeout_sec: int | None = None
     access_stamp: str | None = None
+    is_delayed_recovery: bool = False
 
 
 class UniqueScheduledForError(Exception):
@@ -265,6 +266,7 @@ class SqlJobStore:
             log_body=record.log_body,
             log_updated_at=record.log_updated_at,
             scheduled_for=record.scheduled_for,
+            is_delayed_recovery=record.is_delayed_recovery,
             running_timeout_sec=record.running_timeout_sec,
             claimed_by=record.claimed_by,
             locked_at=record.locked_at,
@@ -335,6 +337,7 @@ class SqlJobStore:
             row.log_body = record.log_body
             row.log_updated_at = record.log_updated_at
             row.scheduled_for = record.scheduled_for
+            row.is_delayed_recovery = record.is_delayed_recovery
             row.running_timeout_sec = record.running_timeout_sec
             row.claimed_by = record.claimed_by
             row.locked_at = record.locked_at
@@ -557,6 +560,7 @@ def _row_to_job(row: object) -> JobRecord:
         log_body=row.log_body or "",
         log_updated_at=row.log_updated_at,
         scheduled_for=getattr(row, "scheduled_for", None),
+        is_delayed_recovery=row.is_delayed_recovery,
         running_timeout_sec=getattr(row, "running_timeout_sec", None),
         claimed_by=getattr(row, "claimed_by", None),
         locked_at=getattr(row, "locked_at", None),
@@ -652,6 +656,7 @@ def create_queued_job(
     trigger_ref: str | None = None,
     log_body: str = "",
     scheduled_for: datetime | None = None,
+    is_delayed_recovery: bool = False,
     running_timeout_sec: int | None = None,
     session: Session | None = None,
     created_at: datetime | None = None,
@@ -674,6 +679,7 @@ def create_queued_job(
         log_body=log_body,
         log_updated_at=now if log_body else None,
         scheduled_for=scheduled_for,
+        is_delayed_recovery=is_delayed_recovery,
         running_timeout_sec=running_timeout_sec,
         claimed_by=None,
         locked_at=None,

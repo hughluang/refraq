@@ -10,6 +10,8 @@ import type { ScheduleRecentJob } from "@/features/schedules/types";
 function job(id: string, over: Partial<ScheduleRecentJob> = {}): ScheduleRecentJob {
   return {
     id,
+    scheduled_for: null,
+    is_delayed_recovery: false,
     status: "succeeded",
     created_at: "2026-10-04T10:00:00Z",
     started_at: "2026-10-04T10:00:00Z",

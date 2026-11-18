@@ -13,7 +13,8 @@ import { cancelJob, listJobs } from "@/features/jobs/api";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
-import { useShowInstant } from "@/hooks/useFormatInstant";
+import { JobTimes } from "@/features/jobs/JobTimes";
+import { DelayedRecoveryBadge } from "@/features/jobs/DelayedRecoveryBadge";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import { formatJobDuration } from "@/lib/datetime";
@@ -23,7 +24,6 @@ const PAGE_SIZE = 50;
 
 export function JobList() {
   const t = useTranslate();
-  const showInstant = useShowInstant();
   const [detailId, setDetailId] = useState<string | null>(null);
 
   const query = useListQuery({ search: false });
@@ -61,7 +61,7 @@ export function JobList() {
             <Table.Th>{t("jobs.fields.kind")}</Table.Th>
             <Table.Th>{t("jobs.fields.status")}</Table.Th>
             <Table.Th>{t("jobs.fields.trigger")}</Table.Th>
-            <Table.Th>{t("jobs.fields.created")}</Table.Th>
+            <Table.Th>{t("jobs.fields.time")}</Table.Th>
             <Table.Th>{t("jobs.fields.duration")}</Table.Th>
             <Table.Th />
           </Table.Tr>
@@ -74,6 +74,7 @@ export function JobList() {
             <Table.Tr key={job.id}>
               <Table.Td>
                 <RecordReference name={recordName} recordKey={job.id} />
+                <DelayedRecoveryBadge recovery={job.is_delayed_recovery} />
               </Table.Td>
               <Table.Td>{t(jobKindLabelKey(job.kind))}</Table.Td>
               <Table.Td>
@@ -83,7 +84,7 @@ export function JobList() {
                 <Text size="sm">{formatJobTrigger(job, t)}</Text>
               </Table.Td>
               <Table.Td>
-                <Text size="sm">{showInstant(job.created_at)}</Text>
+                <JobTimes job={job} />
               </Table.Td>
               <Table.Td>
                 <Text size="sm">{formatJobDuration(job)}</Text>

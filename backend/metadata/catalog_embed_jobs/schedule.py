@@ -119,6 +119,7 @@ def _create_job(
     schedule_id: str,
     actor_user_id: str | None,
     scheduled_for: datetime | None,
+    is_delayed_recovery: bool = False,
     running_timeout_sec: int | None,
     message: str,
     session: Any = None,
@@ -134,6 +135,7 @@ def _create_job(
         trigger_ref=schedule_id,
         log_body=queued_line,
         scheduled_for=scheduled_for,
+        is_delayed_recovery=is_delayed_recovery,
         running_timeout_sec=running_timeout_sec,
         session=session,
         created_at=created_at,
@@ -154,6 +156,7 @@ def _mint_due(
     *,
     schedule_id: str,
     scheduled_for: datetime,
+    is_delayed_recovery: bool,
     now: datetime,
     cancel_immediately: bool,
     cadence: ScheduledTaskRecord | None,
@@ -165,6 +168,7 @@ def _mint_due(
             schedule_id=schedule_id,
             actor_user_id=None,
             scheduled_for=scheduled_for,
+            is_delayed_recovery=is_delayed_recovery,
             running_timeout_sec=(
                 cadence.running_timeout_sec if cadence is not None else None
             ),
@@ -213,6 +217,7 @@ def fire_scheduled_catalog_embed(
         return _mint_due(
             schedule_id=schedule_id,
             scheduled_for=outcome["scheduled_for"],
+            is_delayed_recovery=outcome["is_delayed_recovery"],
             now=outcome["now"],
             cancel_immediately=bool(outcome.get("cancel_immediately")),
             cadence=record,

@@ -69,6 +69,8 @@ function job(status: string): Job {
     trigger_actor_name: "Ada",
     trigger_schedule_name: null,
     created_by_user_id: null,
+    scheduled_for: null,
+    is_delayed_recovery: false,
     created_at: "2026-10-11T06:00:29Z",
     started_at: "2026-10-11T06:00:29Z",
     finished_at: null,
@@ -162,6 +164,19 @@ describe("JobDetailModal", () => {
     resetSessionStoreForTests();
     bindClientI18n({ t: (key: string) => key } as never);
     vi.useRealTimers();
+  });
+
+  it.each(["queued", "cancelled"])("shows recovery and truthful times before execution (%s)", async (status) => {
+    api.getJob.mockResolvedValue({ job: { ...job(status), is_delayed_recovery: true,
+      scheduled_for: "2026-10-11T05:46:00Z", started_at: null } });
+    renderDetail();
+    await advance(0);
+    expect(screen.getByText("jobs.delayedRecovery")).toBeTruthy();
+    expect(screen.getByText("jobs.fields.scheduled:")).toBeTruthy();
+    expect(screen.getByText("10/11/2026, 5:46:00 AM")).toBeTruthy();
+    expect(screen.getByText("jobs.notStarted")).toBeTruthy();
+    fireEvent.focus(screen.getByText("jobs.delayedRecovery"));
+    expect(screen.getByRole("tooltip").textContent).toBe("jobs.delayedRecovery.description");
   });
 
   it("marks a stale job with the last update, refreshes on click, and does not notify", async () => {

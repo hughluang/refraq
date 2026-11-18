@@ -139,10 +139,11 @@ def _mint_on_session(
     schedule_id: str,
     source_id: str | None,
     scheduled_for: datetime,
+    is_delayed_recovery: bool,
     now: datetime,
     cancel_immediately: bool,
     cadence: ScheduledTaskRecord | None,
-    session: Any = None,
+    session: Any,
 ) -> dict[str, Any]:
     spec = SOURCE_WORK_KINDS[kind]
     if source_id:
@@ -170,6 +171,7 @@ def _mint_on_session(
             trigger_ref=schedule_id,
             log_body=queued_line,
             scheduled_for=scheduled_for,
+            is_delayed_recovery=is_delayed_recovery,
             running_timeout_sec=(
                 cadence.running_timeout_sec if cadence is not None else None
             ),
@@ -202,57 +204,6 @@ def _mint_on_session(
     if already:
         return {"status": "already_minted", "job_id": job.id, "job": job}
     return {"status": "queued", "job_id": job.id, "job": job}
-
-
-def mint_source_due_job(
-    *,
-    kind: str,
-    schedule_id: str,
-    source_id: str | None,
-    scheduled_for: datetime,
-    now: datetime,
-    cancel_immediately: bool = False,
-    cadence: ScheduledTaskRecord | None = None,
-    session: Any = None,
-) -> dict[str, Any]:
-    if kind not in SOURCE_WORK_KINDS:
-        raise ScheduleKindInvalid()
-    if cadence is None and session is None:
-        cadence = get_schedule_store().get_by_id(schedule_id)
-    if session is not None:
-        return _mint_on_session(
-            kind=kind,
-            schedule_id=schedule_id,
-            source_id=source_id,
-            scheduled_for=scheduled_for,
-            now=now,
-            cancel_immediately=cancel_immediately,
-            cadence=cadence,
-            session=session,
-        )
-    settings = get_settings()
-    if settings.store_backend == "memory":
-        return _mint_on_session(
-            kind=kind,
-            schedule_id=schedule_id,
-            source_id=source_id,
-            scheduled_for=scheduled_for,
-            now=now,
-            cancel_immediately=cancel_immediately,
-            cadence=cadence,
-            session=None,
-        )
-    with session_scope() as owned:
-        return _mint_on_session(
-            kind=kind,
-            schedule_id=schedule_id,
-            source_id=source_id,
-            scheduled_for=scheduled_for,
-            now=now,
-            cancel_immediately=cancel_immediately,
-            cadence=cadence,
-            session=owned,
-        )
 
 
 def _resolve_due_at(due_at: str | datetime | None) -> datetime | None:
@@ -303,11 +254,12 @@ def _fire_scheduled_kind(
         target_id = _target_source_id(source_id, record)
         cancel_immediately = bool(outcome.get("cancel_immediately")) or target_id is None
 
-        return mint_source_due_job(
+        return _mint_on_session(
             kind=kind,
             schedule_id=schedule_id,
             source_id=target_id,
             scheduled_for=outcome["scheduled_for"],
+            is_delayed_recovery=outcome["is_delayed_recovery"],
             now=outcome["now"],
             cancel_immediately=cancel_immediately,
             cadence=record,

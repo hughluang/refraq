@@ -160,6 +160,7 @@ def _job_out(
         trigger_actor_name=trigger_actor_name,
         trigger_schedule_name=trigger_schedule_name,
         scheduled_for=record.scheduled_for,
+        is_delayed_recovery=record.is_delayed_recovery,
         running_timeout_sec=record.running_timeout_sec,
         created_by_user_id=record.created_by,
         created_at=record.created_at,

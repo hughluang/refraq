@@ -205,6 +205,7 @@ def mint_scheduled_run(
     channel_id: str | None,
     node_id: str | None,
     scheduled_for: datetime,
+    is_delayed_recovery: bool,
     now: datetime,
     session: Any,
 ) -> ScheduledMint:
@@ -227,6 +228,7 @@ def mint_scheduled_run(
                 level="info", message="queued channel run", at=now
             ),
             scheduled_for=scheduled_for,
+            is_delayed_recovery=is_delayed_recovery,
             running_timeout_sec=None,
             session=session,
             created_at=now,
@@ -251,7 +253,8 @@ def mint_scheduled_run(
                 trigger_node_id=node_id or "",
                 ignore_checkpoints=False,
                 created_at=now,
-            )
+            ),
+            session=session,
         )
     return ScheduledMint(
         "already_minted" if already else "queued",

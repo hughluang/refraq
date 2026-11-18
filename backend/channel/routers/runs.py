@@ -78,6 +78,8 @@ class ChannelRunOut(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     created_at: Instant
+    is_delayed_recovery: bool
+    scheduled_for: Instant | None
     started_at: Instant | None = None
     finished_at: Instant | None = None
 
@@ -543,6 +545,8 @@ def _present(
         "failed_node_id": record.failed_node_id,
         "stopped_node_id": record.stopped_node_id,
         "created_at": format_instant(record.created_at),
+        "is_delayed_recovery": job.is_delayed_recovery,
+        "scheduled_for": format_instant(job.scheduled_for) if job.scheduled_for else None,
         "started_at": format_instant(job.started_at) if job.started_at else None,
         "finished_at": format_instant(job.finished_at) if job.finished_at else None,
         "error_code": job.error_code,

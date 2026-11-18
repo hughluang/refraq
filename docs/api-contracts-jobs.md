@@ -27,6 +27,7 @@ List envelopes: [`docs/conventions-pagination.md`](conventions-pagination.md).
   "trigger_actor_name": null,
   "trigger_schedule_name": "structure · mes-prod",
   "scheduled_for": "2026-08-05T02:00:00Z",
+  "is_delayed_recovery": false,
   "running_timeout_sec": null,
   "created_by_user_id": null,
   "created_at": "2026-08-05T02:00:00Z",
@@ -93,7 +94,9 @@ Rules:
 
 Other kinds keep `result` null.
 - **`trigger_kind`** / **`trigger_ref`** describe how the Job was started (`user` | `schedule` | `mcp` | `system` | `inbound`, plus optional id). Structure, join-detection, `catalog_embed`, and `entity_embed` minting is `schedule` with `trigger_ref` = Scheduled Task id. An accepted **Inbound Trigger** call is `inbound` with `trigger_ref` the path. Run-now sets **`created_by_user_id`** to the acting User. Coexist with that field. A `channel_run` Job may be deleted by that Data Channel's keeping settings after the run is terminal. A cancelled run stays. Other kinds are not deleted by those settings (`docs/business-data-channel.md` §6.9).
-- **`scheduled_for`** is the due-slot Instant consumed for an automatic fire; null for operator run-now. Due mint is idempotent on `(trigger_ref, scheduled_for)` when `scheduled_for` is not null.
+- **`scheduled_for`** is a required nullable Instant: the original due identity consumed for an automatic fire, preserved on delayed recovery; null for operator run-now. Due mint is idempotent on `(trigger_ref, scheduled_for)` when non-null.
+- **`is_delayed_recovery`** is a required Boolean on every Job list/get and schedule-related Job response. It is persisted, default false, and true only for a new enabled-cron mint with `now >= due_at + 60 seconds`, where Clock is sampled after acquiring the schedule row lock (UTC Instant difference). +59s is false; +60s is true. This is creation provenance, not execution outcome, lateness grace, or timeout. Interval, run-now, and disabled/deleted cancelled mints are false. Late claim alone does not set it. Subsequent lifecycle writes and duplicate consumption preserve the original value; historical false is not proof of no historical delay. Clients do not infer or backfill it from timestamps.
+- **`created_at`**, **`started_at`**, and **`finished_at`** record actual mint, successful `queued → running` execution claim, and terminal times. `started_at` is nullable and remains null for queued or cancelled-before-claim Jobs; failure/cancellation after claim preserves it. Failed claims, duplicate delivery, and uniqueness repair do not rewrite existing timestamps. Claim time represents platform execution ownership, not necessarily the first business operation. Duration uses actual start, never `scheduled_for`, `created_at`, or schedule `last_run_at`, and is absent before start.
 - **`running_timeout_sec`** is the minted **Running Time Limit** snapshot (nullable positive seconds). Null = the reaper does not mark `JOB_RUNNING_TIMEOUT`. Copied from the **Scheduled Task** at mint; not a live read. Job lists do not add a column; Job detail may show it when non-null.
 - **`trigger_actor_name`** is presentation-only: when `trigger_kind` is `user` and `trigger_ref` resolves to a known User, it is that User's `display_name`; otherwise `null`.
 - **`trigger_schedule_name`** is presentation-only: when `trigger_kind` is `schedule` and `trigger_ref` resolves to a known Scheduled Task, it is that schedule's `name`. Otherwise `null` (deleted schedule). Not an identity field — **`trigger_ref`** remains authoritative. Console Triggered-by uses this in the same column as `trigger_actor_name` (missing name falls back to `trigger_ref`).
@@ -163,7 +166,7 @@ After claim, a structure or join-detection Job tries a Metadata **Kind execution
 - `kind=catalog_embed` is minted by the site embed schedule, not by Model Service code that inserts a Job row.
 - `kind=entity_embed` is minted by the site schedule `entity_embed:site`, not by `POST /jobs` and not by a Model Service insert of a Job row.
 - Later slices/domains may add kinds; unknown kind → `400` with stable code.
-- Console: module id `jobs` is the global observe surface under the **Operations** nav group. Permission `jobs:run`. Job lists omit a `result` column. Job detail may show **Job result** as uninterpreted JSON and does not unpack `class` or link to **Structure Diff**. Triggered-by is one column.
+- Console: module id `jobs` is the global observe surface under the **Operations** nav group. Permission `jobs:run`. Job lists omit a `result` column. Job detail may show **Job result** as uninterpreted JSON and does not unpack `class` or link to **Structure Diff**. Triggered-by is one column. Global and schedule-related Job lists show Delayed recovery only for true, independently of status, and one Time column with labeled Created and Started lines; null start is "Not started". Details separately display Scheduled, Created, Started, and Finished, with a placeholder for null scheduled time. Use Display Timezone, keyboard/hover badge explanation, and shared `jobs.*` copy; no extra planned-time column, created-time fallback for start, recovery filter, or sort (`docs/business-jobs.md` §3).
 
 ## 6. Non-Goals
 

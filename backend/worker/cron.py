@@ -118,17 +118,6 @@ def _cron_weekday(day: date) -> int:
     return (day.weekday() + 1) % 7
 
 
-def _local_matches(naive: datetime, fields: tuple[set[int], set[int], set[int], set[int], set[int]]) -> bool:
-    minutes, hours, doms, months, dows = fields
-    return (
-        naive.minute in minutes
-        and naive.hour in hours
-        and naive.day in doms
-        and naive.month in months
-        and _cron_weekday(naive.date()) in dows
-    )
-
-
 def _plus_years(moment: datetime, years: int) -> datetime:
     try:
         return moment.replace(year=moment.year + years)
@@ -250,30 +239,6 @@ def compute_next_run_at(
             cron_search_after(after, start_at)
         )
     raise ValueError("exactly one of cron or interval_seconds is required")
-
-
-def current_cron_slot_instant(
-    *,
-    cron: str,
-    schedule_timezone: str,
-    now: datetime | None = None,
-) -> datetime | None:
-    """Current minute-aligned wall slot Instant if the expression matches; else None."""
-    zone = ZoneCronSchedule(cron, schedule_timezone=schedule_timezone)
-    clock = ensure_aware_utc(now or utc_now())
-    local_now = clock.astimezone(zone._tz)
-    naive = local_now.replace(second=0, microsecond=0, tzinfo=None)
-    if not _local_matches(naive, zone._fields):
-        return None
-    return resolve_wall_time(
-        naive.year,
-        naive.month,
-        naive.day,
-        naive.hour,
-        naive.minute,
-        0,
-        zone._tz,
-    )
 
 
 class CommitmentSchedule(BaseSchedule):

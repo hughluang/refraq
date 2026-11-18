@@ -35,6 +35,8 @@ Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Sourc
     {
       "id": "job_01HZX",
       "status": "succeeded",
+      "is_delayed_recovery": true,
+      "scheduled_for": "2026-08-13T02:00:00Z",
       "created_at": "2026-08-13T10:00:00Z",
       "started_at": "2026-08-13T10:00:01Z",
       "finished_at": "2026-08-13T10:05:00Z",
@@ -83,9 +85,10 @@ Rules:
 - Cadence is exactly one of `interval_seconds` (an integer from 1 through 252460800, 2922 days) or five-field `cron`. Cron wall clock is the `schedule_timezone` **System Parameter**, not a field of the row. Interval schedules ignore it.
 - `running_timeout_sec` is the optional **Running Time Limit** (positive int seconds, at most 252460800). Null / omit / seed = no control. Mint copies it onto the Job. PATCH of this field does not rewrite in-flight Jobs.
 - `start_at` is the optional **Schedule Start** Instant. Null = start immediately. Interval with `start_at` fires on the grid `start_at + k * interval_seconds` (k ≥ 0); interval without it counts from the previous mint. Cron with `start_at` never fires before the first minute at or after `start_at`. A past `start_at` stays stored as the anchor and is returned as written.
-- `last_run_at` is the Instant cursor of the last **consumed due** mint (Clock Instant). Operator run-now does not change it. Cron cross-slot skip does not change it. It is not Console “last run”.
-- `next_run_at` is the stored commitment Instant. Null when `enabled=false`. Due is `enabled` and `next_run_at <= now`. GET returns the stored value; it is not computed on read.
+- `last_run_at` is the Instant cursor of the last **consumed due** mint (actual Clock Instant, not planned time, actual execution start, or success); creation initializes it to now. Operator run-now does not change it. Valid uniqueness repair uses the original Job `created_at`. It is not Console "Last run".
+- `next_run_at` is one stored, recoverable commitment Instant, not historical slot debt. Null when `enabled=false`. Due is `enabled` and `next_run_at <= now`. GET returns the stored value; it is not computed on read. Enabled cron consumes only the matching valid delivered due identity, even after delay or downtime, then advances directly to the next legal slot strictly after the processing Clock sampled after acquiring the schedule row lock. It does not backfill intervening slots. Replaced/future/already-consumed deliveries do not mint or move cursors; pause/resume and definition/timezone changes can replace the commitment (`docs/business-scheduled-tasks.md`).
 - `recent_jobs` is an observation join to the latest 20 Jobs with `trigger_kind=schedule` and `trigger_ref` = this schedule id (any status), ordered by `created_at` oldest first, so the last element is the last run. Empty array when none. Not cached on the schedule row. List endpoints load it for the whole page in one query.
+- Each `recent_jobs` item contains `id`, `status`, required Boolean `is_delayed_recovery`, required nullable Instant `scheduled_for`, nullable `created_at`, `started_at`, `finished_at`, and nullable `error_code`. The recovery flag and original due identity are projected from the Job, not inferred from status or timestamp differences. Actual mint and successful claim times remain distinct; queued and cancelled-before-claim Jobs have null start. The flag follows `docs/api-contracts-jobs.md` (+60s enabled-cron mint threshold; historical false is not evidence of no delay).
 - Several schedules of each kind may target one Source. Keys `structure:{source_id}:{schedule_id}` and `join_detection:{source_id}:{schedule_id}` are Metadata facade naming conventions (unique per row), not a schedule-table Source FK.
 
 ## 3. Endpoints
@@ -210,6 +213,7 @@ Same **Offset Page** envelope, including `cron_timezone`, defaults, max, and ord
 
 - Module id `schedules` (`operations` group, list permission `jobs:run`): platform-wide domain schedules, including site `catalog_embed` and `entity_embed`; edit cadence / enabled; delete when `deletable`; run-now; related Jobs. No hidden rows. No global create. The list identity column is the raw work kind. The platform list appends the Source key in that same cell (`{work_kind} · {source_key}`, or `source_id` when the key is absent). `catalog_embed` shows only `catalog_embed`. `channel_run` shows `channel_run · {channel_name} · {node_name}`, falling back to ids. The Source workbench shows only the work kind. The Enabled column displays the value and does not change it. Editable rows change `enabled` on the create/edit form. `channel_run` rows offer no edit, delete, or run-now action; related Jobs stay available. A custom name appears on a second line only when it differs from the work-kind default (`structure · {source_key}`, `join_detection · {source_key}`, or `catalog embed`). The list does not show the schedule id.
 - Sources: related-schedules **workbench** at `/console/sources/:id/schedules` — toolbar create plus the same row actions as Operations (edit, delete, run-now, related Jobs). The Enabled column displays the value; create and edit change it. Console delete asks for confirmation; HTTP `DELETE` remains immediate.
+- Related Jobs use the same visible Delayed recovery badge and single Time column as global Jobs: labeled Created and Started lines, "Not started" for null start, no created-time fallback or extra planned-time column. The recent-runs tooltip supports hover and keyboard focus and shows Delayed recovery only for true, original scheduled time, actual creation/start times, finish time, and execution duration (absent before start). Details show those times separately. All use Display Timezone and shared Job presentation (`docs/business-jobs.md` §3).
 - Do not label `last_run_at` as Last run; the list shows a Recent runs strip from `recent_jobs` for observation (one bar per Job, colored by status, height by duration, hover for details, click opens related Jobs) and `next_run_at` for commitment. Disabled → paused (not “unknown next”).
 - Create/edit may set optional **Running Time Limit**. Empty = no control. No schedule-list timezone column. The next-run column header names the **Display Timezone** once (the browser zone when the preference is null). Cell text and recent-run times do not repeat the zone. Job detail may show the minted Running Time Limit snapshot when non-null.
 - The create/edit form chooses clock cadence or a fixed interval. Clock cadence is a builder (every N minutes, every N hours, daily, weekly, monthly) plus an advanced raw cron field. Switching frequency keeps the time, weekdays, day of month, and step already chosen; the expression sent is that visible builder state. A new schedule defaults to daily 02:00 for every work kind. The field description names the **Schedule Timezone**; the expression does not embed it. Fixed interval is a positive integer and a unit (seconds, minutes, hours, days), stored as `interval_seconds` and counted from the previous run, or from the start time when one is set. Clock cadence is aligned to the clock.
@@ -221,7 +225,7 @@ Same **Offset Page** envelope, including `cron_timezone`, defaults, max, and ord
 - Global `POST /schedules` create
 - Operator-supplied Celery `task_name` or product-writable `owner_ref`
 - MCP schedule tools
-- Catchup / backfill / RRule
+- Historical slot backfill / RRule; recovery of one valid stored commitment is supported
 - Schedule end time (`end_at`)
 - PUT replace of “the” schedule per Source or per work kind
 - A create facade for `channel_run` rows

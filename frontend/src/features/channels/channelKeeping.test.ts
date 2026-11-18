@@ -218,6 +218,8 @@ describe("channel keeping settings", () => {
         trigger_ref: "in",
         trigger_node_id: "nd_in",
         trigger_actor_name: null,
+        scheduled_for: null,
+        is_delayed_recovery: false,
         trigger_schedule_name: null,
         ignore_checkpoints: false,
         failed_node_id: null,

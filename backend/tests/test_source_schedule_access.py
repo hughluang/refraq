@@ -29,7 +29,8 @@ from backend.metadata.source_access import (  # noqa: E402
 )
 from backend.metadata.source_jobs import (  # noqa: E402
     enqueue_source_work_job,
-    mint_source_due_job,
+    fire_scheduled_join_detection,
+    fire_scheduled_structure,
 )
 from backend.metadata.sources.access import seal_access  # noqa: E402
 from backend.metadata.sources.store import (  # noqa: E402
@@ -255,24 +256,14 @@ def test_source_mint_writes_the_source_id_stamp(monkeypatch: pytest.MonkeyPatch)
     assert queued.input == {"source_id": "src_alpha"}
 
     now = utc_now()
-    missing = mint_source_due_job(
-        kind="structure",
-        schedule_id="sched_missing",
-        source_id=None,
-        scheduled_for=now,
-        now=now,
-    )
+    missing = fire_scheduled_structure(schedule_id="sched_missing", due_at=now)
     missing_job = get_job_store().get(missing["job_id"])
     assert missing_job is not None
     assert missing_job.access_stamp is None
     assert missing_job.input == {}
 
-    bound = mint_source_due_job(
-        kind="join_detection",
-        schedule_id="sched_bound",
-        source_id="src_alpha",
-        scheduled_for=now + timedelta(seconds=1),
-        now=now,
+    bound = fire_scheduled_join_detection(
+        schedule_id="sched_bound", source_id="src_alpha", due_at=now,
     )
     bound_job = get_job_store().get(bound["job_id"])
     assert bound_job is not None

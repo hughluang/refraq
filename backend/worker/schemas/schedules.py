@@ -17,6 +17,8 @@ class ScheduleTargetOut(BaseModel):
 
 
 class ScheduleRecentJobOut(BaseModel):
+    is_delayed_recovery: bool
+    scheduled_for: Instant | None
     id: str
     status: str
     created_at: Instant | None = None

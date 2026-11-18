@@ -11,7 +11,7 @@ import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { barHeightRatio, buildRunSlots } from "@/features/schedules/runStrip";
 import type { ScheduleRecentJob } from "@/features/schedules/types";
-import { useShowInstant } from "@/hooks/useFormatInstant";
+import { JobTimes } from "@/features/jobs/JobTimes";
 import { formatDurationMs, runDurationMs } from "@/lib/datetime";
 
 const STRIP_HEIGHT = 24;
@@ -26,7 +26,6 @@ type Props = {
 
 export function ScheduleRunStrip({ jobs, kind, onOpenJobs }: Props) {
   const t = useTranslate();
-  const showInstant = useShowInstant();
   const [detailId, setDetailId] = useState<string | null>(null);
   const { slots, maxMs } = useMemo(() => {
     const at = Date.now();
@@ -70,6 +69,7 @@ export function ScheduleRunStrip({ jobs, kind, onOpenJobs }: Props) {
             <Tooltip
               key={job.id}
               withArrow
+              events={{ hover: true, focus: true, touch: false }}
               interactive={live}
               label={
                 <Stack gap={2}>
@@ -83,9 +83,8 @@ export function ScheduleRunStrip({ jobs, kind, onOpenJobs }: Props) {
                   ) : (
                     <JobStatusBadge status={job.status} />
                   )}
-                  <Text size="xs">
-                    {t("jobs.fields.started")}: {showInstant(job.started_at)}
-                  </Text>
+                  {job.is_delayed_recovery ? <Text size="xs">{t("jobs.delayedRecovery")}</Text> : null}
+                  <JobTimes job={job} detail />
                   <Text size="xs">
                     {t("jobs.fields.duration")}: {ms === null ? "—" : formatDurationMs(ms)}
                   </Text>
@@ -99,6 +98,8 @@ export function ScheduleRunStrip({ jobs, kind, onOpenJobs }: Props) {
               }
             >
               <Box
+                tabIndex={0}
+                aria-label={`${t(presentation.labelKey)}${job.is_delayed_recovery ? ` · ${t("jobs.delayedRecovery")}` : ""}`}
                 style={{
                   flex: 1,
                   minWidth: 0,

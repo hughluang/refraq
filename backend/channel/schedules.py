@@ -257,6 +257,7 @@ def fire_scheduled_channel_run(
             channel_id=minted_channel if isinstance(minted_channel, str) else None,
             node_id=minted_node if isinstance(minted_node, str) else None,
             scheduled_for=outcome["scheduled_for"],
+            is_delayed_recovery=outcome["is_delayed_recovery"],
             now=outcome["now"],
             session=session,
         )

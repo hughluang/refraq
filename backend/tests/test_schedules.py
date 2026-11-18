@@ -1539,7 +1539,7 @@ def test_cron_current_slot_mints(
         reset_clock()
 
 
-def test_cron_cross_slot_advances_without_mint(
+def test_cron_cross_slot_recovers_one_commitment(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
@@ -1565,11 +1565,11 @@ def test_cron_cross_slot_advances_without_mint(
             )
         )
         result = _fire(schedule_id)
-        assert result["status"] == "skip_cross_slot"
-        assert _structure_jobs() == []
+        assert result["status"] == "queued"
+        assert len(_structure_jobs()) == 1
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None
-        assert refreshed.last_run_at == last
+        assert refreshed.last_run_at == clock.now()
         assert refreshed.next_run_at == parse_instant("2026-08-16T02:00:00Z")
     finally:
         reset_clock()
@@ -1578,7 +1578,7 @@ def test_cron_cross_slot_advances_without_mint(
 def test_cron_stale_commitment_keeps_today_slot(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Stale yesterday commitment at today's matching minute: second consume mints today."""
+    """A matching processing minute does not replace yesterday's identity."""
     monkeypatch.setattr(
         "backend.metadata.structure_jobs.service.run_structure_job",
         lambda job_id: {"status": "succeeded"},
@@ -1606,8 +1606,8 @@ def test_cron_stale_commitment_keeps_today_slot(
         assert result["status"] == "queued"
         jobs = _structure_jobs()
         assert len(jobs) == 1
-        assert jobs[0].scheduled_for == today_slot
-        assert jobs[0].scheduled_for != yesterday
+        assert jobs[0].scheduled_for == yesterday
+        assert jobs[0].scheduled_for != today_slot
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None
         assert refreshed.last_run_at == clock.now()
@@ -1616,10 +1616,10 @@ def test_cron_stale_commitment_keeps_today_slot(
         reset_clock()
 
 
-def test_cron_stale_commitment_past_slot_skips_without_mint(
+def test_cron_stale_commitment_past_slot_recovers_once(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Stale yesterday commitment after today's slot has passed: no mint, advance next."""
+    """Recover yesterday's stored commitment, skipping uncommitted slots."""
     monkeypatch.setattr(
         "backend.metadata.structure_jobs.service.run_structure_job",
         lambda job_id: {"status": "succeeded"},
@@ -1643,11 +1643,11 @@ def test_cron_stale_commitment_past_slot_skips_without_mint(
             )
         )
         result = _fire(schedule_id)
-        assert result["status"] == "skip_cross_slot"
-        assert _structure_jobs() == []
+        assert result["status"] == "queued"
+        assert len(_structure_jobs()) == 1
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None
-        assert refreshed.last_run_at == last
+        assert refreshed.last_run_at == clock.now()
         assert refreshed.next_run_at == parse_instant("2026-08-16T02:00:00Z")
     finally:
         reset_clock()
@@ -1946,15 +1946,19 @@ def test_unique_collision_still_advances_next(
             scheduled_for=slot,
             created_at=clock.now(),
         )
+        # Recovery must preserve the original creation and provenance on conflict.
+        clock.advance(timedelta(days=3, minutes=5))
         result = _fire(schedule_id)
         assert result["status"] == "already_minted"
         assert result["job_id"] == existing.id
         jobs = _structure_jobs()
         assert len(jobs) == 1
+        assert jobs[0].is_delayed_recovery is False
+        assert jobs[0].created_at == existing.created_at
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None
         assert refreshed.last_run_at == existing.created_at
-        assert refreshed.next_run_at == parse_instant("2026-08-16T02:00:00Z")
+        assert refreshed.next_run_at == parse_instant("2026-08-19T02:00:00Z")
     finally:
         reset_clock()
 
@@ -2100,7 +2104,7 @@ def test_inflight_disable_mints_cancelled_job(
 def test_paused_cron_cross_slot_does_not_mint_or_restore_next(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Paused + delivered Instant already past current slot: skip, keep next null."""
+    """Paused deliveries mint cancelled without restoring the commitment."""
     from dataclasses import replace
 
     monkeypatch.setattr(
@@ -2132,13 +2136,15 @@ def test_paused_cron_cross_slot_does_not_mint_or_restore_next(
             source_id=source["id"],
             due_at=delivered,
         )
-        assert result["status"] == "skip_cross_slot"
-        assert _structure_jobs() == []
+        assert result["status"] == "cancelled"
+        assert len(_structure_jobs()) == 1
+        assert _structure_jobs()[0].started_at is None
+        assert _structure_jobs()[0].is_delayed_recovery is False
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None
         assert refreshed.enabled is False
         assert refreshed.next_run_at is None
-        assert refreshed.last_run_at == parse_instant("2026-08-14T02:00:00Z")
+        assert refreshed.last_run_at == clock.now()
     finally:
         reset_clock()
 
@@ -2646,7 +2652,7 @@ def test_cron_stale_delivery_before_start_at_does_not_mint(
         )
         assert moved.status_code == 200, moved.text
         result = _fire(schedule_id, due_at=stale)
-        assert result["status"] == "skip_cross_slot"
+        assert result["status"] == "commitment_replaced"
         assert _structure_jobs() == []
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None

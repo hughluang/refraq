@@ -213,6 +213,8 @@ def recent_jobs_by_schedule(
             ScheduleRecentJobOut(
                 id=job.id,
                 status=job.status,
+                is_delayed_recovery=job.is_delayed_recovery,
+                scheduled_for=job.scheduled_for,
                 created_at=job.created_at,
                 started_at=job.started_at,
                 finished_at=job.finished_at,

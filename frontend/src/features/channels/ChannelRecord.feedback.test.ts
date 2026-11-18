@@ -225,6 +225,8 @@ function runningDetail(): ChannelRunDetail {
       trigger_ref: "manual",
       trigger_node_id: "nd_1",
       trigger_actor_name: null,
+      scheduled_for: null,
+      is_delayed_recovery: false,
       trigger_schedule_name: null,
       ignore_checkpoints: false,
       stop_at_node_id: null,
