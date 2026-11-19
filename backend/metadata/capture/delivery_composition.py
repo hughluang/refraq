@@ -19,8 +19,8 @@ from backend.metadata.capture.snapshot import SnapshotBinding
 from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.bootstrap import validate_target
 from backend.metadata.mirrors.service import (
-    MirrorError, OpenGenerationBinding, current_open_preparations, read_published_scope, reconcile_open_generation,
-    require_current_open_allocations,
+    MirrorError, OpenGenerationBinding, current_open_preparations, initial_history_epoch, read_published_scope,
+    reconcile_open_generation, require_current_open_allocations,
 )
 from backend.metadata.mirrors.types import Authority, PartitionIdentity
 
@@ -235,6 +235,8 @@ class SourceDelivery:
             raise
         except Exception:
             raise RuntimeBlocked("snapshot_allocation_unconfirmed") from None
+        if binding.history_epoch != initial_history_epoch(binding.mirror_id):
+            raise RuntimeBlocked("snapshot_replacement_allocation_unconfirmed")
         return command
 
     def validate_installation(self, command, *, session):

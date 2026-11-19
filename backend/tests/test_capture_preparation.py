@@ -27,6 +27,7 @@ from backend.core.time import utc_now
 from backend.core.secrets import encrypt_secret
 from backend.metadata.capture import control, delivery_composition, runtime
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
+from backend.metadata.capture.runtime_store import RuntimeBlocked
 from backend.metadata.models import SourceRow
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
 from backend.metadata.capture.test_published_scope import SOURCE, management as management, publish
@@ -216,7 +217,7 @@ def private_gateway(private, dispatch):
                                    "wrong_owner_receipt", "grant_loss", "authority_during_binding", "cross_source_binding",
                                    "target_fence_drift", "withdraw_with_management_timeout",
                                    "snapshot_loss", "snapshot_wrong_table", "snapshot_wrong_signer",
-                                   "snapshot_wrong_incarnation", "snapshot_replaced_relation"])
+                                   "snapshot_wrong_incarnation", "snapshot_replaced_relation", "snapshot_replacement_epoch"])
 def test_protected_executable_prepares_current_open(case, native_target, management, monkeypatch, tmp_path, request):
     target_dsn = native_target
     transaction, _ = management
@@ -224,6 +225,23 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
         opened, = publish(session, "native-workflow", 1, ["items"])
     control.reconcile_published_scope(SOURCE)
     mirror_id = opened["mirror_id"]
+    history_epoch = service.initial_history_epoch(mirror_id)
+    if case == "snapshot_replacement_epoch":
+        history_epoch = uuid4().hex
+        with transaction() as session:
+            session.add(service.HistoryGateRow(mirror_id=mirror_id, history_epoch=history_epoch, status="available",
+                                               lower_commit_seq=0, lower_entry_seq=0))
+        snapshot_faults = []
+        recheck = runtime.CaptureRuntime.recheck_snapshot
+
+        def record_snapshot_fault(capture, binding, *, session, source):
+            try:
+                return recheck(capture, binding, session=session, source=source)
+            except RuntimeBlocked as error:
+                snapshot_faults.append((binding.history_epoch, str(error)))
+                raise
+
+        monkeypatch.setattr(runtime.CaptureRuntime, "recheck_snapshot", record_snapshot_fault)
     profile = dict(source_id=SOURCE, connector_name="cap_one", host="pg.internal", port=5432, database="db",
                    tables=["public.items"], publication="capture_pub", slot="capture_slot", topic_prefix="cap",
                    server_version_num=180000)
@@ -390,7 +408,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
             candidate = target_authority(authority)
             with psycopg.connect(target_dsn) as connection:
                 receipt = bootstrap.prepare_authority(
-                    connection, mirror_id=mirror_id, table_identity="items", history_epoch=service.initial_history_epoch(mirror_id),
+                    connection, mirror_id=mirror_id, table_identity="items", history_epoch=history_epoch,
                     operation_id=operation_id, expected_authority=fenced, authority=candidate,
                     exclusion_proof=(fenced, candidate), verify_exclusion=lambda old, new, evidence: evidence == (old, new),
                 )
@@ -538,7 +556,14 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
         config_file = private("runtime.json", config)
         monkeypatch.setattr("sys.argv", ["runtime", "--config-file", config_file, "--once"])
         contained = case in {"withdraw_during_allocation", "withdraw_with_management_timeout"}
-        if snapshots:
+        if case == "snapshot_replacement_epoch":
+            assert runtime.main() == 2
+            assert mutations == ["configure", "resume"]
+            assert snapshot_faults == [(history_epoch, "snapshot_replacement_allocation_unconfirmed")]
+            assert snapshot_reads == submissions == []
+            with transaction() as session:
+                assert "incremental_snapshots" not in control.load_binding(session, SOURCE)
+        elif snapshots:
             assert runtime.main() == 0
             assert mutations == ["configure", "resume"] and len(submissions) == 1
             entry.pop("owner_allocation_file")
