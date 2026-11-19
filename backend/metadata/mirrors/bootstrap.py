@@ -72,41 +72,99 @@ def install(connection):
 def create_generation(connection, *, mirror_id: str, generation_id: str, authority: Authority,
                       table_identity: str, history_epoch: str, operation_id: str,
                       schema_fingerprint: str, columns: dict[str, str], key_columns: tuple[str, ...],
-                      partition_identity: PartitionIdentity, start_offset: int):
-    """Admin-only allocation after profile/key admission; start offset is the last covered offset."""
+                      partition_identity: PartitionIdentity, start_offset: int,
+                      require_prepared_fence: bool = False) -> str:
+    """Allocate or recover an exact binding in an admin-owned target transaction.
+
+    Managed opens require a preinstalled mirror row for the exact mirror, Source,
+    catalog table, history epoch and accepted Authority. Authority includes the
+    Source binding, owner term and runtime, control and credential revisions, and
+    capture lineage. The deployment adapter installs the fence and supplies an idle
+    administrative connection so this function can commit the allocation itself.
+    """
+    if require_prepared_fence and connection.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        raise ValueError("Managed generation allocation requires a top-level target transaction")
     if not re.fullmatch(r"mir_[a-f0-9]{32}", mirror_id) or not re.fullmatch(r"[a-f0-9]{32}", generation_id):
         raise ValueError("Target ids must match management mirror and generation identities")
     if partition_identity.partition != 0 or start_offset < -1:
         raise ValueError("Only admitted single-partition contiguous delivery is supported")
-    if not key_columns or not set(key_columns) <= columns.keys() or not columns:
+    if not key_columns or len(set(key_columns)) != len(key_columns) or not set(key_columns) <= columns.keys():
         raise ValueError("Admitted key columns required")
+    native_types = []
+    type_aliases = {"timestamp": "timestamp without time zone", "timestamptz": "timestamp with time zone"}
     for name, native_type in columns.items():
         if not name or len(name.encode()) > 63 or "\x00" in name:
             raise ValueError("Persist an ordinal column mapping before allocation")
-        if native_type not in TYPES and not re.fullmatch(r"numeric\([1-9][0-9]{0,2},[0-9]{1,3}\)", native_type):
+        numeric = re.fullmatch(r"numeric\(([1-9][0-9]{0,2}),([0-9]{1,3})\)", native_type)
+        if native_type not in TYPES and not numeric:
             raise ValueError("Unsupported native target type")
+        canonical_type = (f"numeric({int(numeric[1])},{int(numeric[2])})" if numeric
+                          else type_aliases.get(native_type, native_type))
+        native_types.append((name, canonical_type, name in key_columns))
     # Two full ids exceed PostgreSQL's identifier limit. The mirror prefix plus full
     # generation remains generated, collision-detected by the registry unique key.
     table_name = f"m_{mirror_id[4:20]}_{generation_id}"
+    target_table = sql.Identifier("source_mirror", table_name)
+    authority_data = asdict(authority)
+    partition_data = asdict(partition_identity)
+    allocation_stamp = json.dumps(dict(authority=authority_data, history_epoch=history_epoch,
+                                       start_offset=start_offset, native_types=native_types), sort_keys=True)
+    generation = (generation_id, mirror_id, authority.capture_generation, operation_id, table_name,
+                  schema_fingerprint, list(key_columns), list(columns), partition_data)
     definitions = [sql.SQL("{} {} {}").format(sql.Identifier(name), sql.SQL(native_type),
                    sql.SQL("NOT NULL" if name in key_columns else "")) for name, native_type in columns.items()]
     definitions.append(sql.SQL("PRIMARY KEY ({})").format(sql.SQL(", ").join(map(sql.Identifier, key_columns))))
     with connection.transaction():
         connection.execute("SET LOCAL ROLE refraq_mirror_owner")
-        connection.execute(
-            "INSERT INTO source_mirror_state.mirrors(id, source_id, table_identity, authority, history_epoch) "
-            "VALUES (%s,%s,%s,%s::jsonb,%s) ON CONFLICT DO NOTHING",
-            (mirror_id, authority.source_id, table_identity, json.dumps(asdict(authority)), history_epoch))
-        mirror = connection.execute("SELECT source_id, table_identity, authority FROM source_mirror_state.mirrors WHERE id = %s FOR UPDATE", (mirror_id,)).fetchone()
-        if mirror != (authority.source_id, table_identity, asdict(authority)):
-            raise ValueError("Mirror immutable binding or authority mismatch")
-        if connection.execute("SELECT 1 FROM source_mirror_state.generations WHERE id = %s", (generation_id,)).fetchone():
-            raise ValueError("Generation already allocated; recover its durable operation instead")
-        connection.execute(sql.SQL("CREATE TABLE source_mirror.{} ({})").format(sql.Identifier(table_name), sql.SQL(", ").join(definitions)))
-        connection.execute(
-            "INSERT INTO source_mirror_state.generations VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,'building',false)",
-            (generation_id, mirror_id, authority.capture_generation, operation_id, table_name,
-             schema_fingerprint, list(key_columns), list(columns), json.dumps(asdict(partition_identity)), start_offset))
+        if not require_prepared_fence:
+            connection.execute(
+                "INSERT INTO source_mirror_state.mirrors(id, source_id, table_identity, authority, history_epoch) "
+                "VALUES (%s,%s,%s,%s::jsonb,%s) ON CONFLICT DO NOTHING",
+                (mirror_id, authority.source_id, table_identity, json.dumps(authority_data), history_epoch))
+        mirror = connection.execute(
+            sql.SQL("SELECT source_id, table_identity, authority FROM source_mirror_state.mirrors "
+                    "WHERE id = %s AND history_epoch = {} FOR UPDATE").format(sql.Literal(history_epoch)),
+            (mirror_id,)).fetchone()
+        if mirror != (authority.source_id, table_identity, authority_data):
+            raise ValueError("Mirror fence or immutable binding mismatch")
+        existing = connection.execute(
+            "SELECT id, mirror_id, capture_generation, operation_id, table_name, schema_fingerprint, "
+            "key_columns, column_names, partition_identity, status, cleanup_pending FROM source_mirror_state.generations "
+            "WHERE id = %s OR operation_id = %s", (generation_id, operation_id)).fetchone()
+        if existing is not None:
+            if existing[:-2] != generation:
+                raise ValueError("Generation allocation binding mismatch")
+            if existing[-2] == "retired" or existing[-1]:
+                raise ValueError("Generation allocation binding is retired or pending cleanup")
+            relation = connection.execute(
+                "SELECT oid, obj_description(oid, 'pg_class') FROM pg_class "
+                "WHERE relnamespace = 'source_mirror'::regnamespace AND relname = %s "
+                "AND relkind = 'r' AND relowner = 'refraq_mirror_owner'::regrole", (table_name,)).fetchone()
+            if relation is None or relation[1] != allocation_stamp:
+                raise ValueError("Generation allocation binding unconfirmed")
+            relation_id = relation[0]
+            actual_types = connection.execute(
+                "SELECT attname, format_type(atttypid, atttypmod), attnotnull FROM pg_attribute "
+                "WHERE attrelid = %s AND attnum > 0 AND NOT attisdropped ORDER BY attnum",
+                (relation_id,)).fetchall()
+            actual_key = connection.execute(
+                "SELECT array_agg(a.attname::text ORDER BY k.ordinality) FROM pg_constraint c "
+                "CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) "
+                "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum "
+                "WHERE c.conrelid = %s AND c.contype = 'p'", (relation_id,)).fetchone()
+            if actual_types != native_types or actual_key != (list(key_columns),):
+                raise ValueError("Generation allocation schema binding mismatch")
+        else:
+            try:
+                connection.execute(
+                    "INSERT INTO source_mirror_state.generations "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,'building',false)",
+                    (*generation[:-1], json.dumps(partition_data), start_offset))
+            except psycopg.errors.UniqueViolation as exc:
+                raise ValueError("Generation allocation binding conflict") from exc
+            connection.execute(sql.SQL("CREATE TABLE {} ({})").format(target_table, sql.SQL(", ").join(definitions)))
+            connection.execute(sql.SQL("COMMENT ON TABLE {} IS {}").format(target_table, sql.Literal(allocation_stamp)))
+    return generation_id
 
 
 def install_authority(connection, *, mirror_id, expected_authority, authority, exclusion_proof, verify_exclusion):
