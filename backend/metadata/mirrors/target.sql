@@ -6,6 +6,11 @@ CREATE TABLE IF NOT EXISTS source_mirror_state.mirrors (
  history_epoch text NOT NULL, commit_seq bigint NOT NULL DEFAULT 0,
  UNIQUE(source_id, table_identity)
 );
+CREATE TABLE IF NOT EXISTS source_mirror_state.fence_receipts (
+ mirror_id text NOT NULL REFERENCES source_mirror_state.mirrors,
+ operation_id text NOT NULL, request jsonb NOT NULL, receipt_ref text NOT NULL,
+ PRIMARY KEY (mirror_id, operation_id)
+);
 CREATE TABLE IF NOT EXISTS source_mirror_state.generations (
  id text PRIMARY KEY, mirror_id text NOT NULL REFERENCES source_mirror_state.mirrors,
  capture_generation text NOT NULL, operation_id text UNIQUE NOT NULL,
@@ -43,17 +48,27 @@ CREATE OR REPLACE FUNCTION source_mirror_state.delivery_metadata(gid text)
 RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
  SELECT jsonb_build_object(
   'generation_id', g.id, 'authority', m.authority, 'table_identity', m.table_identity,
+  'mirror_id', m.id, 'operation_id', g.operation_id, 'history_epoch', m.history_epoch,
+  'fence_receipt', (
+   SELECT r.receipt_ref FROM source_mirror_state.fence_receipts r
+   WHERE r.mirror_id = m.id AND r.request->'authority' = m.authority
+     AND r.request->>'history_epoch' = m.history_epoch),
+  'start_offset', obj_description(target.oid, 'pg_class')::jsonb->'start_offset',
   'capture_generation', g.capture_generation, 'schema_fingerprint', g.schema_fingerprint,
-  'key_columns', g.key_columns, 'column_names', g.column_names,
+  'key_columns', CASE WHEN g.key_columns = (
+   SELECT array_agg(a.attname::text ORDER BY k.ordinality) FROM pg_constraint pk
+   CROSS JOIN LATERAL unnest(pk.conkey) WITH ORDINALITY k(attnum, ordinality)
+   JOIN pg_attribute a ON a.attrelid = target.oid AND a.attnum = k.attnum
+   WHERE pk.conrelid = target.oid AND pk.contype = 'p') THEN g.key_columns END,
+  'column_names', g.column_names,
   'partition_identity', g.partition_identity, 'cleanup_pending', g.cleanup_pending,
   'status', g.status, 'native_types', (
    SELECT jsonb_object_agg(a.attname, format_type(a.atttypid, a.atttypmod))
-   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
-   JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'source_mirror' AND c.relname = g.table_name
-    AND a.attnum > 0 AND NOT a.attisdropped))
+   FROM pg_attribute a WHERE a.attrelid = target.oid AND a.attnum > 0 AND NOT a.attisdropped))
  FROM source_mirror_state.generations g
- JOIN source_mirror_state.mirrors m ON m.id = g.mirror_id WHERE g.id = gid
+ JOIN source_mirror_state.mirrors m ON m.id = g.mirror_id
+ LEFT JOIN pg_class target ON target.relnamespace = 'source_mirror'::regnamespace AND target.relname = g.table_name
+ WHERE g.id = gid
 $$;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.apply_batch(a jsonb, gid text, p jsonb, records jsonb)

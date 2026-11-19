@@ -170,6 +170,8 @@ def test_native_exact_bootstrap_retry_and_conflicting_facts(target_dsn):
         connection.execute("SET ROLE refraq_mirror_applier")
         metadata, = connection.execute("SELECT source_mirror_state.delivery_metadata(%s)", (generation_id,)).fetchone()
         assert metadata == dict(generation_id=generation_id, authority=asdict(authority), table_identity="orders",
+                                mirror_id=mirror_id, operation_id=request["operation_id"], history_epoch="epoch",
+                                fence_receipt=None, start_offset=request["start_offset"],
                                 capture_generation="capture", schema_fingerprint="schema", key_columns=["tenant", "id"],
                                 column_names=list(request["columns"]), native_types={**request["columns"],
                                 "seen": "timestamp with time zone"}, partition_identity=asdict(request["partition_identity"]),

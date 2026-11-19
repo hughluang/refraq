@@ -164,6 +164,36 @@ class ReadinessSignals:
             raise RuntimeBlocked("allocation_target_fence_unproven")
         return {"observed_at": observation["observed_at"], "exclusion": exclusion, "target_fence": fence}
 
+    def open_generation_proof(self, command, opened, table):
+        scope = dict(profile=self.scope, published_scope=command["published_scope"], opened=opened, table=table)
+        authority = {key: command[key] for key in AUTHORITY_KEYS}
+        operation_id = opened["operation_id"]
+        request = dict(scope=scope, authority=authority, operation_id=operation_id)
+        proof, fence = self._generation_observation("/v1/capture/open-generation-bindings", request,
+                                                    "observation:open_generation_binding", command)
+        return request, proof, fence
+
+    def allocate_generation(self, command, request, proof, fence, generation_id):
+        request = {**request, "scope": {**request["scope"], "generation_id": generation_id}}
+        _, committed_fence = self._generation_observation("/v1/capture/generation-allocations", request,
+                                                          "observation:generation_allocation", command,
+                                                          binding_proof=proof)
+        if committed_fence != fence:
+            raise RuntimeBlocked("generation_fence_changed")
+
+    def _generation_observation(self, path, request, purpose, command, **payload):
+        result = self.http.request("POST", path, {**request, **payload})
+        if not isinstance(result, dict) or self.verifier is None:
+            raise RuntimeBlocked("generation_evidence_unknown")
+        signature = result.get("signature")
+        claims = self.verifier.verify(signature, purpose=purpose, **request)
+        self._require_fresh(claims, command)
+        if json.dumps({key: claims[key] for key in request}, sort_keys=True) != json.dumps(request, sort_keys=True):
+            raise RuntimeBlocked("generation_evidence_mismatch")
+        if claims.get("verified") is not True or not _digest_ref(claims.get("fence_receipt")):
+            raise RuntimeBlocked("generation_evidence_unproven")
+        return signature, claims["fence_receipt"]
+
     def _require_fresh(self, observation, command):
         try:
             observed = datetime.fromisoformat(observation["observed_at"])

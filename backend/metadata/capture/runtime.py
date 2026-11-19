@@ -4,10 +4,10 @@ import argparse
 import os
 import signal
 from threading import Event
-import time
 
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 
 from backend.metadata.capture.authority import SignedAuthority
 from backend.metadata.capture.delivery_composition import SourceDelivery
@@ -16,7 +16,7 @@ from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 
 from backend.core.config import get_settings
 from backend.metadata.capture.control import (
-    allocate_owner, profile_matches_scope, reconcile_published_scope, record_applied_evidence,
+    AUTHORITY_KEYS, allocate_owner, profile_matches_scope, reconcile_published_scope, record_applied_evidence,
     source_control_transaction,
 )
 from backend.metadata.capture.runtime_adapters import ConnectLifecycle, PrivateHTTP, ReadinessSignals
@@ -27,13 +27,15 @@ from backend.metadata.mirrors.service import read_published_scope
 
 
 class CaptureRuntime:
-    def __init__(self, *, journal, connect, signals, profile=None, credentials=None, delivery=None):
+    def __init__(self, *, journal, connect, signals, profile=None, credentials=None, delivery=None,
+                 prepare_delivery=None):
         self.journal = journal
         self.connect = connect
         self.signals = signals
         self.profile = profile
         self.credentials = credentials
         self.delivery = delivery
+        self.prepare_delivery = prepare_delivery
 
     def poll_once(self, source_id, *, owner_allocation_file=None):
         try:
@@ -63,7 +65,7 @@ class CaptureRuntime:
         return allocate_owner(source_id=source_id, operation_id=operation_id,
                               signed_proof=signature, signals=self.signals)
 
-    def reconcile(self, command, source, phase):
+    def reconcile(self, command, source, phase, *, session):
         if self.profile is None or self.credentials is None or self.delivery is None:
             raise RuntimeBlocked("reconcile_adapter_not_installed")
         if (source.status != "active" or not source.capture_credential_ciphertext
@@ -72,13 +74,14 @@ class CaptureRuntime:
         if not profile_matches_scope(self.profile.scope, command["published_scope"]):
             raise RuntimeBlocked("connector_published_scope_mismatch")
         self.signals.observation(command, "before_start")
-        self.delivery.validate_installation(command)
+        self.delivery.validate_installation(command, session=session)
         refs = self.credentials.install(command, source)
         config = self.profile.configuration(command, source, refs)
         if not self.connect.configured(config):
             if phase != "pending":
                 raise RuntimeBlocked("configuration_outcome_uncertain")
             self.signals.observation(command, "before_configure")
+            self.delivery.validate_installation(command, session=session)
             self.journal.mark(command, "uncertain")
             self.connect.configure(config)
             if not self.connect.configured(config):
@@ -87,44 +90,67 @@ class CaptureRuntime:
             if phase in {"resume_uncertain", "observed", "applied"}:
                 raise RuntimeBlocked("resume_outcome_uncertain")
             self.signals.observation(command, "before_resume")
+            self.delivery.validate_installation(command, session=session)
             self.journal.mark(command, "resume_uncertain")
             self.connect.resume()
             if not self.connect.running():
                 raise RuntimeBlocked("resume_outcome_uncertain")
         return self.signals.observation(command, "running")
 
+    def _current_command(self, session, source, *, include_applied=False):
+        state = load_binding(session, source.id)
+        if state is None:
+            return None
+        current = [op["command"] for op in list_operations(session, source.id)
+                   if (include_applied or op["evidence"] is None) and all(
+                       op["command"].get(key) == state.get(key) for key in AUTHORITY_KEYS
+                   )]
+        if not current:
+            return None
+        if len(current) != 1:
+            raise RuntimeBlocked("ambiguous_current_intent")
+        command, = current
+        if (command["owner_epoch"] <= 0 or command["runtime_instance_id"] != self.signals.runtime_instance_id):
+            raise RuntimeBlocked("owner_assignment_unproven")
+        if source.status == "active" and source.capture_credential_ciphertext:
+            scope = read_published_scope(session, source.id)
+            if command.get("published_scope", []) != scope or state.get("published_scope", []) != scope:
+                raise RuntimeBlocked("published_scope_changed")
+        return command
+
     def poll_source(self, source_id, *, containment_only=False):
         with self.journal.source_lock(source_id):
             reconcile_published_scope(source_id)
+            prepared = None
+            preparation_error = None
+            if self.prepare_delivery is not None and not containment_only:
+                try:
+                    with source_control_transaction(source_id) as (session, source):
+                        candidate = self._current_command(session, source, include_applied=True)
+                    if candidate and candidate["kind"] == "reconcile":
+                        self.prepare_delivery(candidate)
+                        prepared = candidate
+                except RuntimeBlocked as exc:
+                    preparation_error = exc
+                except DBAPIError:
+                    preparation_error = RuntimeBlocked("capture_preparation_management_unconfirmed")
             # Retain the same management Source lock through external dispatch.
             # PATCH cannot retire authority between validation and stop submission.
             with source_control_transaction(source_id) as (session, source):
-                state = load_binding(session, source_id)
-                if state is None:
+                command = self._current_command(session, source)
+                if command is None:
+                    if preparation_error is not None:
+                        raise preparation_error
                     return "idle"
-                pending = [op for op in list_operations(session, source_id)
-                           if op["evidence"] is None and all(
-                               op["command"].get(key) == state.get(key)
-                               for key in ("binding_id", "owner_epoch", "runtime_instance_id",
-                                           "capture_generation", "control_revision", "credential_revision")
-                           )]
-                if not pending:
-                    return "idle"
-                if len(pending) != 1:
-                    raise RuntimeBlocked("ambiguous_current_intent")
-                command = pending[0]["command"]
                 if containment_only and command["kind"] != "stop":
                     return "idle"
-                if (command["owner_epoch"] <= 0
-                        or command["runtime_instance_id"] != self.signals.runtime_instance_id):
-                    raise RuntimeBlocked("owner_assignment_unproven")
-                if source.status == "active" and source.capture_credential_ciphertext:
-                    scope = read_published_scope(session, source_id)
-                    if command.get("published_scope", []) != scope or state.get("published_scope", []) != scope:
-                        raise RuntimeBlocked("published_scope_changed")
+                if command["kind"] == "reconcile" and self.prepare_delivery is not None and prepared != command:
+                    if preparation_error is not None:
+                        raise preparation_error
+                    raise RuntimeBlocked("capture_preparation_superseded")
                 phase = self.journal.accept(command)
                 if command["kind"] == "reconcile":
-                    evidence = self.reconcile(command, source, phase)
+                    evidence = self.reconcile(command, source, phase, session=session)
                 elif command["kind"] == "stop":
                     self.signals.observation(command, "before_stop")
                     if not self.connect.stopped():
@@ -205,16 +231,15 @@ def main():
             if (profile.scope["source_id"] != entry["source_id"]
                     or profile.scope["connector_name"] != entry["connector_name"]):
                 raise RuntimeBlocked("configured_scope_mismatch")
-            runtime = CaptureRuntime(
-                journal=journal,
-                connect=ConnectLifecycle(connect_http, entry["connector_name"]),
-                signals=ReadinessSignals(signal_http, verifier=verifier, scope=profile.scope,
-                                         **entry["readiness_policy"]),
-                profile=profile, credentials=CredentialFiles(**entry["credential_files"]),
-            )
-            runtime.delivery = SourceDelivery(
+            signals = ReadinessSignals(signal_http, verifier=verifier, scope=profile.scope, **entry["readiness_policy"])
+            delivery = SourceDelivery(
                 settings_file=entry.get("delivery_settings_file"), source_id=entry["source_id"],
-                journal=journal, signals=runtime.signals, verifier=verifier, profile=profile,
+                journal=journal, signals=signals, verifier=verifier, profile=profile,
+            )
+            runtime = CaptureRuntime(
+                journal=journal, connect=ConnectLifecycle(connect_http, entry["connector_name"]), signals=signals,
+                profile=profile, credentials=CredentialFiles(**entry["credential_files"]),
+                delivery=delivery, prepare_delivery=delivery.prepare,
             )
             runtimes.append((entry["source_id"], runtime, entry.get("owner_allocation_file")))
         while not stopping.is_set():

@@ -1,6 +1,7 @@
 """Administrative target installer. Serving identities never execute this DDL."""
 
 import argparse
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -167,22 +168,82 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
     return generation_id
 
 
-def install_authority(connection, *, mirror_id, expected_authority, authority, exclusion_proof, verify_exclusion):
-    """The deployer's trusted verifier must establish old-producer exclusion."""
-    verify_exclusion(expected_authority, authority, exclusion_proof)
+def _check_authority_transition(expected_authority, authority):
+    if (authority.source_id, authority.resource_binding_id) != (expected_authority.source_id, expected_authority.resource_binding_id):
+        raise ValueError("Immutable resource binding mismatch")
     if authority.owner_epoch < expected_authority.owner_epoch:
         raise ValueError("Stale owner epoch")
     if authority != expected_authority and authority.owner_epoch == expected_authority.owner_epoch:
         if (authority.runtime_instance_id != expected_authority.runtime_instance_id
                 or authority.control_revision <= expected_authority.control_revision):
             raise ValueError("Stale authority revision")
+
+
+def prepare_authority(connection, *, mirror_id, table_identity, history_epoch, operation_id,
+                      expected_authority, authority, exclusion_proof, verify_exclusion):
+    """Commit or recover an exact target fence through the privileged deployment adapter."""
+    if connection.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        raise ValueError("Fence preparation requires a top-level target transaction")
+    if (not re.fullmatch(r"mir_[a-f0-9]{32}", mirror_id) or not table_identity or not history_epoch
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", operation_id) or authority.owner_epoch < 1
+            or not all((authority.source_id, authority.resource_binding_id, authority.runtime_instance_id,
+                        authority.capture_generation))):
+        raise ValueError("Incomplete fence identity")
+    if expected_authority is not None:
+        if expected_authority == authority:
+            raise ValueError("Fence preparation requires a new authority")
+        _check_authority_transition(expected_authority, authority)
+    if verify_exclusion(expected_authority, authority, exclusion_proof) is not True:
+        raise ValueError("Producer exclusion unverified")
+    candidate = asdict(authority)
+    previous = asdict(expected_authority) if expected_authority is not None else None
+    request = dict(mirror_id=mirror_id, table_identity=table_identity, history_epoch=history_epoch,
+                   operation_id=operation_id, expected_authority=previous, authority=candidate)
+    encoded = json.dumps(request, sort_keys=True, separators=(",", ":"))
+    receipt_ref = "sha256:" + sha256(encoded.encode()).hexdigest()
+    identity = (authority.source_id, table_identity, history_epoch)
+    with connection.transaction():
+        connection.execute("SET LOCAL ROLE refraq_mirror_owner")
+        inserted = False
+        if previous is None:
+            inserted = connection.execute(
+                "INSERT INTO source_mirror_state.mirrors(id, source_id, table_identity, history_epoch, authority) "
+                "VALUES (%s,%s,%s,%s,%s::jsonb) ON CONFLICT DO NOTHING",
+                (mirror_id, *identity, json.dumps(candidate)),
+            ).rowcount == 1
+        current = connection.execute(
+            "SELECT source_id, table_identity, history_epoch, authority FROM source_mirror_state.mirrors "
+            "WHERE id = %s FOR UPDATE", (mirror_id,),
+        ).fetchone()
+        if current is None or current[:3] != identity:
+            raise ValueError("Mirror fence identity mismatch")
+        receipt = connection.execute(
+            "SELECT request, receipt_ref FROM source_mirror_state.fence_receipts WHERE mirror_id = %s AND operation_id = %s",
+            (mirror_id, operation_id),
+        ).fetchone()
+        if receipt is not None:
+            if receipt != (request, receipt_ref) or current[3] != candidate:
+                raise ValueError("Fence receipt is no longer exact")
+        else:
+            if not inserted:
+                if previous is None or current[3] != previous:
+                    raise ValueError("Mirror authority changed")
+                connection.execute("UPDATE source_mirror_state.mirrors SET authority = %s::jsonb WHERE id = %s",
+                                   (json.dumps(candidate), mirror_id))
+            connection.execute("INSERT INTO source_mirror_state.fence_receipts VALUES (%s,%s,%s::jsonb,%s)",
+                               (mirror_id, operation_id, encoded, receipt_ref))
+    return receipt_ref
+
+
+def install_authority(connection, *, mirror_id, expected_authority, authority, exclusion_proof, verify_exclusion):
+    """The deployer's trusted verifier must establish old-producer exclusion."""
+    verify_exclusion(expected_authority, authority, exclusion_proof)
+    _check_authority_transition(expected_authority, authority)
     with connection.transaction():
         connection.execute("SET LOCAL ROLE refraq_mirror_owner")
         current = connection.execute("SELECT authority FROM source_mirror_state.mirrors WHERE id = %s FOR UPDATE", (mirror_id,)).fetchone()
         if current != (asdict(expected_authority),):
             raise ValueError("Mirror authority changed")
-        if (authority.source_id, authority.resource_binding_id) != (expected_authority.source_id, expected_authority.resource_binding_id):
-            raise ValueError("Immutable resource binding mismatch")
         connection.execute("UPDATE source_mirror_state.mirrors SET authority = %s::jsonb WHERE id = %s", (json.dumps(asdict(authority)), mirror_id))
 
 

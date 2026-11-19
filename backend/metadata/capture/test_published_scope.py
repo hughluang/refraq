@@ -34,7 +34,16 @@ SOURCE = "source-one"
 
 
 @pytest.fixture
-def management(monkeypatch, tmp_path, request):
+def management_engine(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'management.sqlite3'}")
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def management(monkeypatch, request, management_engine):
     monkeypatch.setenv("REFRAQ_STORE_BACKEND", "persistent")
     monkeypatch.setenv("REFRAQ_SECRETS_MASTER_KEY", "offline-scope-fixture")
     monkeypatch.setenv("DATABASE_URL", "postgresql://fixture/management?sslmode=verify-full")
@@ -43,8 +52,7 @@ def management(monkeypatch, tmp_path, request):
     reset_source_store()
     request.addfinalizer(get_settings.cache_clear)
     request.addfinalizer(reset_source_store)
-    engine = create_engine(f"sqlite:///{tmp_path / 'management.sqlite3'}")
-    request.addfinalizer(engine.dispose)
+    engine = management_engine
     for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, MirrorRow,
                   MirrorReferenceRow, MirrorOperationRow, MirrorPublicationRow, MirrorIntentReceiptRow,
                   service.HistoryGateRow):
@@ -400,6 +408,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
         **args, connect=lambda **kwargs: SourceConnection(),
     ))
     monkeypatch.setattr(delivery_composition, "applier_engine", lambda settings: SimpleNamespace(dispose=lambda: None))
+    monkeypatch.setattr(delivery_composition, "current_open_preparations", lambda **kwargs: [])
     monkeypatch.setattr(delivery_composition, "target_metadata", lambda *args: None if mismatch == "target" else metadata)
     monkeypatch.setattr(delivery_composition, "open_delivery", lambda **args: SimpleNamespace(poll_once=lambda: 0, close=lambda: None))
     settings = dict(target={}, tables=[table], kafka={}, group_id="scope-test", limits={}, max_age_seconds=30)

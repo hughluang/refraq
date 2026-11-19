@@ -19,7 +19,7 @@ from backend.metadata.capture.runtime import CaptureRuntime
 from backend.metadata.capture.runtime_adapters import ConnectLifecycle, ReadinessSignals
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked
 from backend.metadata.capture.test_runtime import (
-    CHECKS, TRUST, FakeHTTP, allocation_observation, managed_command, observation,
+    CHECKS, TRUST, FakeHTTP, allocation_observation, managed_command as managed_command, observation,
 )
 from backend.metadata.errors import SourceCaptureControlConflict
 from backend.metadata.mirrors import service as mirrors
@@ -168,7 +168,7 @@ def test_connect_create_response_loss_reconciles_without_repeating_mutation(tmp_
             return config
 
     class Delivery:
-        def validate_installation(self, command):
+        def validate_installation(self, command, *, session):
             return None
 
     http = FakeHTTP(handler)

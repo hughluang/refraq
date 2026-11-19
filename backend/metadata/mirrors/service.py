@@ -384,6 +384,88 @@ class OpenGenerationBinding:
     start_offset: int
 
 
+def initial_history_epoch(mirror_id):
+    return uuid5(NAMESPACE_URL, f"refraq:mirror:initial-history:{mirror_id}").hex
+
+
+def current_open_preparations(*, authority: Authority, published_scope):
+    """Select committed opens and replace a claim that belongs to a retired authority."""
+    store = _storage()
+    source_id = authority.source_id
+    with store.transaction() as session:
+        store.lock_channel(session, None)
+        store.lock_sources(session, {source_id})
+        state = load_binding(None if isinstance(store, MemoryMirrorStore) else session, source_id)
+        scope = read_published_scope(session, source_id)
+        if not _current_open_authority(state, authority, scope) or scope != published_scope:
+            _error("MIRROR_CONTROL_CONFLICT")
+        assignment_fence = state.get("allocation", {}).get("evidence", {}).get("target_fence")
+        assignment_receipts = {}
+        if assignment_fence and all(state.get(key) == value for key, value in assignment_fence["authority"].items()):
+            assignment_receipts = assignment_fence["mirror_receipts"]
+        selected = []
+        for entry in scope:
+            if not entry["included"]:
+                continue
+            mirror_id, revision = entry["mirror_id"], entry["mirror_revision"]
+            operations = [op for op in store.ops(session, mirror_id) if op["kind"] == "open"
+                          and op["state"] == "pending" and op["control_revision"] == revision]
+            if not operations:
+                continue
+            if len(operations) != 1:
+                _error("MIRROR_CONTROL_CONFLICT")
+            operation, = operations
+            claim = operation.get("allocation")
+            if claim is not None and claim["binding"]["authority"] != asdict(authority):
+                old = Authority(**claim["binding"]["authority"])
+                if (old.source_id != source_id or old.resource_binding_id != authority.resource_binding_id
+                        or old.owner_epoch >= authority.owner_epoch):
+                    _error("MIRROR_CONTROL_CONFLICT")
+                store.save_op(session, dict(operation, state="superseded"))
+                operation_id = _id()
+                _operation(session, {"id": mirror_id, "control": {"control_revision": revision}}, "open", operation_id)
+            else:
+                operation_id = operation["id"]
+            selected.append(dict(entry, operation_id=operation_id,
+                                 history_epoch=_preparation_history_epoch(session, mirror_id),
+                                 assignment_fence_receipt=assignment_receipts.get(mirror_id)))
+        return selected
+
+
+def _preparation_history_epoch(session, mirror_id, *, lock=False):
+    gate = session.get(HistoryGateRow, mirror_id, with_for_update=lock) if session is not None else None
+    if gate is not None and gate.status == "invalidating":
+        _error("MIRROR_CONTROL_CONFLICT")
+    return gate.history_epoch if gate else initial_history_epoch(mirror_id)
+
+
+def require_current_open_allocations(session, *, authority: Authority, allocations):
+    """Validate observed allocations under the caller's Source lock without acquiring the registry."""
+    store = _storage()
+    for opened, generation_id in sorted(allocations, key=lambda item: item[0]["mirror_id"]):
+        mirror_id = opened["mirror_id"]
+        operation = next((op for op in store.ops(session, mirror_id) if op["id"] == opened["operation_id"]), None)
+        claim = operation.get("allocation") if operation else None
+        if (not claim or operation["kind"] != "open" or operation["state"] != "pending"
+                or operation["control_revision"] != opened["mirror_revision"]
+                or claim["observed"] is not True or claim["generation_id"] != generation_id
+                or claim["binding"]["authority"] != asdict(authority)
+                or claim["binding"]["history_epoch"] != opened["history_epoch"]
+                or opened["history_epoch"] != _preparation_history_epoch(session, mirror_id, lock=True)):
+            _error("MIRROR_CONTROL_CONFLICT")
+
+
+def _current_open_authority(state, authority, scope):
+    expected = asdict(authority)
+    expected["binding_id"] = expected.pop("resource_binding_id")
+    lineage = expected.pop("capture_generation")
+    return (state and state.get("desired") == "configured" and authority.owner_epoch > 0
+            and authority.runtime_instance_id and authority.resource_binding_id
+            and state.get("capture_generation") is not None and str(state["capture_generation"]) == lineage
+            and all(state.get(key) == value for key, value in expected.items())
+            and state.get("published_scope") == scope)
+
+
 def _current_open_operation(session, store, mirror_id, operation_id, binding):
     mirror = _lock_mirror_source(session, mirror_id)
     authority = binding.authority
@@ -401,15 +483,7 @@ def _current_open_operation(session, store, mirror_id, operation_id, binding):
             _error("MIRROR_CONTROL_CONFLICT")
     state = load_binding(None if isinstance(store, MemoryMirrorStore) else session, source_id)
     scope = read_published_scope(session, source_id)
-    expected = asdict(authority)
-    expected["binding_id"] = expected.pop("resource_binding_id")
-    expected.pop("capture_generation")
-    if (not state or state.get("desired") != "configured" or authority.owner_epoch <= 0
-            or not authority.runtime_instance_id or not authority.resource_binding_id
-            or state.get("capture_generation") is None
-            or str(state["capture_generation"]) != authority.capture_generation
-            or any(state.get(key) != value for key, value in expected.items())
-            or state.get("published_scope") != scope
+    if (not _current_open_authority(state, authority, scope)
             or not any(entry["mirror_id"] == mirror_id and entry["included"] for entry in scope)):
         _error("MIRROR_CONTROL_CONFLICT")
     revision = mirror["control"]["control_revision"]

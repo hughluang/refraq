@@ -73,7 +73,7 @@ def setup_delivery(monkeypatch, tmp_path):
 
     owner = object.__new__(composition.SourceDelivery)
     owner.settings = {"target": {"timeout_seconds": 2}}
-    owner.tables = [table]
+    owner.tables = owner.manifest_tables = [table]
     owner.source_id = "source"
     owner.journal = CommandJournal(tmp_path)
     owner.signals = SimpleNamespace(runtime_instance_id="runtime", http=Gateway())

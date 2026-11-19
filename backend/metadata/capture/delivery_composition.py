@@ -2,7 +2,6 @@
 
 from contextlib import contextmanager
 from dataclasses import asdict
-import json
 import math
 import time
 from uuid import uuid4
@@ -18,7 +17,10 @@ from backend.metadata.capture.delivery import DeliveryBinding, DeliveryLimits, o
 from backend.metadata.capture.runtime_store import RuntimeBlocked, protected_json, protected_read
 from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.bootstrap import validate_target
-from backend.metadata.mirrors.service import read_published_scope
+from backend.metadata.mirrors.service import (
+    MirrorError, OpenGenerationBinding, current_open_preparations, read_published_scope, reconcile_open_generation,
+    require_current_open_allocations,
+)
 from backend.metadata.mirrors.types import Authority, PartitionIdentity
 
 
@@ -56,6 +58,13 @@ def target_metadata(engine, generation_id):
         ), {"generation": generation_id}).scalar_one()
 
 
+def _target_authority(command):
+    authority = {key: command[key] for key in AUTHORITY_KEYS}
+    authority["resource_binding_id"] = authority.pop("binding_id")
+    authority["capture_generation"] = str(authority["capture_generation"])
+    return authority
+
+
 class SourceDelivery:
     """A protected immutable manifest; changes require process configuration reload."""
 
@@ -67,6 +76,7 @@ class SourceDelivery:
         self.engine = None
         self.clients = []
         self.stamp = None
+        self.prepared_command = None
 
     def _load_installation(self):
         if self.engine is not None:
@@ -88,7 +98,8 @@ class SourceDelivery:
             raise
         except Exception:
             raise RuntimeBlocked("delivery_installation_unconfirmed") from None
-        self.settings, self.limits, self.max_age, self.tables = settings, limits, max_age, tables
+        self.settings, self.limits, self.max_age, self.manifest_tables = settings, limits, max_age, tables
+        self.tables = tables
         self.engine = engine
 
     def _current(self, session, source):
@@ -103,6 +114,7 @@ class SourceDelivery:
             raise RuntimeBlocked("published_scope_changed")
         self._load_installation()
         self._validate_manifest(scope)
+        self._require_current_allocations(session, state)
         return {key: state[key] for key in AUTHORITY_KEYS}
 
     def _validate_manifest(self, scope):
@@ -111,17 +123,86 @@ class SourceDelivery:
         try:
             actual = sorted((f'{decoder["schema_name"]}.{decoder["table_name"]}',
                              decoder["table_identity"])
-                            for decoder in (table["decoder"] for table in self.tables))
+                            for decoder in (table["decoder"] for table in self.manifest_tables))
         except (KeyError, TypeError):
             raise RuntimeBlocked("delivery_manifest_scope_mismatch") from None
         if actual != expected or not profile_matches_scope(self.profile.scope, scope):
             raise RuntimeBlocked("delivery_manifest_scope_mismatch")
 
-    def validate_installation(self, command):
+    def prepare(self, command):
+        if self.prepared_command == command:
+            return
+        self._load_installation()
+        scope = command["published_scope"]
+        self._validate_manifest(scope)
+        authority = Authority(**_target_authority(command))
+        try:
+            opens = {opened["table_identity"]: opened for opened in current_open_preparations(
+                authority=authority, published_scope=scope,
+            )}
+            self.tables = [self._prepare_table(command, authority, table, opens.get(table["decoder"]["table_identity"]))
+                           for table in self.manifest_tables]
+        except (MirrorError, KeyError, TypeError, ValueError):
+            raise RuntimeBlocked("open_generation_preparation_blocked") from None
+        self.prepared_command = command
+
+    def _prepare_table(self, command, authority, table, opened):
+        if opened is None:
+            if not {"authority", "generation_id"} <= table.keys():
+                raise RuntimeBlocked("current_mirror_open_required")
+            return table
+        if set(table) != {"decoder", "partition_identity", "schema_fingerprint", "topic", "native_types", "start_offset"}:
+            raise RuntimeBlocked("open_generation_manifest_required")
+        if "capture_generation" in table["decoder"]:
+            raise RuntimeBlocked("open_generation_manifest_required")
+        decoder_data = dict(table["decoder"], capture_generation=authority.capture_generation)
+        decoder = PostgreSQLDecoder(**decoder_data)
+        partition = PartitionIdentity(**table["partition_identity"])
+        native_types = table["native_types"]
+        if set(native_types) != set(decoder.columns) or type(table["start_offset"]) is not int:
+            raise RuntimeBlocked("open_generation_manifest_invalid")
+        aliases = {"timestamp without time zone": "timestamp", "timestamp with time zone": "timestamptz"}
+        expected = OpenGenerationBinding(
+            authority=authority, object_id=opened["table_identity"], table_identity=decoder.table_identity,
+            qualified_table=opened["qualified_table"], history_epoch=opened["history_epoch"],
+            schema_fingerprint=table["schema_fingerprint"],
+            columns={name: aliases.get(native_types[name], native_types[name]) for name in decoder.columns},
+            key_columns=tuple(decoder.key_fields), partition_identity=partition, start_offset=table["start_offset"],
+        )
+        self._validate_topic(decoder, table["topic"], partition)
+        request, proof, fence = self.signals.open_generation_proof(command, opened, table)
+        if opened["assignment_fence_receipt"] is not None and opened["assignment_fence_receipt"] != fence:
+            raise RuntimeBlocked("generation_assignment_fence_mismatch")
+        installed = {**table, "decoder": decoder_data, "authority": asdict(authority), "open": opened,
+                     "fence_receipt": fence}
+
+        def verify_binding(*, binding, mirror_id, operation_id, mirror_revision):
+            return (binding == expected and (mirror_id, operation_id, mirror_revision) ==
+                    (opened["mirror_id"], opened["operation_id"], opened["mirror_revision"]))
+
+        def allocate(*, generation_id, **_):
+            self.signals.allocate_generation(command, request, proof, fence, generation_id)
+            self._installed(dict(installed, generation_id=generation_id), command)
+            return generation_id
+
+        generation_id = reconcile_open_generation(
+            mirror_id=opened["mirror_id"], operation_id=opened["operation_id"], binding=expected,
+            verify_binding=verify_binding, allocate=allocate,
+        )
+        return dict(installed, generation_id=generation_id)
+
+    def _require_current_allocations(self, session, authority):
+        allocations = [(table["open"], table["generation_id"]) for table in self.tables if "open" in table]
+        if allocations:
+            require_current_open_allocations(session, authority=Authority(**_target_authority(authority)),
+                                             allocations=allocations)
+
+    def validate_installation(self, command, *, session):
         self._load_installation()
         self._validate_manifest(command["published_scope"])
         authority = {key: command[key] for key in AUTHORITY_KEYS}
         try:
+            self._require_current_allocations(session, authority)
             for table in self.tables:
                 self._installed(table, authority)
         except RuntimeBlocked:
@@ -132,14 +213,16 @@ class SourceDelivery:
     def _installed(self, table, authority):
         binding = DeliveryBinding(Authority(**table["authority"]), table["generation_id"],
                                   PartitionIdentity(**table["partition_identity"]), table["topic"])
-        expected = {**authority, "resource_binding_id": authority["binding_id"],
-                    "capture_generation": str(authority["capture_generation"])}
-        del expected["binding_id"]
+        expected = _target_authority(authority)
         if asdict(binding.authority) != expected:
             raise RuntimeBlocked("delivery_manifest_authority_mismatch")
         decoder = PostgreSQLDecoder(**table["decoder"])
         binding.validate(decoder)
-        metadata = target_metadata(self.engine, binding.generation_id)
+        try:
+            metadata = target_metadata(self.engine, binding.generation_id)
+        except Exception:
+            raise RuntimeBlocked("delivery_installation_unconfirmed") from None
+        opened = table.get("open")
         if (metadata is None or metadata["authority"] != expected
                 or metadata["generation_id"] != binding.generation_id
                 or metadata["capture_generation"] != binding.authority.capture_generation
@@ -149,17 +232,25 @@ class SourceDelivery:
                 or metadata["key_columns"] != list(decoder.key_fields)
                 or metadata["column_names"] != list(decoder.columns)
                 or metadata["native_types"] != table["native_types"]
+                or (opened is not None and (
+                    metadata.get("fence_receipt") != table["fence_receipt"]
+                    or metadata.get("start_offset") != table["start_offset"]
+                    or any(metadata.get(key) != opened[key] for key in ("mirror_id", "operation_id", "history_epoch"))
+                ))
                 or metadata["cleanup_pending"] is not False
                 or metadata["status"] not in {"building", "catching_up", "published"}):
             raise RuntimeBlocked("delivery_installed_metadata_mismatch")
+        self._validate_topic(decoder, binding.topic, binding.partition_identity)
+        return binding, decoder, metadata
+
+    def _validate_topic(self, decoder, topic, partition):
         src = decoder.source
         scope = self.profile.scope
         if (src["db"] != scope["database"] or src["name"] != scope["topic_prefix"]
                 or src["schema"] + "." + src["table"] not in scope["tables"]
-                or binding.topic != src["name"] + "." + src["schema"] + "." + src["table"]
-                or binding.partition_identity.partition != 0):
+                or topic != src["name"] + "." + src["schema"] + "." + src["table"]
+                or type(partition.partition) is not int or partition.partition != 0):
             raise RuntimeBlocked("delivery_scope_mismatch")
-        return binding, decoder, metadata
 
     @contextmanager
     def admission(self, *, binding, decoder, limits):
