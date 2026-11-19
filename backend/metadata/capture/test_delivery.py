@@ -7,6 +7,7 @@ from dataclasses import replace
 import json
 from types import SimpleNamespace
 
+from confluent_kafka import KafkaError
 import pytest
 
 from backend.metadata.capture import delivery as delivery_module
@@ -15,7 +16,9 @@ from backend.metadata.capture.delivery import (
     DeliveryBinding, DeliveryLimits, KafkaDelivery, KafkaIdentity, open_delivery,
 )
 from backend.metadata.capture.runtime_store import RuntimeBlocked
-from backend.metadata.mirrors.types import AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds
+from backend.metadata.mirrors.types import (
+    AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds, SealedScan,
+)
 
 
 KEY = {"type": "struct", "fields": [{"field": "id", "type": "int32"}]}
@@ -236,6 +239,10 @@ class RecordingApplication:
                 assert records[0].offset == self.offset + 1
             self.records.extend(records)
             self.offset = records[-1].offset
+        scan = kwargs.get("scan")
+        if isinstance(scan, SealedScan):
+            self.scan = scan
+            self.offset = scan.end - 1
         return {"offset": self.offset, "commit_seq": 1}
 
 
@@ -281,6 +288,90 @@ def test_anchored_prefix_uses_prescan_stable_bound_and_carries_exact_visible_off
     assert delivery.poll_once() == 1
     assert ("seek", 5) in events
     assert app.scan == AnchoredScan(5, 7, after, after, (6,))
+
+
+class PartitionEOF(Message):
+    def error(self):
+        return KafkaError(KafkaError._PARTITION_EOF)
+
+
+@pytest.mark.parametrize(("start", "end", "visible"), [(0, 0, ()), (5, 8, ()), (5, 8, (6,))])
+def test_sealed_range_requires_explicit_eof_from_target_cursor(start, end, visible):
+    delivery, _, app, events = runtime(
+        [*(Message(offset) for offset in visible), PartitionEOF(end)], anchored_profile=AnchoredProfile(7),
+    )
+    app.offset = start - 1
+    bounds = ReadCommittedBounds(0, end, end, 7)
+    delivery.identity.read_committed_bounds = lambda *args: bounds
+
+    assert delivery.apply_sealed_range(partition_identity=BINDING.partition_identity, seal=bounds) == end
+    assert ("seek", start) in events
+    assert app.offset == end - 1
+    assert (app.scan.start, app.scan.end, app.scan.eof, app.scan.offsets) == (start, end, end, visible)
+    assert not any(event[0] == "ack" for event in events)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "early", "past", "moving", "open transaction", "foreign partition",
+                                     "foreign EOF", "excess records"])
+def test_sealed_range_refuses_incomplete_or_changed_transport(failure):
+    bounds = ReadCommittedBounds(0, 8, 8, 7)
+    before = replace(bounds, high=9) if failure == "open transaction" else bounds
+    after = replace(bounds, stable=9, high=9) if failure == "moving" else bounds
+    eof = {"early": 7, "past": 9}.get(failure, 8)
+    messages = [Message(5)]
+    if failure == "excess records":
+        messages.append(Message(6))
+    if failure != "timeout":
+        terminal = PartitionEOF(eof)
+        if failure == "foreign EOF":
+            terminal.partition = lambda: 1
+        messages.append(terminal)
+    delivery, _, app, events = runtime(messages, anchored_profile=AnchoredProfile(7),
+                                       limits=DeliveryLimits(max_records=1))
+    app.offset = 4
+    observations = iter((before, after))
+    delivery.identity.read_committed_bounds = lambda *args: next(observations)
+    partition = replace(BINDING.partition_identity, partition=1) if failure == "foreign partition" else BINDING.partition_identity
+
+    with pytest.raises(RuntimeBlocked):
+        delivery.apply_sealed_range(partition_identity=partition, seal=bounds)
+    assert app.offset == 4 and app.scan is None and not app.records
+    assert not any(event[0] == "ack" for event in events)
+
+
+@pytest.mark.parametrize("failure", ["late EOF", "changed record offset", "stop during final bounds check"])
+def test_sealed_range_rejects_stale_or_altered_evidence(failure, monkeypatch):
+    bounds = ReadCommittedBounds(0, 8, 8, 7)
+    messages = [PartitionEOF(8)] if failure == "late EOF" else [Message(6), PartitionEOF(8)]
+    delivery, client, app, events = runtime(messages, anchored_profile=AnchoredProfile(7))
+    app.offset = 4
+    app_events = [("target", ()), ("seek", 5), ("unassign",)]
+    delivery.identity.read_committed_bounds = lambda *args: bounds
+    if failure == "late EOF":
+        clock = [0.0]
+        poll = client.poll
+
+        def late_poll(timeout):
+            clock[0] += timeout + 0.1
+            return poll(timeout)
+
+        monkeypatch.setattr(delivery_module, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(client, "poll", late_poll)
+    elif failure == "changed record offset":
+        decode = delivery.decoder.decode
+        monkeypatch.setattr(delivery.decoder, "decode", lambda **wire: replace(decode(**wire), offset=7))
+    else:
+        def bounds_with_stop(*args):
+            if client.polled:
+                delivery.stop()
+            return bounds
+
+        delivery.identity.read_committed_bounds = bounds_with_stop
+
+    with pytest.raises(RuntimeBlocked, match="^capture_delivery_blocked$"):
+        delivery.apply_sealed_range(partition_identity=BINDING.partition_identity, seal=bounds)
+    assert app.offset == 4 and app.scan is None and not app.records
+    assert events == app_events
 
 
 @pytest.mark.parametrize("after", [ReadCommittedBounds(0, 3, 5, 7), ReadCommittedBounds(0, 4, 4, 7)])

@@ -50,6 +50,13 @@ class AnchoredScan:
 
 
 @dataclass(frozen=True)
+class SealedScan(AnchoredScan):
+    """A disposable scan ending at an explicit partition EOF under exclusion."""
+
+    eof: int
+
+
+@dataclass(frozen=True)
 class Record:
     offset: int
     table_identity: str

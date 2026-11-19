@@ -83,6 +83,7 @@ DECLARE
  predicate text; columns_sql text; updates_sql text; k text; n bigint;
  entries integer := 0; seq bigint; previous_offset bigint := NULL;
  scan_end bigint; bounds jsonb; pre_stable bigint; pre_high bigint;
+ sealed boolean := coalesce(scan ? 'eof', false);
 BEGIN
  SELECT * INTO g FROM source_mirror_state.generations WHERE id = gid;
  IF NOT FOUND THEN RAISE EXCEPTION 'MIRROR_CONTROL_CONFLICT'; END IF;
@@ -101,24 +102,32 @@ BEGIN
   IF profile->>'kind' IS DISTINCT FROM 'disposable_read_committed_v1'
    OR jsonb_typeof(profile->'leader_epoch') IS DISTINCT FROM 'number'
    OR profile->>'leader_epoch' !~ '^[0-9]+$'
-   OR (g.applied_offset = -1 AND g.anchored_coverage IS NOT NULL)
-   OR (g.applied_offset >= 0 AND g.anchored_coverage->'end' IS DISTINCT FROM to_jsonb(g.applied_offset + 1)) THEN
+   OR (g.applied_offset = -1 AND g.anchored_coverage IS NOT NULL
+    AND g.anchored_coverage->'eof' IS DISTINCT FROM '0'::jsonb)
+   OR ((g.applied_offset <> -1 OR g.anchored_coverage IS NOT NULL)
+    AND g.anchored_coverage->'end' IS DISTINCT FROM to_jsonb(g.applied_offset + 1)) THEN
    RAISE EXCEPTION 'MIRROR_COVERAGE_PROFILE_MISMATCH';
   END IF;
   IF records = '[]'::jsonb AND scan IS NULL THEN
    RETURN jsonb_build_object('offset', g.applied_offset, 'commit_seq', m.commit_seq);
   END IF;
   IF jsonb_typeof(scan) IS DISTINCT FROM 'object'
+   OR jsonb_typeof(records) IS DISTINCT FROM 'array'
+   OR (NOT sealed AND records = '[]'::jsonb)
    OR scan->'start' IS DISTINCT FROM to_jsonb(g.applied_offset + 1)
    OR jsonb_typeof(scan->'end') IS DISTINCT FROM 'number'
    OR scan->>'end' !~ '^[0-9]+$'
    OR jsonb_typeof(scan->'offsets') IS DISTINCT FROM 'array'
-   OR scan->'offsets' IS DISTINCT FROM (
+   OR scan->'offsets' IS DISTINCT FROM coalesce((
     SELECT jsonb_agg(record->'offset' ORDER BY ordinal)
-    FROM jsonb_array_elements(records) WITH ORDINALITY AS batch(record, ordinal)) THEN
+    FROM jsonb_array_elements(records) WITH ORDINALITY AS batch(record, ordinal)), '[]'::jsonb) THEN
    RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
   END IF;
   scan_end := (scan->>'end')::bigint;
+  IF sealed AND (g.status NOT IN ('building', 'catching_up')
+   OR scan_end < g.applied_offset + 1 OR scan->'eof' IS DISTINCT FROM scan->'end') THEN
+   RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
+  END IF;
   pre_stable := (g.anchored_coverage->'after'->>'stable')::bigint;
   pre_high := (g.anchored_coverage->'after'->>'high')::bigint;
   FOREACH bounds IN ARRAY ARRAY[scan->'before', scan->'after'] LOOP
@@ -129,12 +138,21 @@ BEGIN
     OR bounds->>'stable' !~ '^[0-9]+$' OR bounds->>'high' !~ '^[0-9]+$'
     OR (bounds->>'stable')::bigint < scan_end
     OR (bounds->>'stable')::bigint > (bounds->>'high')::bigint
+    OR (sealed AND (bounds->'stable' IS DISTINCT FROM scan->'end'
+     OR bounds->'high' IS DISTINCT FROM scan->'end'))
     OR (bounds->>'stable')::bigint < pre_stable OR (bounds->>'high')::bigint < pre_high THEN
     RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
    END IF;
    pre_stable := (bounds->>'stable')::bigint;
    pre_high := (bounds->>'high')::bigint;
   END LOOP;
+  IF g.anchored_coverage ? 'eof' THEN
+   IF NOT sealed OR scan->'end' IS DISTINCT FROM g.anchored_coverage->'end'
+    OR g.anchored_coverage->'authority' IS DISTINCT FROM a OR records <> '[]'::jsonb THEN
+    RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
+   END IF;
+   RETURN jsonb_build_object('offset', g.applied_offset, 'commit_seq', m.commit_seq);
+  END IF;
  END IF;
  seq := m.commit_seq + 1;
  SELECT string_agg(format('t.%1$I IS NOT DISTINCT FROM k.%1$I', c), ' AND ') INTO predicate FROM unnest(g.key_columns) c;
@@ -211,7 +229,9 @@ BEGIN
   END IF;
   g.applied_offset := n;
  END LOOP;
- IF scan IS NOT NULL AND g.applied_offset <> scan_end - 1 THEN
+ IF sealed THEN
+  g.applied_offset := scan_end - 1;
+ ELSIF scan IS NOT NULL AND g.applied_offset <> scan_end - 1 THEN
   RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
  END IF;
  UPDATE source_mirror_state.generations SET applied_offset = g.applied_offset,

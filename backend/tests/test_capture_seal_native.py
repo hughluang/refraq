@@ -1,15 +1,30 @@
 """Measure a same-primary snapshot checkpoint and seal in the disposable EOS rig."""
 
+from contextlib import contextmanager
+from dataclasses import asdict, replace
 import json
 import os
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from confluent_kafka import Consumer
+import psycopg
+from psycopg import sql
 import pytest
+from sqlalchemy import create_engine, event
+from sqlalchemy.exc import DBAPIError
 
+from backend.metadata.capture.delivery import DeliveryBinding, DeliveryLimits, KafkaDelivery, KafkaIdentity
+from backend.metadata.capture.runtime_store import RuntimeBlocked
+from backend.metadata.mirrors.application import Application
+from backend.metadata.mirrors.bootstrap import create_generation
+from backend.metadata.mirrors.types import (
+    AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds, Record, SealedScan,
+)
 from backend.tests.cdc.eos import CONNECTOR, EosTrial
 from backend.tests.cdc.signal import EMPTY_TABLE, POPULATED_TABLE, SnapshotSignalProbe
+from backend.tests.test_capture_anchored_native import disposable_target
 
 pytestmark = pytest.mark.skipif(os.getenv('REFRAQ_CDC_SEAL_TRIAL') != '1', reason='disposable Docker seal trial only')
 
@@ -24,6 +39,102 @@ class SealTrial(EosTrial):
             assert all(config.get(key) == value for key, value in CONNECTOR.items())
             kwargs['data'] = json.dumps({**config, 'provide.transaction.metadata': 'true'})
         return super().rest(path, *opts, **kwargs)
+
+
+class SignalFixtureDecoder:
+    """Translate the signal fixture's schemaless wire format for the target test."""
+
+    def __init__(self, probe, table, capture_generation):
+        self.probe = probe
+        self.table = table
+        self.capture_generation = capture_generation
+
+    def decode(self, *, offset, key, value):
+        event = json.loads(value)
+        ((key_id, operation, snapshot, _, _),) = self.probe.changes(
+            self.table, [(offset, json.loads(key), event)],
+        )
+        assert (operation, snapshot) in {('c', 'false'), ('r', 'incremental')}
+        assert event['after']['id'] == key_id
+        return Record(offset, self.table, self.capture_generation, 'upsert',
+                      'baseline' if operation == 'r' else 'live', {'id': key_id}, event['after'])
+
+
+class SealTarget:
+    def __init__(self, probe, admin, owner, table, operation, initial, suffix):
+        self.probe = probe
+        self.admin = admin
+        topic = probe.topic(table)
+        identity, bounds = initial[topic]
+        self.anchored = AnchoredProfile(bounds.epoch)
+        self.partition = PartitionIdentity(*identity, 0)
+        self.authority = Authority(f'source-{suffix}', 'binding', 1, 'runtime', 1, 1, 'capture')
+        self.generation = suffix * 32
+        self.binding = DeliveryBinding(self.authority, self.generation, self.partition, topic)
+        self.application = Application(owner)
+        self.decoder = SignalFixtureDecoder(probe, table, self.authority.capture_generation)
+        self.request = dict(authority=self.authority, generation_id=self.generation,
+                            partition_identity=self.partition, anchored_profile=self.anchored)
+        self.mirror = 'mir_' + suffix * 32
+        columns = {'id': 'integer', 'value': 'text'} if table == POPULATED_TABLE else {'id': 'integer'}
+        create_generation(admin, mirror_id=self.mirror, generation_id=self.generation, authority=self.authority,
+                          table_identity=table, history_epoch='history-epoch', operation_id=operation,
+                          schema_fingerprint='signal-fixture', columns=columns, key_columns=('id',),
+                          partition_identity=self.partition, start_offset=-1)
+        self.target_table, = admin.execute(
+            'UPDATE source_mirror_state.generations SET anchored_profile = %s::jsonb WHERE id = %s RETURNING table_name',
+            (json.dumps(asdict(self.anchored)), self.generation),
+        ).fetchone()
+
+    @contextmanager
+    def reader(self, *, eof):
+        kafka = self.probe.profile.kafka
+
+        @contextmanager
+        def admit(**request):
+            assert request['binding'] == self.binding
+            yield
+
+        delivery = KafkaDelivery(
+            consumer=Consumer({**kafka.config, 'group.id': f'seal-{self.generation}', 'isolation.level': 'read_committed',
+                               'enable.auto.commit': False, 'enable.auto.offset.store': False,
+                               'auto.offset.reset': 'error', 'allow.auto.create.topics': False,
+                               'enable.partition.eof': eof, 'check.crcs': True,
+                               'queued.max.messages.kbytes': 1024, 'fetch.max.bytes': 1024 * 1024}),
+            identity=KafkaIdentity(kafka.admin), application=self.application, binding=self.binding,
+            decoder=self.decoder, admission=admit, anchored_profile=self.anchored,
+            limits=DeliveryLimits(poll_seconds=3),
+        )
+        try:
+            yield delivery
+        finally:
+            delivery.close()
+
+    def state(self):
+        offset, proof, commit_seq = self.admin.execute(
+            'SELECT g.applied_offset, g.anchored_coverage, m.commit_seq '
+            'FROM source_mirror_state.generations g JOIN source_mirror_state.mirrors m ON m.id = g.mirror_id '
+            'WHERE g.id = %s', (self.generation,),
+        ).fetchone()
+        rows = self.admin.execute(sql.SQL('SELECT * FROM source_mirror.{} ORDER BY id').format(
+            sql.Identifier(self.target_table),
+        )).fetchall()
+        history = self.admin.execute("SELECT after_image->>'id', after_image->>'value' "
+                                     'FROM source_mirror_state.live_log WHERE mirror_id = %s '
+                                     'ORDER BY commit_seq, entry_seq', (self.mirror,)).fetchall()
+        return offset, proof, rows, history, commit_seq
+
+    def apply_visible_prefix(self, last_visible):
+        deadline = time.monotonic() + 8
+        with self.reader(eof=False) as delivery:
+            while self.state()[0] < last_visible:
+                assert time.monotonic() < deadline
+                delivery.poll_once()
+        assert self.state()[0] == last_visible
+
+    def seal(self, bounds):
+        with self.reader(eof=True) as delivery:
+            return delivery.apply_sealed_range(partition_identity=self.partition, seal=bounds)
 
 
 def committed(probe, topic, *, start=0):
@@ -133,12 +244,21 @@ def test_snapshot_terminals_precede_quiesced_durable_seal():
         profile = SealTrial(Path(directory))
         try:
             profile.setup()
-            measure_seal(profile)
+            with disposable_target(profile) as (admin, applier):
+                parameters = dict(admin.info.get_parameters(), password=admin.info.password,
+                                  options='-c role=refraq_mirror_owner -c statement_timeout=4000')
+                owner = create_engine('postgresql+psycopg://', creator=lambda: psycopg.connect(**parameters))
+                try:
+                    with owner.connect() as connection:
+                        assert connection.exec_driver_sql('SELECT current_user').scalar_one() == 'refraq_mirror_owner'
+                    measure_seal(profile, admin, owner, applier)
+                finally:
+                    owner.dispose()
         finally:
             profile.clean()
 
 
-def measure_seal(profile):
+def measure_seal(profile, admin, owner, applier):
     probe = SnapshotSignalProbe(profile)
     probe.configure()
     profile.sql('CREATE EXTENSION pg_walinspect;')
@@ -165,6 +285,15 @@ def measure_seal(profile):
         (2, 'r', 'incremental', None, 'before-update'),
         (4, 'r', 'incremental', None, 'live'),
     ]
+    empty_target = SealTarget(probe, admin, owner, EMPTY_TABLE, empty, initial, 'a')
+    final_target = SealTarget(probe, admin, owner, POPULATED_TABLE, populated, initial, 'b')
+    tail_target = SealTarget(probe, admin, owner, POPULATED_TABLE, f'{populated}-tail-fixture', initial, 'c')
+    final_target.apply_visible_prefix(before_witness[-1][0])
+    with pytest.raises(DBAPIError, match='permission denied for function apply_batch'):
+        Application(applier).apply_batch(**empty_target.request, records=[])
+    with pytest.raises(DBAPIError, match='MIRROR_COVERAGE_PROFILE_MISMATCH'):
+        Application(applier).apply_batch(**{key: value for key, value in empty_target.request.items()
+                                           if key != 'anchored_profile'}, records=[])
 
     previous = connect_checkpoint(probe)
     assert previous is not None
@@ -238,6 +367,81 @@ def measure_seal(profile):
     assert profile.kafka.scan(data_topic, start=witness_offset + 1, committed=False) == ([], data_end)
     assert populated_end == sealed[probe.notifications][1].positions[1]
     assert committed(probe, probe.notifications, start=populated_end) == ([], populated_end)
+    empty_bounds = ReadCommittedBounds(*sealed[empty_topic][1].positions, sealed[empty_topic][1].epoch)
+    data_bounds = ReadCommittedBounds(*sealed[data_topic][1].positions, sealed[data_topic][1].epoch)
+    assert empty_target.state() == (-1, None, [], [], 0)
+    with pytest.raises(DBAPIError, match='MIRROR_COVERAGE_INVALID'):
+        empty_target.application.apply_batch(**empty_target.request, records=[],
+                                             scan=AnchoredScan(0, 0, empty_bounds, empty_bounds, ()))
+    assert empty_target.seal(empty_bounds) == 0
+    tail_target.apply_visible_prefix(witness_offset)
+    tail_commit_seq = tail_target.state()[4]
+    before_failure = final_target.state()
+    candidate = SealedScan(before_failure[0] + 1, data_end, data_bounds, data_bounds, (), data_end)
+    for malformed in (replace(candidate, start=before_failure[0]), replace(candidate, eof=data_end - 1),
+                      replace(candidate, after=replace(data_bounds, high=data_end + 1))):
+        with pytest.raises(DBAPIError, match='MIRROR_COVERAGE_INVALID'):
+            final_target.application.apply_batch(**final_target.request, records=[], scan=malformed)
+    assert final_target.state() == before_failure
+    admin.execute(sql.SQL("ALTER TABLE source_mirror_state.generations ADD CONSTRAINT deny_fixture_seal "
+                          "CHECK (anchored_coverage->'eof' IS NULL OR id <> {}) NOT VALID").format(
+        sql.Literal(final_target.generation),
+    ))
+    constraints = []
+
+    def observe_constraint(context):
+        if isinstance(context.original_exception, psycopg.errors.CheckViolation):
+            constraints.append(context.original_exception.diag.constraint_name)
+
+    event.listen(owner, 'handle_error', observe_constraint)
+    try:
+        with pytest.raises(RuntimeBlocked, match='capture_delivery_blocked'):
+            final_target.seal(data_bounds)
+        assert constraints == ['deny_fixture_seal']
+        assert final_target.state() == before_failure
+    finally:
+        event.remove(owner, 'handle_error', observe_constraint)
+        admin.execute('ALTER TABLE source_mirror_state.generations DROP CONSTRAINT deny_fixture_seal')
+    assert final_target.seal(data_bounds) == data_end
+    assert tail_target.seal(data_bounds) == data_end
+    for target, start, end, offsets, expected_commit_seq in (
+        (empty_target, 0, 0, [], 0),
+        (final_target, before_failure[0] + 1, data_end, [witness_offset], before_failure[4] + 1),
+        (tail_target, witness_offset + 1, data_end, [], tail_commit_seq),
+    ):
+        offset, proof, rows, history, commit_seq = target.state()
+        assert offset == end - 1
+        assert commit_seq == expected_commit_seq
+        assert (proof['start'], proof['end'], proof['eof'], proof['offsets']) == (start, end, end, offsets)
+        assert proof['authority'] == asdict(target.authority)
+        bounds = empty_bounds if target is empty_target else data_bounds
+        assert proof['before'] == proof['after'] == asdict(bounds)
+        if target is empty_target:
+            assert rows == history == []
+        else:
+            assert rows == [(1, 'before-delete'), (2, 'before-update'), (4, 'live'), (5, 'seal-witness')]
+            assert history == [('4', 'live'), ('5', 'seal-witness')]
+        assert target.seal(bounds) == end
+        assert target.state() == (offset, proof, rows, history, commit_seq)
+        print(f'target_seal table={target.decoder.table} range=[{start},{end}) eof={end} '
+              f'offsets={offsets} applied={offset} rows={len(rows)} live_entries={len(history)}')
+    sealed_target_state = final_target.state()
+    advanced = replace(data_bounds, stable=data_end + 1, high=data_end + 1)
+    later_record = Record(data_end, POPULATED_TABLE, final_target.authority.capture_generation, 'upsert', 'live',
+                          {'id': 6}, {'id': 6, 'value': 'after-seal'})
+    with pytest.raises(DBAPIError, match='MIRROR_COVERAGE_INVALID'):
+        final_target.application.apply_batch(**final_target.request, records=[later_record],
+                                             scan=AnchoredScan(data_end, data_end + 1, advanced, advanced, (data_end,)))
+    current_authority = replace(final_target.authority, owner_epoch=final_target.authority.owner_epoch + 1)
+    admin.execute('UPDATE source_mirror_state.mirrors SET authority = %s::jsonb WHERE id = %s',
+                  (json.dumps(asdict(current_authority)), final_target.mirror))
+    retry = SealedScan(data_end, data_end, data_bounds, data_bounds, (), data_end)
+    with pytest.raises(DBAPIError, match='MIRROR_CONTROL_CONFLICT'):
+        final_target.application.apply_batch(**final_target.request, records=[], scan=retry)
+    with pytest.raises(DBAPIError, match='MIRROR_COVERAGE_INVALID'):
+        final_target.application.apply_batch(**{**final_target.request, 'authority': current_authority},
+                                             records=[], scan=retry)
+    assert final_target.state() == sealed_target_state
     assert transport_state(probe, topics, quiesced=True) == sealed
     final_lineage, final_wal = source_position(probe, active=False)
     assert final_lineage == source_lineage and final_wal[:2] == quiesced_wal[:2]

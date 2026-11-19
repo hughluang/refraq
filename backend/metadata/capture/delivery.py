@@ -10,13 +10,16 @@ from dataclasses import dataclass
 import logging
 import math
 from threading import Event
+from time import monotonic
 
-from confluent_kafka import Consumer, IsolationLevel, TopicCollection, TopicPartition
+from confluent_kafka import Consumer, IsolationLevel, KafkaError, TopicCollection, TopicPartition
 from confluent_kafka.admin import AdminClient, ConfigResource, OffsetSpec, ResourceType
 
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 from backend.metadata.mirrors.application import Application
-from backend.metadata.mirrors.types import AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds
+from backend.metadata.mirrors.types import (
+    AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds, SealedScan,
+)
 
 
 @dataclass(frozen=True)
@@ -160,6 +163,25 @@ class KafkaDelivery:
         """
         if self.closed or self.stopping.is_set():
             return 0
+        return self._poll_once(seal=None)
+
+    def apply_sealed_range(self, *, partition_identity: PartitionIdentity, seal: ReadCommittedBounds):
+        """Return the exclusive committed boundary for a disposable, quiesced partition.
+
+        The caller supplies an EOF-enabled read-committed consumer and an admission
+        context that holds current authority and producer exclusion through commit.
+        """
+        profile = self.anchored_profile
+        if (self.closed or self.stopping.is_set() or profile is None
+                or partition_identity != self.binding.partition_identity
+                or not isinstance(seal, ReadCommittedBounds)
+                or any(type(value) is not int for value in (seal.low, seal.stable, seal.high, seal.leader_epoch))
+                or seal.low != 0 or seal.stable < 0 or seal.stable != seal.high
+                or seal.leader_epoch != profile.leader_epoch):
+            raise RuntimeBlocked("delivery_seal_invalid")
+        return self._poll_once(seal=seal)
+
+    def _poll_once(self, *, seal):
         assigned = False
         try:
             with self.admission(binding=self.binding, decoder=self.decoder, limits=self.limits) as permit:
@@ -177,7 +199,7 @@ class KafkaDelivery:
                 start = applied + 1
                 if profile is not None:
                     before = self.identity.read_committed_bounds(b, profile, timeout)
-                    if not before.low <= start <= before.stable:
+                    if not before.low <= start <= before.stable or (seal is not None and before != seal):
                         raise RuntimeBlocked("delivery_coverage_unavailable")
                 partition = TopicPartition(b.topic, b.partition_identity.partition, start)
                 self.consumer.assign([partition])
@@ -186,33 +208,21 @@ class KafkaDelivery:
                     low, high = self.consumer.get_watermark_offsets(partition, timeout=timeout, cached=False)
                     if not low <= start <= high:
                         raise RuntimeBlocked("delivery_coverage_unavailable")
-                records, size = [], 0
-                while len(records) < self.limits.max_records and not self.stopping.is_set():
-                    # Reserve a complete maximum-sized record before polling.
-                    if size + self.limits.max_record_bytes > self.limits.max_batch_bytes:
-                        break
-                    message = self.consumer.poll(self.limits.poll_seconds if not records else 0)
-                    if message is None:
-                        break
-                    if message.error():
-                        raise RuntimeBlocked("delivery_poll_unavailable")
-                    offset = message.offset()
-                    next_offset = records[-1].offset + 1 if records else start
-                    if (message.topic() != b.topic or message.partition() != b.partition_identity.partition
-                            or offset < next_offset or (before is None and offset != next_offset)):
-                        raise RuntimeBlocked("delivery_contiguous_coverage_required")
-                    if before is not None and offset >= before.stable:
-                        break
-                    key, value = message.key(), message.value()
-                    headers = message.headers() or []
-                    length = (len(key or b"") + len(value or b"")
-                              + sum(len(k.encode()) + len(v or b"") for k, v in headers))
-                    if length > self.limits.max_record_bytes:
-                        raise RuntimeBlocked("delivery_record_capacity_exceeded")
-                    records.append(self.decoder.decode(offset=offset, key=key, value=value))
-                    size += length
+                records, eof = self._read_batch(start=start, before=before, seal=seal)
                 self.consumer.unassign()
                 assigned = False
+                if seal is not None:
+                    if eof != seal.stable or self.stopping.is_set():
+                        raise RuntimeBlocked("delivery_seal_eof_missing")
+                    after = self.identity.read_committed_bounds(b, profile, timeout)
+                    if after != seal:
+                        raise RuntimeBlocked("delivery_seal_moved")
+                    if self.stopping.is_set():
+                        raise RuntimeBlocked("delivery_seal_stopped")
+                    scan = SealedScan(start, seal.stable, before, after, tuple(record.offset for record in records), eof)
+                    if self._apply(records, scan) != seal.stable - 1:
+                        raise RuntimeBlocked("delivery_coverage_invalid")
+                    return seal.stable
                 if not records:
                     return 0
                 scan = None
@@ -249,6 +259,53 @@ class KafkaDelivery:
                         self.consumer.close()
                     except Exception:
                         pass
+
+    def _read_batch(self, *, start, before, seal):
+        binding = self.binding
+        records, size = [], 0
+        deadline = monotonic() + self.limits.poll_seconds
+        while not self.stopping.is_set():
+            if seal is None:
+                if (len(records) >= self.limits.max_records
+                        or size + self.limits.max_record_bytes > self.limits.max_batch_bytes):
+                    break
+                timeout = self.limits.poll_seconds if not records else 0
+            else:
+                timeout = deadline - monotonic()
+                if timeout <= 0:
+                    break
+            message = self.consumer.poll(timeout)
+            if message is None or (seal is not None and monotonic() >= deadline):
+                break
+            if (message.topic() != binding.topic
+                    or message.partition() != binding.partition_identity.partition):
+                raise RuntimeBlocked("delivery_partition_identity_mismatch")
+            error = message.error()
+            offset = message.offset()
+            if error:
+                if seal is not None and error.code() == KafkaError._PARTITION_EOF:
+                    return records, offset
+                raise RuntimeBlocked("delivery_poll_unavailable")
+            next_offset = records[-1].offset + 1 if records else start
+            if offset < next_offset or (before is None and offset != next_offset):
+                raise RuntimeBlocked("delivery_contiguous_coverage_required")
+            if before is not None and offset >= before.stable:
+                if seal is not None:
+                    raise RuntimeBlocked("delivery_seal_moved")
+                break
+            key, value = message.key(), message.value()
+            headers = message.headers() or []
+            length = (len(key or b"") + len(value or b"")
+                      + sum(len(k.encode()) + len(v or b"") for k, v in headers))
+            if (length > self.limits.max_record_bytes or len(records) >= self.limits.max_records
+                    or size + length > self.limits.max_batch_bytes):
+                raise RuntimeBlocked("delivery_record_capacity_exceeded")
+            record = self.decoder.decode(offset=offset, key=key, value=value)
+            if seal is not None and (type(record.offset) is not int or record.offset != offset):
+                raise RuntimeBlocked("delivery_seal_record_offset_mismatch")
+            records.append(record)
+            size += length
+        return records, None
 
     def stop(self):
         self.stopping.set()
