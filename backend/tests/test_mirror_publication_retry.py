@@ -1,4 +1,4 @@
-"""Native PostgreSQL regression for guarded target publication retries."""
+"""Native PostgreSQL regressions for guarded target publication and run pins."""
 
 from contextlib import nullcontext
 from dataclasses import asdict, replace
@@ -11,10 +11,12 @@ from psycopg.types.json import Jsonb
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.pool import NullPool
 
 from backend.metadata.mirrors.application import Application
 from backend.metadata.mirrors.bootstrap import create_generation, install, install_authority
 from backend.metadata.mirrors.publication import Publication, persist_verified_certificate
+from backend.metadata.mirrors.reads import Reads
 from backend.metadata.mirrors.service import (
     CommittedOpenPublication, OpenGenerationBinding, OpenPublicationIdentity, publication_certificate_ref,
 )
@@ -106,6 +108,49 @@ def test_publication_retry_confirms_only_current_generation(publication_target, 
             publication.publish_generation(**first)
     assert publication.publish_generation(**current) == current["generation_id"]
     assert deliver(application, current) == progress
+
+
+def test_pinned_run_resumes_paging_across_publication_switch(publication_target):
+    admin, application, publication = publication_target
+    first = prepare_generation(admin, 1)
+    deliver(application, first, order_record(0, "baseline"))
+    assert publication.publish_generation(**first) == first["generation_id"]
+    deliver(application, first, order_record(1, "live"))
+
+    def authorize_fixture_source_read(*, execution_user_id, source_id):
+        assert (execution_user_id, source_id) == ("reader", AUTHORITY.source_id)
+
+    gateway = create_engine("postgresql+psycopg://", poolclass=NullPool, creator=lambda: psycopg.connect(
+        os.environ["REFRAQ_MIRROR_PUBLICATION_TEST_DSN"], dbname=admin.info.dbname,
+        options="-c role=refraq_mirror_gateway",
+    ))
+    gateway_options = dict(authorize_source_read=authorize_fixture_source_read, verify_terminal_proof=pytest.fail)
+    read_identity = dict(mirror_id=MIRROR_ID, execution_user_id="reader")
+    reads = Reads(gateway, **gateway_options)
+    first_pin = reads.acquire_pin(run_id="original-run", **read_identity)
+    assert first_pin.generation_id == first["generation_id"]
+    first_page = reads.read_page(pin=first_pin, execution_user_id="reader", after_key=None, limit=1)
+    assert (first_page["rows"], first_page["next_key"]) == ([{"id": 1}], {"id": 1})
+
+    replacement = prepare_generation(admin, 2)
+    replacement_row = {"id": 3}
+    deliver(application, replacement, replace(order_record(0, "baseline"), key=replacement_row, values=replacement_row))
+    assert publication.publish_generation(**replacement) == replacement["generation_id"]
+
+    resumed_reads = Reads(gateway, **gateway_options)
+    resumed_pin = resumed_reads.acquire_pin(run_id="original-run", **read_identity)
+    assert resumed_pin == first_pin
+    resumed_page = resumed_reads.read_page(
+        pin=resumed_pin, execution_user_id="reader", after_key=first_page["next_key"], limit=2,
+    )
+    assert (resumed_page["generation_id"], resumed_page["rows"], resumed_page["next_key"]) == (
+        first["generation_id"], [{"id": 2}], None,
+    )
+
+    fresh_pin = resumed_reads.acquire_pin(run_id="fresh-run", **read_identity)
+    assert fresh_pin.generation_id == replacement["generation_id"]
+    fresh_page = resumed_reads.read_page(pin=fresh_pin, execution_user_id="reader", after_key=None, limit=2)
+    assert fresh_page["rows"] == [{"id": 3}]
 
 
 @pytest.mark.parametrize("applied_offset", [-1, 1], ids=["behind", "ahead"])
