@@ -48,6 +48,13 @@ class Profile(StrictModel):
     qualification: Literal["unverified", "qualified"]
 
 
+class HistoryPosition(StrictModel):
+    mirror_id: str
+    history_epoch: str
+    commit_seq: int = Field(strict=True, ge=0)
+    entry_seq: int = Field(strict=True, ge=0)
+
+
 class Mirror(StrictModel):
     id: str
     source_id: str
@@ -61,8 +68,8 @@ class Mirror(StrictModel):
     published_generation_id: str | None
     capture_generation: str | None
     history_epoch: str | None
-    retained_lower_bound: None = None
-    committed_upper_bound: None = None
+    retained_lower_bound: HistoryPosition | None = None
+    committed_upper_bound: HistoryPosition | None = None
     control: Control
     progress: None = None
     profile: Profile

@@ -15,6 +15,7 @@ from backend.metadata.capture.credentials import CredentialFiles
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 
 from backend.core.config import get_settings
+from backend.core.errors import PlatformCapacityExceeded, PlatformTimeout
 from backend.metadata.capture.control import (
     AUTHORITY_KEYS, allocate_owner, profile_matches_scope, reconcile_published_scope, record_applied_evidence,
     source_control_transaction,
@@ -24,12 +25,17 @@ from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocke
 from backend.metadata.capture.snapshot import SnapshotCoordinator
 from backend.metadata.capture.store import list_operations, load_binding
 from backend.metadata.errors import SourceCaptureControlConflict
-from backend.metadata.mirrors.service import read_published_scope
+from backend.metadata.mirrors.service import (
+    MirrorError, ObserveCommittedOpenPublication, OpenPublicationIdentity, read_published_scope,
+    reconcile_open_publication,
+)
+from backend.metadata.mirrors.types import Authority
 
 
 class CaptureRuntime:
     def __init__(self, *, journal, connect, signals, profile=None, credentials=None, delivery=None,
-                 prepare_delivery=None, snapshot=None):
+                 prepare_delivery=None, snapshot=None,
+                 observe_committed_publication: ObserveCommittedOpenPublication | None = None):
         self.journal = journal
         self.connect = connect
         self.signals = signals
@@ -38,6 +44,25 @@ class CaptureRuntime:
         self.delivery = delivery
         self.prepare_delivery = prepare_delivery
         self.snapshot = snapshot
+        self.observe_committed_publication = observe_committed_publication
+
+    def reconcile_open_publication(self, *, mirror_id, operation_id, expected: OpenPublicationIdentity):
+        """Explicitly reconcile publication under a qualified driver and Source exclusion.
+
+        Ordinary polling needs to rehydrate applied delivery from durable evidence and
+        safely resume from the sealed source and target positions before using this transition.
+        """
+        if not callable(self.observe_committed_publication):
+            raise RuntimeBlocked("publication_observer_not_installed")
+        if (not isinstance(expected, OpenPublicationIdentity) or not isinstance(expected.authority, Authority)
+                or not isinstance(expected.authority.source_id, str) or not expected.authority.source_id):
+            raise RuntimeBlocked("publication_observation_rejected")
+        with self.journal.source_lock(expected.authority.source_id):
+            try:
+                return reconcile_open_publication(mirror_id=mirror_id, operation_id=operation_id, expected=expected,
+                                                  observe_committed=self.observe_committed_publication)
+            except (DBAPIError, MirrorError, PlatformCapacityExceeded, PlatformTimeout, RuntimeBlocked):
+                raise RuntimeBlocked("publication_observation_rejected") from None
 
     def poll_once(self, source_id, *, owner_allocation_file=None):
         try:

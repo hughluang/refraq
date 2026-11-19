@@ -1,18 +1,23 @@
 """Native PostgreSQL regression for guarded target publication retries."""
 
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 import os
 from uuid import uuid4
 
 import psycopg
 from psycopg import sql
+from psycopg.types.json import Jsonb
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
 from backend.metadata.mirrors.application import Application
 from backend.metadata.mirrors.bootstrap import create_generation, install, install_authority
 from backend.metadata.mirrors.publication import Publication, persist_verified_certificate
+from backend.metadata.mirrors.service import (
+    CommittedOpenPublication, OpenGenerationBinding, OpenPublicationIdentity, publication_certificate_ref,
+)
 from backend.metadata.mirrors.types import Authority, PartitionIdentity, Record
 
 
@@ -131,6 +136,9 @@ def test_publication_retry_requires_exact_certificate_and_current_fence(publicat
     )
     with pytest.raises(DBAPIError, match="MIRROR_PUBLICATION_BLOCKED"):
         publication.publish_generation(**request)
+    with pytest.raises(DBAPIError, match="MIRROR_PUBLICATION_BLOCKED"):
+        with publication.observe_committed(**observation_request(request)):
+            pytest.fail("An old publication fence was observed")
 
 
 @pytest.mark.parametrize("status, certificate_published, applied_offset", [
@@ -158,3 +166,146 @@ def test_publication_retry_rejects_contradictory_target_state(
 
     with pytest.raises(DBAPIError, match="MIRROR_PUBLICATION_BLOCKED"):
         publication.publish_generation(**request)
+    with pytest.raises(DBAPIError, match="MIRROR_PUBLICATION_BLOCKED"):
+        with publication.observe_committed(**observation_request(request)):
+            pytest.fail("Contradictory publication state was observed")
+
+
+def observation_request(request, *, authority=AUTHORITY, epoch="epoch"):
+    certificate = request["certificate"]
+    return dict(
+        mirror_id=MIRROR_ID, operation_id=request["operation_id"],
+        binding=OpenGenerationBinding(
+            authority=authority, object_id="catalog-orders", table_identity="orders",
+            qualified_table="public.orders", history_epoch=epoch, schema_fingerprint="schema",
+            columns={"id": "bigint"}, key_columns=("id",), start_offset=-1,
+            partition_identity=PartitionIdentity(**certificate["partition_identity"]),
+        ),
+        expected=OpenPublicationIdentity(
+            authority=authority, generation_id=request["generation_id"], history_epoch=epoch,
+            snapshot_operation_id="snapshot", scan_offset=3, completion_offset=4,
+            certificate_ref=publication_certificate_ref(certificate),
+        ),
+    )
+
+
+def publish_in_transaction(admin, request):
+    admin.execute("SET LOCAL ROLE refraq_mirror_applier")
+    return admin.execute("SELECT source_mirror_state.publish_generation(%s, %s, %s, %s)", (
+        request["operation_id"], Jsonb(asdict(request["authority"])), request["generation_id"],
+        Jsonb(request["certificate"]),
+    )).fetchone()[0]
+
+
+def test_observer_requires_committed_publication_and_returns_current_target_view(publication_target):
+    admin, application, publication = publication_target
+    request = prepare_generation(admin, 1)
+    deliver(application, request, order_record(0, "baseline"))
+    observe = observation_request(request)
+    with pytest.raises(DBAPIError, match="MIRROR_PUBLICATION_BLOCKED"):
+        with publication.observe_committed(**observe):
+            pytest.fail("An unpublished certificate was observed")
+
+    observer = Publication(publication.engine, timeout_ms=150)
+    with admin.transaction():
+        assert publish_in_transaction(admin, request) == request["generation_id"]
+        with pytest.raises(DBAPIError) as blocked:
+            with observer.observe_committed(**observe):
+                pytest.fail("An uncommitted publication was observed")
+        assert blocked.value.orig.sqlstate in {"55P03", "57014"}
+
+    deliver(application, request, order_record(1, "live"))
+    with publication.observe_committed(**observe) as observed:
+        assert isinstance(observed, CommittedOpenPublication)
+        assert observed.published_generation_id == request["generation_id"]
+        assert observed.applied_offset == 1
+        assert observed.certificate == dict(
+            operation_id=request["operation_id"], generation_id=request["generation_id"],
+            authority=asdict(AUTHORITY), evidence=request["certificate"],
+            verified_by="native-publication-retry-fixture", published=True,
+        )
+        assert observed.allocation == dict(
+            generation_id=request["generation_id"], authority=asdict(AUTHORITY), table_identity="orders",
+            mirror_id=MIRROR_ID, operation_id=request["operation_id"], history_epoch="epoch",
+            fence_receipt=None, start_offset=-1, capture_generation="capture", schema_fingerprint="schema",
+            key_columns=["id"], column_names=["id"], partition_identity=request["certificate"]["partition_identity"],
+            cleanup_pending=False, status="published", native_types={"id": "bigint"},
+        )
+        assert observed.history_bound == dict(
+            mirror_id=MIRROR_ID, source_id="source", history_epoch="epoch",
+            lower_bound=dict(mirror_id=MIRROR_ID, history_epoch="epoch", commit_seq=0, entry_seq=0),
+            upper_bound=dict(mirror_id=MIRROR_ID, history_epoch="epoch", commit_seq=1, entry_seq=1),
+        )
+
+
+@pytest.mark.parametrize("caller_failed", [False, True], ids=["commit", "rollback"])
+def test_observer_guards_pointer_until_context_exit(publication_target, caller_failed):
+    admin, application, publication = publication_target
+    first, successor = [prepare_generation(admin, number) for number in (1, 2)]
+    for request in (first, successor):
+        deliver(application, request, order_record(0, "baseline"))
+    publication.publish_generation(**first)
+
+    disposition = pytest.raises(RuntimeError, match="caller failed") if caller_failed else nullcontext()
+    observe = observation_request(first)
+    with disposition, publication.observe_committed(**observe):
+        with publication.observe_committed(**observe) as concurrent:
+            assert concurrent.published_generation_id == first["generation_id"]
+        with pytest.raises(psycopg.errors.LockNotAvailable), admin.transaction():
+            admin.execute("SET LOCAL lock_timeout = '150ms'")
+            publish_in_transaction(admin, successor)
+        if caller_failed:
+            raise RuntimeError("caller failed")
+
+    assert publication.publish_generation(**successor) == successor["generation_id"]
+    with pytest.raises(DBAPIError, match="MIRROR_PUBLICATION_BLOCKED"):
+        with publication.observe_committed(**observation_request(first)):
+            pytest.fail("The superseded generation was observed")
+
+
+@pytest.mark.parametrize("mismatch", ["mirror_id", "operation_id", "generation_id", "authority", "history_epoch"])
+def test_observer_rejects_mismatched_target_identity(publication_target, mismatch):
+    admin, application, publication = publication_target
+    request = prepare_generation(admin, 1)
+    deliver(application, request, order_record(0, "baseline"))
+    publication.publish_generation(**request)
+    if mismatch == "authority":
+        observe = observation_request(request, authority=replace(AUTHORITY, credential_revision=3))
+    elif mismatch == "history_epoch":
+        observe = observation_request(request, epoch="other-epoch")
+    else:
+        observe = observation_request(request)
+        if mismatch == "generation_id":
+            observe["expected"] = replace(observe["expected"], generation_id="2" * 32)
+        else:
+            observe[mismatch] = "other-id"
+
+    with pytest.raises(DBAPIError, match="MIRROR_PUBLICATION_BLOCKED"):
+        with publication.observe_committed(**observe):
+            pytest.fail("A mismatched publication was observed")
+
+
+def test_observer_role_boundary_and_reinstall(publication_target):
+    admin, application, publication = publication_target
+    request = prepare_generation(admin, 1)
+    deliver(application, request, order_record(0, "baseline"))
+    publication.publish_generation(**request)
+    observe = observation_request(request)
+    for role in ("refraq_mirror_gateway", "pg_monitor"):
+        assert admin.execute("SELECT has_function_privilege(%s, "
+                             "'source_mirror_state.observe_committed_publication(text,text,text,jsonb,text)', "
+                             "'EXECUTE')", (role,)).fetchone() == (False,)
+    for table in ("mirrors", "generations", "certificates", "live_log"):
+        with pytest.raises(DBAPIError) as denied, publication.engine.begin() as connection:
+            connection.execute(text(f"SELECT 1 FROM source_mirror_state.{table}"))
+        assert denied.value.orig.sqlstate == "42501"
+
+    admin.execute("DROP FUNCTION source_mirror_state.observe_committed_publication(text,text,text,jsonb,text)")
+    with pytest.raises(DBAPIError) as missing:
+        with publication.observe_committed(**observe):
+            pytest.fail("A missing observer allowed publication")
+    assert missing.value.orig.sqlstate == "42883"
+    install(admin)
+    install(admin)
+    with publication.observe_committed(**observe) as observed:
+        assert observed.published_generation_id == request["generation_id"]

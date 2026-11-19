@@ -1,8 +1,11 @@
 """Transactional mirror intent and conservative Operations lifecycle."""
 
+from contextlib import AbstractContextManager, ExitStack
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from typing import Protocol
+from hashlib import sha256
+import json
+from typing import Literal, Protocol
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from backend.admin.audit import persist_audit_event
@@ -11,8 +14,10 @@ from backend.core.errors import AppError
 from backend.core.time import utc_now
 from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.history_models import HistoryGateRow
+from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors.store import MemoryMirrorStore, SqlMirrorStore
 from backend.metadata.mirrors.types import Authority, PartitionIdentity
+from backend.metadata.models import SourceRow
 
 __all__ = [
     "resolve_object_binding",
@@ -23,6 +28,11 @@ __all__ = [
     "reconcile_references",
     "OpenGenerationBinding",
     "reconcile_open_generation",
+    "OpenPublicationIdentity",
+    "CommittedOpenPublication",
+    "ObserveCommittedOpenPublication",
+    "publication_certificate_ref",
+    "reconcile_open_publication",
     "bind_management",
     "get_mirror",
     "list_mirrors",
@@ -466,8 +476,7 @@ def _current_open_authority(state, authority, scope):
             and state.get("published_scope") == scope)
 
 
-def _current_open_operation(session, store, mirror_id, operation_id, binding):
-    mirror = _lock_mirror_source(session, mirror_id)
+def _require_open_binding(session, store, mirror, binding):
     authority = binding.authority
     source_id = mirror["source_id"]
     identity = dict(source_id=authority.source_id, object_id=binding.object_id,
@@ -477,15 +486,21 @@ def _current_open_operation(session, store, mirror_id, operation_id, binding):
     catalog = store.binding(session, binding.object_id)
     if catalog is None or any(catalog[key] != value for key, value in identity.items()):
         _error("MIRROR_CONTROL_CONFLICT")
+    state = load_binding(None if isinstance(store, MemoryMirrorStore) else session, source_id)
+    scope = read_published_scope(session, source_id)
+    if (not _current_open_authority(state, authority, scope)
+            or not any(entry["mirror_id"] == mirror["id"] and entry["included"] for entry in scope)):
+        _error("MIRROR_CONTROL_CONFLICT")
+    return state
+
+
+def _current_open_operation(session, store, mirror_id, operation_id, binding):
+    mirror = _lock_mirror_source(session, mirror_id)
+    _require_open_binding(session, store, mirror, binding)
     if not isinstance(store, MemoryMirrorStore):
         gate = session.get(HistoryGateRow, mirror_id, with_for_update=True)
         if gate is not None and gate.history_epoch != binding.history_epoch:
             _error("MIRROR_CONTROL_CONFLICT")
-    state = load_binding(None if isinstance(store, MemoryMirrorStore) else session, source_id)
-    scope = read_published_scope(session, source_id)
-    if (not _current_open_authority(state, authority, scope)
-            or not any(entry["mirror_id"] == mirror_id and entry["included"] for entry in scope)):
-        _error("MIRROR_CONTROL_CONFLICT")
     revision = mirror["control"]["control_revision"]
     operation = next((op for op in store.ops(session, mirror_id) if op["id"] == operation_id), None)
     if (operation is None or operation["kind"] != "open" or operation["state"] != "pending"
@@ -548,15 +563,190 @@ def reconcile_open_generation(*, mirror_id: str, operation_id: str, binding: Ope
     return generation_id
 
 
+@dataclass(frozen=True)
+class OpenPublicationIdentity:
+    authority: Authority
+    generation_id: str
+    history_epoch: str
+    snapshot_operation_id: str
+    scan_offset: int
+    completion_offset: int
+    certificate_ref: str
+
+
+@dataclass(frozen=True)
+class CommittedOpenPublication:
+    published_generation_id: str
+    allocation: dict
+    certificate: dict
+    applied_offset: int
+    history_bound: dict
+
+
+class ObserveCommittedOpenPublication(Protocol):
+    def __call__(
+        self, *, mirror_id: str, operation_id: str, binding: OpenGenerationBinding,
+        expected: OpenPublicationIdentity,
+    ) -> AbstractContextManager[CommittedOpenPublication | None]:
+        """Authenticate and guard a current target view through Management commit or rollback.
+
+        Return the committed pointer, delivery_metadata for that generation, the complete
+        certificates row, the generation's applied offset and history_bound. The bounded
+        guard must prevent changes to this view and must never acquire Management locks.
+        """
+        ...
+
+
+def publication_certificate_ref(evidence: dict) -> str:
+    """Reference the exact certificate evidence independently of target cursor movement."""
+    payload = json.dumps(evidence, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return "sha256:" + sha256(payload.encode()).hexdigest()
+
+
+def _open_publication_binding(operation, expected):
+    claim = operation.get("allocation")
+    if (not claim or claim["observed"] is not True or claim["generation_id"] != expected.generation_id
+            or claim["mirror_revision"] != operation["control_revision"]
+            or claim["binding"]["authority"] != asdict(expected.authority)
+            or claim["binding"]["history_epoch"] != expected.history_epoch):
+        _error("MIRROR_CONTROL_CONFLICT")
+    data = claim["binding"]
+    return OpenGenerationBinding(**dict(data, authority=expected.authority, columns=dict(data["columns"]),
+                                        key_columns=tuple(data["key_columns"]),
+                                        partition_identity=PartitionIdentity(**data["partition_identity"])))
+
+
+def _publication_snapshot(state, mirror_id, operation, binding, expected):
+    snapshot = state.get("incremental_snapshots", {}).get("generations", {}).get(expected.generation_id)
+    allocated = dict(authority=asdict(binding.authority), mirror_id=mirror_id,
+                     mirror_revision=operation["control_revision"], allocation_operation_id=operation["id"],
+                     generation_id=expected.generation_id, table_identity=binding.table_identity,
+                     qualified_table=binding.qualified_table, history_epoch=binding.history_epoch,
+                     schema_fingerprint=binding.schema_fingerprint, data_partition=asdict(binding.partition_identity))
+    if (not snapshot or snapshot.get("state") != "catching_up" or snapshot.get("receipt") is not True
+            or snapshot.get("id") != expected.snapshot_operation_id
+            or snapshot.get("scan", {}).get("offset") != expected.scan_offset
+            or snapshot.get("completion", {}).get("offset") != expected.completion_offset
+            or any(snapshot.get("binding", {}).get(key) != value for key, value in allocated.items())):
+        _error("MIRROR_CONTROL_CONFLICT")
+    return snapshot["binding"]
+
+
+def _validate_observed_publication(observed, *, mirror_id, operation_id, binding, expected, snapshot):
+    if not isinstance(observed, CommittedOpenPublication) or observed.published_generation_id != expected.generation_id:
+        _error("MIRROR_CONTROL_CONFLICT")
+    allocation = observed.allocation
+    certificate = observed.certificate
+    shared = dict(operation_id=operation_id, generation_id=expected.generation_id,
+                  table_identity=binding.table_identity, capture_generation=binding.authority.capture_generation,
+                  schema_fingerprint=binding.schema_fingerprint, partition_identity=asdict(binding.partition_identity))
+    aliases = {"timestamp": "timestamp without time zone", "timestamptz": "timestamp with time zone"}
+    target_binding = dict(shared, authority=asdict(binding.authority), mirror_id=mirror_id,
+                          history_epoch=binding.history_epoch, start_offset=binding.start_offset,
+                          column_names=list(binding.columns), key_columns=list(binding.key_columns),
+                          native_types={name: aliases.get(kind, kind) for name, kind in binding.columns.items()},
+                          status="published", cleanup_pending=False)
+    if (not isinstance(allocation, dict) or any(allocation.get(key) != value for key, value in target_binding.items())
+            or not isinstance(certificate, dict) or certificate.get("published") is not True
+            or not isinstance(certificate.get("verified_by"), str) or not certificate["verified_by"]
+            or certificate.get("authority") != target_binding["authority"]
+            or certificate.get("operation_id") != operation_id or certificate.get("generation_id") != expected.generation_id):
+        _error("MIRROR_CONTROL_CONFLICT")
+    evidence = certificate.get("evidence")
+    if (not isinstance(evidence, dict) or any(evidence.get(key) != value for key, value in shared.items())
+            or publication_certificate_ref(evidence) != expected.certificate_ref
+            or type(evidence.get("end_offset")) is not int or type(observed.applied_offset) is not int
+            or not binding.start_offset <= evidence["end_offset"] <= observed.applied_offset):
+        _error("MIRROR_CONTROL_CONFLICT")
+    completion = evidence.get("source_completion")
+    if (not isinstance(completion, dict) or completion.get("operation") != expected.snapshot_operation_id
+            or completion.get("table") != binding.qualified_table
+            or any(completion.get(key) != snapshot[key] for key in ("notification_topic", "notification_partition"))):
+        _error("MIRROR_CONTROL_CONFLICT")
+    terminals = completion.get("terminals")
+    required = (("TABLE_SCAN_COMPLETED", expected.scan_offset), ("COMPLETED", expected.completion_offset))
+    if (not isinstance(terminals, list) or len(terminals) != len(required)
+            or any(not isinstance(terminal, dict) or type(terminal.get("offset")) is not int
+                   or terminal["offset"] != offset or not isinstance(terminal.get("event"), dict)
+                   or terminal["event"].get("id") != expected.snapshot_operation_id
+                   or terminal["event"].get("type") != kind
+                   for terminal, (kind, offset) in zip(terminals, required))):
+        _error("MIRROR_CONTROL_CONFLICT")
+
+
+def reconcile_open_publication(
+    *, mirror_id: str, operation_id: str, expected: OpenPublicationIdentity,
+    observe_committed: ObserveCommittedOpenPublication,
+) -> Literal["applied", "already_applied"]:
+    """Project the first published generation or acknowledge its historical receipt."""
+    from backend.metadata.mirrors.history import admit_observed_history
+
+    store = _storage()
+    if (not isinstance(store, SqlMirrorStore) or not isinstance(expected, OpenPublicationIdentity)
+            or not isinstance(expected.authority, Authority)
+            or not expected.snapshot_operation_id or not expected.certificate_ref
+            or type(expected.scan_offset) is not int or type(expected.completion_offset) is not int
+            or not 0 <= expected.scan_offset < expected.completion_offset):
+        _error("MIRROR_CONTROL_CONFLICT")
+    receipt = asdict(expected)
+    authority = receipt["authority"]
+    if any(type(authority[key]) is not int for key in ("owner_epoch", "control_revision", "credential_revision")):
+        _error("MIRROR_CONTROL_CONFLICT")
+    with ExitStack() as target_guard, store.transaction() as session:
+        mirror = _lock_mirror_source(session, mirror_id)
+        operation = next((op for op in store.ops(session, mirror_id) if op["id"] == operation_id), None)
+        if operation is None or operation["kind"] != "open":
+            _error("MIRROR_CONTROL_CONFLICT")
+        if "publication_receipt" in operation:
+            if operation["state"] != "applied" or operation["publication_receipt"] != receipt:
+                _error("MIRROR_CONTROL_CONFLICT")
+            return "already_applied"
+        if (operation["state"] != "pending" or operation["control_revision"] != mirror["control"]["control_revision"]
+                or mirror["published_generation_id"] is not None
+                or expected.history_epoch != initial_history_epoch(mirror_id)):
+            _error("MIRROR_CONTROL_CONFLICT")
+        binding = _open_publication_binding(operation, expected)
+        state = _require_open_binding(session, store, mirror, binding)
+        source = session.get(SourceRow, mirror["source_id"], populate_existing=True)
+        if (source.status != "active" or source.engine != "postgresql" or not source.capture_credential_ciphertext
+                or source.capture_revision != expected.authority.credential_revision
+                or state.get("applied_revision") != expected.authority.control_revision):
+            _error("MIRROR_CONTROL_CONFLICT")
+        snapshot = _publication_snapshot(state, mirror_id, operation, binding, expected)
+        mirror_row = session.get(MirrorRow, mirror_id, with_for_update=True)
+        gate = session.get(HistoryGateRow, mirror_id, with_for_update=True, populate_existing=True)
+        if gate is not None and (gate.status != "available" or gate.history_epoch != expected.history_epoch):
+            _error("MIRROR_CONTROL_CONFLICT")
+        observed = target_guard.enter_context(observe_committed(
+            mirror_id=mirror_id, operation_id=operation_id, binding=deepcopy(binding), expected=expected,
+        ))
+        _validate_observed_publication(observed, mirror_id=mirror_id, operation_id=operation_id,
+                                       binding=binding, expected=expected, snapshot=snapshot)
+        bound = observed.history_bound
+        if not isinstance(bound, dict) or bound.get("mirror_id") != mirror_id:
+            _error("MIRROR_CONTROL_CONFLICT")
+        lower, upper = admit_observed_history(session, mirror=mirror_row, gate=gate,
+                                              history_epoch=expected.history_epoch, bound=bound)
+        store.save(session, dict(mirror, published_generation_id=observed.published_generation_id,
+                                 capture_generation=binding.authority.capture_generation,
+                                 history_epoch=bound["history_epoch"], retained_lower_bound=lower,
+                                 committed_upper_bound=upper))
+        store.save_op(session, dict(operation, state="applied", publication_receipt=receipt))
+        return "applied"
+    _error("MIRROR_CONTROL_CONFLICT")
+
+
 def _present(session, mirror):
     result = deepcopy(mirror)
     gate = None if isinstance(session, MemoryMirrorStore) else session.get(HistoryGateRow, mirror["id"])
     result["history_epoch"] = gate.history_epoch if gate is not None else None
+    if gate is None or gate.status != "available" or gate.history_epoch != mirror.get("history_epoch"):
+        result["retained_lower_bound"] = result["committed_upper_bound"] = None
     result["published_reference_count"] = sum(
         mid == mirror["id"] for _, mid in _storage().refs(session)
     )
     result["operations"] = sorted(
-        ({key: value for key, value in op.items() if key != "allocation"}
+        ({key: value for key, value in op.items() if key not in {"allocation", "publication_receipt"}}
          for op in _storage().ops(session, mirror["id"])),
         key=lambda op: (op["requested_at"], op["id"]),
     )

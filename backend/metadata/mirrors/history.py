@@ -32,6 +32,30 @@ def _point(mirror_id, epoch, pair):
     return dict(mirror_id=mirror_id, history_epoch=epoch, commit_seq=pair[0], entry_seq=pair[1])
 
 
+def _validated_bounds(bound, *, mirror_id, source_id, history_epoch):
+    if (not isinstance(bound, dict) or bound.get("source_id") != source_id
+            or bound.get("history_epoch") != history_epoch):
+        _invalid()
+    lower = _position(bound.get("lower_bound"), mirror_id, history_epoch)
+    upper = _position(bound.get("upper_bound"), mirror_id, history_epoch)
+    if upper < lower:
+        _invalid()
+    return lower, upper
+
+
+def admit_observed_history(session, *, mirror, gate, history_epoch, bound):
+    """Admit validated bounds while the caller holds the mirror and any existing gate lock."""
+    lower, upper = _validated_bounds(bound, mirror_id=mirror.id, source_id=mirror.source_id,
+                                     history_epoch=history_epoch)
+    if gate is None:
+        session.add(HistoryGateRow(mirror_id=mirror.id, history_epoch=history_epoch,
+                                   lower_commit_seq=lower[0], lower_entry_seq=lower[1], status="available"))
+    elif (gate.status != "available" or gate.history_epoch != history_epoch
+          or (gate.lower_commit_seq, gate.lower_entry_seq) != lower):
+        _invalid()
+    return _point(mirror.id, history_epoch, lower), _point(mirror.id, history_epoch, upper)
+
+
 class SqlHistoryTarget:
     """Restricted gateway reads; invalidation uses the separate applier identity."""
 
@@ -104,11 +128,11 @@ class History:
         return mirror.source_id
 
     def _bounds(self, gate, bound, source_id):
-        if gate.status != "available" or bound.get("source_id") != source_id or bound.get("history_epoch") != gate.history_epoch:
+        if gate.status != "available":
             _invalid()
-        lower = _position(bound["lower_bound"], gate.mirror_id, gate.history_epoch)
-        upper = _position(bound["upper_bound"], gate.mirror_id, gate.history_epoch)
-        if lower != (gate.lower_commit_seq, gate.lower_entry_seq) or upper < lower:
+        lower, upper = _validated_bounds(bound, mirror_id=gate.mirror_id, source_id=source_id,
+                                         history_epoch=gate.history_epoch)
+        if lower != (gate.lower_commit_seq, gate.lower_entry_seq):
             _invalid()
         return lower, upper
 
@@ -121,13 +145,7 @@ class History:
                 _invalid()
             return
         bound = self.target.capture_bound(mirror_id=mirror_id)
-        lower = _position(bound["lower_bound"], mirror_id, history_epoch)
-        upper = _position(bound["upper_bound"], mirror_id, history_epoch)
-        if (bound.get("source_id") != mirror.source_id or bound.get("history_epoch") != history_epoch
-                or upper < lower):
-            _invalid()
-        session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch=history_epoch,
-                                   lower_commit_seq=lower[0], lower_entry_seq=lower[1], status="available"))
+        admit_observed_history(session, mirror=mirror, gate=None, history_epoch=history_epoch, bound=bound)
         session.flush()
 
     def capture_bound(self, *, mirror_id, execution_user_id):

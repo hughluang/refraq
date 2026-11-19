@@ -1,10 +1,13 @@
-"""Publication requires evidence installed by an administrative trusted verifier."""
+"""Guarded target publication and observation of verified evidence."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 import json
 
 from sqlalchemy import text
 
+from backend.metadata.mirrors.service import CommittedOpenPublication, OpenGenerationBinding, OpenPublicationIdentity
 from backend.metadata.mirrors.types import Authority
 
 
@@ -44,8 +47,11 @@ def persist_verified_certificate(connection, *, operation_id, authority, generat
 
 
 class Publication:
-    def __init__(self, engine):
+    def __init__(self, engine, *, timeout_ms: int = 5000):
+        if type(timeout_ms) is not int or timeout_ms <= 0:
+            raise ValueError("A positive bounded target timeout is required")
         self.engine = engine
+        self.timeout_ms = timeout_ms
 
     def publish_generation(self, *, operation_id: str, authority: Authority,
                            generation_id: str, certificate: dict):
@@ -56,3 +62,21 @@ class Publication:
             ), {"operation": operation_id, "authority": json.dumps(asdict(authority)),
                 "generation": generation_id, "certificate": json.dumps(certificate)}).scalar_one()
         return observed
+
+    @contextmanager
+    def observe_committed(
+        self, *, mirror_id: str, operation_id: str, binding: OpenGenerationBinding,
+        expected: OpenPublicationIdentity,
+    ) -> Iterator[CommittedOpenPublication]:
+        """Hold target publication locks through the caller's Management transaction."""
+        if binding.authority != expected.authority or binding.history_epoch != expected.history_epoch:
+            raise ValueError("MIRROR_PUBLICATION_BLOCKED")
+        with self.engine.connect().execution_options(isolation_level="READ COMMITTED") as connection, connection.begin():
+            connection.execute(text("SELECT set_config('statement_timeout', :timeout, true), "
+                                    "set_config('lock_timeout', :timeout, true)"), {"timeout": str(self.timeout_ms)})
+            observed = connection.execute(text(
+                "SELECT source_mirror_state.observe_committed_publication(:mirror, :operation, :generation, "
+                "CAST(:authority AS jsonb), :epoch)"
+            ), {"mirror": mirror_id, "operation": operation_id, "generation": expected.generation_id,
+                "authority": json.dumps(asdict(expected.authority)), "epoch": expected.history_epoch}).scalar_one()
+            yield CommittedOpenPublication(**observed)

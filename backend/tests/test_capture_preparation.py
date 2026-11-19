@@ -1,6 +1,6 @@
 """Native target and protected runtime gates for open preparation."""
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import timedelta
@@ -21,19 +21,28 @@ import jwt
 import psycopg
 from psycopg import sql
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
+from backend.admin.errors import AuthForbidden
+from backend.admin.models import RoleRow, UserGroupMemberRow, UserGroupRow, UserRow
 from backend.core.time import utc_now
 from backend.core.secrets import encrypt_secret
 from backend.metadata.capture import control, delivery_composition, runtime
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime_store import RuntimeBlocked
-from backend.metadata.models import SourceRow
+from backend.metadata.models import SourceMembershipRow, SourceRow
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
 from backend.metadata.capture.test_published_scope import SOURCE, management as management, publish
 from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, TRUST, allocation_observation, observation
 from backend.metadata.mirrors import bootstrap, service
-from backend.metadata.mirrors.types import Authority, PartitionIdentity
+from backend.metadata.mirrors.application import Application
+from backend.metadata.mirrors.history import History, SqlHistoryTarget
+from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
+from backend.metadata.mirrors.publication import Publication, persist_verified_certificate
+from backend.metadata.mirrors.schemas import MirrorResponse
+from backend.metadata.mirrors.types import Authority, PartitionIdentity, Record
 from backend.tests.test_mirror_generation_allocation import target_dsn as target_dsn
 
 
@@ -210,13 +219,206 @@ def private_gateway(private, dispatch):
             assert not errors, errors
 
 
+def reconcile_open_publication_observation(transaction, target_dsn, restricted, tmp_path, mirror_id, attempt,
+                                           *, wrong_terminal):
+    operation_id, generation_id = attempt
+
+    def reconcile(expected, observer):
+        with closing(runtime.CommandJournal(tmp_path)) as journal:
+            capture = runtime.CaptureRuntime(journal=journal, connect=None, signals=None,
+                                             observe_committed_publication=observer)
+            return capture.reconcile_open_publication(mirror_id=mirror_id, operation_id=operation_id, expected=expected)
+
+    with pytest.raises(RuntimeBlocked, match="publication_observer_not_installed"):
+        reconcile(None, None)
+
+    with transaction() as session:
+        management_db = session.bind
+        source_state = control.load_binding(session, SOURCE)
+        snapshot = source_state["incremental_snapshots"]["generations"][generation_id]
+    binding = snapshot["binding"]
+    authority = Authority(**binding["authority"])
+    terminals = [dict(offset=snapshot[key]["offset"], event={"id": snapshot["id"], "type": kind})
+                 for key, kind in (("scan", "TABLE_SCAN_COMPLETED"), ("completion", "COMPLETED"))]
+    if wrong_terminal:
+        terminals[1]["offset"] += 1
+    source_completion = dict(operation=snapshot["id"], table=binding["qualified_table"], terminals=terminals,
+                             notification_topic=binding["notification_topic"],
+                             notification_partition=binding["notification_partition"])
+    certificate = dict(operation_id=operation_id, generation_id=generation_id,
+                       table_identity=binding["table_identity"], capture_generation=authority.capture_generation,
+                       schema_fingerprint=binding["schema_fingerprint"], partition_identity=binding["data_partition"],
+                       end_offset=-1, source_completion=source_completion, producer_exclusion="fixture-exclusion",
+                       durable_source_checkpoint="fixture-checkpoint", ordered_delivery_proof="fixture-empty-delivery",
+                       key_fingerprint="fixture-key", empty_table_proof=True)
+    publication = dict(operation_id=operation_id, generation_id=generation_id,
+                       authority=authority, certificate=certificate)
+    verifier = SimpleNamespace(verify=lambda **facts: "fixture-verifier" if facts == {
+        "authority": authority, "certificate": certificate,
+    } else None)
+    with psycopg.connect(target_dsn) as connection:
+        persist_verified_certificate(connection, **publication, verifier=verifier)
+    expected = service.OpenPublicationIdentity(
+        authority=authority, generation_id=generation_id, history_epoch=binding["history_epoch"],
+        snapshot_operation_id=snapshot["id"], scan_offset=11, completion_offset=12,
+        certificate_ref=service.publication_certificate_ref(certificate),
+    )
+    with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
+        reconcile(replace(expected, authority=None), pytest.fail)
+    publisher = Publication(restricted, timeout_ms=3000)
+    target_row = "SELECT published_generation_id FROM source_mirror_state.mirrors WHERE id = %s"
+
+    @contextmanager
+    def lose_observation_response(**request):
+        with publisher.observe_committed(**request) as observed:
+            yield observed
+        raise RuntimeBlocked("fixture_response_lost")
+
+    before = service.get_mirror(mirror_id)
+    assert before["published_generation_id"] is before["history_epoch"] is None
+    assert before["operations"][0]["state"] == "pending"
+    with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
+        reconcile(expected, publisher.observe_committed)
+    assert service.get_mirror(mirror_id) == before
+
+    assert publisher.publish_generation(**publication) == generation_id
+    if wrong_terminal:
+        with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
+            reconcile(expected, publisher.observe_committed)
+        assert service.get_mirror(mirror_id) == before
+        return
+
+    with transaction() as session:
+        control.save_binding(session, dict(source_state, runtime_instance_id="replacement-owner"))
+    with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
+        reconcile(expected, pytest.fail)
+    with transaction() as session:
+        control.save_binding(session, source_state)
+        session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch=expected.history_epoch,
+                                   lower_commit_seq=0, lower_entry_seq=0, status="invalidating"))
+    with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
+        reconcile(expected, pytest.fail)
+    with transaction() as session:
+        session.delete(session.get(HistoryGateRow, mirror_id))
+
+    with psycopg.connect(target_dsn) as connection:
+        connection.execute("UPDATE source_mirror_state.mirrors SET retained_commit_seq = 1 WHERE id = %s", (mirror_id,))
+    with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
+        reconcile(expected, publisher.observe_committed)
+    assert service.get_mirror(mirror_id) == before
+    assert Application(restricted).apply_batch(
+        authority=authority, generation_id=generation_id,
+        partition_identity=PartitionIdentity(**binding["data_partition"]),
+        records=[Record(0, "items", authority.capture_generation, "upsert", "live", {"id": 1},
+                        {"id": 1, "body": "fixture"})],
+    ) == {"offset": 0, "commit_seq": 1}
+
+    with transaction() as session:
+        session.execute(text("CREATE FUNCTION fail_publication_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                             "BEGIN RAISE EXCEPTION 'fixture Management commit rejected'; END $$"))
+        session.execute(text("CREATE CONSTRAINT TRIGGER fail_publication_commit AFTER UPDATE ON source_mirror_operations "
+                             "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fail_publication_commit()"))
+    guarded_commits = []
+
+    def verify_commit_is_guarded(connection):
+        with psycopg.connect(target_dsn) as contender, pytest.raises(psycopg.errors.LockNotAvailable):
+            contender.execute(target_row + " FOR UPDATE NOWAIT", (mirror_id,))
+        guarded_commits.append(True)
+
+    def reconcile_under_commit_probe(observer):
+        event.listen(management_db, "commit", verify_commit_is_guarded)
+        try:
+            return reconcile(expected, observer)
+        finally:
+            event.remove(management_db, "commit", verify_commit_is_guarded)
+
+    with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
+        reconcile_under_commit_probe(publisher.observe_committed)
+    assert guarded_commits == [True]
+    with psycopg.connect(target_dsn) as contender:
+        assert contender.execute(target_row + " FOR UPDATE NOWAIT", (mirror_id,)).fetchone() == (generation_id,)
+    assert service.get_mirror(mirror_id) == before
+    with transaction() as session:
+        assert session.get(HistoryGateRow, mirror_id) is None
+        session.execute(text("DROP TRIGGER fail_publication_commit ON source_mirror_operations"))
+
+    with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
+        reconcile_under_commit_probe(lose_observation_response)
+    assert guarded_commits == [True, True]
+    with psycopg.connect(target_dsn) as contender:
+        assert contender.execute(target_row + " FOR UPDATE NOWAIT", (mirror_id,)).fetchone() == (generation_id,)
+    after = service.get_mirror(mirror_id)
+    assert after["published_generation_id"] == generation_id
+    assert after["capture_generation"] == authority.capture_generation
+    assert after["history_epoch"] == binding["history_epoch"]
+    assert after["operations"] == [dict(before["operations"][0], state="applied")]
+    assert after["status"] == before["status"]
+    assert after["readiness"] == before["readiness"] and after["progress"] == before["progress"]
+    lower = dict(mirror_id=mirror_id, history_epoch=expected.history_epoch, commit_seq=1, entry_seq=0)
+    upper = dict(lower, entry_seq=1)
+    mirror_out = MirrorResponse.model_validate({"mirror": after}).model_dump()["mirror"]
+    assert mirror_out["retained_lower_bound"] == lower
+    assert mirror_out["committed_upper_bound"] == upper
+    assert reconcile(expected, pytest.fail) == "already_applied"
+    for changed in (replace(expected, certificate_ref="different"), replace(expected, completion_offset=13),
+                    replace(expected, authority=replace(authority, owner_epoch=authority.owner_epoch + 1)),
+                    replace(expected, authority=replace(authority, owner_epoch=float(authority.owner_epoch)))):
+        with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
+            reconcile(changed, pytest.fail)
+
+    for model in (RoleRow, UserRow, UserGroupRow, UserGroupMemberRow, SourceMembershipRow, HistoryInvalidationRow):
+        model.__table__.create(management_db)
+    now = utc_now()
+    with transaction() as session:
+        session.add(RoleRow(id="reader-role", key="reader", name="Reader", permissions=["sources:data_read"],
+                            created_at=now.timestamp()))
+        session.add(UserRow(id="reader", role_id="reader-role", account="reader", display_name="Reader", created_at=now))
+        session.add(SourceMembershipRow(id="reader-membership", subject_type="user", subject_id="reader", target=SOURCE,
+                                        level="viewer", created_at=now, updated_at=now))
+        gate = session.get(HistoryGateRow, mirror_id)
+        assert (gate.status, gate.history_epoch, gate.lower_commit_seq, gate.lower_entry_seq) == (
+            "available", expected.history_epoch, 1, 0,
+        )
+    gateway = create_engine("postgresql+psycopg://", poolclass=NullPool, creator=lambda: psycopg.connect(
+        target_dsn, options="-c role=refraq_mirror_gateway",
+    ))
+    history = History(session_factory=sessionmaker(management_db),
+                      target=SqlHistoryTarget(engine=gateway, invalidation_engine=restricted, timeout_ms=3000))
+    query = dict(mirror_id=mirror_id, execution_user_id="reader")
+    try:
+        assert history.capture_bound(**query) == dict(mirror_id=mirror_id, source_id=SOURCE,
+                                                     history_epoch=expected.history_epoch,
+                                                     lower_bound=lower, upper_bound=upper)
+        with transaction() as session:
+            session.delete(session.get(SourceMembershipRow, "reader-membership"))
+        with pytest.raises(AuthForbidden):
+            history.capture_bound(**query)
+        with transaction() as session:
+            transition, = history.invalidate_history(session, mirror_ids=[mirror_id], reason="retention_loss",
+                                                     operation_id="invalidate-initial-epoch")
+        invalidated = service.get_mirror(mirror_id)
+        assert invalidated["history_epoch"] == transition["history_epoch"] != expected.history_epoch
+        mirror_out = MirrorResponse.model_validate({"mirror": invalidated}).model_dump()["mirror"]
+        assert mirror_out["retained_lower_bound"] is mirror_out["committed_upper_bound"] is None
+        assert reconcile(expected, pytest.fail) == "already_applied"
+        assert service.get_mirror(mirror_id) == invalidated
+        with transaction() as session:
+            assert session.get(HistoryGateRow, mirror_id).status == "invalidating"
+        history.consume_invalidation(operation_id="invalidate-initial-epoch")
+        assert service.get_mirror(mirror_id) == invalidated
+    finally:
+        gateway.dispose()
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("case", ["success", "loss", "bad_incarnation", "bad_key", "bad_metadata", "drift_before_resume",
                                    "withdraw_during_allocation", "takeover", "prefilled_manifest", "history_gate_race",
                                    "wrong_fence", "different_allocation_fence", "wrong_start_offset", "target_key_drift",
                                    "wrong_owner_receipt", "grant_loss", "authority_during_binding", "cross_source_binding",
                                    "target_fence_drift", "withdraw_with_management_timeout",
-                                   "snapshot_loss", "snapshot_wrong_table", "snapshot_wrong_signer",
+                                   "snapshot_loss", "snapshot_loss_open_publication_observation",
+                                   "snapshot_loss_open_publication_observation_wrong_terminal",
+                                   "snapshot_wrong_table", "snapshot_wrong_signer",
                                    "snapshot_wrong_incarnation", "snapshot_replaced_relation", "snapshot_replacement_epoch"])
 def test_protected_executable_prepares_current_open(case, native_target, management, monkeypatch, tmp_path, request):
     target_dsn = native_target
@@ -576,11 +778,11 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                         sql.Identifier(connector_role),
                     ))
                     connection.execute("ALTER PUBLICATION capture_pub SET TABLE public.items, public.snapshot_signal")
-            assert runtime.main() == (0 if case == "snapshot_loss" else 2)
+            assert runtime.main() == (0 if case.startswith("snapshot_loss") else 2)
             with transaction() as session:
                 result = control.load_binding(session, SOURCE)["incremental_snapshots"]["generations"][attempts[-1][1]]
                 assert result["id"] == submissions[0]
-                assert result["state"] == ("catching_up" if case == "snapshot_loss" else
+                assert result["state"] == ("catching_up" if case.startswith("snapshot_loss") else
                                            "blocked" if case == "snapshot_wrong_table" else "submission_uncertain")
             assert "incremental_snapshots" not in control.capture_status(SOURCE)["control"]
             assert receipt_checks == ([] if case == "snapshot_replaced_relation" else submissions)
@@ -589,6 +791,13 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                 assert connection.execute(sql.SQL("SELECT id FROM public.{}").format(sql.Identifier(relation_name))).fetchall() == [
                     (submissions[0],),
                 ]
+            if case.startswith("snapshot_loss_open_publication_observation"):
+                try:
+                    reconcile_open_publication_observation(transaction, target_dsn, restricted, tmp_path, mirror_id,
+                                                           attempts[-1], wrong_terminal=case.endswith("wrong_terminal"))
+                finally:
+                    restricted.dispose()
+                return
             reads_before_stop = list(snapshot_reads)
             withdraw()
             assert runtime.main() == 0

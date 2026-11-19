@@ -21,6 +21,7 @@ FUNCTIONS = {
     "apply_batch(jsonb,text,jsonb,jsonb)": "refraq_mirror_applier",
     "delivery_metadata(text)": "refraq_mirror_applier",
     "publish_generation(text,jsonb,text,jsonb)": "refraq_mirror_applier",
+    "observe_committed_publication(text,text,text,jsonb,text)": "refraq_mirror_applier",
     "acquire_pin(text,text)": "refraq_mirror_gateway",
     "resolve_source(text)": "refraq_mirror_gateway",
     "read_page(text,text,jsonb,integer)": "refraq_mirror_gateway",

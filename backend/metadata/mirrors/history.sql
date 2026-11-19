@@ -26,6 +26,62 @@ BEGIN
    'commit_seq', m.commit_seq, 'entry_seq', last_entry));
 END $$;
 
+CREATE OR REPLACE FUNCTION source_mirror_state.observe_committed_publication(
+ requested_mirror text, requested_operation text, requested_generation text, expected_authority jsonb, expected_epoch text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+DECLARE mirror_row source_mirror_state.mirrors; generation_row source_mirror_state.generations;
+ certificate_row source_mirror_state.certificates;
+ allocation jsonb; bound jsonb; certified_offset numeric; start_offset numeric;
+BEGIN
+ SELECT * INTO mirror_row FROM source_mirror_state.mirrors WHERE id = requested_mirror FOR SHARE;
+ IF NOT FOUND OR mirror_row.published_generation_id IS DISTINCT FROM requested_generation
+  OR mirror_row.authority IS DISTINCT FROM expected_authority
+  OR mirror_row.source_id IS DISTINCT FROM expected_authority->>'source_id'
+  OR mirror_row.history_epoch IS DISTINCT FROM expected_epoch THEN
+  RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
+ END IF;
+ SELECT * INTO generation_row FROM source_mirror_state.generations
+ WHERE id = requested_generation AND mirror_id = requested_mirror AND operation_id = requested_operation FOR SHARE;
+ IF NOT FOUND OR generation_row.status <> 'published' OR generation_row.cleanup_pending
+  OR generation_row.capture_generation IS DISTINCT FROM expected_authority->>'capture_generation' THEN
+  RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
+ END IF;
+ SELECT * INTO certificate_row FROM source_mirror_state.certificates
+ WHERE operation_id = requested_operation AND generation_id = requested_generation FOR SHARE;
+ IF NOT FOUND OR NOT certificate_row.published OR certificate_row.authority IS DISTINCT FROM expected_authority
+  OR certificate_row.verified_by = ''
+  OR certificate_row.evidence->>'operation_id' IS DISTINCT FROM requested_operation
+  OR certificate_row.evidence->>'generation_id' IS DISTINCT FROM requested_generation
+  OR certificate_row.evidence->>'table_identity' IS DISTINCT FROM mirror_row.table_identity
+  OR certificate_row.evidence->>'capture_generation' IS DISTINCT FROM generation_row.capture_generation
+  OR certificate_row.evidence->>'schema_fingerprint' IS DISTINCT FROM generation_row.schema_fingerprint
+  OR certificate_row.evidence->'partition_identity' IS DISTINCT FROM generation_row.partition_identity
+  OR jsonb_typeof(certificate_row.evidence->'end_offset') IS DISTINCT FROM 'number'
+  OR certificate_row.evidence->>'end_offset' !~ '^-?[0-9]+$' THEN
+  RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
+ END IF;
+ allocation := source_mirror_state.delivery_metadata(generation_row.id);
+ IF jsonb_typeof(allocation->'start_offset') IS DISTINCT FROM 'number'
+  OR allocation->>'start_offset' !~ '^-?[0-9]+$' THEN
+  RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
+ END IF;
+ certified_offset := (certificate_row.evidence->>'end_offset')::numeric;
+ start_offset := (allocation->>'start_offset')::numeric;
+ IF start_offset < -1 OR certified_offset < start_offset OR generation_row.applied_offset < certified_offset THEN
+  RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
+ END IF;
+ bound := source_mirror_state.history_bound(mirror_row.id);
+ IF ROW(mirror_row.retained_commit_seq, mirror_row.retained_entry_seq)
+  > ROW(mirror_row.commit_seq, (bound->'upper_bound'->>'entry_seq')::integer) THEN
+  RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
+ END IF;
+ RETURN jsonb_build_object('published_generation_id', mirror_row.published_generation_id, 'allocation', allocation,
+  'certificate', jsonb_build_object('operation_id', certificate_row.operation_id,
+   'generation_id', certificate_row.generation_id, 'authority', certificate_row.authority,
+   'evidence', certificate_row.evidence, 'verified_by', certificate_row.verified_by, 'published', certificate_row.published),
+  'applied_offset', generation_row.applied_offset, 'history_bound', bound);
+END $$;
+
 CREATE OR REPLACE FUNCTION source_mirror_state.history_page(mid text, after_position jsonb, through_position jsonb, page_limit integer)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
 DECLARE b jsonb; entries jsonb; next_position jsonb;
