@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS source_mirror_state.generations (
 );
 ALTER TABLE source_mirror_state.generations
  ADD COLUMN IF NOT EXISTS anchored_profile jsonb,
- ADD COLUMN IF NOT EXISTS anchored_coverage jsonb;
+ ADD COLUMN IF NOT EXISTS anchored_coverage jsonb,
+ ADD COLUMN IF NOT EXISTS anchored_publication jsonb;
 CREATE TABLE IF NOT EXISTS source_mirror_state.live_log (
  mirror_id text NOT NULL REFERENCES source_mirror_state.mirrors,
  history_epoch text NOT NULL, commit_seq bigint NOT NULL, entry_seq integer NOT NULL,
@@ -68,6 +69,9 @@ RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source
   'status', g.status, 'native_types', (
    SELECT jsonb_object_agg(a.attname, format_type(a.atttypid, a.atttypmod))
    FROM pg_attribute a WHERE a.attrelid = target.oid AND a.attnum > 0 AND NOT a.attisdropped))
+ || CASE WHEN g.anchored_profile IS NOT NULL THEN jsonb_build_object(
+  'anchored_profile', g.anchored_profile, 'anchored_coverage', g.anchored_coverage,
+  'anchored_seal', g.anchored_publication->'seal') ELSE '{}'::jsonb END
  FROM source_mirror_state.generations g
  JOIN source_mirror_state.mirrors m ON m.id = g.mirror_id
  LEFT JOIN pg_class target ON target.relnamespace = 'source_mirror'::regnamespace AND target.relname = g.table_name
@@ -75,10 +79,11 @@ RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source
 $$;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.apply_batch(a jsonb, gid text, p jsonb, records jsonb,
-                                                         profile jsonb, scan jsonb)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+                                                         profile jsonb, scan jsonb, resume jsonb)
+RETURNS jsonb LANGUAGE plpgsql SET search_path = pg_catalog, source_mirror_state AS $$
 DECLARE
  m source_mirror_state.mirrors; g source_mirror_state.generations;
+ certified source_mirror_state.certificates; seal_proof jsonb; sealed_end bigint;
  r jsonb; old_row jsonb; new_row jsonb; candidate jsonb; typed_key jsonb;
  predicate text; columns_sql text; updates_sql text; k text; n bigint;
  entries integer := 0; seq bigint; previous_offset bigint := NULL;
@@ -98,6 +103,9 @@ BEGIN
  IF profile IS DISTINCT FROM g.anchored_profile OR (profile IS NULL AND scan IS NOT NULL) THEN
   RAISE EXCEPTION 'MIRROR_COVERAGE_PROFILE_MISMATCH';
  END IF;
+ IF resume IS NOT NULL AND (profile IS NULL OR scan IS NULL OR sealed) THEN
+  RAISE EXCEPTION 'MIRROR_RESUME_BLOCKED';
+ END IF;
  IF profile IS NOT NULL THEN
   IF profile->>'kind' IS DISTINCT FROM 'disposable_read_committed_v1'
    OR jsonb_typeof(profile->'leader_epoch') IS DISTINCT FROM 'number'
@@ -110,6 +118,52 @@ BEGIN
   END IF;
   IF records = '[]'::jsonb AND scan IS NULL THEN
    RETURN jsonb_build_object('offset', g.applied_offset, 'commit_seq', m.commit_seq);
+  END IF;
+  IF resume IS NOT NULL THEN
+   SELECT * INTO certified FROM source_mirror_state.certificates
+   WHERE operation_id = g.operation_id AND generation_id = gid FOR SHARE;
+   seal_proof := g.anchored_publication->'seal';
+   IF NOT FOUND OR NOT certified.published OR certified.verified_by = ''
+    OR certified.evidence IS DISTINCT FROM resume->'certificate'
+    OR certified.authority IS DISTINCT FROM a OR m.source_id IS DISTINCT FROM a->>'source_id'
+    OR certified.evidence->>'operation_id' IS DISTINCT FROM g.operation_id
+    OR certified.evidence->>'generation_id' IS DISTINCT FROM gid
+    OR certified.evidence->>'table_identity' IS DISTINCT FROM m.table_identity
+    OR certified.evidence->>'schema_fingerprint' IS DISTINCT FROM g.schema_fingerprint
+    OR certified.evidence->>'capture_generation' IS DISTINCT FROM g.capture_generation
+    OR certified.evidence->'partition_identity' IS DISTINCT FROM p
+    OR p->'partition' IS DISTINCT FROM '0'::jsonb
+    OR m.published_generation_id IS DISTINCT FROM gid OR g.status <> 'published'
+    OR g.anchored_publication->>'history_epoch' IS DISTINCT FROM m.history_epoch
+    OR resume->>'history_epoch' IS DISTINCT FROM m.history_epoch
+    OR seal_proof IS NULL OR seal_proof IS DISTINCT FROM certified.evidence->'ordered_delivery_proof'
+    OR seal_proof->'authority' IS DISTINCT FROM a
+    OR seal_proof->'eof' IS DISTINCT FROM seal_proof->'end'
+    OR seal_proof->'before'->'leader_epoch' IS DISTINCT FROM profile->'leader_epoch'
+    OR seal_proof->'after'->'leader_epoch' IS DISTINCT FROM profile->'leader_epoch'
+    OR jsonb_typeof(seal_proof->'eof') IS DISTINCT FROM 'number'
+    OR seal_proof->>'eof' !~ '^[0-9]+$' THEN
+    RAISE EXCEPTION 'MIRROR_RESUME_BLOCKED';
+   END IF;
+   sealed_end := (seal_proof->>'eof')::bigint;
+   bounds := g.anchored_coverage->'after';
+   IF certified.evidence->'end_offset' IS DISTINCT FROM to_jsonb(sealed_end - 1)
+    OR g.applied_offset < sealed_end - 1
+    OR g.anchored_coverage->'authority' IS DISTINCT FROM a
+    OR (g.applied_offset = sealed_end - 1 AND g.anchored_coverage IS DISTINCT FROM seal_proof)
+    OR (g.applied_offset >= sealed_end AND (g.anchored_coverage ? 'eof'
+     OR ((g.anchored_coverage->>'start')::bigint >= sealed_end) IS NOT TRUE
+     OR bounds->'low' IS DISTINCT FROM '0'::jsonb
+     OR bounds->'leader_epoch' IS DISTINCT FROM profile->'leader_epoch'
+     OR jsonb_typeof(bounds->'stable') IS DISTINCT FROM 'number'
+     OR jsonb_typeof(bounds->'high') IS DISTINCT FROM 'number'
+     OR bounds->>'stable' !~ '^[0-9]+$' OR bounds->>'high' !~ '^[0-9]+$'
+     OR (bounds->>'stable')::bigint < g.applied_offset + 1
+     OR (bounds->>'high')::bigint < (bounds->>'stable')::bigint)) THEN
+    RAISE EXCEPTION 'MIRROR_RESUME_BLOCKED';
+   END IF;
+  ELSIF g.status = 'published' THEN
+   RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
   END IF;
   IF jsonb_typeof(scan) IS DISTINCT FROM 'object'
    OR jsonb_typeof(records) IS DISTINCT FROM 'array'
@@ -146,7 +200,7 @@ BEGIN
    pre_stable := (bounds->>'stable')::bigint;
    pre_high := (bounds->>'high')::bigint;
   END LOOP;
-  IF g.anchored_coverage ? 'eof' THEN
+  IF resume IS NULL AND g.anchored_coverage ? 'eof' THEN
    IF NOT sealed OR scan->'end' IS DISTINCT FROM g.anchored_coverage->'end'
     OR g.anchored_coverage->'authority' IS DISTINCT FROM a OR records <> '[]'::jsonb THEN
     RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
@@ -243,6 +297,13 @@ BEGIN
  END IF;
  RETURN jsonb_build_object('offset', g.applied_offset, 'commit_seq', seq);
 END $$;
+REVOKE EXECUTE ON FUNCTION source_mirror_state.apply_batch(jsonb,text,jsonb,jsonb,jsonb,jsonb,jsonb) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION source_mirror_state.apply_batch(a jsonb, gid text, p jsonb, records jsonb,
+                                                         profile jsonb, scan jsonb)
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+ SELECT source_mirror_state.apply_batch(a, gid, p, records, profile, scan, NULL::jsonb)
+$$;
 REVOKE EXECUTE ON FUNCTION source_mirror_state.apply_batch(jsonb,text,jsonb,jsonb,jsonb,jsonb) FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.apply_batch(a jsonb, gid text, p jsonb, records jsonb)
@@ -284,10 +345,20 @@ BEGIN
   OR g.status NOT IN ('building','catching_up','complete') THEN
   RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
  END IF;
+ IF g.anchored_profile IS NOT NULL AND (c.verified_by = ''
+  OR g.anchored_coverage->'eof' IS DISTINCT FROM to_jsonb(g.applied_offset + 1)
+  OR g.anchored_coverage->'eof' IS DISTINCT FROM g.anchored_coverage->'end'
+  OR g.anchored_coverage->'authority' IS DISTINCT FROM a
+  OR g.anchored_coverage IS DISTINCT FROM cert->'ordered_delivery_proof') THEN
+  RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
+ END IF;
  IF m.published_generation_id IS NOT NULL THEN
   UPDATE source_mirror_state.generations SET status = 'retired' WHERE id = m.published_generation_id;
  END IF;
- UPDATE source_mirror_state.generations SET status = 'published' WHERE id = gid;
+ UPDATE source_mirror_state.generations SET status = 'published',
+  anchored_publication = CASE WHEN g.anchored_profile IS NOT NULL
+   THEN jsonb_build_object('seal', g.anchored_coverage, 'history_epoch', m.history_epoch) END
+ WHERE id = gid;
  UPDATE source_mirror_state.mirrors SET published_generation_id = gid WHERE id = m.id;
  UPDATE source_mirror_state.certificates SET published = true WHERE operation_id = op;
  RETURN gid;

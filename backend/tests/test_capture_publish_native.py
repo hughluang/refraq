@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 import json
 import os
@@ -10,19 +10,23 @@ from pathlib import Path
 from secrets import token_hex
 from tempfile import TemporaryDirectory
 import time
+from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg
+from confluent_kafka import TopicPartition
 from psycopg import sql
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
 from backend.core.errors import AppError
+from backend.metadata.capture.runtime_store import RuntimeBlocked
+from backend.metadata.mirrors.application import Application
 from backend.metadata.mirrors.authorization import authorize_source_data
 from backend.metadata.mirrors.publication import Publication, persist_verified_certificate
 from backend.metadata.mirrors.reads import Reads
-from backend.metadata.mirrors.types import PartitionIdentity, ReadCommittedBounds
+from backend.metadata.mirrors.types import PartitionIdentity, ReadCommittedBounds, Record
 from backend.tests.cdc.signal import EMPTY_TABLE, POPULATED_TABLE, SnapshotSignalProbe
 from backend.tests.test_capture_anchored_native import disposable_target
 from backend.tests.test_capture_seal_native import (
@@ -154,6 +158,8 @@ class QuiescedRig:
     started: float
     transport: dict
     checkpoint: tuple
+    worker_identity: str
+    connector_config: dict
 
     def partition(self, topic):
         identity, _ = self.transport[topic]
@@ -172,6 +178,47 @@ class QuiescedRig:
         return dict(network=profile.prefix, peers=sorted(peer['Name'] for peer in peers.values()),
                     slot=self.probe.slot, publication=self.probe.publication,
                     source_lineage=list(lineage), confirmed_flush_lsn=wal[1])
+
+    def resume(self, publications):
+        self.observe()
+        probe = self.probe
+        profile = probe.profile
+        for publication in publications:
+            checkpoint = publication['certificate']['evidence']['durable_source_checkpoint']
+            assert (checkpoint['offset'], checkpoint['value'], checkpoint['eof']) == self.checkpoint
+            assert checkpoint['partition'] == asdict(self.partition(OFFSET_TOPIC))
+        worker = profile.prefix + 'worker'
+        inspect = '{{.Id}} {{.Image}} {{.State.Running}}'
+        assert profile.docker('inspect', '-f', inspect, worker) == f'{self.worker_identity} false'
+        profile.docker('start', worker)
+        profile.wait('worker', lambda: profile.rest('', check=False))
+        assert profile.docker('inspect', '-f', inspect, worker) == f'{self.worker_identity} true'
+        assert json.loads(profile.rest('connectors')) == [probe.connector_path.split('/')[1]]
+        assert json.loads(profile.rest(f'{probe.connector_path}/config')) == self.connector_config
+        assert probe.await_stream() in ('TLSv1.2', 'TLSv1.3')
+        lineage, wal = source_position(probe, active=True)
+        assert lineage == self.lineage and wal[1] >= self.acknowledged_wal
+        assert wal[0] <= self.checkpoint[1]['lsn'] <= wal[2]
+        position, value, eof = self.checkpoint
+        checkpoint_records, observed_eof = committed(probe, OFFSET_TOPIC, start=eof)
+        key = [probe.connector_path.split('/')[1], {'server': probe.source}]
+        assert [(actual_key, actual_value) for _, actual_key, actual_value in checkpoint_records] in ([], [(key, value)])
+        current_checkpoint = checkpoint_records[-1][0] if checkpoint_records else position
+        assert connect_checkpoint(probe) == (current_checkpoint, value, observed_eof)
+        transport = transport_state(probe, self.transport, quiesced=True)
+        for topic, (identity, bounds) in transport.items():
+            retained_identity, retained_bounds = self.transport[topic]
+            assert (identity, bounds.epoch) == (retained_identity, retained_bounds.epoch)
+            assert bounds.positions[1] >= retained_bounds.positions[1]
+        assert transport[OFFSET_TOPIC][1].positions == (0, observed_eof, observed_eof)
+        for table in (EMPTY_TABLE, POPULATED_TABLE):
+            topic = probe.topic(table)
+            _, old_stable, _ = self.transport[topic][1].positions
+            assert committed(probe, topic, start=old_stable) == ([], transport[topic][1].positions[1])
+        peers = json.loads(profile.docker('network', 'inspect', '-f', '{{json .Containers}}', profile.prefix))
+        assert {peer['Name'] for peer in peers.values()} == {profile.prefix + name for name in ('pg', 'broker', 'worker')}
+        print(f'resumed checkpoint_offset={position} observed_offset={current_checkpoint} '
+              f'confirmed_flush_lsn={wal[1]} slot={probe.slot}')
 
 
 class DisposablePublicationVerifier:
@@ -314,8 +361,9 @@ def rig_publications(profile, admin, owner):
     assert active_lineage == lineage
     started = time.monotonic()
     worker = profile.prefix + 'worker'
+    worker_identity = profile.docker('inspect', '-f', '{{.Id}} {{.Image}}', worker)
+    connector_config = json.loads(profile.rest(f'{probe.connector_path}/config'))
     profile.docker('stop', '--timeout', '15', worker)
-    profile.docker('rm', worker)
     quiesced_lineage, quiesced_wal = source_position(probe, active=False)
     assert quiesced_lineage == lineage and quiesced_wal[1] >= active_wal[1]
     sealed = transport_state(probe, topics, quiesced=True)
@@ -333,7 +381,8 @@ def rig_publications(profile, admin, owner):
     assert target.state()[0] + 1 == delayed_cursor <= baseline[0][0] < witness_offset
     assert empty_target.state()[:2] == (-1, None)
     delayed = baseline + [witness.data_record]
-    rig = QuiescedRig(probe, lineage, initial_wal[0], quiesced_wal[1], started, sealed, checkpoint)
+    rig = QuiescedRig(probe, lineage, initial_wal[0], quiesced_wal[1], started, sealed, checkpoint,
+                      worker_identity, connector_config)
     exclusion = rig.observe()
     print(f'publish delay target_cursor={delayed_cursor} notification_eof={completed["notification_end"]} '
           f'wal_witness={witness.evidence(rig)} checkpoint_offset={checkpoint[0]} sealed_eof={data_end}')
@@ -353,6 +402,211 @@ def target_rejects(code):
     with pytest.raises(DBAPIError) as rejected:
         yield
     assert (rejected.value.orig.sqlstate, rejected.value.orig.diag.message_primary) == ('P0001', code)
+
+
+def observe_published(applier, verifier):
+    target, expected = verifier.target, verifier.expected
+    with applier.begin() as connection:
+        return connection.execute(text(
+            'SELECT source_mirror_state.observe_committed_publication(:mirror, :operation, :generation, '
+            'CAST(:authority AS jsonb), :epoch)',
+        ), dict(mirror=target.mirror, operation=expected['operation_id'], generation=target.generation,
+                authority=json.dumps(asdict(target.authority)), epoch='history-epoch')).scalar_one()
+
+
+def apply_resumed(connection, *, resume, authority, generation_id, partition_identity, records, anchored_profile, scan):
+    arguments = dict(authority=asdict(authority), partition=asdict(partition_identity),
+                     records=[asdict(record) for record in records], profile=asdict(anchored_profile),
+                     scan=asdict(scan), resume=resume)
+    return connection.execute(text(
+        'SELECT source_mirror_state.apply_batch(CAST(:authority AS jsonb), :generation, '
+        'CAST(:partition AS jsonb), CAST(:records AS jsonb), CAST(:profile AS jsonb), '
+        'CAST(:scan AS jsonb), CAST(:resume AS jsonb))',
+    ), {'generation': generation_id, **{key: json.dumps(value) for key, value in arguments.items()}}).scalar_one()
+
+
+class ResumedApplication:
+    def __init__(self, target, published, *, lose_reply=False):
+        self.target = target
+        self.resume = dict(certificate=published['certificate']['evidence'],
+                           history_epoch=published['allocation']['history_epoch'])
+        self.starts = []
+        self.scans = []
+        self.lose_reply = lose_reply
+
+    def apply_batch(self, **request):
+        if request['scan'] is None:
+            cursor = self.target.application.apply_batch(**request)
+            self.starts.append(cursor['offset'] + 1)
+            return cursor
+        self.scans.append(request)
+        with self.target.application.engine.begin() as connection:
+            reply = apply_resumed(connection, resume=self.resume, **request)
+        if self.lose_reply:
+            raise ConnectionError('fixture lost live reply after commit')
+        return reply
+
+
+class LiveFixtureDecoder:
+    def __init__(self, target):
+        self.table = target.decoder.table
+        self.capture_generation = target.authority.capture_generation
+        self.source = target.probe.source
+
+    def decode(self, *, offset, key, value):
+        event = json.loads(value)
+        source = event['source']
+        assert (source['name'], source['schema'], source['table']) == (self.source, *self.table.split('.'))
+        assert source['snapshot'] == 'false'
+        key = json.loads(key)
+        assert event['op'] in ('c', 'u', 'd')
+        return Record(offset, self.table, self.capture_generation, 'delete' if event['op'] == 'd' else 'upsert',
+                      'live', key, event['after'])
+
+
+def reject_resumed_facts(target, applier, live, request, other_certificate):
+    owner = target.application.engine
+    forged = deepcopy(live.resume)
+    forged['certificate']['durable_source_checkpoint']['offset'] += 1
+    for resume in (forged, {**live.resume, 'certificate': other_certificate},
+                   {**live.resume, 'history_epoch': 'superseded-epoch'}):
+        with target_rejects('MIRROR_RESUME_BLOCKED'), owner.begin() as connection:
+            apply_resumed(connection, resume=resume, **request)
+    for field, change, code in (
+        ('authority', replace(target.authority, owner_epoch=2), 'MIRROR_CONTROL_CONFLICT'),
+        ('partition_identity', replace(target.partition, topic_incarnation_id='other-topic'), 'MIRROR_CONTROL_CONFLICT'),
+        ('anchored_profile', replace(target.anchored, leader_epoch=target.anchored.leader_epoch + 1),
+         'MIRROR_COVERAGE_PROFILE_MISMATCH'),
+        ('scan', replace(request['scan'], start=request['scan'].start + 1), 'MIRROR_COVERAGE_INVALID'),
+    ):
+        with target_rejects(code), owner.begin() as connection:
+            apply_resumed(connection, resume=live.resume, **{**request, field: change})
+    for change, parameters in (
+        ("UPDATE source_mirror_state.mirrors SET published_generation_id='superseded' WHERE id=:id", {'id': target.mirror}),
+        ("UPDATE source_mirror_state.mirrors SET history_epoch='superseded' WHERE id=:id", {'id': target.mirror}),
+        ("DELETE FROM source_mirror_state.certificates WHERE generation_id=:id", {'id': target.generation}),
+        ("UPDATE source_mirror_state.certificates SET published=false WHERE generation_id=:id", {'id': target.generation}),
+        ("UPDATE source_mirror_state.generations SET anchored_coverage=anchored_coverage - 'offsets' WHERE id=:id",
+         {'id': target.generation}),
+    ):
+        with owner.connect() as connection:
+            connection.execute(text(change), parameters)
+            with target_rejects('MIRROR_RESUME_BLOCKED'), connection.begin_nested():
+                apply_resumed(connection, resume=live.resume, **request)
+    with pytest.raises(DBAPIError) as denied, applier.begin() as connection:
+        apply_resumed(connection, resume=live.resume, **request)
+    assert denied.value.orig.sqlstate == '42501'
+    with target_rejects('MIRROR_COVERAGE_PROFILE_MISMATCH'):
+        Application(applier).apply_batch(**{key: value for key, value in request.items()
+                                           if key not in {'anchored_profile', 'scan'}})
+
+
+def assert_live_rollback(target, live, request, before):
+    target.admin.execute(sql.SQL(
+        'ALTER TABLE source_mirror_state.generations ADD CONSTRAINT fixture_live_rollback '
+        'CHECK (id <> {} OR applied_offset <= {})',
+    ).format(sql.Literal(target.generation), sql.Literal(before[0])))
+    try:
+        with pytest.raises(DBAPIError) as failure, target.application.engine.begin() as connection:
+            apply_resumed(connection, resume=live.resume, **request)
+        assert failure.value.orig.diag.constraint_name == 'fixture_live_rollback'
+        assert target.state() == before
+    finally:
+        target.admin.execute('ALTER TABLE source_mirror_state.generations DROP CONSTRAINT fixture_live_rollback')
+
+
+def live_write(verifier, published, applier, reads, pin, *, expected_rows, before_image, after_image, xid,
+               other_certificate=None, lose_reply=True):
+    target = verifier.target
+    certificate = published['certificate']['evidence']
+    probe = verifier.rig.probe
+    topic = target.binding.topic
+    start = published['applied_offset'] + 1
+    before = target.state()
+    operation = 'd' if after_image is None else 'c'
+    records, _ = await_evidence(
+        topic, lambda: committed(probe, topic, start=start), lambda observed: bool(observed[0]),
+    )
+    (offset, _, event), = records
+    assert (event['op'], event['source']['snapshot'], event['before'], event['after']) == (
+        operation, 'false', before_image, after_image,
+    )
+    assert event['source']['txId'] == xid
+    assert event['source']['lsn'] > verifier.rig.checkpoint[1]['lsn']
+    original_decoder, target.decoder = target.decoder, LiveFixtureDecoder(target)
+    try:
+        with target.reader(eof=False) as delivery:
+            partition = TopicPartition(topic, target.partition.partition)
+            acknowledged = delivery.consumer.committed([partition], timeout=5)[0].offset
+            ordinary_scans = []
+
+            def apply_ordinary(**request):
+                if request['scan'] is not None:
+                    ordinary_scans.append(request)
+                return target.application.apply_batch(**request)
+
+            delivery.application = SimpleNamespace(apply_batch=apply_ordinary)
+            with pytest.raises(RuntimeBlocked, match='capture_delivery_blocked'):
+                delivery.poll_once()
+        (request,) = ordinary_scans
+        with target_rejects('MIRROR_COVERAGE_INVALID'):
+            target.application.apply_batch(**request)
+        live = ResumedApplication(target, published, lose_reply=lose_reply)
+        if other_certificate is not None:
+            reject_resumed_facts(target, applier, live, request, other_certificate)
+            assert_live_rollback(target, live, request, before)
+        else:
+            with target.application.engine.connect() as connection:
+                connection.execute(text(
+                    "UPDATE source_mirror_state.generations SET anchored_coverage=anchored_coverage - 'after' "
+                    'WHERE id=:generation',
+                ), {'generation': target.generation})
+                with target_rejects('MIRROR_RESUME_BLOCKED'), connection.begin_nested():
+                    apply_resumed(connection, resume=live.resume, **request)
+        assert target.state() == before
+        with target.reader(eof=False) as delivery:
+            delivery.application = live
+            if lose_reply:
+                with pytest.raises(RuntimeBlocked, match='capture_delivery_blocked'):
+                    delivery.poll_once()
+            else:
+                assert delivery.poll_once() == 1
+            expected_ack = acknowledged if lose_reply else offset + 1
+            assert delivery.consumer.committed([partition], timeout=5)[0].offset == expected_ack
+        target.application.engine.dispose()
+        (request,) = live.scans
+        with target_rejects('MIRROR_COVERAGE_INVALID'), target.application.engine.begin() as connection:
+            apply_resumed(connection, resume=live.resume, **request)
+        after = target.state()
+        with target.reader(eof=False) as delivery:
+            restarted = delivery.application = ResumedApplication(target, published)
+            assert delivery.poll_once() == 0
+            assert restarted.starts == [offset + 1] and restarted.scans == []
+            assert delivery.consumer.committed([partition], timeout=5)[0].offset == expected_ack
+        assert target.state() == after
+    finally:
+        target.decoder = original_decoder
+    assert live.starts == [start]
+    assert after[:2] == (offset, asdict(live.scans[0]['scan']) | {
+        'authority': asdict(target.authority), 'offsets': [offset],
+    })
+    log = target.admin.execute(
+        'SELECT operation, before_image, after_image FROM source_mirror_state.live_log '
+        'WHERE mirror_id=%s AND commit_seq=%s ORDER BY entry_seq', (target.mirror, before[4] + 1),
+    ).fetchall()
+    assert after[4] == before[4] + 1
+    assert log == [('delete' if operation == 'd' else 'upsert', before_image, after_image)]
+    observed = observe_published(applier, verifier)
+    assert observed['published_generation_id'] == target.generation
+    assert observed['applied_offset'] == offset
+    assert observed['certificate'] == published['certificate']
+    assert observed['allocation']['anchored_seal'] == certificate['ordered_delivery_proof']
+    assert observed['allocation']['anchored_coverage'] == after[1]
+    page = reads.read_page(pin=pin, execution_user_id='reader', after_key=None, limit=20)
+    assert (page['generation_id'], page['rows']) == (target.generation, expected_rows)
+    print(f'live generation={target.generation} xid={xid} seek={start} offset={offset} '
+          f'commit_seq={after[4]} restart_seek={offset + 1} kafka_ack={expected_ack} lost_reply={lose_reply}')
+    return observed
 
 
 def guarded_publication(verifier, applier, reads, parameters, expected_rows):
@@ -403,6 +657,19 @@ def guarded_publication(verifier, applier, reads, parameters, expected_rows):
     changed = {**certificate, 'key_fingerprint': '0' * 64}
     with target_rejects('MIRROR_PUBLICATION_BLOCKED'):
         publication.publish_generation(**{**request, 'certificate': changed})
+    assert observe() == pending
+    with target.application.engine.connect() as connection:
+        connection.execute(text(
+            "UPDATE source_mirror_state.generations SET anchored_coverage=anchored_coverage - 'offsets' "
+            'WHERE id=:generation',
+        ), {'generation': target.generation})
+        connection.exec_driver_sql('SET LOCAL ROLE refraq_mirror_applier')
+        with target_rejects('MIRROR_PUBLICATION_BLOCKED'), connection.begin_nested():
+            connection.execute(text(
+                'SELECT source_mirror_state.publish_generation(:operation, CAST(:authority AS jsonb), '
+                ':generation, CAST(:certificate AS jsonb))',
+            ), dict(operation=operation, authority=json.dumps(asdict(target.authority)),
+                    generation=target.generation, certificate=json.dumps(certificate)))
     assert observe() == pending
 
     with applier.connect() as connection:
@@ -468,13 +735,38 @@ def test_quiesced_native_seal_publishes_once_and_recovers_authorized_rows():
                             reads.read_page(**page_request)
                         assert (role_denied.value.code, role_denied.value.http_status) == ('AUTH_FORBIDDEN', 403)
                         assert admin.execute(role_permissions, ('["sources:data_read"]',)).rowcount == 1
+                        page = reads.read_page(**page_request)
                         assert admin.execute('DELETE FROM fixture_access.source_memberships WHERE target = %s',
                                              (pin.source_id,)).rowcount == 1
                         with pytest.raises(AppError) as source_denied:
                             reads.read_page(**page_request)
                         assert (source_denied.value.code, source_denied.value.http_status) == ('AUTH_FORBIDDEN', 403)
                         assert reads.read_page(**{**page_request, 'pin': empty_pin})['source_ids'] == [empty_pin.source_id]
-                        populated.rig.observe()
+                        assert admin.execute('INSERT INTO fixture_access.source_memberships VALUES (%s, %s, %s, %s)',
+                                             (pin.source_id, 'viewer', 'user', 'reader')).rowcount == 1
+                        empty_published = observe_published(applier, empty)
+                        populated_published = observe_published(applier, populated)
+                        for verifier, published in ((empty, empty_published), (populated, populated_published)):
+                            assert published['certificate']['evidence'] == verifier.expected
+                            assert published['applied_offset'] == verifier.expected['end_offset']
+                            assert published['allocation']['anchored_profile'] == asdict(verifier.target.anchored)
+                            assert published['allocation']['anchored_seal'] == verifier.expected['ordered_delivery_proof']
+                            assert published['allocation']['anchored_coverage'] == published['allocation']['anchored_seal']
+                        populated.rig.resume((empty_published, populated_published))
+                        row = {'id': 6, 'value': 'after-publication'}
+                        xid = int(profile.sql(f"BEGIN; INSERT INTO {EMPTY_TABLE} VALUES (1); "
+                                              f"INSERT INTO {POPULATED_TABLE} VALUES (6, 'after-publication'); "
+                                              "SELECT pg_current_xact_id()::xid; COMMIT;"))
+                        live_write(empty, empty_published, applier, reads, empty_pin, expected_rows=[{'id': 1}],
+                                   before_image=None, after_image={'id': 1}, xid=xid,
+                                   other_certificate=populated.expected)
+                        advanced = live_write(populated, populated_published, applier, reads, pin,
+                                              expected_rows=page['rows'] + [row], before_image=None, after_image=row,
+                                              xid=xid, other_certificate=empty.expected)
+                        xid = int(profile.sql(f'BEGIN; DELETE FROM {POPULATED_TABLE} WHERE id=6; '
+                                              'SELECT pg_current_xact_id()::xid; COMMIT;'))
+                        live_write(populated, advanced, applier, reads, pin, expected_rows=page['rows'],
+                                   before_image=row, after_image=None, xid=xid, lose_reply=False)
                 finally:
                     owner.dispose()
         finally:
