@@ -19,8 +19,9 @@ from backend.metadata.capture.control import (
     AUTHORITY_KEYS, allocate_owner, profile_matches_scope, reconcile_published_scope, record_applied_evidence,
     source_control_transaction,
 )
-from backend.metadata.capture.runtime_adapters import ConnectLifecycle, PrivateHTTP, ReadinessSignals
+from backend.metadata.capture.runtime_adapters import ConnectLifecycle, PrivateHTTP, ReadinessSignals, SnapshotGateway
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked, protected_json, protected_read
+from backend.metadata.capture.snapshot import SnapshotCoordinator
 from backend.metadata.capture.store import list_operations, load_binding
 from backend.metadata.errors import SourceCaptureControlConflict
 from backend.metadata.mirrors.service import read_published_scope
@@ -28,7 +29,7 @@ from backend.metadata.mirrors.service import read_published_scope
 
 class CaptureRuntime:
     def __init__(self, *, journal, connect, signals, profile=None, credentials=None, delivery=None,
-                 prepare_delivery=None):
+                 prepare_delivery=None, snapshot=None):
         self.journal = journal
         self.connect = connect
         self.signals = signals
@@ -36,6 +37,7 @@ class CaptureRuntime:
         self.credentials = credentials
         self.delivery = delivery
         self.prepare_delivery = prepare_delivery
+        self.snapshot = snapshot
 
     def poll_once(self, source_id, *, owner_allocation_file=None):
         try:
@@ -119,6 +121,30 @@ class CaptureRuntime:
         return command
 
     def poll_source(self, source_id, *, containment_only=False):
+        result, prepared = self._poll_lifecycle(source_id, containment_only=containment_only)
+        if self.snapshot is not None and prepared is not None:
+            for binding in self.delivery.snapshot_bindings(prepared):
+                try:
+                    state = self.snapshot.reconcile(binding).state
+                except DBAPIError:
+                    raise RuntimeBlocked("capture_snapshot_management_unconfirmed") from None
+                if state == "blocked":
+                    raise RuntimeBlocked("incremental_snapshot_blocked")
+                if state in {"submission_uncertain", "snapshotting"}:
+                    break
+        return result
+
+    def recheck_snapshot(self, binding, *, session, source):
+        command = self.delivery.recheck_snapshot_allocation(binding, session=session)
+        if self._current_command(session, source, include_applied=True) != command:
+            raise RuntimeBlocked("snapshot_preparation_superseded")
+        refs = self.credentials.install(command, source)
+        config = self.profile.configuration(command, source, refs)
+        if not self.connect.configured(config) or not self.connect.running():
+            raise RuntimeBlocked("snapshot_connector_not_current")
+        return "window"
+
+    def _poll_lifecycle(self, source_id, *, containment_only):
         with self.journal.source_lock(source_id):
             reconcile_published_scope(source_id)
             prepared = None
@@ -141,9 +167,9 @@ class CaptureRuntime:
                 if command is None:
                     if preparation_error is not None:
                         raise preparation_error
-                    return "idle"
+                    return "idle", prepared
                 if containment_only and command["kind"] != "stop":
-                    return "idle"
+                    return "idle", None
                 if command["kind"] == "reconcile" and self.prepare_delivery is not None and prepared != command:
                     if preparation_error is not None:
                         raise preparation_error
@@ -159,7 +185,7 @@ class CaptureRuntime:
                         self.journal.mark(command, "uncertain")
                         self.connect.stop()
                         if not self.connect.stopped():
-                            return "pending"
+                            return "pending", None
                     if self.credentials is not None:
                         self.credentials.revoke(command)
                     evidence = self.signals.observation(command, "stopped")
@@ -175,7 +201,14 @@ class CaptureRuntime:
             except SourceCaptureControlConflict:
                 raise RuntimeBlocked("capture_evidence_rejected") from None
             self.journal.mark(command, "applied")
-            return "applied"
+            return "applied", prepared if command["kind"] == "reconcile" else None
+
+
+def _signing_authority(trust):
+    return SignedAuthority(
+        keys={kid: load_pem_public_key(protected_read(path)) for kid, path in trust["public_key_files"].items()},
+        issuer=trust["issuer"], audience=trust["audience"],
+    )
 
 
 def main():
@@ -221,12 +254,7 @@ def main():
             clients.append(connect_http)
             signal_http = PrivateHTTP(**entry["signals_tls"])
             clients.append(signal_http)
-            trust = entry["signing_trust"]
-            verifier = SignedAuthority(
-                keys={kid: load_pem_public_key(protected_read(path))
-                      for kid, path in trust["public_key_files"].items()},
-                issuer=trust["issuer"], audience=trust["audience"],
-            )
+            verifier = _signing_authority(entry["signing_trust"])
             profile = PostgreSQLCaptureProfile(**entry["postgresql_profile"])
             if (profile.scope["source_id"] != entry["source_id"]
                     or profile.scope["connector_name"] != entry["connector_name"]):
@@ -242,6 +270,23 @@ def main():
                 delivery=delivery, prepare_delivery=delivery.prepare,
             )
             runtimes.append((entry["source_id"], runtime, entry.get("owner_allocation_file")))
+            observers = entry.get("snapshot_observers")
+            if (profile.snapshot is None) != (observers is None):
+                raise RuntimeBlocked("snapshot_observer_configuration_required")
+            if observers is not None:
+                if set(observers) != {"receipt", "notification", "max_age_seconds"}:
+                    raise RuntimeBlocked("snapshot_observer_configuration_invalid")
+                observation_clients = {}
+                for role in ("receipt", "notification"):
+                    observer = PrivateHTTP(**observers[role]["tls"])
+                    clients.append(observer)
+                    observation_clients[role] = observer
+                runtime.snapshot = SnapshotCoordinator(
+                    journal=journal, signals=SnapshotGateway(dispatch=signal_http, **observation_clients),
+                    receipt_trust=_signing_authority(observers["receipt"]["signing_trust"]),
+                    notification_trust=_signing_authority(observers["notification"]["signing_trust"]),
+                    max_observation_age_seconds=observers["max_age_seconds"], recheck=runtime.recheck_snapshot,
+                )
         while not stopping.is_set():
             blocked = False
             for source_id, runtime, request_file in runtimes:

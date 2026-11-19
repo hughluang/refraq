@@ -15,6 +15,7 @@ from uuid import uuid4
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.x509.oid import NameOID
 import jwt
 import psycopg
@@ -23,7 +24,10 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from backend.core.time import utc_now
+from backend.core.secrets import encrypt_secret
 from backend.metadata.capture import control, delivery_composition, runtime
+from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
+from backend.metadata.models import SourceRow
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
 from backend.metadata.capture.test_published_scope import SOURCE, management as management, publish
 from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, TRUST, allocation_observation, observation
@@ -109,6 +113,39 @@ def native_target(target_dsn):
         yield dsn
 
 
+@pytest.fixture
+def snapshot_source(target_dsn):
+    with isolated_database(target_dsn) as dsn:
+        connector, observer = (f"snapshot_{uuid4().hex}" for _ in range(2))
+        with psycopg.connect(dsn) as connection:
+            version, wal = connection.execute("SELECT current_setting('server_version_num'), "
+                                              "current_setting('wal_level')").fetchone()
+            assert (version, wal) == ("180006", "logical"), (
+                "Snapshot preparation requires PostgreSQL 18.6 started with -c wal_level=logical"
+            )
+            connection.execute("CREATE TABLE public.items (id integer PRIMARY KEY, body text)")
+            connection.execute("CREATE TABLE public.snapshot_signal ("
+                               "id varchar(64) PRIMARY KEY, type varchar(32), data varchar(2048))")
+            connection.execute("CREATE PUBLICATION capture_pub FOR TABLE public.items, public.snapshot_signal")
+            for role, permissions in ((connector, "SELECT, INSERT"), (observer, "SELECT")):
+                connection.execute(sql.SQL("CREATE ROLE {} {}").format(
+                    sql.Identifier(role), sql.SQL("REPLICATION" if role == connector else "NOREPLICATION"),
+                ))
+                connection.execute(sql.SQL("GRANT {} ON public.snapshot_signal TO {}").format(
+                    sql.SQL(permissions), sql.Identifier(role),
+                ))
+            connection.execute(sql.SQL("GRANT SELECT ON public.items TO {}").format(sql.Identifier(connector)))
+            relation, = connection.execute("SELECT oid || ':' || 'public.snapshot_signal'::regclass::oid "
+                                           "FROM pg_database WHERE datname = current_database()").fetchone()
+        try:
+            yield dsn, connector, observer, relation
+        finally:
+            with psycopg.connect(dsn) as connection:
+                for role in (connector, observer):
+                    connection.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+                    connection.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
 @contextmanager
 def private_gateway(private, dispatch):
     now = utc_now()
@@ -177,8 +214,10 @@ def private_gateway(private, dispatch):
                                    "withdraw_during_allocation", "takeover", "prefilled_manifest", "history_gate_race",
                                    "wrong_fence", "different_allocation_fence", "wrong_start_offset", "target_key_drift",
                                    "wrong_owner_receipt", "grant_loss", "authority_during_binding", "cross_source_binding",
-                                   "target_fence_drift", "withdraw_with_management_timeout"])
-def test_protected_executable_prepares_current_open(case, native_target, management, monkeypatch, tmp_path):
+                                   "target_fence_drift", "withdraw_with_management_timeout",
+                                   "snapshot_loss", "snapshot_wrong_table", "snapshot_wrong_signer",
+                                   "snapshot_wrong_incarnation", "snapshot_replaced_relation"])
+def test_protected_executable_prepares_current_open(case, native_target, management, monkeypatch, tmp_path, request):
     target_dsn = native_target
     transaction, _ = management
     with transaction() as session:
@@ -194,17 +233,37 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                                               table_name="items", connector_version="3.4.0.Final", key_schema=KEY,
                                               value_schema=SCHEMA))
 
+    snapshots = case.startswith("snapshot_")
+    if snapshots:
+        source_dsn, connector_role, receipt_role, relation = request.getfixturevalue("snapshot_source")
+        database = psycopg.conninfo.conninfo_to_dict(source_dsn)["dbname"]
+        profile["database"] = table["decoder"]["database"] = database
+        with transaction() as session:
+            session.get(SourceRow, SOURCE).access_ciphertext = encrypt_secret(json.dumps(
+                dict(host="pg.internal", port=5432, database=database, schema="public"),
+            ))
+        profile["server_version_num"] = 180006
+        profile["snapshot"] = dict(signal_table="public.snapshot_signal", signal_relation_identity=relation,
+                                   notification_topic="cap.notifications", notification_partition={
+                                       "runtime_cluster_id": "cluster", "topic_incarnation_id": "notifications", "partition": 0,
+                                   })
+        table["decoder"]["connector_version"] = "3.7.1.Final"
+        snapshot_keys = {role: Ed25519PrivateKey.generate() for role in ("receipt", "notification")}
+        submissions, snapshot_reads = [], []
+        receipt_checks = []
+
     def private(name, value):
         path = tmp_path / name
         path.write_bytes(value if isinstance(value, bytes) else json.dumps(value).encode())
         path.chmod(0o600)
         return str(path)
 
-    def signed(purpose, authority, scope, operation_id, **extra):
+    def signed(purpose, authority, scope, operation_id, *, role=None, **extra):
         now = utc_now()
-        return jwt.encode(dict(iss="gateway", aud="capture", iat=now, nbf=now, exp=now + timedelta(seconds=60),
+        return jwt.encode(dict(iss=role or "gateway", aud="capture", iat=now, nbf=now, exp=now + timedelta(seconds=60),
                                jti=uuid4().hex, authority=authority, scope=scope, operation_id=operation_id,
-                               purpose=purpose, **extra), SIGNING_KEY, algorithm="EdDSA", headers={"kid": "trusted"})
+                               purpose=purpose, **extra), snapshot_keys[role] if role else SIGNING_KEY,
+                          algorithm="EdDSA", headers={"kid": "trusted"})
 
     def target_authority(stamp):
         return Authority(stamp["source_id"], stamp["binding_id"], stamp["owner_epoch"], stamp["runtime_instance_id"],
@@ -230,7 +289,19 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
     ))
     monkeypatch.setattr(delivery_composition, "applier_engine", lambda settings: restricted)
     monkeypatch.setattr(delivery_composition, "open_delivery", lambda **kwargs: SimpleNamespace(poll_once=lambda: 0, close=lambda: None))
-    monkeypatch.setattr(runtime.PostgreSQLCaptureProfile, "configuration", lambda *args: {"fixture": "generated config"})
+    if snapshots:
+        def source_connection(**options):
+            assert options["sslmode"] == "verify-full" and options["host"] == "pg.internal"
+            connection = psycopg.connect(source_dsn, connect_timeout=3,
+                                         options="-c statement_timeout=3000 -c lock_timeout=3000")
+            connection.execute(sql.SQL("SET SESSION AUTHORIZATION {}").format(sql.Identifier(connector_role)))
+            return connection
+
+        monkeypatch.setattr(runtime, "PostgreSQLCaptureProfile", lambda **options: PostgreSQLCaptureProfile(
+            **options, connect=source_connection,
+        ))
+    else:
+        monkeypatch.setattr(runtime.PostgreSQLCaptureProfile, "configuration", lambda *args: {"fixture": "generated config"})
     attempts, mutations, owner_receipts = [], [], []
     fenced = receipt = installed = None
     running = False
@@ -253,6 +324,63 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
 
     def dispatch(path, payload):
         nonlocal fenced, receipt
+        if path.startswith("/v1/capture/snapshots/"):
+            assert snapshots and running
+            step = path.rsplit("/", 1)[-1]
+            scope, operation = payload["scope"], payload["operation_id"]
+            stamp = scope["authority"]
+            assert stamp == asdict(fenced) and scope["generation_id"] == attempts[-1][1]
+            assert scope["allocation_operation_id"] == attempts[-1][0] and scope["mirror_id"] == mirror_id
+            expected_snapshot = profile["snapshot"]
+            assert all(scope[key] == value for key, value in expected_snapshot.items())
+            assert scope["connector_name"] == "cap" and scope["qualified_table"] == "public.items"
+            if step == "submit":
+                signal = payload["signal"]
+                assert signal == {"id": operation, "type": "execute-snapshot",
+                                  "data": {"type": "incremental", "data-collections": [r"public\.items"]}}
+                with transaction() as session:
+                    ledger = control.load_binding(session, SOURCE)["incremental_snapshots"]
+                    pending = ledger["generations"][scope["generation_id"]]
+                    assert pending["id"] == operation and pending["state"] == "submission_uncertain"
+                with psycopg.connect(source_dsn) as connection:
+                    assert connection.execute("INSERT INTO public.snapshot_signal VALUES (%s, %s, %s) "
+                                              "ON CONFLICT (id) DO NOTHING RETURNING id",
+                                              (operation, signal["type"], json.dumps(signal["data"]))).fetchone() == (operation,)
+                submissions.append(operation)
+                return None
+            snapshot_reads.append(step)
+            if step == "receipt":
+                receipt_checks.append(operation)
+                with psycopg.connect(source_dsn) as connection:
+                    connection.execute(sql.SQL("SET SESSION AUTHORIZATION {}").format(sql.Identifier(receipt_role)))
+                    row = connection.execute("SELECT id, type, data FROM public.snapshot_signal WHERE id = %s",
+                                             (operation,)).fetchone()
+                assert row is not None
+                return {"signature": signed("snapshot:receipt", stamp, scope, operation, role="receipt",
+                                            evidence=dict(id=row[0], type=row[1], data=json.loads(row[2])))}
+            if step == "baseline":
+                assert not submissions
+                return {"signature": signed("snapshot:baseline", stamp, scope, operation, role="notification",
+                                            challenge=payload["challenge"],
+                                            evidence=dict(offset=9, idle=True, exclusive=True))}
+            assert step == "notifications" and payload["offset"] == 9
+            now_ms = int(utc_now().timestamp() * 1000)
+            records = [{"offset": offset, "key": {"id": operation}, "value": {
+                "id": operation, "aggregate_type": "Incremental Snapshot", "type": kind, "timestamp": now_ms,
+                "additional_data": {"connector_name": "cap"} | facts,
+            }} for offset, kind, facts in (
+                (9, "STARTED", dict(data_collections="public.items")),
+                (10, "DATA_COLLECTIONS_RESOLVED", dict(data_collections="public.items")),
+                (11, "TABLE_SCAN_COMPLETED", dict(scanned_collection="public.other" if case == "snapshot_wrong_table"
+                                                  else "public.items", status="EMPTY", total_rows_scanned="0")),
+                (12, "COMPLETED", {}),
+            )]
+            if case == "snapshot_wrong_incarnation":
+                scope["notification_partition"]["topic_incarnation_id"] = "foreign-topic"
+            return {"signature": signed("snapshot:notifications", stamp, scope, operation,
+                                        role="receipt" if case == "snapshot_wrong_signer" else "notification",
+                                        challenge=payload["challenge"], evidence=dict(start=9, end=13, high_water=13,
+                                                                                     exclusive=True, records=records))}
         if path.endswith("owner-allocations"):
             command, scope = payload["command"], payload["scope"]
             authority = {key: command[key] for key in control.AUTHORITY_KEYS}
@@ -355,6 +483,13 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
             _operation, generation = attempts[-1]
             metadata = delivery_composition.target_metadata(restricted, generation)
             assert metadata["mirror_id"] == mirror_id and metadata["authority"] == asdict(fenced)
+            if snapshots:
+                assert config["table.include.list"] == r"public\.items,public\.snapshot_signal"
+                assert config["signal.data.collection"] == "public.snapshot_signal"
+                assert config["signal.enabled.channels"] == "source"
+                assert config["incremental.snapshot.watermarking.strategy"] == "insert_insert"
+                assert config["notification.enabled.channels"] == "sink"
+                assert config["notification.sink.topic.name"] == "cap.notifications"
             mutations.append("configure")
             installed = config
 
@@ -388,12 +523,54 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                      delivery_settings_file=private("delivery.json", dict(target={}, tables=[manifest], kafka={},
                                                                            group_id="native", limits={}, max_age_seconds=30)),
                      owner_allocation_file=owner_request("first-owner", "agent-one"))
+        if snapshots:
+            def observer_configuration(role):
+                key_file = private(f"{role}.pem", snapshot_keys[role].public_key().public_bytes(
+                    serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
+                ))
+                return dict(tls=tls, signing_trust=dict(public_key_files={"trusted": key_file}, issuer=role,
+                                                       audience="capture"))
+
+            entry["snapshot_observers"] = dict(receipt=observer_configuration("receipt"),
+                                               notification=observer_configuration("notification"), max_age_seconds=30)
         config = dict(state_directory=str(tmp_path), poll_interval_seconds=1, sources=[entry],
                       management_database_url_file=private("management.url", b"postgresql://fixture/management?sslmode=verify-full"))
         config_file = private("runtime.json", config)
         monkeypatch.setattr("sys.argv", ["runtime", "--config-file", config_file, "--once"])
         contained = case in {"withdraw_during_allocation", "withdraw_with_management_timeout"}
-        assert runtime.main() == (0 if case == "success" or contained else 2)
+        if snapshots:
+            assert runtime.main() == 0
+            assert mutations == ["configure", "resume"] and len(submissions) == 1
+            entry.pop("owner_allocation_file")
+            private("runtime.json", config)
+            if case == "snapshot_replaced_relation":
+                with psycopg.connect(source_dsn) as connection:
+                    connection.execute("ALTER TABLE public.snapshot_signal RENAME TO replaced_signal")
+                    connection.execute("CREATE TABLE public.snapshot_signal (LIKE public.replaced_signal INCLUDING ALL)")
+                    connection.execute(sql.SQL("GRANT SELECT, INSERT ON public.snapshot_signal TO {}").format(
+                        sql.Identifier(connector_role),
+                    ))
+                    connection.execute("ALTER PUBLICATION capture_pub SET TABLE public.items, public.snapshot_signal")
+            assert runtime.main() == (0 if case == "snapshot_loss" else 2)
+            with transaction() as session:
+                result = control.load_binding(session, SOURCE)["incremental_snapshots"]["generations"][attempts[-1][1]]
+                assert result["id"] == submissions[0]
+                assert result["state"] == ("catching_up" if case == "snapshot_loss" else
+                                           "blocked" if case == "snapshot_wrong_table" else "submission_uncertain")
+            assert "incremental_snapshots" not in control.capture_status(SOURCE)["control"]
+            assert receipt_checks == ([] if case == "snapshot_replaced_relation" else submissions)
+            with psycopg.connect(source_dsn) as connection:
+                relation_name = "replaced_signal" if case == "snapshot_replaced_relation" else "snapshot_signal"
+                assert connection.execute(sql.SQL("SELECT id FROM public.{}").format(sql.Identifier(relation_name))).fetchall() == [
+                    (submissions[0],),
+                ]
+            reads_before_stop = list(snapshot_reads)
+            withdraw()
+            assert runtime.main() == 0
+            assert mutations == ["configure", "resume", "stop"] and snapshot_reads == reads_before_stop
+            assert control.capture_status(SOURCE)["control"]["stop_ack"] is not None
+        else:
+            assert runtime.main() == (0 if case == "success" or contained else 2)
         if case in {"loss", "takeover", "grant_loss"}:
             assert mutations == []
             if case == "grant_loss":
@@ -414,7 +591,9 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                                          control_revision=fenced.control_revision - 1)
                     connection.exec_driver_sql("SELECT source_mirror_state.apply_batch(%s::jsonb,%s,%s::jsonb,'[]'::jsonb)",
                                                (json.dumps(old_authority), attempts[0][1], json.dumps(table["partition_identity"])))
-        if case in {"success", "loss", "takeover", "grant_loss"}:
+        if snapshots:
+            assert len(attempts) == 1
+        elif case in {"success", "loss", "takeover", "grant_loss"}:
             assert mutations == ["configure", "resume"]
             assert runtime.main() == 0
             withdraw()

@@ -1,5 +1,6 @@
 """Bounded private TLS adapters; Connect is lifecycle-only."""
 
+from dataclasses import asdict
 import hashlib
 import json
 import re
@@ -59,6 +60,7 @@ class ConnectLifecycle:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", connector_name):
             raise RuntimeBlocked("connector_not_allowlisted")
         self.http = http
+        self.name = connector_name
         self.path = "/connectors/" + connector_name
 
     def stop(self):
@@ -69,7 +71,8 @@ class ConnectLifecycle:
         self.http.request("PUT", self.path + "/config", config)
 
     def configured(self, config):
-        return self.http.request("GET", self.path + "/config", missing=True) == config
+        observed = self.http.request("GET", self.path + "/config", missing=True)
+        return observed == config or observed == {**config, "name": self.name}
 
     def resume(self):
         self.http.request("PUT", self.path + "/resume")
@@ -92,6 +95,44 @@ class ConnectLifecycle:
             and all(isinstance(task, dict) and task.get("state") == "STOPPED"
                     for task in status["tasks"])
         )
+
+
+class SnapshotGateway:
+    def __init__(self, *, dispatch, receipt, notification):
+        self.dispatch = dispatch
+        self.receipt_observer = receipt
+        self.notification_observer = notification
+
+    @staticmethod
+    def _request(http, step, binding, operation_id, *, missing=False, **payload):
+        scope = asdict(binding)
+        return http.request("POST", f"/v1/capture/snapshots/{step}", {
+            "authority": scope["authority"], "scope": scope, "operation_id": operation_id, **payload,
+        }, missing=missing)
+
+    def _observe(self, http, step, binding, operation_id, **payload):
+        response = self._request(http, step, binding, operation_id, missing=True, **payload)
+        if response is None:
+            return None
+        if not isinstance(response, dict) or not isinstance(response.get("signature"), str):
+            raise RuntimeBlocked("snapshot_observation_invalid")
+        return response["signature"]
+
+    def baseline(self, binding, operation_id, *, challenge):
+        return self._observe(self.notification_observer, "baseline", binding, operation_id, challenge=challenge)
+
+    def submit(self, binding, signal):
+        try:
+            self._request(self.dispatch, "submit", binding, signal["id"], signal=signal)
+        except RuntimeBlocked:
+            raise TimeoutError() from None
+
+    def receipt(self, binding, operation_id):
+        return self._observe(self.receipt_observer, "receipt", binding, operation_id)
+
+    def notifications(self, binding, operation_id, offset, *, challenge):
+        return self._observe(self.notification_observer, "notifications", binding, operation_id,
+                             offset=offset, challenge=challenge)
 
 
 STOP_PROOFS = {

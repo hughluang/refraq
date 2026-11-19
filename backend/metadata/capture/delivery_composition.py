@@ -15,6 +15,7 @@ from backend.metadata.capture.control import (
 from backend.metadata.capture.decoder import PostgreSQLDecoder
 from backend.metadata.capture.delivery import DeliveryBinding, DeliveryLimits, open_delivery
 from backend.metadata.capture.runtime_store import RuntimeBlocked, protected_json, protected_read
+from backend.metadata.capture.snapshot import SnapshotBinding
 from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.bootstrap import validate_target
 from backend.metadata.mirrors.service import (
@@ -128,6 +129,14 @@ class SourceDelivery:
             raise RuntimeBlocked("delivery_manifest_scope_mismatch") from None
         if actual != expected or not profile_matches_scope(self.profile.scope, scope):
             raise RuntimeBlocked("delivery_manifest_scope_mismatch")
+        if getattr(self.profile, "snapshot", None) is not None:
+            for table in self.manifest_tables:
+                binding = table["partition_identity"]
+                notification = self.profile.snapshot["notification_partition"]
+                if (table["decoder"]["connector_version"] != "3.7.1.Final"
+                        or binding["runtime_cluster_id"] != notification["runtime_cluster_id"]
+                        or binding["topic_incarnation_id"] == notification["topic_incarnation_id"]):
+                    raise RuntimeBlocked("delivery_snapshot_profile_mismatch")
 
     def prepare(self, command):
         if self.prepared_command == command:
@@ -196,6 +205,37 @@ class SourceDelivery:
         if allocations:
             require_current_open_allocations(session, authority=Authority(**_target_authority(authority)),
                                              allocations=allocations)
+
+    def snapshot_bindings(self, command):
+        if self.prepared_command != command:
+            raise RuntimeBlocked("snapshot_preparation_superseded")
+        snapshot = self.profile.snapshot
+        return [SnapshotBinding(
+            authority=Authority(**table["authority"]), mirror_id=opened["mirror_id"],
+            mirror_revision=opened["mirror_revision"], allocation_operation_id=opened["operation_id"],
+            generation_id=table["generation_id"], table_identity=opened["table_identity"],
+            qualified_table=opened["qualified_table"], history_epoch=opened["history_epoch"],
+            schema_fingerprint=table["schema_fingerprint"], data_partition=PartitionIdentity(**table["partition_identity"]),
+            connector_name=self.profile.scope["topic_prefix"], signal_table=snapshot["signal_table"],
+            signal_relation_identity=snapshot["signal_relation_identity"],
+            notification_topic=snapshot["notification_topic"],
+            notification_partition=PartitionIdentity(**snapshot["notification_partition"]),
+        ) for table in self.tables if (opened := table.get("open")) is not None]
+
+    def recheck_snapshot_allocation(self, binding, *, session):
+        command = self.prepared_command
+        if command is None or binding not in self.snapshot_bindings(command):
+            raise RuntimeBlocked("snapshot_preparation_superseded")
+        table = next(table for table in self.tables if table["generation_id"] == binding.generation_id)
+        try:
+            require_current_open_allocations(session, authority=binding.authority,
+                                             allocations=[(table["open"], binding.generation_id)])
+            self._installed(table, command)
+        except RuntimeBlocked:
+            raise
+        except Exception:
+            raise RuntimeBlocked("snapshot_allocation_unconfirmed") from None
+        return command
 
     def validate_installation(self, command, *, session):
         self._load_installation()

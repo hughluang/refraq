@@ -321,6 +321,16 @@ def test_unknown_connect_status_is_not_stop_proof(payload):
     http.client.close()
 
 
+@pytest.mark.parametrize("name, accepted", [("cap_one", True), ("cap_other", False)])
+def test_config_readback_verifies_connect_added_name(name, accepted):
+    config = {"snapshot.mode": "no_data"}
+    http = FakeHTTP(lambda request: httpx.Response(200, json={**config, "name": name}))
+    try:
+        assert ConnectLifecycle(http, "cap_one").configured(config) is accepted
+    finally:
+        http.client.close()
+
+
 def test_secret_permissions_and_connector_path_are_not_optional(tmp_path):
     secret = tmp_path / "secret"
     secret.write_text("do-not-disclose")

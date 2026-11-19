@@ -257,7 +257,7 @@ def capture_status(source_id: str) -> dict:
             "readiness": readiness,
             "availability": "disabled" if stopped else "unknown",
             "control": {key: value for key, value in state.items()
-                        if key not in {"allocation", "pending_allocation", "published_scope"}},
+                        if key not in {"allocation", "pending_allocation", "published_scope", "incremental_snapshots"}},
             "operations": [
                 {
                     **{key: value for key, value in op["command"].items() if key != "published_scope"},
