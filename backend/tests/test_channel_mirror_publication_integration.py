@@ -65,6 +65,7 @@ from backend.metadata.models import (
 )
 from backend.metadata.source_access import (
     authorize_source_read_on,
+    create_membership,
     delete_membership,
     reset_source_access_store,
 )
@@ -422,7 +423,7 @@ class FixtureCertificateVerifier:
 
 
 @pytest.mark.integration
-def test_confirmed_channel_open_publishes_and_rechecks_grants(
+def test_confirmed_channel_open_rechecks_grants_and_keeps_pin_across_switch(
     channel_management, native_target, restricted_target, tmp_path
 ):
     actor = dict(actor_user_id=PUBLISHER, actor_token_id=None)
@@ -607,7 +608,8 @@ def test_confirmed_channel_open_publishes_and_rechecks_grants(
     assert page["rows"] == [first]
     assert page["generation_id"] == generation_id
     assert page["source_ids"] == [SOURCE]
-    next_page = dict(mirror_id=mirror_id, after_key=page["next_key"], limit=1)
+    assert page["next_key"] == {"id": 1}
+    next_page = dict(mirror_id=mirror_id, after_key=page["next_key"], limit=2)
     run = runs.get_run(job.id)
     assert run.mirror_state["pins"] == {
         mirror_id: {"generation_id": generation_id, "source_id": SOURCE}
@@ -656,3 +658,89 @@ def test_confirmed_channel_open_publishes_and_rechecks_grants(
     with pytest.raises(AuthForbidden):
         mint_on_demand_run(**start)
     authorize_source_data(execution_user_id=PUBLISHER, source_id=SOURCE)
+
+    create_membership(
+        subject_type="user", subject_id=READER, target=SOURCE, level="viewer"
+    )
+    replacement_id = uuid4().hex
+    replacement_operation = "fixture-replacement"
+    replacement_partition = replace(
+        binding.partition_identity, topic_incarnation_id="fixture-replacement-topic"
+    )
+    replacement_certificate = dict(
+        certificate,
+        operation_id=replacement_operation,
+        generation_id=replacement_id,
+        partition_identity=asdict(replacement_partition),
+        end_offset=0,
+        source_completion="fixture-replacement-snapshot-completed",
+        durable_source_checkpoint="fixture-replacement-checkpoint",
+        ordered_delivery_proof="fixture-replacement-seal-[0,1)",
+    )
+    replacement_publication = dict(
+        operation_id=replacement_operation,
+        authority=binding.authority,
+        generation_id=replacement_id,
+        certificate=replacement_certificate,
+    )
+    with psycopg.connect(native_target) as connection:
+        bootstrap.create_generation(
+            connection,
+            mirror_id=mirror_id,
+            generation_id=replacement_id,
+            authority=binding.authority,
+            operation_id=replacement_operation,
+            table_identity=binding.table_identity,
+            history_epoch=binding.history_epoch,
+            schema_fingerprint=binding.schema_fingerprint,
+            columns=binding.columns,
+            key_columns=binding.key_columns,
+            partition_identity=replacement_partition,
+            start_offset=-1,
+            require_prepared_fence=True,
+        )
+    replacement_row = {"id": 3, "value": "replacement"}
+    replacement_progress = target.apply_batch(
+        authority=binding.authority,
+        generation_id=replacement_id,
+        partition_identity=replacement_partition,
+        records=[
+            Record(
+                0,
+                binding.table_identity,
+                binding.authority.capture_generation,
+                "upsert",
+                "baseline",
+                {"id": 3},
+                replacement_row,
+            ),
+        ],
+    )
+    assert replacement_progress["offset"] == 0
+    with psycopg.connect(native_target) as connection:
+        persist_verified_certificate(
+            connection,
+            **replacement_publication,
+            verifier=FixtureCertificateVerifier(
+                binding.authority,
+                mirrors.publication_certificate_ref(replacement_certificate),
+            ),
+        )
+    assert (
+        target_publication.publish_generation(**replacement_publication)
+        == replacement_id
+    )
+
+    resumed_page = mirror_reads.read_run_page(runs.get_run(job.id), **next_page)
+    assert resumed_page["generation_id"] == generation_id
+    assert resumed_page["rows"] == [second]
+    assert resumed_page["next_key"] is None
+    assert resumed_page["freshness"] == "stale"
+
+    fresh_job, _ = mint_on_demand_run(**start)
+    assert fresh_job.id != job.id
+    fresh_page = mirror_reads.read_run_page(
+        runs.get_run(fresh_job.id), mirror_id=mirror_id, after_key=None, limit=2
+    )
+    assert fresh_page["generation_id"] == replacement_id
+    assert fresh_page["rows"] == [replacement_row]
