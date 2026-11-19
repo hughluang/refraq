@@ -21,6 +21,7 @@ from cryptography.x509.oid import NameOID
 import jwt
 import psycopg
 from psycopg import sql
+from psycopg.types.json import Jsonb
 import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
@@ -43,7 +44,9 @@ from backend.metadata.mirrors.history import History, SqlHistoryTarget
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.publication import Publication, persist_verified_certificate
 from backend.metadata.mirrors.schemas import MirrorResponse
-from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity, ReadCommittedBounds, Record, SealedScan
+from backend.metadata.mirrors.types import (
+    AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds, Record, SealedScan,
+)
 from backend.tests.test_mirror_generation_allocation import target_dsn as target_dsn
 
 
@@ -449,6 +452,75 @@ def reconcile_open_publication_observation(transaction, target_dsn, restricted, 
         assert service.get_mirror(mirror_id) == invalidated
     finally:
         gateway.dispose()
+
+
+def advance_published_target(target_dsn, expected, certificate):
+    profile = AnchoredProfile(leader_epoch=3)
+    first = ReadCommittedBounds(low=0, stable=3, high=4, leader_epoch=3)
+    before = ReadCommittedBounds(low=0, stable=4, high=5, leader_epoch=3)
+    after = ReadCommittedBounds(low=0, stable=5, high=6, leader_epoch=3)
+    resume = {"certificate": certificate, "history_epoch": expected.history_epoch}
+    for scan, commit_seq in ((AnchoredScan(0, 1, first, first, (0,)), 1),
+                             (AnchoredScan(1, 4, before, after, (2, 3)), 2)):
+        records = [asdict(Record(offset, certificate["table_identity"], expected.authority.capture_generation,
+                                 "upsert", "live", {"id": offset}, {"id": offset, "body": "resumed"}))
+                   for offset in scan.offsets]
+        with psycopg.connect(target_dsn) as owner:
+            owner.execute("SET LOCAL ROLE refraq_mirror_owner")
+            assert owner.execute(
+                "SELECT source_mirror_state.apply_batch(%s, %s, %s, %s, %s, %s, %s)",
+                (Jsonb(asdict(expected.authority)), expected.generation_id, Jsonb(certificate["partition_identity"]),
+                 Jsonb(records), Jsonb(asdict(profile)), Jsonb(asdict(scan)), Jsonb(resume)),
+            ).fetchone() == ({"offset": scan.offsets[-1], "commit_seq": commit_seq},)
+
+
+def reject_damaged_initial_seal(target_dsn, generation_id, allocation, prepare):
+    seal = allocation["anchored_seal"]
+    profile = allocation["anchored_profile"]
+    changed_epoch = profile["leader_epoch"] + 1
+    changed_seal = dict(seal, before=dict(seal["before"], leader_epoch=changed_epoch),
+                        after=dict(seal["after"], leader_epoch=changed_epoch))
+    update = ("UPDATE source_mirror_state.generations SET anchored_profile = %s, anchored_coverage = %s, "
+              "anchored_publication = jsonb_set(anchored_publication, '{seal}', %s) WHERE id = %s")
+    with psycopg.connect(target_dsn, autocommit=True) as connection:
+        for stored_profile, stored_seal, coverage in (
+            (profile, seal, dict(seal, eof=False)),
+            (dict(profile, leader_epoch=changed_epoch), changed_seal, changed_seal),
+        ):
+            connection.execute(update, (Jsonb(stored_profile), Jsonb(coverage), Jsonb(stored_seal), generation_id))
+            with pytest.raises(RuntimeBlocked, match="^published_open_seal_unconfirmed$"):
+                prepare()
+        connection.execute(update, (Jsonb(profile), Jsonb(seal), Jsonb(seal), generation_id))
+
+
+def reject_damaged_coverage(target_dsn, generation_id, coverage, prepare):
+    faults = {
+        "missing coverage": None,
+        "wrong authority": dict(coverage, authority=dict(coverage["authority"], owner_epoch=99)),
+        "before the original seal": dict(coverage, start=-1),
+        "wrong cursor": dict(coverage, end=5),
+        "noncanonical cursor": dict(coverage, end=4.0),
+        "accidental EOF": dict(coverage, eof=4),
+        "missing last visible record": dict(coverage, offsets=[2]),
+        "unordered visible offsets": dict(coverage, offsets=[2, 1, 3]),
+        "missing before bounds": {key: value for key, value in coverage.items() if key != "before"},
+        "missing after bounds": {key: value for key, value in coverage.items() if key != "after"},
+        "incomplete retained bounds": dict(coverage, after={"low": 0, "leader_epoch": 3, "stable": 5}),
+        "noncanonical low bound": dict(coverage, after=dict(coverage["after"], low=False)),
+        "changed retention floor": dict(coverage, after=dict(coverage["after"], low=1)),
+        "changed leader epoch": dict(coverage, after=dict(coverage["after"], leader_epoch=4)),
+        "regressed stable bound": dict(coverage, before=dict(coverage["before"], stable=5),
+                                       after=dict(coverage["after"], stable=4)),
+        "regressed high bound": dict(coverage, after=dict(coverage["after"], stable=4, high=4)),
+    }
+    update = "UPDATE source_mirror_state.generations SET anchored_coverage = %s WHERE id = %s"
+    with psycopg.connect(target_dsn, autocommit=True) as connection:
+        for fault, damaged in faults.items():
+            connection.execute(update, (None if damaged is None else Jsonb(damaged), generation_id))
+            with pytest.raises(RuntimeBlocked) as failure:
+                prepare()
+            assert str(failure.value) == "published_open_seal_unconfirmed", fault
+        connection.execute(update, (Jsonb(coverage), generation_id))
 
 
 @pytest.mark.integration
@@ -863,30 +935,26 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
 
                         def recover(command, expected, certificate):
                             before = service.get_mirror(mirror_id)
-                            fresh_state = tmp_path / "fresh-state"
-                            fresh_state.mkdir(mode=0o700)
-                            fresh_journal = agents.enter_context(closing(runtime.CommandJournal(fresh_state)))
+
+                            def fresh_delivery(name):
+                                state_dir = tmp_path / name
+                                state_dir.mkdir(mode=0o700)
+                                fresh_journal = agents.enter_context(closing(runtime.CommandJournal(state_dir)))
+                                return new_delivery(fresh_journal)
+
                             with monkeypatch.context() as blocked:
                                 request_gateway = Mock()
                                 activate = Mock()
                                 blocked.setattr(http, "request", request_gateway)
                                 blocked.setattr(delivery_composition, "open_delivery", activate)
                                 connect, snapshot, credentials = Mock(), Mock(), Mock()
-                                captures = []
-                                for delivery in (warm, new_delivery(fresh_journal)):
-                                    capture = runtime.CaptureRuntime(
+                                def capture_for(delivery):
+                                    return runtime.CaptureRuntime(
                                         journal=delivery.journal, connect=connect, signals=signals, credentials=credentials,
                                         delivery=delivery, prepare_delivery=delivery.prepare, snapshot=snapshot,
                                     )
-                                    captures.append(capture)
-                                    if checkpoint_fault:
-                                        with pytest.raises(RuntimeBlocked, match="^published_open_checkpoint_unconfirmed$"):
-                                            capture.poll_once(SOURCE, owner_allocation_file=owner_file)
-                                        with pytest.raises(RuntimeBlocked, match="^snapshot_preparation_superseded$"):
-                                            delivery.snapshot_bindings(command)
-                                        continue
-                                    with pytest.raises(RuntimeBlocked, match="^retained_position_resume_driver_required$"):
-                                        capture.poll_once(SOURCE, owner_allocation_file=owner_file)
+
+                                def confirm_candidate(delivery, seek):
                                     candidate, = delivery.prepare(command)
                                     assert candidate.mirror_id == mirror_id
                                     assert candidate.operation_id == attempts[-1][0]
@@ -895,31 +963,55 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                                     assert candidate.certificate_ref == expected.certificate_ref
                                     assert candidate.binding.history_epoch == expected.history_epoch
                                     assert candidate.source_checkpoint == certificate["durable_source_checkpoint"]
-                                    assert candidate.target_seek_offset == 0
+                                    assert candidate.target_seek_offset == seek
                                     assert delivery.snapshot_bindings(command) == []
+                                    with pytest.raises(RuntimeBlocked, match="^retained_position_resume_driver_required$"):
+                                        capture_for(delivery).poll_once(SOURCE, owner_allocation_file=owner_file)
+                                    return candidate
+
+                                initial_deliveries = (warm, fresh_delivery("fresh-state"))
+                                for delivery in initial_deliveries:
+                                    if checkpoint_fault:
+                                        with pytest.raises(RuntimeBlocked, match="^published_open_checkpoint_unconfirmed$"):
+                                            capture_for(delivery).poll_once(SOURCE, owner_allocation_file=owner_file)
+                                        with pytest.raises(RuntimeBlocked, match="^snapshot_preparation_superseded$"):
+                                            delivery.snapshot_bindings(command)
+                                        continue
+                                    initial_candidate = confirm_candidate(delivery, seek=0)
                                 if checkpoint_fault:
                                     for external in (connect, snapshot, credentials, request_gateway, activate):
                                         assert external.mock_calls == []
                                     return
+
+                                observe = Publication(restricted, timeout_ms=3000).observe_committed
+                                publication = dict(mirror_id=mirror_id, operation_id=initial_candidate.operation_id,
+                                                   binding=initial_candidate.binding, expected=expected)
+                                with observe(**publication) as initial:
+                                    assert initial.applied_offset == -1
+                                reject_damaged_initial_seal(target_dsn, expected.generation_id, initial.allocation,
+                                                            lambda: warm.prepare(command))
+                                advance_published_target(target_dsn, expected, certificate)
+                                with observe(**publication) as advanced:
+                                    assert advanced.applied_offset == 3
+                                    assert advanced.certificate == initial.certificate
+                                    assert advanced.certificate["evidence"] == certificate
+                                    assert advanced.allocation["anchored_seal"] == certificate["ordered_delivery_proof"]
+                                    coverage = advanced.allocation["anchored_coverage"]
+                                    assert coverage["offsets"] == [2, 3]
+                                advanced_deliveries = (warm, fresh_delivery("advanced-state"))
+                                for delivery in advanced_deliveries:
+                                    confirm_candidate(delivery, seek=4)
+
+                                reject_damaged_coverage(target_dsn, expected.generation_id, coverage,
+                                                        lambda: warm.prepare(command))
                                 with psycopg.connect(target_dsn) as connection:
-                                    connection.execute(
-                                        "UPDATE source_mirror_state.generations SET anchored_coverage = NULL WHERE id = %s",
-                                        (expected.generation_id,),
-                                    )
-                                with pytest.raises(RuntimeBlocked, match="^published_open_seal_unconfirmed$"):
-                                    warm.prepare(command)
-                                with psycopg.connect(target_dsn) as connection:
-                                    connection.execute(
-                                        "UPDATE source_mirror_state.generations SET anchored_coverage = %s::jsonb WHERE id = %s",
-                                        (json.dumps(certificate["ordered_delivery_proof"]), expected.generation_id),
-                                    )
                                     connection.execute(
                                         "UPDATE source_mirror_state.mirrors SET published_generation_id = NULL WHERE id = %s",
                                         (mirror_id,),
                                     )
-                                for capture in captures:
+                                for delivery in advanced_deliveries:
                                     with pytest.raises(RuntimeBlocked, match="^published_open_target_unconfirmed$"):
-                                        capture.poll_once(SOURCE, owner_allocation_file=owner_file)
+                                        capture_for(delivery).poll_once(SOURCE, owner_allocation_file=owner_file)
                                 with psycopg.connect(target_dsn) as connection:
                                     connection.execute(
                                         "UPDATE source_mirror_state.mirrors SET published_generation_id = %s WHERE id = %s",
@@ -930,11 +1022,11 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                                         "SET evidence = evidence || '{\"key_fingerprint\": \"remapped\"}'::jsonb "
                                         "WHERE operation_id = %s", (attempts[-1][0],),
                                     )
-                                for capture in captures:
+                                for delivery in advanced_deliveries:
                                     with pytest.raises(RuntimeBlocked, match="^open_generation_preparation_blocked$"):
-                                        capture.poll_once(SOURCE, owner_allocation_file=owner_file)
+                                        capture_for(delivery).poll_once(SOURCE, owner_allocation_file=owner_file)
                                     with pytest.raises(RuntimeBlocked, match="^snapshot_preparation_superseded$"):
-                                        capture.delivery.snapshot_bindings(command)
+                                        delivery.snapshot_bindings(command)
                                 for external in (connect, snapshot, credentials, request_gateway, activate):
                                     assert external.mock_calls == []
                             assert service.get_mirror(mirror_id) == before

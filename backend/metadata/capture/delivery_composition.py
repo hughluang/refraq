@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+import json
 import math
 import time
 from uuid import uuid4
@@ -115,6 +116,36 @@ def _confirmed_checkpoint(evidence, scope, *, data_topics, data_partitions):
             or not witness["commit_lsn"] == value["lsn"] == value["lsn_proc"] == value["lsn_commit"]):
         raise RuntimeBlocked("published_open_checkpoint_unconfirmed")
     return checkpoint
+
+
+def _canonical_coverage(coverage, *, authority, leader_epoch, earliest, end, sealed):
+    fields = {"authority", "start", "end", "before", "after", "offsets"}
+    if sealed:
+        fields.add("eof")
+    if not isinstance(coverage, dict) or set(coverage) != fields:
+        return False
+    start, offsets = coverage["start"], coverage["offsets"]
+    if (coverage["authority"] != authority
+            or any(type(coverage["authority"][key]) is not type(value) for key, value in authority.items())
+            or type(start) is not int or not earliest <= start <= end
+            or type(coverage["end"]) is not int or coverage["end"] != end
+            or not isinstance(offsets, list)
+            or any(type(offset) is not int or not start <= offset < end for offset in offsets)
+            or any(left >= right for left, right in zip(offsets, offsets[1:]))):
+        return False
+    stable = high = end
+    for name in ("before", "after"):
+        bounds = coverage[name]
+        if (not isinstance(bounds, dict) or set(bounds) != {"low", "stable", "high", "leader_epoch"}
+                or any(type(value) is not int for value in bounds.values())
+                or bounds["low"] != 0 or bounds["leader_epoch"] != leader_epoch
+                or not stable <= bounds["stable"] <= bounds["high"] <= 2**63 - 1
+                or bounds["high"] < high):
+            return False
+        stable, high = bounds["stable"], bounds["high"]
+    if sealed:
+        return type(coverage["eof"]) is int and coverage["eof"] == stable == high == end
+    return bool(offsets) and offsets[-1] == end - 1
 
 
 class SourceDelivery:
@@ -282,15 +313,25 @@ class SourceDelivery:
         evidence = observed.certificate["evidence"]
         profile = observed.allocation.get("anchored_profile")
         seal = observed.allocation.get("anchored_seal")
+        coverage = observed.allocation.get("anchored_coverage")
+        authority = asdict(binding.authority)
+        sealed_end = evidence["end_offset"] + 1
         seek = observed.applied_offset + 1
-        if (not isinstance(profile, dict) or profile.get("kind") != "disposable_read_committed_v1"
+        if (not isinstance(profile, dict) or set(profile) != {"kind", "leader_epoch"}
+                or profile.get("kind") != "disposable_read_committed_v1"
                 or type(profile.get("leader_epoch")) is not int or profile["leader_epoch"] < 0
-                or not isinstance(seal, dict) or seal != observed.allocation.get("anchored_coverage")
-                or seal != evidence.get("ordered_delivery_proof") or seal.get("authority") != asdict(binding.authority)
-                or type(seal.get("eof")) is not int or seal["eof"] != seek or seal.get("end") != seek
-                or evidence["end_offset"] != observed.applied_offset
-                or any(seal.get(bound) != dict(low=0, stable=seek, high=seek, leader_epoch=profile["leader_epoch"])
-                       for bound in ("before", "after"))):
+                or not _canonical_coverage(seal, authority=authority, leader_epoch=profile["leader_epoch"],
+                                           earliest=binding.start_offset + 1, end=sealed_end, sealed=True)):
+            raise RuntimeBlocked("published_open_seal_unconfirmed")
+        original = json.dumps(seal, sort_keys=True)
+        if original != json.dumps(evidence.get("ordered_delivery_proof"), sort_keys=True):
+            raise RuntimeBlocked("published_open_seal_unconfirmed")
+        if seek == sealed_end:
+            confirmed = json.dumps(coverage, sort_keys=True) == original
+        else:
+            confirmed = _canonical_coverage(coverage, authority=authority, leader_epoch=profile["leader_epoch"],
+                                            earliest=sealed_end, end=seek, sealed=False)
+        if not confirmed:
             raise RuntimeBlocked("published_open_seal_unconfirmed")
         return RetainedOpenCandidate(opened.mirror_id, opened.operation_id, expected.generation_id, binding,
                                      table["topic"], expected.certificate_ref, checkpoint, seek)
