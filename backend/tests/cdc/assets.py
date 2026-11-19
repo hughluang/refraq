@@ -45,6 +45,7 @@ def generate(root: Path):
               'log.segment.bytes': 8388608, 'log.flush.interval.messages': 1}
     worker = {'bootstrap.servers': 'broker:9092', 'group.id': 'trial', 'config.storage.topic': 'configs',
               'offset.storage.topic': 'offsets', 'status.storage.topic': 'status', 'plugin.path': '/kafka/connect',
+              'plugin.discovery': 'service_load',
               'listeners': 'https://0.0.0.0:8083', 'rest.advertised.host.name': 'worker', 'ssl.client.auth': 'required',
               'key.converter': 'org.apache.kafka.connect.json.JsonConverter', 'key.converter.schemas.enable': 'false',
               'value.converter': 'org.apache.kafka.connect.json.JsonConverter', 'value.converter.schemas.enable': 'false',
@@ -63,6 +64,14 @@ def generate(root: Path):
     (root/'broker/server').write_text(properties(broker))
     (root/'broker/client').write_text(properties(client))
     (root/'worker/config').write_text(properties(worker))
+    (root/'worker/log4j2.properties').write_text(properties({
+        'rootLogger.level': 'INFO',
+        'rootLogger.appenderRef.console.ref': 'Console',
+        'appender.console.type': 'Console',
+        'appender.console.name': 'Console',
+        'appender.console.layout.type': 'PatternLayout',
+        'appender.console.layout.pattern': '%level %logger %msg%n%throwable',
+    }))
     (root/'worker/credentials').write_text(properties({'user': role, 'password': password}))
     (root/'pg/bootstrap').write_text(secrets.token_hex(32))
     (root/'pg/hba').write_text(f'local all postgres peer\nhostssl postgres {role} all scram-sha-256\n')

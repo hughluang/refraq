@@ -166,6 +166,7 @@ class Trial:
                    '--mount', f'type=bind,src={self.markers},dst=/trial-startup',
                    '--tmpfs', '/kafka/config:size=4m', '--tmpfs', '/kafka/data:size=4m',
                    '--tmpfs', '/kafka/logs:size=8m,mode=1777', '-e', 'LOG_DIR=/tmp',
+                   '-e', 'KAFKA_LOG4J_OPTS=-Dlog4j2.configurationFile=/trial/log4j2.properties',
                    '-e', 'KAFKA_HEAP_OPTS=-Xms192m -Xmx384m')
         self.wait('worker', lambda: self.rest('', check=False))
         self.worker_version = self.connect_version()
@@ -251,7 +252,7 @@ class Trial:
 
     def consume(self, count):
         raw = self.exe('broker', '/opt/kafka/bin/kafka-console-consumer.sh', '--bootstrap-server', 'broker:9092',
-                       '--consumer.config', '/trial/client', '--topic', 'trial.public.items', '--partition', '0',
+                       '--command-config', '/trial/client', '--topic', 'trial.public.items', '--partition', '0',
                        '--offset', 'earliest', '--max-messages', str(count), '--timeout-ms', '20000',
                        '--formatter-property', 'print.offset=true', '--formatter-property', 'print.key=true')
         events = []
