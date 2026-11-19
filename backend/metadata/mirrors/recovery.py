@@ -139,41 +139,51 @@ class Recovery:
                        actor_user_id=actor_user_id, actor_token_id=actor_token_id)
         identity = sha256(json.dumps(dict(request, mirror_id=mirror_id), sort_keys=True).encode()).hexdigest()
         with self.session_factory() as session, session.begin():
-            mirror, source = self._mirror(session, mirror_id)
+            _, source = self._mirror(session, mirror_id)
             gate = self._gate(session, mirror_id)
             if gate.history_epoch != str(expected_history_epoch):
                 raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
-            old = session.scalar(select(RecoveryRow).where(RecoveryRow.source_id == source.id, RecoveryRow.identity == identity))
-            if old is not None:
-                return dict(operation_id=old.operation_id, state="pending")
+            scoped_rows = select(RecoveryRow).where(
+                RecoveryRow.source_id == source.id, RecoveryRow.mirror_id == mirror_id)
+            previous = session.scalar(scoped_rows.where(RecoveryRow.identity == identity))
+            rows = ()
+            if previous is None:
+                rows = session.scalars(scoped_rows).all()
+                previous = next((row for row in rows if identity in row.journal.get("request_identities", [])), None)
+            if previous is not None:
+                replacement_epoch = previous.journal.get("replacement_epoch")
+                if replacement_epoch and replacement_epoch != gate.history_epoch:
+                    raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
+                return dict(operation_id=previous.operation_id, state="pending")
             if action == "reconcile_state":
                 self._classify(session, mirror_id, request)
-            rows = session.scalars(select(RecoveryRow).where(RecoveryRow.mirror_id == mirror_id)).all()
-            if any(identity in row.journal.get("request_identities", []) for row in rows):
-                previous = next(row for row in rows if identity in row.journal.get("request_identities", []))
-                return dict(operation_id=previous.operation_id, state="pending")
-            for row in rows:
-                journal = deepcopy(row.journal)
-                if journal.get("submission_uncertain"):
+
+            operation_id = None
+            active_rows = [row for row in rows if row.journal["state"] not in {"applied", "superseded"}]
+            if active_rows:
+                [active] = active_rows
+                journal = active.journal
+                state = journal["state"]
+                if journal.get("submission_uncertain") or state == "dispatched":
                     raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
-                if journal.get("replacement_epoch") and journal["state"] not in {"applied", "dispatched", "superseded"} and action in {"run_now", "postpone", "manual", "retry"}:
-                    journal.update(request=request, state="invalidated", attempts=0, next_attempt_at=None)
-                    journal["request_identities"] = list(dict.fromkeys([*journal.get("request_identities", []), row.identity, identity]))
-                    row.journal = journal
-                    row.identity = identity
-                    self.audit(session=session, actor_user_id=actor_user_id, actor_token_id=actor_token_id,
-                               resource_type="mirror", resource_id=mirror_id, action="mirror.recovery_request", result="success",
-                               detail=dict(operation_id=row.operation_id, source_id=source.id, **request))
-                    return dict(operation_id=row.operation_id, state="pending")
-                if journal["state"] in {"invalidated", "dispatched"} or journal.get("submission_uncertain"):
+                replacement_epoch = journal.get("replacement_epoch")
+                if replacement_epoch and action != "reconcile_state":
+                    if replacement_epoch != gate.history_epoch:
+                        raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
+                    identities = list(dict.fromkeys([*journal.get("request_identities", []), active.identity, identity]))
+                    active.journal = dict(journal, request=request, state="invalidated", attempts=0,
+                                          next_attempt_at=None, request_identities=identities)
+                    active.identity = identity
+                    operation_id = active.operation_id
+                elif state == "invalidated":
                     raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
-                if journal["state"] not in {"applied", "superseded"}:
-                    journal["state"] = "superseded"
-                    row.journal = journal
-            operation_id = "mrec_" + uuid4().hex
-            session.add(RecoveryRow(operation_id=operation_id, source_id=source.id, mirror_id=mirror_id,
-                                    identity=identity, journal=dict(request=request, state="pending", attempts=0,
-                                    next_attempt_at=None, fault_code=None, capture_generation=None, generation_id=None)))
+                else:
+                    active.journal = dict(journal, state="superseded")
+            if operation_id is None:
+                operation_id = "mrec_" + uuid4().hex
+                session.add(RecoveryRow(operation_id=operation_id, source_id=source.id, mirror_id=mirror_id,
+                                        identity=identity, journal=dict(request=request, state="pending", attempts=0,
+                                        next_attempt_at=None, fault_code=None, capture_generation=None, generation_id=None)))
             self.audit(session=session, actor_user_id=actor_user_id, actor_token_id=actor_token_id,
                        resource_type="mirror", resource_id=mirror_id, action="mirror.recovery_request", result="success",
                        detail=dict(operation_id=operation_id, source_id=source.id, **request))

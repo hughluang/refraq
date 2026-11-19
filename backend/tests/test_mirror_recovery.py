@@ -194,6 +194,9 @@ def test_publication_uses_existing_guarded_path_and_only_then_releases_busy(reco
     service.dispatch(operation_id=op)
     journal = service.get_operation(op)
     runtime.epoch = journal["replacement_epoch"]
+    override = dict(action="run_now", expected_history_epoch=runtime.epoch, actor_user_id="user", reason="Approved override")
+    accepted = service.request_recovery("a", **override)
+    assert accepted["operation_id"] == op
     service.dispatch(operation_id=op)
     with pytest.raises(MirrorError):
         service.publish_replacement(operation_id=op, authority=None, certificate={})
@@ -207,6 +210,20 @@ def test_publication_uses_existing_guarded_path_and_only_then_releases_busy(reco
     service.publication = Publication()
     assert service.publish_replacement(operation_id=op, authority=None, certificate={}) == journal["generation_id"]
     assert service.get_operation(op)["state"] == "applied"
+    assert service.request_recovery("a", **override) == accepted
+    assert len(audits) == 2
+
+    runtime.epoch = "epoch"
+    runtime.affected = ["a", "b"]
+    loss = request(service, "b")["operation_id"]
+    assert service.dispatch(operation_id=loss) == "invalidated"
+    with factory() as session:
+        current_epoch = session.get(HistoryGateRow, "a").history_epoch
+    with pytest.raises(MirrorError, match="MIRROR_CONTROL_CONFLICT"):
+        service.request_recovery("a", **override)
+    assert service.publish_replacement(operation_id=op, authority=None, certificate={}) == journal["generation_id"]
+    new_request = service.request_recovery("a", **(override | {"expected_history_epoch": current_epoch}))
+    assert new_request["operation_id"] != op
 
 
 @pytest.mark.parametrize("change", ["unknown", "rename", "drop", "narrow", "truncate", "key"])
@@ -274,20 +291,26 @@ def test_lost_submit_response_retries_same_generation_and_operation(recovery):
 
 
 @pytest.mark.parametrize("action", ["manual", "postpone", "run_now", "retry"])
-def test_uncertain_replacement_cannot_be_rewritten(recovery, action):
+@pytest.mark.parametrize("fail_submit", [True, False], ids=["uncertain", "dispatched"])
+def test_submitted_replacement_cannot_be_rewritten(recovery, action, fail_submit):
     service, factory, runtime, audits = recovery
     runtime.validity = "lost"
     op = request(service)["operation_id"]
     service.dispatch(operation_id=op)
     runtime.epoch = service.get_operation(op)["replacement_epoch"]
-    runtime.fail = True
-    service.dispatch(operation_id=op)
+    override = dict(action="run_now", expected_history_epoch=runtime.epoch, actor_user_id="user", reason="Approved override")
+    accepted = service.request_recovery("a", **override)
+    runtime.fail = fail_submit
+    assert service.dispatch(operation_id=op) == ("invalidated" if fail_submit else "dispatched")
     before = service.get_operation(op)
+    assert before["submission_uncertain"] is True
+    assert service.request_recovery("a", **override) == accepted
     with pytest.raises(MirrorError, match="MIRROR_CONTROL_CONFLICT"):
         service.request_recovery("a", action=action, expected_history_epoch=runtime.epoch,
                                  actor_user_id="user", reason="Operator decision")
     assert service.get_operation(op) == before
-    assert len(audits) == 1
+    assert len(audits) == 2
+    assert len(runtime.calls) == 1
 
 
 def test_retained_uncertain_submission_is_source_busy_and_cannot_be_superseded(recovery):
