@@ -268,11 +268,22 @@ BEGIN
   OR cert->>'operation_id' IS DISTINCT FROM g.operation_id
   OR cert->>'generation_id' IS DISTINCT FROM gid
   OR cert->>'end_offset' IS NULL
-  OR g.applied_offset <> (cert->>'end_offset')::bigint OR g.cleanup_pending THEN
+  OR g.cleanup_pending THEN
   RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
  END IF;
- IF c.published THEN RETURN gid; END IF;
- IF g.status NOT IN ('building','catching_up','complete') THEN RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED'; END IF;
+ IF c.published THEN
+  IF m.published_generation_id IS DISTINCT FROM gid
+   OR g.status IS DISTINCT FROM 'published'
+   OR g.applied_offset < (cert->>'end_offset')::bigint THEN
+   RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
+  END IF;
+  RETURN gid;
+ END IF;
+ IF m.published_generation_id IS NOT DISTINCT FROM gid
+  OR g.applied_offset <> (cert->>'end_offset')::bigint
+  OR g.status NOT IN ('building','catching_up','complete') THEN
+  RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
+ END IF;
  IF m.published_generation_id IS NOT NULL THEN
   UPDATE source_mirror_state.generations SET status = 'retired' WHERE id = m.published_generation_id;
  END IF;
