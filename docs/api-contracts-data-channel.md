@@ -353,6 +353,8 @@ Live Source query configuration (`read.source_query`):
 
 A successful execution returns `{rows, count, truncated}`. `rows` is an array of objects keyed by column name. `count` is the length of `rows`. `truncated` is true when the result was cut at `row_cap`. Ports: input `main`, output `main`. A guard, timeout, or row-limit failure is `CHANNEL_NODE_FAILED` with the Controlled Query message. `error_detail.code` is that Controlled Query code. The node does not require `query:run`.
 
+MySQL binary cells in `rows` use the Controlled Query Base64 object. See [MySQL result cells](api-contracts-metadata.md#mysql-result-cells).
+
 Inbound Trigger configuration (`trigger.inbound`):
 
 | Field | Rule |

@@ -301,6 +301,12 @@ Every attempt writes a management audit event (statement summary or hash, never 
 
 Envelope notes: request `max_rows` defaults to **100** when omitted; values above the `query_max_rows` **System Parameter** (seed **1000**, range 100–10000) are rejected with `QUERY_ROW_LIMIT` before connect. Platform timeout is `query_timeout_sec` (seed **30**, range 5–3600), enforced both at the application boundary and via engine statement/command timeout. L4 SQL guards parse a single statement with a dialect-aware AST (sqlglot) for the Source engine and fail closed on write nodes, `INTO`, row locks, blocked functions, or unparseable SQL. Prefer a read-only database account on the Source as defense in depth; platform SQL guards remain mandatory.
 
+#### MySQL result cells
+
+For MySQL Sources, binary cells in `rows` use a Base64 object. For example, the bytes `FF 00` are `{"encoding":"base64","data":"/wA="}`. The decoded cell type supplied by the driver determines which cells are binary. `data` uses the standard Base64 alphabet with padding where required (RFC 4648 §4). An empty binary cell is `{"encoding":"base64","data":""}`. SQL `NULL` is JSON `null`.
+
+MySQL text and JSON documents returned by the driver are JSON strings. `DECIMAL` values are exact decimal strings. Temporal values follow the declared temporal representation.
+
 ## 8. Catalog Sample
 
 ### `POST /objects/{id}/sample`
@@ -349,6 +355,8 @@ Response `200`:
 ```
 
 `has_more` is heuristic: true when the page returned exactly `limit` rows (not a `COUNT(*)`). `sql` is present only when `include_sql` is true.
+
+MySQL `rows` use the Controlled Query cell encoding, including tagged Base64 for binary values and JSON `null` for SQL `NULL`. See [MySQL result cells](#mysql-result-cells).
 
 Errors: same Controlled Query codes when execution/guards fail (`QUERY_NOT_READONLY`, `QUERY_TIMEOUT`, `QUERY_ROW_LIMIT`, …), plus:
 

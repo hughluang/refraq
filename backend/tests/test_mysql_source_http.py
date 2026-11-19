@@ -1,7 +1,16 @@
 """Offline MySQL Source integration at the HTTP and connector runtime seams."""
 
+import asyncio
+import json
+from base64 import b64decode
+from contextlib import nullcontext
+from datetime import timedelta
+from decimal import Decimal
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
+from pymysql.constants import FIELD_TYPE
 
 from backend.admin.role_store import RoleRecord, get_role_store
 from backend.admin.roles import seed_roles
@@ -282,3 +291,182 @@ def test_mysql_http_rejects_invalid_scope_and_unwired_options(client, change):
         assert response.status_code == 400, response.text
         assert response.json()["code"] == "SOURCE_ACCESS_INVALID"
     assert client.get(f"/sources/{source_id}/access").json()["access"] == mysql_access()
+
+
+@pytest.fixture
+def mysql_result_source(client, monkeypatch):
+    from backend.metadata.connectors import mysql
+
+    columns = ["id", "payload", "label", "total", "document", "elapsed"]
+    codes = [
+        FIELD_TYPE.VAR_STRING,
+        FIELD_TYPE.BLOB,
+        FIELD_TYPE.BLOB,
+        FIELD_TYPE.NEWDECIMAL,
+        FIELD_TYPE.JSON,
+        FIELD_TYPE.TIME,
+    ]
+    rows = [
+        (
+            b"abc",
+            b"\xff\x00",
+            "abc",
+            Decimal("12345678901234567890.12345678901234567890"),
+            '{"encoding":"base64","data":"/wA="}',
+            timedelta(hours=-30, microseconds=-123456),
+        ),
+        (b"", b"", "", None, None, None),
+        (b"xyz", None, None, None, None, None),
+    ]
+
+    class Result:
+        cursor = SimpleNamespace(
+            description=[
+                (
+                    name,
+                    code,
+                    None,
+                    None,
+                    None,
+                    6 if code == FIELD_TYPE.TIME else None,
+                    name != "id",
+                )
+                for name, code in zip(columns, codes, strict=True)
+            ]
+        )
+
+        def keys(self):
+            return columns
+
+        def __iter__(self):
+            return iter(rows)
+
+    connection = SimpleNamespace(
+        exec_driver_sql=lambda sql: None,
+        execution_options=lambda **options: connection,
+        execute=lambda sql: Result(),
+    )
+    engine = SimpleNamespace(
+        connect=lambda: nullcontext(connection), dispose=lambda: None
+    )
+    monkeypatch.setattr(mysql, "create_engine", lambda *args, **kwargs: engine)
+    return create_mysql(client).json()["source"]
+
+
+def _assert_mysql_result_cells(body):
+    assert body["columns"] == ["id", "payload", "label", "total", "document", "elapsed"]
+    assert body["declarations"][-1] == {
+        "name": "elapsed",
+        "temporal_kind": "interval",
+        "precision": 6,
+        "nullable": True,
+    }
+    assert body["rows"] == [
+        [
+            {"encoding": "base64", "data": "YWJj"},
+            {"encoding": "base64", "data": "/wA="},
+            "abc",
+            "12345678901234567890.12345678901234567890",
+            '{"encoding":"base64","data":"/wA="}',
+            "-P1DT6H0.123456S",
+        ],
+        [
+            {"encoding": "base64", "data": ""},
+            {"encoding": "base64", "data": ""},
+            "",
+            None,
+            None,
+            None,
+        ],
+        [{"encoding": "base64", "data": "eHl6"}, None, None, None, None, None],
+    ]
+    key, payload = body["rows"][0][:2]
+    assert b64decode(key["data"], validate=True) == b"abc"
+    assert b64decode(payload["data"], validate=True) == b"\xff\x00"
+
+
+def test_mysql_controlled_query_preserves_binary_and_other_result_cells(
+    client, mysql_result_source
+):
+    response = client.post(
+        f"/sources/{mysql_result_source['id']}/query",
+        json={
+            "sql": "SELECT id, payload, label, total, document, elapsed FROM result_cells"
+        },
+    )
+    assert response.status_code == 200, response.text
+    _assert_mysql_result_cells(response.json())
+
+
+def test_mysql_mcp_query_preserves_binary_and_other_result_cells(
+    client, mysql_result_source
+):
+    from backend.core.time import format_instant, utc_now
+    from backend.metadata.mcp_actor import mcp_authorization
+    from backend.metadata.mcp_server import run_sql
+
+    token = client.post(
+        "/tokens",
+        json={
+            "name": "mysql-query",
+            "expires_at": format_instant(utc_now() + timedelta(days=7)),
+        },
+    )
+    assert token.status_code == 201
+    with mcp_authorization(f"Bearer {token.json()['secret']}"):
+        payload = asyncio.run(
+            run_sql(
+                source_locator_key=mysql_result_source["locator_key"],
+                sql="SELECT id, payload, label, total, document, elapsed FROM result_cells",
+            )
+        )
+    body = json.loads(payload)
+    assert "error" not in body, body
+    _assert_mysql_result_cells(body)
+
+
+def test_mysql_catalog_sample_preserves_binary_and_other_result_cells(
+    client, mysql_result_source
+):
+    from backend.core.time import utc_now
+    from backend.metadata.catalog.records import CatalogObjectRecord
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+
+    source_id = mysql_result_source["id"]
+    now = utc_now()
+    record = CatalogObjectRecord(
+        id="obj_mysql_result_cells",
+        source_id=source_id,
+        locator_key="obj/mysql/mysql-sales/Sales/table/result_cells",
+        object_type="table",
+        schema_name="Sales",
+        name="result_cells",
+        ddl=None,
+        comment=None,
+        primary_key=["id"],
+        is_present=True,
+        business_name=None,
+        business_description=None,
+        object_category=None,
+        grain_description=None,
+        business_primary_key=None,
+        evidence_summary=None,
+        open_questions=None,
+        semantic_source=None,
+        business_semantics_ready=False,
+        semantics_updated_at=None,
+        last_structure_job_id="job_mysql_result_cells",
+        collected_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    apply_structure_snapshot(
+        source=get_source_store().get_source(source_id),
+        job_id="job_mysql_result_cells",
+        collected=[record],
+        schema_scope="Sales",
+    )
+
+    response = client.post(f"/objects/{record.id}/sample", json={})
+    assert response.status_code == 200, response.text
+    _assert_mysql_result_cells(response.json())

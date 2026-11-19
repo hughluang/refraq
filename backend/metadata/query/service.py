@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+from base64 import b64encode
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Mapping
 
 from backend.admin.audit import persist_audit_event
@@ -262,7 +264,7 @@ def _classify_temporal(engine: str, native_type: str | None) -> tuple[str | None
 def _present_query(
     result: QueryResult, engine: str
 ) -> tuple[list[dict[str, Any]], list[list[Any]]]:
-    """Declarations aligned with column names, cells encoded from those declarations."""
+    """Align column declarations and encode temporal, MySQL binary, and MySQL decimal cells."""
     infos = result.column_info or []
     declarations: list[dict[str, Any]] = []
     for index, name in enumerate(result.columns):
@@ -279,11 +281,18 @@ def _present_query(
             }
         )
     rows: list[list[Any]] = []
+    is_mysql = engine == "mysql"
     for row in result.rows:
         encoded: list[Any] = []
         for index, value in enumerate(row):
-            kind = declarations[index]["temporal_kind"] if index < len(declarations) else None
-            encoded.append(encode_temporal_cell(value, kind))
+            if is_mysql and isinstance(value, bytes):
+                data = b64encode(value).decode("ascii")
+                encoded.append({"encoding": "base64", "data": data})
+            elif is_mysql and isinstance(value, Decimal):
+                encoded.append(str(value))
+            else:
+                kind = declarations[index]["temporal_kind"] if index < len(declarations) else None
+                encoded.append(encode_temporal_cell(value, kind))
         rows.append(encoded)
     return declarations, rows
 

@@ -100,6 +100,8 @@ Tool-error codes for process overload and platform time (same identity as HTTP, 
 
 Guards match `docs/api-contracts-metadata.md` §7 (same defaults/caps/timeouts and per-attempt audit). `execution` for this tool is `read`. Tool annotation `readOnlyHint` is advisory only: it does not replace platform guards and it is not the `execution` class. Admission uses the MCP process pool (ADR 0045): `ADMISSION_CAPACITY_EXCEEDED` / `ADMISSION_ACTOR_LIMIT_EXCEEDED` in the tool-error envelope when the pool or this actor's share is full.
 
+MySQL binary cells in `rows` use the Controlled Query Base64 object. See [MySQL result cells](api-contracts-metadata.md#mysql-result-cells).
+
 There is **no** MCP Catalog Sample tool; agents peek via `run_sql`. HTTP Catalog Sample remains `POST /objects/{id}/sample` (`catalog:sample`).
 
 ## 8. HTTP Catalog (`GET /mcp/catalog`)
