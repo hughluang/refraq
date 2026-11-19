@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS source_mirror_state.generations (
  status text NOT NULL CHECK(status IN ('building','catching_up','complete','published','retired')),
  cleanup_pending boolean NOT NULL DEFAULT false
 );
+ALTER TABLE source_mirror_state.generations
+ ADD COLUMN IF NOT EXISTS anchored_profile jsonb,
+ ADD COLUMN IF NOT EXISTS anchored_coverage jsonb;
 CREATE TABLE IF NOT EXISTS source_mirror_state.live_log (
  mirror_id text NOT NULL REFERENCES source_mirror_state.mirrors,
  history_epoch text NOT NULL, commit_seq bigint NOT NULL, entry_seq integer NOT NULL,
@@ -71,22 +74,67 @@ RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source
  WHERE g.id = gid
 $$;
 
-CREATE OR REPLACE FUNCTION source_mirror_state.apply_batch(a jsonb, gid text, p jsonb, records jsonb)
+CREATE OR REPLACE FUNCTION source_mirror_state.apply_batch(a jsonb, gid text, p jsonb, records jsonb,
+                                                         profile jsonb, scan jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
 DECLARE
  m source_mirror_state.mirrors; g source_mirror_state.generations;
  r jsonb; old_row jsonb; new_row jsonb; candidate jsonb; typed_key jsonb;
  predicate text; columns_sql text; updates_sql text; k text; n bigint;
  entries integer := 0; seq bigint; previous_offset bigint := NULL;
+ scan_end bigint; bounds jsonb; pre_stable bigint; pre_high bigint;
 BEGIN
  SELECT * INTO g FROM source_mirror_state.generations WHERE id = gid;
  IF NOT FOUND THEN RAISE EXCEPTION 'MIRROR_CONTROL_CONFLICT'; END IF;
  SELECT * INTO m FROM source_mirror_state.mirrors WHERE id = g.mirror_id FOR UPDATE;
  SELECT * INTO g FROM source_mirror_state.generations WHERE id = gid FOR UPDATE;
- IF m.authority IS DISTINCT FROM a OR g.capture_generation IS DISTINCT FROM a->>'capture_generation'
+ IF m.id IS NULL OR g.id IS NULL
+ OR m.authority IS DISTINCT FROM a OR g.capture_generation IS DISTINCT FROM a->>'capture_generation'
  OR g.partition_identity IS DISTINCT FROM p OR g.cleanup_pending
  OR g.status NOT IN ('building','catching_up','published') THEN
   RAISE EXCEPTION 'MIRROR_CONTROL_CONFLICT';
+ END IF;
+ IF profile IS DISTINCT FROM g.anchored_profile OR (profile IS NULL AND scan IS NOT NULL) THEN
+  RAISE EXCEPTION 'MIRROR_COVERAGE_PROFILE_MISMATCH';
+ END IF;
+ IF profile IS NOT NULL THEN
+  IF profile->>'kind' IS DISTINCT FROM 'disposable_read_committed_v1'
+   OR jsonb_typeof(profile->'leader_epoch') IS DISTINCT FROM 'number'
+   OR profile->>'leader_epoch' !~ '^[0-9]+$'
+   OR (g.applied_offset = -1 AND g.anchored_coverage IS NOT NULL)
+   OR (g.applied_offset >= 0 AND g.anchored_coverage->'end' IS DISTINCT FROM to_jsonb(g.applied_offset + 1)) THEN
+   RAISE EXCEPTION 'MIRROR_COVERAGE_PROFILE_MISMATCH';
+  END IF;
+  IF records = '[]'::jsonb AND scan IS NULL THEN
+   RETURN jsonb_build_object('offset', g.applied_offset, 'commit_seq', m.commit_seq);
+  END IF;
+  IF jsonb_typeof(scan) IS DISTINCT FROM 'object'
+   OR scan->'start' IS DISTINCT FROM to_jsonb(g.applied_offset + 1)
+   OR jsonb_typeof(scan->'end') IS DISTINCT FROM 'number'
+   OR scan->>'end' !~ '^[0-9]+$'
+   OR jsonb_typeof(scan->'offsets') IS DISTINCT FROM 'array'
+   OR scan->'offsets' IS DISTINCT FROM (
+    SELECT jsonb_agg(record->'offset' ORDER BY ordinal)
+    FROM jsonb_array_elements(records) WITH ORDINALITY AS batch(record, ordinal)) THEN
+   RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
+  END IF;
+  scan_end := (scan->>'end')::bigint;
+  pre_stable := (g.anchored_coverage->'after'->>'stable')::bigint;
+  pre_high := (g.anchored_coverage->'after'->>'high')::bigint;
+  FOREACH bounds IN ARRAY ARRAY[scan->'before', scan->'after'] LOOP
+   IF bounds->'low' IS DISTINCT FROM '0'::jsonb
+    OR bounds->'leader_epoch' IS DISTINCT FROM profile->'leader_epoch'
+    OR jsonb_typeof(bounds->'stable') IS DISTINCT FROM 'number'
+    OR jsonb_typeof(bounds->'high') IS DISTINCT FROM 'number'
+    OR bounds->>'stable' !~ '^[0-9]+$' OR bounds->>'high' !~ '^[0-9]+$'
+    OR (bounds->>'stable')::bigint < scan_end
+    OR (bounds->>'stable')::bigint > (bounds->>'high')::bigint
+    OR (bounds->>'stable')::bigint < pre_stable OR (bounds->>'high')::bigint < pre_high THEN
+    RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
+   END IF;
+   pre_stable := (bounds->>'stable')::bigint;
+   pre_high := (bounds->>'high')::bigint;
+  END LOOP;
  END IF;
  seq := m.commit_seq + 1;
  SELECT string_agg(format('t.%1$I IS NOT DISTINCT FROM k.%1$I', c), ' AND ') INTO predicate FROM unnest(g.key_columns) c;
@@ -94,12 +142,17 @@ BEGIN
  INTO columns_sql, updates_sql FROM unnest(g.column_names) c;
  FOR r IN SELECT value FROM jsonb_array_elements(records) LOOP
   n := (r->>'offset')::bigint;
-  IF n < 0 OR (previous_offset IS NOT NULL AND n <> previous_offset + 1) THEN
-   RAISE EXCEPTION 'MIRROR_DELIVERY_GAP';
+  IF scan IS NULL THEN
+   IF n < 0 OR (previous_offset IS NOT NULL AND n <> previous_offset + 1) THEN
+    RAISE EXCEPTION 'MIRROR_DELIVERY_GAP';
+   END IF;
+   previous_offset := n;
+   IF n <= g.applied_offset THEN CONTINUE; END IF;
+   IF n <> g.applied_offset + 1 THEN RAISE EXCEPTION 'MIRROR_DELIVERY_GAP'; END IF;
+  ELSIF jsonb_typeof(r->'offset') IS DISTINCT FROM 'number'
+   OR r->>'offset' !~ '^[0-9]+$' OR n <= g.applied_offset OR n >= scan_end THEN
+   RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
   END IF;
-  previous_offset := n;
-  IF n <= g.applied_offset THEN CONTINUE; END IF;
-  IF n <> g.applied_offset + 1 THEN RAISE EXCEPTION 'MIRROR_DELIVERY_GAP'; END IF;
   IF r->>'table_identity' IS DISTINCT FROM m.table_identity
    OR r->>'capture_generation' IS DISTINCT FROM g.capture_generation
    OR r->>'origin' NOT IN ('live','baseline','recovery')
@@ -158,13 +211,24 @@ BEGIN
   END IF;
   g.applied_offset := n;
  END LOOP;
- UPDATE source_mirror_state.generations SET applied_offset = g.applied_offset WHERE id = gid;
+ IF scan IS NOT NULL AND g.applied_offset <> scan_end - 1 THEN
+  RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
+ END IF;
+ UPDATE source_mirror_state.generations SET applied_offset = g.applied_offset,
+  anchored_coverage = scan || jsonb_build_object('authority', a)
+ WHERE id = gid;
  IF entries > 0 THEN
   UPDATE source_mirror_state.mirrors SET commit_seq = seq WHERE id = m.id;
  ELSE seq := m.commit_seq;
  END IF;
  RETURN jsonb_build_object('offset', g.applied_offset, 'commit_seq', seq);
 END $$;
+REVOKE EXECUTE ON FUNCTION source_mirror_state.apply_batch(jsonb,text,jsonb,jsonb,jsonb,jsonb) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION source_mirror_state.apply_batch(a jsonb, gid text, p jsonb, records jsonb)
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+ SELECT source_mirror_state.apply_batch(a, gid, p, records, NULL::jsonb, NULL::jsonb)
+$$;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.publish_generation(op text, a jsonb, gid text, cert jsonb)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$

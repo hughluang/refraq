@@ -159,6 +159,8 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
             try:
                 connection.execute(
                     "INSERT INTO source_mirror_state.generations "
+                    "(id, mirror_id, capture_generation, operation_id, table_name, schema_fingerprint, "
+                    "key_columns, column_names, partition_identity, applied_offset, status, cleanup_pending) "
                     "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,'building',false)",
                     (*generation[:-1], json.dumps(partition_data), start_offset))
             except psycopg.errors.UniqueViolation as exc:

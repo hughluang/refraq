@@ -11,12 +11,12 @@ import logging
 import math
 from threading import Event
 
-from confluent_kafka import Consumer, TopicCollection, TopicPartition
-from confluent_kafka.admin import AdminClient
+from confluent_kafka import Consumer, IsolationLevel, TopicCollection, TopicPartition
+from confluent_kafka.admin import AdminClient, ConfigResource, OffsetSpec, ResourceType
 
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 from backend.metadata.mirrors.application import Application
-from backend.metadata.mirrors.types import Authority, PartitionIdentity
+from backend.metadata.mirrors.types import AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds
 
 
 @dataclass(frozen=True)
@@ -85,15 +85,47 @@ class KafkaIdentity:
             # This profile requires a sole table partition: key changes cannot
             # be ordered safely across independently consumed partitions.
             raise RuntimeBlocked("delivery_partition_identity_mismatch")
+        return cluster, topic
+
+    def read_committed_bounds(self, binding, profile, timeout):
+        cluster, topic = self.verify(binding, timeout)
+        (partition_meta,) = topic.partitions
+        if (len(cluster.nodes) != 1 or len(partition_meta.replicas) != 1
+                or partition_meta.leader is None or partition_meta.leader.id != cluster.nodes[0].id
+                or str(topic.topic_id) == "AAAAAAAAAAAAAAAAAAAAAA"):
+            raise RuntimeBlocked("delivery_anchored_topology_mismatch")
+        resource = ConfigResource(ResourceType.TOPIC, binding.topic)
+        config = self.admin.describe_configs([resource], request_timeout=timeout)[resource].result(timeout=timeout)
+        if any(config[key].value != value for key, value in (
+            ("cleanup.policy", "delete"), ("retention.ms", "-1"), ("retention.bytes", "-1"),
+        )):
+            raise RuntimeBlocked("delivery_anchored_retention_mismatch")
+        partition = TopicPartition(binding.topic, binding.partition_identity.partition)
+        first, stable, high = (
+            self.admin.list_offsets({partition: spec}, isolation_level=isolation,
+                                    request_timeout=timeout)[partition].result(timeout=timeout)
+            for spec, isolation in (
+                (OffsetSpec.earliest(), IsolationLevel.READ_COMMITTED),
+                (OffsetSpec.latest(), IsolationLevel.READ_COMMITTED),
+                (OffsetSpec.latest(), IsolationLevel.READ_UNCOMMITTED),
+            )
+        )
+        if (first.offset != 0 or not 0 <= stable.offset <= high.offset
+                or stable.leader_epoch != profile.leader_epoch or high.leader_epoch != profile.leader_epoch):
+            raise RuntimeBlocked("delivery_anchored_lineage_mismatch")
+        return ReadCommittedBounds(first.offset, stable.offset, high.offset, stable.leader_epoch)
 
 
 class KafkaDelivery:
     def __init__(self, *, consumer, identity, application, binding, decoder,
-                 admission, limits=DeliveryLimits()):
+                 admission, limits=DeliveryLimits(), anchored_profile: AnchoredProfile | None = None):
         limits.validate()
         binding.validate(decoder)
         if not callable(admission):
             raise RuntimeBlocked("delivery_admission_required")
+        if anchored_profile is not None and (not isinstance(anchored_profile, AnchoredProfile)
+                or type(anchored_profile.leader_epoch) is not int or anchored_profile.leader_epoch < 0):
+            raise RuntimeBlocked("delivery_anchored_profile_invalid")
         self.consumer = consumer
         self.identity = identity
         self.application = application
@@ -101,14 +133,16 @@ class KafkaDelivery:
         self.decoder = decoder
         self.admission = admission
         self.limits = limits
+        self.anchored_profile = anchored_profile
         self.stopping = Event()
         self.closed = False
 
-    def _apply(self, records):
+    def _apply(self, records, scan=None):
         b = self.binding
+        evidence = {} if self.anchored_profile is None else {"anchored_profile": self.anchored_profile, "scan": scan}
         coverage = self.application.apply_batch(
             authority=b.authority, generation_id=b.generation_id,
-            partition_identity=b.partition_identity, records=records,
+            partition_identity=b.partition_identity, records=records, **evidence,
         )
         offset = coverage.get("offset")
         if type(offset) is not int or offset < -1:
@@ -131,19 +165,27 @@ class KafkaDelivery:
             with self.admission(binding=self.binding, decoder=self.decoder, limits=self.limits) as permit:
                 if permit is not None:
                     raise RuntimeBlocked("delivery_admission_invalid")
-                self.identity.verify(self.binding, self.limits.metadata_seconds)
+                b = self.binding
+                profile = self.anchored_profile
+                timeout = self.limits.metadata_seconds
+                before = None
+                if profile is None:
+                    self.identity.verify(b, timeout)
                 # Empty batches exercise the same target authority fence and
                 # return committed coverage without mutating rows or the log.
                 applied = self._apply([])
-                b = self.binding
-                partition = TopicPartition(b.topic, b.partition_identity.partition, applied + 1)
+                start = applied + 1
+                if profile is not None:
+                    before = self.identity.read_committed_bounds(b, profile, timeout)
+                    if not before.low <= start <= before.stable:
+                        raise RuntimeBlocked("delivery_coverage_unavailable")
+                partition = TopicPartition(b.topic, b.partition_identity.partition, start)
                 self.consumer.assign([partition])
                 assigned = True
-                low, high = self.consumer.get_watermark_offsets(
-                    partition, timeout=self.limits.metadata_seconds, cached=False,
-                )
-                if not low <= applied + 1 <= high:
-                    raise RuntimeBlocked("delivery_coverage_unavailable")
+                if profile is None:
+                    low, high = self.consumer.get_watermark_offsets(partition, timeout=timeout, cached=False)
+                    if not low <= start <= high:
+                        raise RuntimeBlocked("delivery_coverage_unavailable")
                 records, size = [], 0
                 while len(records) < self.limits.max_records and not self.stopping.is_set():
                     # Reserve a complete maximum-sized record before polling.
@@ -154,27 +196,35 @@ class KafkaDelivery:
                         break
                     if message.error():
                         raise RuntimeBlocked("delivery_poll_unavailable")
-                    if (message.topic() != b.topic
-                            or message.partition() != b.partition_identity.partition
-                            or message.offset() != applied + len(records) + 1):
-                        # read_committed hides control/aborted records; compaction
-                        # also leaves holes. Neither is proof of safe coverage.
-                        # The current target contract cannot span such intervals.
+                    offset = message.offset()
+                    next_offset = records[-1].offset + 1 if records else start
+                    if (message.topic() != b.topic or message.partition() != b.partition_identity.partition
+                            or offset < next_offset or (before is None and offset != next_offset)):
                         raise RuntimeBlocked("delivery_contiguous_coverage_required")
+                    if before is not None and offset >= before.stable:
+                        break
                     key, value = message.key(), message.value()
                     headers = message.headers() or []
                     length = (len(key or b"") + len(value or b"")
                               + sum(len(k.encode()) + len(v or b"") for k, v in headers))
                     if length > self.limits.max_record_bytes:
                         raise RuntimeBlocked("delivery_record_capacity_exceeded")
-                    records.append(self.decoder.decode(offset=message.offset(), key=key, value=value))
+                    records.append(self.decoder.decode(offset=offset, key=key, value=value))
                     size += length
-                self.consumer.pause([partition])
+                self.consumer.unassign()
+                assigned = False
                 if not records:
                     return 0
-                # Recheck topic incarnation immediately before any row effects.
-                self.identity.verify(b, self.limits.metadata_seconds)
-                end = self._apply(records)
+                scan = None
+                if before is None:
+                    self.identity.verify(b, timeout)
+                else:
+                    after = self.identity.read_committed_bounds(b, profile, timeout)
+                    if after.stable < before.stable or after.high < before.high:
+                        raise RuntimeBlocked("delivery_anchored_bounds_regressed")
+                    scan = AnchoredScan(start, records[-1].offset + 1, before, after,
+                                        tuple(record.offset for record in records))
+                end = self._apply(records, scan)
                 if end != records[-1].offset:
                     raise RuntimeBlocked("delivery_coverage_invalid")
                 result = self.consumer.commit(

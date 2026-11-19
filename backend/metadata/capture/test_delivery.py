@@ -15,7 +15,7 @@ from backend.metadata.capture.delivery import (
     DeliveryBinding, DeliveryLimits, KafkaDelivery, KafkaIdentity, open_delivery,
 )
 from backend.metadata.capture.runtime_store import RuntimeBlocked
-from backend.metadata.mirrors.types import Authority, PartitionIdentity
+from backend.metadata.mirrors.types import AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds
 
 
 KEY = {"type": "struct", "fields": [{"field": "id", "type": "int32"}]}
@@ -201,9 +201,6 @@ class FakeConsumer:
             self.next = message.n + 1
         return message
 
-    def pause(self, partitions):
-        self.events.append(("pause",))
-
     def commit(self, *, offsets, asynchronous):
         assert not asynchronous
         self.events.append(("ack", offsets[0].offset))
@@ -223,6 +220,7 @@ class RecordingApplication:
         self.offset = -1
         self.events = events
         self.records = []
+        self.scan = None
         self.fail = False
 
     def apply_batch(self, **kwargs):
@@ -233,7 +231,9 @@ class RecordingApplication:
             raise RuntimeError("private-value")
         self.events.append(("target", tuple(r.offset for r in records)))
         if records:
-            assert records[0].offset == self.offset + 1
+            self.scan = kwargs.get("scan")
+            if self.scan is None:
+                assert records[0].offset == self.offset + 1
             self.records.extend(records)
             self.offset = records[-1].offset
         return {"offset": self.offset, "commit_seq": 1}
@@ -263,6 +263,35 @@ def test_commit_before_ack_and_target_seek_not_group_offset():
     assert delivery.poll_once() == 0
     assert ("seek", 2) in events
     assert len(app.records) == 2
+
+
+def test_anchored_prefix_uses_prescan_stable_bound_and_carries_exact_visible_offsets():
+    delivery, _, app, events = runtime(
+        [Message(2), Message(4, tombstone=True), Message(6)], anchored_profile=AnchoredProfile(7),
+    )
+    before = ReadCommittedBounds(0, 6, 8, 7)
+    after = ReadCommittedBounds(0, 8, 8, 7)
+    observations = iter((before, after, after, after))
+    delivery.identity.read_committed_bounds = lambda *args: next(observations)
+
+    assert delivery.poll_once() == 2
+    assert app.scan == AnchoredScan(0, 5, before, after, (2, 4))
+    assert [record.operation for record in app.records] == ["upsert", "tombstone"]
+    assert events.index(("target", (2, 4))) < events.index(("ack", 5))
+    assert delivery.poll_once() == 1
+    assert ("seek", 5) in events
+    assert app.scan == AnchoredScan(5, 7, after, after, (6,))
+
+
+@pytest.mark.parametrize("after", [ReadCommittedBounds(0, 3, 5, 7), ReadCommittedBounds(0, 4, 4, 7)])
+def test_anchored_prefix_rejects_bounds_change_before_target_apply(after):
+    delivery, _, app, events = runtime([Message(2)], anchored_profile=AnchoredProfile(7))
+    observations = iter((ReadCommittedBounds(0, 4, 5, 7), after))
+    delivery.identity.read_committed_bounds = lambda *args: next(observations)
+    with pytest.raises(RuntimeBlocked):
+        delivery.poll_once()
+    assert app.offset == -1 and app.scan is None
+    assert not any(event[0] == "ack" for event in events)
 
 
 def test_bad_last_record_rolls_back_whole_offline_batch_before_application():
@@ -416,6 +445,7 @@ def test_real_composition_wires_application_and_safety_settings(monkeypatch):
                                           "ssl.ca.location": "/protected/ca"}, group_id="delivery",
                              applier_engine=engine, binding=BINDING, decoder=decoder(), admission=admission)
     assert delivery.application.engine is engine
+    assert delivery.anchored_profile is None
     assert captured["enable.auto.commit"] is False
     assert captured["enable.auto.offset.store"] is False
     assert captured["auto.offset.reset"] == "error"

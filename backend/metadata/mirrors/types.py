@@ -1,6 +1,6 @@
 """Immutable transport values for the Metadata-owned target adapter."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -20,6 +20,33 @@ class PartitionIdentity:
     runtime_cluster_id: str
     topic_incarnation_id: str
     partition: int
+
+
+@dataclass(frozen=True)
+class AnchoredProfile:
+    """Fixed Kafka log lineage enrolled at fresh disposable generation allocation."""
+
+    leader_epoch: int
+    kind: str = field(default="disposable_read_committed_v1", init=False)
+
+
+@dataclass(frozen=True)
+class ReadCommittedBounds:
+    low: int
+    stable: int
+    high: int
+    leader_epoch: int
+
+
+@dataclass(frozen=True)
+class AnchoredScan:
+    """Evidence from a single ordered scan ending at a decoded visible record."""
+
+    start: int
+    end: int
+    before: ReadCommittedBounds
+    after: ReadCommittedBounds
+    offsets: tuple[int, ...]
 
 
 @dataclass(frozen=True)
