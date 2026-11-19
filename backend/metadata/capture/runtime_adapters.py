@@ -34,7 +34,7 @@ class PrivateHTTP:
         )
         self.limit = max_response_bytes
 
-    def request(self, method, path, payload=None):
+    def request(self, method, path, payload=None, *, missing=False):
         try:
             with self.client.stream(method, path, json=payload) as response:
                 body = bytearray()
@@ -42,6 +42,8 @@ class PrivateHTTP:
                     body.extend(chunk)
                     if len(body) > self.limit:
                         raise RuntimeBlocked("response_bound_exceeded")
+                if missing and response.status_code == 404:
+                    return None
                 if response.status_code not in {200, 201, 202, 204}:
                     raise RuntimeBlocked("private_http_unconfirmed")
                 return json.loads(body) if body else None
@@ -62,6 +64,23 @@ class ConnectLifecycle:
     def stop(self):
         # Stop preserves offsets and the connector. It is never delete/pause.
         self.http.request("PUT", self.path + "/stop")
+
+    def configure(self, config):
+        self.http.request("PUT", self.path + "/config", config)
+
+    def configured(self, config):
+        return self.http.request("GET", self.path + "/config", missing=True) == config
+
+    def resume(self):
+        self.http.request("PUT", self.path + "/resume")
+
+    def running(self):
+        status = self.http.request("GET", self.path + "/status")
+        return (isinstance(status, dict) and isinstance(status.get("connector"), dict)
+                and status["connector"].get("state") == "RUNNING"
+                and isinstance(status.get("tasks"), list) and bool(status["tasks"])
+                and all(isinstance(task, dict) and task.get("state") == "RUNNING"
+                        for task in status["tasks"]))
 
     def stopped(self):
         status = self.http.request("GET", self.path + "/status")
@@ -88,7 +107,8 @@ class ReadinessSignals:
     Snapshot terminal signals can be observed here but are not start authority.
     """
 
-    def __init__(self, http, *, runtime_instance_id, max_age_seconds, required_checks):
+    def __init__(self, http, *, runtime_instance_id, max_age_seconds, required_checks,
+                 verifier=None, scope=None):
         mandatory = {"profile_qualified", "source_pressure", "delivery_bounded",
                      "credential_valid", "alarm_drill", "owner_excluded", "target_fenced"}
         if (not runtime_instance_id or not 0 < max_age_seconds <= 3600
@@ -98,6 +118,8 @@ class ReadinessSignals:
         self.runtime_instance_id = runtime_instance_id
         self.max_age = max_age_seconds
         self.required = set(required_checks)
+        self.verifier = verifier
+        self.scope = scope
 
     def observation(self, command, phase):
         result = self.http.request("POST", "/v1/capture/observations", {
@@ -106,6 +128,15 @@ class ReadinessSignals:
         })
         if not isinstance(result, dict):
             raise RuntimeBlocked("readiness_unknown")
+        if self.verifier is None:
+            raise RuntimeBlocked("signing_trust_required")
+        signed = self.verifier.verify(
+            result.get("signature"), purpose="observation:" + phase,
+            authority={key: command[key] for key in AUTHORITY_KEYS}, scope=self.scope,
+            operation_id=command["operation_id"],
+        )
+        if signed.get("observation") != {key: value for key, value in result.items() if key != "signature"}:
+            raise RuntimeBlocked("signed_observation_mismatch")
         if result.get("authority") != {key: command[key] for key in AUTHORITY_KEYS}:
             raise RuntimeBlocked("observation_authority_mismatch")
         if (command["runtime_instance_id"] != self.runtime_instance_id
@@ -120,12 +151,15 @@ class ReadinessSignals:
             valid = False
         if not valid:
             raise RuntimeBlocked("observation_stale")
-        checks = result.get("checks", {})
-        if not isinstance(checks, dict) or any(checks.get(key) != "pass" for key in self.required):
-            raise RuntimeBlocked("readiness_unknown_or_failed")
+        if phase not in {"before_stop", "stopped"}:
+            checks = result.get("checks", {})
+            if not isinstance(checks, dict) or any(checks.get(key) != "pass" for key in self.required):
+                raise RuntimeBlocked("readiness_unknown_or_failed")
         proofs = result.get("proofs", {})
         required = (STOP_PROOFS | {"owner_assignment_ref"} if phase == "stopped"
                     else {"owner_assignment_ref", "owner_exclusion_ref", "target_fence_ref"})
+        if phase == "running":
+            required |= {"credential_installed_ref", "credential_revoked_ref", "task_running_ref"}
         if not isinstance(proofs, dict):
             raise RuntimeBlocked("proof_unverified")
         refs = {}
@@ -151,7 +185,7 @@ class ReadinessSignals:
             expected_fact = key.removesuffix("_ref")
             if proof["facts"].get(expected_fact) is not True:
                 raise RuntimeBlocked("proof_fact_missing")
-            if key != "owner_assignment_ref":
+            if key not in {"owner_assignment_ref", "task_running_ref"}:
                 refs[key] = proof["ref"]
         return {**result["authority"], "operation_id": command["operation_id"],
                 "observed_at": result["observed_at"], **refs}

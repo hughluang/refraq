@@ -31,6 +31,7 @@ def test_binding_survives_clear_and_blocks_delete_and_retarget(client, monkeypat
     assert initial["control"]["control_revision"] == 1
     assert initial["control"]["credential_revision"] == 1
     assert initial["availability"] == "unknown"
+    assert initial["operations"][-1]["kind"] == "stop"
     assert (
         client.patch(
             f"/sources/{source_id}",

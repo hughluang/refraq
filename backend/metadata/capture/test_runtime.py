@@ -2,9 +2,14 @@
 
 import hashlib
 import json
+from datetime import datetime, timedelta
 
 import httpx
+import jwt
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
+
+from backend.metadata.capture.authority import SignedAuthority
 
 from backend.core.config import get_settings
 from backend.core.time import utc_now
@@ -63,22 +68,37 @@ class FakeHTTP:
     def __init__(self, handler):
         self.client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://private")
 
-    def request(self, method, path, payload=None):
+    def request(self, method, path, payload=None, **kwargs):
         response = self.client.request(method, path, json=payload)
         return response.json() if response.content else None
 
 
-def observation(cmd, phase):
+SIGNING_KEY = Ed25519PrivateKey.generate()
+TRUST = SignedAuthority(keys={"trusted": SIGNING_KEY.public_key()}, issuer="gateway", audience="capture")
+RUNNING_PROOFS = ("credential_installed_ref", "credential_revoked_ref", "task_running_ref")
+
+
+def observation(cmd, phase, *, checks=None, omit_proofs=(), observed_at=None):
     authority = {key: cmd[key] for key in AUTHORITY_KEYS}
-    observed_at = utc_now().isoformat()
+    observed_at = observed_at if observed_at is not None else utc_now().isoformat()
     proofs = {}
-    for key in STOP_PROOFS | {"owner_assignment_ref"}:
+    for key in STOP_PROOFS | {"owner_assignment_ref", *RUNNING_PROOFS}:
         proof = {"authority": authority, "operation_id": cmd["operation_id"],
                  "observed_at": observed_at, "facts": {key.removesuffix("_ref"): True}}
         digest = hashlib.sha256(json.dumps(proof, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         proofs[key] = {**proof, "ref": "sha256:" + digest, "verified": True}
-    return {"authority": authority, "observed_at": observed_at, "proofs": proofs,
-            "checks": {key: "pass" for key in CHECKS}}
+    for key in omit_proofs:
+        del proofs[key]
+    result = {"authority": authority, "observed_at": observed_at, "proofs": proofs,
+              "checks": {**dict.fromkeys(CHECKS, "pass"), **(checks or {})}}
+    now = utc_now()
+    result["signature"] = jwt.encode({
+        "iss": "gateway", "aud": "capture", "iat": now, "nbf": now,
+        "exp": now + timedelta(seconds=60), "jti": "fresh-proof",
+        "purpose": "observation:" + phase, "authority": authority,
+        "scope": None, "operation_id": cmd["operation_id"], "observation": dict(result),
+    }, SIGNING_KEY, algorithm="EdDSA", headers={"kid": "trusted"})
+    return result
 
 
 CHECKS = ["profile_qualified", "source_pressure", "delivery_bounded", "credential_valid",
@@ -108,6 +128,95 @@ def managed_command(monkeypatch):
     get_settings.cache_clear()
 
 
+TERMINAL_STOP_PROOFS = (
+    "retired_commands_rejected_ref", "task_stopped_ref", "source_session_stopped_ref",
+    "inflight_drained_ref",
+)
+
+
+@pytest.mark.parametrize(("readiness", "terminal_fault", "reason"), [
+    ("fail", None, None),
+    ("unknown", None, None),
+    *(("unknown", proof, "proof_unverified") for proof in TERMINAL_STOP_PROOFS),
+    ("unknown", "owner_assignment_ref", "proof_unverified"),
+    ("unknown", "unsigned", "signed_authority_unverified"),
+    ("unknown", "wrong_phase", "signed_authority_unverified"),
+    ("unknown", "stale", "observation_stale"),
+])
+def test_current_owner_can_stop_but_needs_terminal_proof_to_ack(
+    tmp_path, managed_command, readiness, terminal_fault, reason,
+):
+    stop_requests = []
+
+    def handler(request):
+        if request.url.path == "/v1/capture/observations":
+            payload = json.loads(request.content)
+            cmd = payload["command"]
+            checks = {"source_pressure": readiness, "credential_valid": readiness}
+            if payload["phase"] == "before_stop":
+                return httpx.Response(200, json=observation(
+                    cmd, "before_stop", checks=checks, omit_proofs=(*TERMINAL_STOP_PROOFS, *RUNNING_PROOFS),
+                ))
+            assert payload["phase"] == "stopped"
+            fault = terminal_fault or ""
+            observed_at = None
+            if fault == "stale":
+                observed_at = (datetime.fromisoformat(cmd["requested_at"]) - timedelta(seconds=1)).isoformat()
+            result = observation(
+                cmd, "before_stop" if fault == "wrong_phase" else "stopped", checks=checks,
+                omit_proofs=(fault,) if fault.endswith("_ref") else (), observed_at=observed_at,
+            )
+            if fault == "unsigned":
+                del result["signature"]
+            return httpx.Response(200, json=result)
+        if request.method == "PUT":
+            assert request.url.path == "/connectors/cap_one/stop"
+            stop_requests.append(request.url.path)
+        state = "STOPPED" if stop_requests else "RUNNING"
+        return httpx.Response(200, json={"connector": {"state": state}, "tasks": []})
+
+    http = FakeHTTP(handler)
+    journal = CommandJournal(tmp_path)
+    try:
+        runtime = CaptureRuntime(journal=journal, connect=ConnectLifecycle(http, "cap_one"),
+                                 signals=ReadinessSignals(http, verifier=TRUST, runtime_instance_id="agent-one",
+                                                          max_age_seconds=30, required_checks=CHECKS))
+        source_id = managed_command["source_id"]
+        if reason is None:
+            assert runtime.poll_source(source_id) == "applied"
+            assert capture_status(source_id)["control"]["stop_ack"]["operation_id"] == managed_command["operation_id"]
+        else:
+            with pytest.raises(RuntimeBlocked, match=reason):
+                runtime.poll_source(source_id)
+            assert capture_status(source_id)["control"]["stop_ack"] is None
+        assert len(stop_requests) == 1
+    finally:
+        journal.close()
+        http.client.close()
+
+
+@pytest.mark.parametrize("phase", ["before_start", "before_configure", "before_resume", "running"])
+@pytest.mark.parametrize("failed_check", ["source_pressure", "credential_valid"])
+@pytest.mark.parametrize("readiness", ["fail", "unknown"])
+def test_running_state_requires_signed_start_readiness(phase, failed_check, readiness):
+    cmd = {**command(), "kind": "reconcile"}
+
+    def handler(request):
+        payload = json.loads(request.content)
+        return httpx.Response(200, json=observation(
+            payload["command"], payload["phase"], checks={failed_check: readiness},
+        ))
+
+    http = FakeHTTP(handler)
+    try:
+        signals = ReadinessSignals(http, verifier=TRUST, runtime_instance_id="agent-one",
+                                   max_age_seconds=30, required_checks=CHECKS)
+        with pytest.raises(RuntimeBlocked, match="readiness_unknown_or_failed"):
+            signals.observation(cmd, phase)
+    finally:
+        http.client.close()
+
+
 def test_real_durable_intent_stop_recovers_response_loss_without_second_mutation(tmp_path, managed_command):
     cmd = managed_command
     external = {"stopped": False, "mutations": 0}
@@ -127,7 +236,7 @@ def test_real_durable_intent_stop_recovers_response_loss_without_second_mutation
     journal = CommandJournal(tmp_path)
     def runtime(journal):
         return CaptureRuntime(journal=journal, connect=ConnectLifecycle(http, "cap_one"),
-                              signals=ReadinessSignals(http, runtime_instance_id="agent-one",
+                              signals=ReadinessSignals(http, verifier=TRUST, runtime_instance_id="agent-one",
                                                        max_age_seconds=30, required_checks=CHECKS))
     with pytest.raises(RuntimeBlocked, match="private_http_uncertain"):
         runtime(journal).poll_source(cmd["source_id"])
@@ -142,31 +251,42 @@ def test_real_durable_intent_stop_recovers_response_loss_without_second_mutation
     http.client.close()
 
 
-@pytest.mark.parametrize("fault", ["unknown", "placeholder", "assignment", "owner", "stale", "tampered"])
-def test_unverified_readiness_and_proofs_block_before_connect(tmp_path, managed_command, fault):
+@pytest.mark.parametrize(("fault", "reason"), [
+    ("unknown", "signed_observation_mismatch"),
+    ("placeholder", "signed_observation_mismatch"),
+    ("owner_assignment_ref", "proof_unverified"),
+    ("owner_exclusion_ref", "proof_unverified"),
+    ("target_fence_ref", "proof_unverified"),
+    ("owner", "signed_authority_unverified"),
+    ("unsigned", "signed_authority_unverified"),
+    ("stale", "observation_stale"),
+    ("tampered", "signed_observation_mismatch"),
+])
+def test_unverified_readiness_and_proofs_block_before_connect(tmp_path, managed_command, fault, reason):
     cmd = managed_command
     def handler(request):
         assert request.url.path == "/v1/capture/observations", "Connect was reached before admission"
-        result = observation(cmd, "before_stop")
+        result = observation(
+            {**cmd, "owner_epoch": cmd["owner_epoch"] - 1} if fault == "owner" else cmd,
+            "before_stop",
+            omit_proofs=(fault,) if fault.endswith("_ref") else (),
+            observed_at="2020-01-01T00:00:00+00:00" if fault == "stale" else None,
+        )
         if fault == "unknown":
             result["checks"]["source_pressure"] = "unknown"
         elif fault == "placeholder":
             result["proofs"]["owner_exclusion_ref"] = "approved"
-        elif fault == "assignment":
-            result["proofs"].pop("owner_assignment_ref")
-        elif fault == "owner":
-            result["authority"]["runtime_instance_id"] = None
-        elif fault == "stale":
-            result["observed_at"] = "2020-01-01T00:00:00+00:00"
-        else:
+        elif fault == "unsigned":
+            del result["signature"]
+        elif fault == "tampered":
             result["proofs"]["target_fence_ref"]["facts"] = {"target_fence": False}
         return httpx.Response(200, json=result)
     http = FakeHTTP(handler)
     journal = CommandJournal(tmp_path)
     agent = CaptureRuntime(journal=journal, connect=ConnectLifecycle(http, "cap_one"),
-                           signals=ReadinessSignals(http, runtime_instance_id="agent-one",
+                           signals=ReadinessSignals(http, verifier=TRUST, runtime_instance_id="agent-one",
                                                     max_age_seconds=30, required_checks=CHECKS))
-    with pytest.raises(RuntimeBlocked):
+    with pytest.raises(RuntimeBlocked, match=reason):
         agent.poll_source(cmd["source_id"])
     assert capture_status(cmd["source_id"])["control"]["stop_ack"] is None
     journal.close()

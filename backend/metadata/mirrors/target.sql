@@ -39,6 +39,23 @@ RETURNS integer LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, sour
  SELECT version FROM source_mirror_state.version WHERE singleton
 $$;
 
+CREATE OR REPLACE FUNCTION source_mirror_state.delivery_metadata(gid text)
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+ SELECT jsonb_build_object(
+  'generation_id', g.id, 'authority', m.authority, 'table_identity', m.table_identity,
+  'capture_generation', g.capture_generation, 'schema_fingerprint', g.schema_fingerprint,
+  'key_columns', g.key_columns, 'column_names', g.column_names,
+  'partition_identity', g.partition_identity, 'cleanup_pending', g.cleanup_pending,
+  'status', g.status, 'native_types', (
+   SELECT jsonb_object_agg(a.attname, format_type(a.atttypid, a.atttypmod))
+   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+   JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'source_mirror' AND c.relname = g.table_name
+    AND a.attnum > 0 AND NOT a.attisdropped))
+ FROM source_mirror_state.generations g
+ JOIN source_mirror_state.mirrors m ON m.id = g.mirror_id WHERE g.id = gid
+$$;
+
 CREATE OR REPLACE FUNCTION source_mirror_state.apply_batch(a jsonb, gid text, p jsonb, records jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
 DECLARE

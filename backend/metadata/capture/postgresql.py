@@ -1,0 +1,102 @@
+"""Pinned PostgreSQL pgoutput profile; no automatic publication or slot DDL."""
+
+import json
+import re
+
+import psycopg
+
+from backend.core.secrets import decrypt_secret
+from backend.metadata.capture.runtime_store import RuntimeBlocked
+
+
+class PostgreSQLCaptureProfile:
+    def __init__(self, *, scope, tls, connect=psycopg.connect):
+        self.scope = scope
+        self.tls = tls
+        self.connect = connect
+        required = {"source_id", "connector_name", "host", "port", "database", "tables",
+                    "publication", "slot", "topic_prefix", "server_version_num"}
+        if (set(scope) != required or set(tls) != {"sslmode", "sslrootcert"}
+                or tls.get("sslmode") != "verify-full"
+                or not tls.get("sslrootcert") or not scope["tables"]
+                or any(not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", scope[k])
+                       for k in ("publication", "slot"))
+                or any(not re.fullmatch(r"[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*", t)
+                       for t in scope["tables"])):
+            raise RuntimeBlocked("explicit_postgresql_profile_required")
+
+    def configuration(self, command, source, refs):
+        p = self.scope
+        if source.engine != "postgresql" or source.id != p["source_id"]:
+            raise RuntimeBlocked("postgresql_scope_mismatch")
+        try:
+            access = json.loads(decrypt_secret(source.access_ciphertext))
+            if (any(access.get(k) != p[k] for k in ("host", "port", "database"))
+                    or any(table.split(".")[0] != access.get("schema") for table in p["tables"])):
+                raise ValueError()
+            credential = json.loads(decrypt_secret(source.capture_credential_ciphertext))
+            with self.connect(host=p["host"], port=p["port"], dbname=p["database"],
+                              user=credential["username"], password=credential["password"],
+                              connect_timeout=10, options="-c statement_timeout=10000",
+                              **self.tls) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT current_database(), current_setting('wal_level'), "
+                                   "current_setting('server_version_num')::int, rolreplication, "
+                                   "rolsuper FROM pg_roles WHERE rolname = current_user")
+                    database, wal, version, replication, superuser = cursor.fetchone()
+                    if (database != p["database"] or wal != "logical"
+                            or version != p["server_version_num"] or not replication or superuser):
+                        raise ValueError()
+                    cursor.execute("SELECT puballtables, pubinsert, pubupdate, pubdelete, pubtruncate "
+                                   "FROM pg_publication WHERE pubname = %s", (p["publication"],))
+                    if cursor.fetchone() != (False, True, True, True, True):
+                        raise ValueError()
+                    cursor.execute("""
+                        SELECT published.schemaname || '.' || published.tablename,
+                               published.rowfilter IS NOT NULL, published.attnames,
+                               attributes.names, attributes.has_generated
+                        FROM pg_catalog.pg_publication_tables AS published
+                        JOIN pg_catalog.pg_namespace AS namespace ON namespace.nspname = published.schemaname
+                        JOIN pg_catalog.pg_class AS relation
+                          ON relation.relnamespace = namespace.oid AND relation.relname = published.tablename
+                        CROSS JOIN LATERAL (
+                            SELECT array_agg(attname) AS names, bool_or(attgenerated <> '') AS has_generated
+                            FROM pg_catalog.pg_attribute
+                            WHERE attrelid = relation.oid AND attnum > 0 AND NOT attisdropped
+                        ) AS attributes
+                        WHERE published.pubname = %s
+                        LIMIT %s
+                    """, (p["publication"], len(p["tables"]) + 1))
+                    published_tables = cursor.fetchall()
+                    if (len(published_tables) != len(p["tables"])
+                            or {row[0] for row in published_tables} != set(p["tables"])):
+                        raise ValueError()
+                    for _, filtered, published_columns, live_columns, has_generated in published_tables:
+                        if (filtered is not False or has_generated is not False
+                                or not published_columns or not live_columns
+                                or set(published_columns) != set(live_columns)):
+                            raise ValueError()
+                    cursor.execute("SELECT plugin, database, active FROM pg_replication_slots "
+                                   "WHERE slot_name = %s", (p["slot"],))
+                    slot = cursor.fetchone()
+                    if slot is not None and slot[:2] != ("pgoutput", p["database"]):
+                        raise ValueError()
+                    for table in p["tables"]:
+                        cursor.execute("SELECT has_table_privilege(current_user, %s, 'SELECT')", (table,))
+                        if cursor.fetchone() != (True,):
+                            raise ValueError()
+        except Exception:
+            raise RuntimeBlocked("postgresql_readiness_unconfirmed") from None
+        return {
+            "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+            "tasks.max": "1", "database.hostname": p["host"], "database.port": str(p["port"]),
+            "database.dbname": p["database"], "database.user": refs["username"],
+            "database.password": refs["password"], "database.sslmode": "verify-full",
+            "database.sslrootcert": self.tls["sslrootcert"], "plugin.name": "pgoutput",
+            "slot.name": p["slot"], "slot.drop.on.stop": "false",
+            "publication.name": p["publication"], "publication.autocreate.mode": "disabled",
+            "topic.prefix": p["topic_prefix"], "table.include.list": ",".join(
+                re.escape(table) for table in p["tables"]),
+            "snapshot.mode": "no_data", "tombstones.on.delete": "false",
+            "decimal.handling.mode": "precise",
+        }

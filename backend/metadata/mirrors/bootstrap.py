@@ -18,6 +18,7 @@ ROLES = ("refraq_mirror_owner", "refraq_mirror_applier", "refraq_mirror_gateway"
 TYPES = {"bigint", "integer", "smallint", "boolean", "text", "uuid", "date", "bytea", "jsonb", "timestamp", "timestamptz"}
 FUNCTIONS = {
     "apply_batch(jsonb,text,jsonb,jsonb)": "refraq_mirror_applier",
+    "delivery_metadata(text)": "refraq_mirror_applier",
     "publish_generation(text,jsonb,text,jsonb)": "refraq_mirror_applier",
     "acquire_pin(text,text)": "refraq_mirror_gateway",
     "resolve_source(text)": "refraq_mirror_gateway",

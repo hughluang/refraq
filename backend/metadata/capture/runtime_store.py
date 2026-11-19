@@ -32,6 +32,21 @@ def protected_read(path, *, limit=1048576):
         return data
 
 
+def protected_json(path):
+    def pairs(values):
+        result = {}
+        for key, value in values:
+            if key in result:
+                raise RuntimeBlocked("protected_json_invalid")
+            result[key] = value
+        return result
+
+    def invalid(value):
+        raise RuntimeBlocked("protected_json_invalid")
+
+    return json.loads(protected_read(path), object_pairs_hook=pairs, parse_constant=invalid)
+
+
 class CommandJournal:
     def __init__(self, directory):
         self.directory = Path(directory)
@@ -104,7 +119,7 @@ class CommandJournal:
         return "pending"
 
     def mark(self, command, state):
-        if state not in {"uncertain", "observed", "applied"}:
+        if state not in {"uncertain", "resume_uncertain", "observed", "applied"}:
             raise RuntimeBlocked("invalid_journal_transition")
         with self.db:
             self.db.execute(

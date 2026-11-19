@@ -18,6 +18,7 @@ from backend.metadata.capture.store import (
     save_operation,
 )
 from backend.metadata.errors import SourceCaptureControlConflict, SourceNotFound
+from backend.metadata.mirrors.service import read_published_scope
 from backend.metadata.sources.store import SourceRecord, get_source_store
 
 
@@ -30,6 +31,24 @@ AUTHORITY_KEYS = (
     "control_revision",
     "credential_revision",
 )
+
+
+def included_tables(published_scope):
+    return [table for table in published_scope if table["included"]]
+
+
+def profile_matches_scope(profile_scope, published_scope):
+    desired = included_tables(published_scope)
+    configured = profile_scope.get("tables", [])
+    return bool(desired) and len(configured) == len(desired) and sorted(configured) == sorted(
+        table["qualified_table"] for table in desired
+    )
+
+
+def _desired(source, published_scope):
+    if source.status == "active" and source.capture_credential_ciphertext and included_tables(published_scope):
+        return "configured"
+    return "stopped"
 
 
 @contextmanager
@@ -49,6 +68,42 @@ def source_control_transaction(source_id: str):
             yield None, source
 
 
+def _new_binding(source_id):
+    return dict(source_id=source_id, binding_id=f"cap_{uuid4().hex}", capture_generation=1,
+                owner_epoch=0, runtime_instance_id=None, control_revision=0, published_scope=[])
+
+
+def _command(state, source, operation_id):
+    command = {key: state[key] for key in AUTHORITY_KEYS}
+    return dict(command, operation_id=operation_id,
+                kind="stop" if state["desired"] == "stopped" else "reconcile",
+                snapshot_window=source.snapshot_window, requested_at=utc_now().isoformat(),
+                published_scope=state.get("published_scope", []))
+
+
+def _advance_intent(session, state, source, published_scope):
+    state.update(control_revision=state["control_revision"] + 1,
+                 credential_revision=source.capture_revision, stop_ack=None,
+                 applied_revision=None, observed_at=None, published_scope=published_scope,
+                 desired=_desired(source, published_scope))
+    command = _command(state, source, f"cop_{uuid4().hex}")
+    save_binding(session, state)
+    save_operation(session, command)
+    return command
+
+
+def reconcile_published_scope(source_id):
+    """Commit the current scope and corresponding command before runtime dispatch."""
+    with source_control_transaction(source_id) as (session, source):
+        state = load_binding(session, source_id)
+        if state is None:
+            return
+        scope = read_published_scope(session, source_id)
+        if scope == state.get("published_scope", []) and state["desired"] == _desired(source, scope):
+            return
+        _advance_intent(session, state, source, scope)
+
+
 def record_source_intent(
     session: Session | None,
     before: SourceRecord | None,
@@ -64,45 +119,14 @@ def record_source_intent(
     ):
         return
     if state is None:
-        state = {
-            "source_id": after.id,
-            "binding_id": f"cap_{uuid4().hex}",
-            "capture_generation": 1,
-            "owner_epoch": 0,
-            "runtime_instance_id": None,
-            "control_revision": 0,
-            "credential_revision": after.capture_revision,
-            "applied_revision": None,
-            "observed_at": None,
-            "stop_ack": None,
-        }
+        state = _new_binding(after.id)
     elif before is not None and (
         before.status == after.status
         and before.capture_revision == after.capture_revision
         and before.snapshot_window == after.snapshot_window
     ):
         return
-    state["control_revision"] += 1
-    state["credential_revision"] = after.capture_revision
-    state["stop_ack"] = None
-    state["applied_revision"] = None
-    state["observed_at"] = None
-    state["desired"] = (
-        "configured"
-        if after.status == "active" and after.capture_credential_ciphertext
-        else "stopped"
-    )
-    command = {key: state[key] for key in AUTHORITY_KEYS}
-    command.update(
-        {
-            "operation_id": f"cop_{uuid4().hex}",
-            "kind": "stop" if state["desired"] == "stopped" else "reconcile",
-            "snapshot_window": after.snapshot_window,
-            "requested_at": utc_now().isoformat(),
-        }
-    )
-    save_binding(session, state)
-    save_operation(session, command)
+    command = _advance_intent(session, state, after, state.get("published_scope", []))
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -122,6 +146,38 @@ def record_source_intent(
         },
         session=session,
     )
+
+
+def allocate_owner(*, source_id, runtime_instance_id, operation_id, signed_proof,
+                   verifier, scope):
+    """Allocate a new term only against signed current exclusion and fence facts."""
+    with source_control_transaction(source_id) as (session, source):
+        state = load_binding(session, source_id)
+        if (state is None or state.get("desired") not in {"configured", "stopped"}
+                or not runtime_instance_id or load_operation(session, operation_id)):
+            raise SourceCaptureControlConflict()
+        if state["desired"] == "configured":
+            published_scope = read_published_scope(session, source_id)
+            if (published_scope != state.get("published_scope")
+                    or not profile_matches_scope(scope, published_scope)):
+                raise SourceCaptureControlConflict()
+        previous = {key: state[key] for key in AUTHORITY_KEYS}
+        authority = {**previous, "owner_epoch": state["owner_epoch"] + 1,
+                     "runtime_instance_id": runtime_instance_id,
+                     "control_revision": state["control_revision"] + 1}
+        claims = verifier.verify(signed_proof, purpose="owner_allocation", authority=authority,
+                                 scope=scope, operation_id=operation_id)
+        if (claims.get("previous_authority") != previous
+                or claims.get("facts") != {"old_agent_excluded": True,
+                                           "old_tasks_excluded": True,
+                                           "target_fence_installed": True}):
+            raise SourceCaptureControlConflict()
+        state.update(authority, applied_revision=None, observed_at=None, stop_ack=None,
+                     allocation={"proof": signed_proof, "scope": scope})
+        command = _command(state, source, operation_id)
+        save_binding(session, state)
+        save_operation(session, command)
+        return command
 
 
 def capture_status(source_id: str) -> dict:
@@ -155,10 +211,10 @@ def capture_status(source_id: str) -> dict:
             "profile_id": None,
             "readiness": readiness,
             "availability": "disabled" if stopped else "unknown",
-            "control": state,
+            "control": {key: value for key, value in state.items() if key not in {"allocation", "published_scope"}},
             "operations": [
                 {
-                    **op["command"],
+                    **{key: value for key, value in op["command"].items() if key != "published_scope"},
                     "state": "applied" if op["evidence"] else (
                         "pending" if op["command"]["control_revision"] == state["control_revision"]
                         else "superseded"
@@ -193,6 +249,9 @@ def record_applied_evidence(
         if state is None or operation is None:
             raise SourceCaptureControlConflict()
         command = operation["command"]
+        if (command["kind"] == "reconcile"
+                and command.get("published_scope") != read_published_scope(session, source_id)):
+            raise SourceCaptureControlConflict()
         if any(
             command[key] != state[key] or evidence.get(key) != state[key]
             for key in AUTHORITY_KEYS

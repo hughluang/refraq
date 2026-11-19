@@ -28,7 +28,7 @@ class MemoryMirrorStore:
 
     @contextmanager
     def transaction(self):
-        with self.lock:
+        with get_source_store().capture_lock, self.lock:
             before = deepcopy((self.mirrors, self.operations, self.references, self.publications, self.receipts))
             try:
                 yield self
@@ -39,6 +39,14 @@ class MemoryMirrorStore:
     def lock_channel(self, session, channel_id):
         if session is not self:
             raise ValueError("Memory mirror calls require the caller's memory transaction")
+
+    def lock_sources(self, session, source_ids):
+        self.lock_channel(session, None)
+
+    def scope_rows(self, session, source_id):
+        referenced = {mirror_id for _, mirror_id in self.references}
+        return [(row, row["id"] in referenced) for row in self.mirrors.values()
+                if row["source_id"] == source_id]
 
     def binding(self, session, object_id):
         if object_id in self.bindings:
@@ -101,6 +109,18 @@ class SqlMirrorStore:
     def _lock_registry(self, session):
         if session.bind.dialect.name == "postgresql":
             session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": "mirror-management-registry"})
+
+    def lock_sources(self, session, source_ids):
+        if source_ids:
+            session.scalars(select(SourceRow.id).where(SourceRow.id.in_(source_ids))
+                            .order_by(SourceRow.id).with_for_update()).all()
+
+    def scope_rows(self, session, source_id):
+        referenced = select(MirrorReferenceRow.mirror_id).where(
+            MirrorReferenceRow.mirror_id == MirrorRow.id
+        ).exists()
+        return session.execute(select(MirrorRow.state, referenced)
+                               .where(MirrorRow.source_id == source_id)).all()
 
     def binding(self, session, object_id):
         self._lock_registry(session)

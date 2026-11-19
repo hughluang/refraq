@@ -141,6 +141,27 @@ def _find(session, mirror_id):
     _error("MIRROR_NOT_FOUND", 404)
 
 
+def _lock_mirror_source(session, mirror_id):
+    store = _storage()
+    store.lock_channel(session, None)
+    for mirror in store.preview_mirrors(session):
+        if mirror["id"] == mirror_id:
+            store.lock_sources(session, {mirror["source_id"]})
+            return
+    _error("MIRROR_NOT_FOUND", 404)
+
+
+def read_published_scope(session, source_id):
+    """Read committed mirrors under the caller's Source lock, without locking the registry."""
+    return sorted((
+        dict(mirror_id=mirror["id"], qualified_table=mirror["qualified_table"],
+             table_identity=mirror["table_identity"],
+             mirror_revision=mirror["control"]["control_revision"],
+             included=mirror["enabled"] and referenced)
+        for mirror, referenced in _storage().scope_rows(session, source_id)
+    ), key=lambda table: (table["qualified_table"], table["mirror_id"]))
+
+
 def _mirror_id(binding):
     return "mir_" + uuid5(
         NAMESPACE_URL,
@@ -228,6 +249,16 @@ def _check_version(session, channel_id, version, object_ids):
         _error("MIRROR_CONTROL_CONFLICT")
 
 
+def _lock_withdrawn_sources(session, channel_id):
+    store = _storage()
+    previous_ids = {mirror_id for cid, mirror_id in store.refs(session) if cid == channel_id}
+    if previous_ids:
+        store.lock_sources(session, {
+            mirror["source_id"] for mirror in store.preview_mirrors(session)
+            if mirror["id"] in previous_ids
+        })
+
+
 def ensure_open_intent(
     session, *, operation_id, channel_id, channel_version, object_ids,
     confirmed_mirrors_to_open=None,
@@ -248,6 +279,7 @@ def ensure_open_intent(
             _error("MIRROR_CONTROL_CONFLICT")
         return deepcopy(receipt["result"])
     _check_version(session, channel_id, channel_version, ids)
+    _lock_withdrawn_sources(session, channel_id)
     bindings = _resolve(session, ids)
     mirrors = store.list(session)
     if confirmed_mirrors_to_open is not None:
@@ -304,6 +336,7 @@ def reconcile_references(session, *, channel_id, channel_version, object_ids):
     store.lock_channel(session, channel_id)
     ids = sorted(set(object_ids))
     _check_version(session, channel_id, channel_version, ids)
+    _lock_withdrawn_sources(session, channel_id)
     bindings = _resolve(session, ids)
     mirrors = store.list(session)
     selected = []
@@ -392,6 +425,7 @@ def _audit(
 def set_enabled(mirror_id, *, enabled, actor_user_id, actor_token_id=None):
     store = _storage()
     with store.transaction() as session:
+        _lock_mirror_source(session, mirror_id)
         mirror = _find(session, mirror_id)
         operation_id = _id()
         mirror["enabled"] = enabled
@@ -414,6 +448,7 @@ def set_enabled(mirror_id, *, enabled, actor_user_id, actor_token_id=None):
 def delete_mirror(mirror_id, *, actor_user_id, actor_token_id=None):
     store = _storage()
     with store.transaction() as session:
+        _lock_mirror_source(session, mirror_id)
         mirror = _find(session, mirror_id)
         if any(mid == mirror_id for _, mid in store.refs(session)):
             _error("MIRROR_REFERENCED")
