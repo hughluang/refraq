@@ -2,6 +2,8 @@
 
 from contextlib import contextmanager
 from datetime import datetime
+from hashlib import sha256
+import re
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -148,35 +150,78 @@ def record_source_intent(
     )
 
 
-def allocate_owner(*, source_id, runtime_instance_id, operation_id, signed_proof,
-                   verifier, scope):
-    """Allocate a new term only against signed current exclusion and fence facts."""
+def _allocation_context(session, source, state, profile_scope):
+    published_scope = read_published_scope(session, source.id)
+    desired = _desired(source, published_scope)
+    if (state is None or state["credential_revision"] != source.capture_revision
+            or state["desired"] != desired or state.get("published_scope", []) != published_scope
+            or (desired == "configured" and not profile_matches_scope(profile_scope, published_scope))):
+        raise SourceCaptureControlConflict()
+    return ({key: state[key] for key in AUTHORITY_KEYS},
+            {"profile": profile_scope, "published_scope": published_scope})
+
+
+def allocate_owner(*, source_id, operation_id, signed_proof, signals):
+    """Reserve exact intent, then promote only after the gateway confirms the fence."""
+    if (not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", operation_id)
+            or not isinstance(signed_proof, str) or not signed_proof or signals.verifier is None):
+        raise SourceCaptureControlConflict()
+    request_digest = sha256(signed_proof.encode()).hexdigest()
     with source_control_transaction(source_id) as (session, source):
         state = load_binding(session, source_id)
-        if (state is None or state.get("desired") not in {"configured", "stopped"}
-                or not runtime_instance_id or load_operation(session, operation_id)):
-            raise SourceCaptureControlConflict()
-        if state["desired"] == "configured":
-            published_scope = read_published_scope(session, source_id)
-            if (published_scope != state.get("published_scope")
-                    or not profile_matches_scope(scope, published_scope)):
+        existing = load_operation(session, operation_id)
+        if existing is not None:
+            command = existing["command"]
+            committed = state.get("allocation", {}) if state else {}
+            if (committed.get("command") != command or committed["scope"]["profile"] != signals.scope
+                    or committed.get("request_digest") != request_digest
+                    or command["runtime_instance_id"] != signals.runtime_instance_id):
                 raise SourceCaptureControlConflict()
-        previous = {key: state[key] for key in AUTHORITY_KEYS}
+            return command
+        previous, scope = _allocation_context(session, source, state, signals.scope)
         authority = {**previous, "owner_epoch": state["owner_epoch"] + 1,
-                     "runtime_instance_id": runtime_instance_id,
+                     "runtime_instance_id": signals.runtime_instance_id,
                      "control_revision": state["control_revision"] + 1}
-        claims = verifier.verify(signed_proof, purpose="owner_allocation", authority=authority,
-                                 scope=scope, operation_id=operation_id)
-        if (claims.get("previous_authority") != previous
-                or claims.get("facts") != {"old_agent_excluded": True,
-                                           "old_tasks_excluded": True,
-                                           "target_fence_installed": True}):
+        pending = state.get("pending_allocation")
+        if pending is not None and pending["previous_authority"] == previous:
+            command = pending["command"]
+            if (command["operation_id"] != operation_id or pending["scope"] != scope
+                    or pending["request_digest"] != request_digest
+                    or any(command[key] != authority[key] for key in AUTHORITY_KEYS)):
+                raise SourceCaptureControlConflict()
+        else:
+            if pending is not None and pending["command"]["operation_id"] == operation_id:
+                raise SourceCaptureControlConflict()
+            claims = signals.verifier.verify(signed_proof, purpose="owner_allocation", authority=authority,
+                                             scope=scope, operation_id=operation_id)
+            if claims.get("previous_authority") != previous:
+                raise SourceCaptureControlConflict()
+            command = _command({**state, **authority}, source, operation_id)
+            pending = dict(command=command, scope=scope, previous_authority=previous,
+                           request_digest=request_digest)
+            state["pending_allocation"] = pending
+            save_binding(session, state)
+
+    with source_control_transaction(source_id) as (session, source):
+        state = load_binding(session, source_id)
+        if (state.get("allocation", {}).get("command") == command
+                and state["allocation"]["request_digest"] == request_digest):
+            return command
+        current, scope = _allocation_context(session, source, state, signals.scope)
+        if (state.get("pending_allocation") != pending or current != previous
+                or scope != pending["scope"] or load_operation(session, operation_id) is not None):
             raise SourceCaptureControlConflict()
-        state.update(authority, applied_revision=None, observed_at=None, stop_ack=None,
-                     allocation={"proof": signed_proof, "scope": scope})
-        command = _command(state, source, operation_id)
-        save_binding(session, state)
+        evidence = signals.allocation_observation(pending, signed_proof)
+        persist_audit_event(
+            actor_user_id=None, actor_token_id=None, resource_type="source", resource_id=source_id,
+            action="source.capture_owner_allocated", result="success", session=session,
+            detail={key: command[key] for key in ("operation_id", "binding_id", "owner_epoch", "control_revision")},
+        )
         save_operation(session, command)
+        state.pop("pending_allocation")
+        state.update(authority, applied_revision=None, observed_at=None, stop_ack=None,
+                     allocation={**pending, "evidence": evidence})
+        save_binding(session, state)
         return command
 
 
@@ -211,7 +256,8 @@ def capture_status(source_id: str) -> dict:
             "profile_id": None,
             "readiness": readiness,
             "availability": "disabled" if stopped else "unknown",
-            "control": {key: value for key, value in state.items() if key not in {"allocation", "published_scope"}},
+            "control": {key: value for key, value in state.items()
+                        if key not in {"allocation", "pending_allocation", "published_scope"}},
             "operations": [
                 {
                     **{key: value for key, value in op["command"].items() if key != "published_scope"},

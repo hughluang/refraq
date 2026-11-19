@@ -100,6 +100,10 @@ STOP_PROOFS = {
 }
 
 
+def _digest_ref(value):
+    return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
+
+
 class ReadinessSignals:
     """Read independently substantiated attestations from a deployment-owned gateway.
 
@@ -120,6 +124,61 @@ class ReadinessSignals:
         self.required = set(required_checks)
         self.verifier = verifier
         self.scope = scope
+
+    def allocation_observation(self, pending, authorization):
+        command = pending["command"]
+        authority = {key: command[key] for key in AUTHORITY_KEYS}
+        previous = pending["previous_authority"]
+        result = self.http.request("POST", "/v1/capture/owner-allocations", {
+            "command": command, "previous_authority": previous, "scope": pending["scope"],
+            "authorization": authorization,
+        })
+        if not isinstance(result, dict):
+            raise RuntimeBlocked("allocation_evidence_unknown")
+        signed = self.verifier.verify(
+            result.get("signature"), purpose="observation:owner_allocation", authority=authority,
+            scope=pending["scope"], operation_id=command["operation_id"],
+        )
+        observation = signed.get("observation")
+        if (not isinstance(observation, dict) or observation.get("command") != command
+                or observation.get("previous_authority") != previous):
+            raise RuntimeBlocked("allocation_observation_mismatch")
+        self._require_fresh(observation, command)
+        if command["kind"] == "reconcile":
+            self._require_readiness(observation)
+
+        exclusion = observation.get("exclusion")
+        methods = ("terminated", "authority_revoked") if previous["owner_epoch"] else ("initial_absence",)
+        if (not isinstance(exclusion, dict) or exclusion.get("method") not in methods
+                or not _digest_ref(exclusion.get("agent_receipt"))
+                or not _digest_ref(exclusion.get("task_receipt"))):
+            raise RuntimeBlocked("allocation_exclusion_unproven")
+        fence = observation.get("target_fence")
+        mirrors = {table["mirror_id"] for table in command["published_scope"]}
+        if (not isinstance(fence, dict) or fence.get("authority") != authority
+                or fence.get("operation_id") != command["operation_id"]
+                or not _digest_ref(fence.get("inventory_receipt"))
+                or not isinstance(fence.get("mirror_receipts"), dict)
+                or not mirrors.issubset(fence["mirror_receipts"])
+                or not all(_digest_ref(ref) for ref in fence["mirror_receipts"].values())):
+            raise RuntimeBlocked("allocation_target_fence_unproven")
+        return {"observed_at": observation["observed_at"], "exclusion": exclusion, "target_fence": fence}
+
+    def _require_fresh(self, observation, command):
+        try:
+            observed = datetime.fromisoformat(observation["observed_at"])
+            requested = datetime.fromisoformat(command["requested_at"])
+            age = (utc_now() - observed).total_seconds()
+            valid = observed.tzinfo is not None and 0 <= age <= self.max_age and observed >= requested
+        except (KeyError, ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise RuntimeBlocked("observation_stale")
+
+    def _require_readiness(self, observation):
+        checks = observation.get("checks", {})
+        if not isinstance(checks, dict) or any(checks.get(key) != "pass" for key in self.required):
+            raise RuntimeBlocked("readiness_unknown_or_failed")
 
     def observation(self, command, phase):
         result = self.http.request("POST", "/v1/capture/observations", {
@@ -142,19 +201,9 @@ class ReadinessSignals:
         if (command["runtime_instance_id"] != self.runtime_instance_id
                 or not isinstance(command["owner_epoch"], int) or command["owner_epoch"] <= 0):
             raise RuntimeBlocked("owner_assignment_unproven")
-        try:
-            observed = datetime.fromisoformat(result["observed_at"])
-            requested = datetime.fromisoformat(command["requested_at"])
-            age = (utc_now() - observed).total_seconds()
-            valid = observed.tzinfo is not None and 0 <= age <= self.max_age and observed >= requested
-        except (KeyError, ValueError, TypeError):
-            valid = False
-        if not valid:
-            raise RuntimeBlocked("observation_stale")
+        self._require_fresh(result, command)
         if phase not in {"before_stop", "stopped"}:
-            checks = result.get("checks", {})
-            if not isinstance(checks, dict) or any(checks.get(key) != "pass" for key in self.required):
-                raise RuntimeBlocked("readiness_unknown_or_failed")
+            self._require_readiness(result)
         proofs = result.get("proofs", {})
         required = (STOP_PROOFS | {"owner_assignment_ref"} if phase == "stopped"
                     else {"owner_assignment_ref", "owner_exclusion_ref", "target_fence_ref"})

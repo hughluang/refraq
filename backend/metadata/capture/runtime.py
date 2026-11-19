@@ -1,7 +1,6 @@
 """Independent capture intent consumer with signed, scoped safety admission."""
 
 import argparse
-import json
 import os
 import signal
 from threading import Event
@@ -36,8 +35,14 @@ class CaptureRuntime:
         self.credentials = credentials
         self.delivery = delivery
 
-    def poll_once(self, source_id):
+    def poll_once(self, source_id, *, owner_allocation_file=None):
         try:
+            if owner_allocation_file is not None:
+                try:
+                    self.reconcile_owner(source_id, owner_allocation_file)
+                except (RuntimeBlocked, SourceCaptureControlConflict):
+                    self.poll_source(source_id, containment_only=True)
+                    raise RuntimeBlocked("owner_allocation_blocked") from None
             result = self.poll_source(source_id)
         except Exception:
             if self.delivery is not None:
@@ -46,6 +51,17 @@ class CaptureRuntime:
         if self.delivery is not None:
             self.delivery.poll_once()
         return result
+
+    def reconcile_owner(self, source_id, request_file):
+        try:
+            request = protected_json(request_file)
+            operation_id = request["operation_id"]
+            signature = request["signature"]
+        except (OSError, ValueError, KeyError, TypeError):
+            raise RuntimeBlocked("owner_allocation_file_invalid") from None
+        reconcile_published_scope(source_id)
+        return allocate_owner(source_id=source_id, operation_id=operation_id,
+                              signed_proof=signature, signals=self.signals)
 
     def reconcile(self, command, source, phase):
         if self.profile is None or self.credentials is None or self.delivery is None:
@@ -77,7 +93,7 @@ class CaptureRuntime:
                 raise RuntimeBlocked("resume_outcome_uncertain")
         return self.signals.observation(command, "running")
 
-    def poll_source(self, source_id):
+    def poll_source(self, source_id, *, containment_only=False):
         with self.journal.source_lock(source_id):
             reconcile_published_scope(source_id)
             # Retain the same management Source lock through external dispatch.
@@ -97,13 +113,16 @@ class CaptureRuntime:
                 if len(pending) != 1:
                     raise RuntimeBlocked("ambiguous_current_intent")
                 command = pending[0]["command"]
+                if containment_only and command["kind"] != "stop":
+                    return "idle"
+                if (command["owner_epoch"] <= 0
+                        or command["runtime_instance_id"] != self.signals.runtime_instance_id):
+                    raise RuntimeBlocked("owner_assignment_unproven")
                 if source.status == "active" and source.capture_credential_ciphertext:
                     scope = read_published_scope(session, source_id)
                     if command.get("published_scope", []) != scope or state.get("published_scope", []) != scope:
                         raise RuntimeBlocked("published_scope_changed")
                 phase = self.journal.accept(command)
-                if command["owner_epoch"] <= 0 or not command["runtime_instance_id"]:
-                    raise RuntimeBlocked("owner_assignment_unproven")
                 if command["kind"] == "reconcile":
                     evidence = self.reconcile(command, source, phase)
                 elif command["kind"] == "stop":
@@ -145,7 +164,7 @@ def main():
 
     def stop(signum, frame):
         stopping.set()
-        for _, runtime in runtimes:
+        for _, runtime, _ in runtimes:
             if runtime.delivery is not None:
                 runtime.delivery.stop()
 
@@ -186,18 +205,6 @@ def main():
             if (profile.scope["source_id"] != entry["source_id"]
                     or profile.scope["connector_name"] != entry["connector_name"]):
                 raise RuntimeBlocked("configured_scope_mismatch")
-            if entry.get("owner_allocation_file"):
-                allocation = json.loads(protected_read(entry["owner_allocation_file"]))
-                reconcile_published_scope(entry["source_id"])
-                with source_control_transaction(entry["source_id"]) as (session, source):
-                    existing = any(op["command"]["operation_id"] == allocation["operation_id"]
-                                   for op in list_operations(session, entry["source_id"]))
-                if not existing:
-                    allocate_owner(source_id=entry["source_id"],
-                                   runtime_instance_id=entry["readiness_policy"]["runtime_instance_id"],
-                                   operation_id=allocation["operation_id"],
-                                   signed_proof=allocation["signature"], verifier=verifier,
-                                   scope=profile.scope)
             runtime = CaptureRuntime(
                 journal=journal,
                 connect=ConnectLifecycle(connect_http, entry["connector_name"]),
@@ -209,12 +216,12 @@ def main():
                 settings_file=entry.get("delivery_settings_file"), source_id=entry["source_id"],
                 journal=journal, signals=runtime.signals, verifier=verifier, profile=profile,
             )
-            runtimes.append((entry["source_id"], runtime))
+            runtimes.append((entry["source_id"], runtime, entry.get("owner_allocation_file")))
         while not stopping.is_set():
             blocked = False
-            for source_id, runtime in runtimes:
+            for source_id, runtime, request_file in runtimes:
                 try:
-                    runtime.poll_once(source_id)
+                    runtime.poll_once(source_id, owner_allocation_file=request_file)
                 except RuntimeBlocked:
                     blocked = True
             if args.once:
@@ -228,7 +235,7 @@ def main():
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-        for _, runtime in runtimes:
+        for _, runtime, _ in runtimes:
             if runtime.delivery is not None:
                 runtime.delivery.close()
         for client in clients:

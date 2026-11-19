@@ -20,7 +20,7 @@ from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime import CaptureRuntime
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
-from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, observation
+from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, allocation_observation, observation
 from backend.metadata.mirrors import service
 from backend.metadata.mirrors.models import (
     MirrorIntentReceiptRow, MirrorOperationRow, MirrorPublicationRow, MirrorReferenceRow, MirrorRow,
@@ -37,9 +37,14 @@ SOURCE = "source-one"
 def management(monkeypatch, tmp_path, request):
     monkeypatch.setenv("REFRAQ_STORE_BACKEND", "persistent")
     monkeypatch.setenv("REFRAQ_SECRETS_MASTER_KEY", "offline-scope-fixture")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fixture/management?sslmode=verify-full")
+    monkeypatch.setenv("REDIS_URL", "redis://fixture/0")
     get_settings.cache_clear()
     reset_source_store()
+    request.addfinalizer(get_settings.cache_clear)
+    request.addfinalizer(reset_source_store)
     engine = create_engine(f"sqlite:///{tmp_path / 'management.sqlite3'}")
+    request.addfinalizer(engine.dispose)
     for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, MirrorRow,
                   MirrorReferenceRow, MirrorOperationRow, MirrorPublicationRow, MirrorIntentReceiptRow,
                   service.HistoryGateRow):
@@ -58,7 +63,8 @@ def management(monkeypatch, tmp_path, request):
     monkeypatch.setattr(control, "session_scope", transaction)
     monkeypatch.setattr(control, "persist_audit_event", lambda **kwargs: None)
     monkeypatch.setattr(service, "persist_audit_event", lambda **kwargs: None)
-    service.bind_management(store=Store())
+    monkeypatch.setattr(service, "_store", Store())
+    monkeypatch.setattr(service, "_target", None)
     now = utc_now()
     source = SourceRecord(
         id=SOURCE, key="one", locator_key="pg://one", name="One", kind="database",
@@ -77,13 +83,7 @@ def management(monkeypatch, tmp_path, request):
             id=name, source_id=SOURCE, locator_key=name, object_type="table", schema_name="public",
             name=name, created_at=now, updated_at=now,
         ) for name in ("items", "orders")])
-    try:
-        yield transaction, source
-    finally:
-        service.bind_management()
-        engine.dispose()
-        reset_source_store()
-        get_settings.cache_clear()
+    yield transaction, source
 
 
 def publish(session, channel, version, objects, *, confirmed=None):
@@ -244,9 +244,11 @@ def test_rollbacks_leave_older_scope_and_command_current(management, tmp_path):
 @pytest.mark.parametrize(("stopping", "mismatch"), [
     *[(False, mismatch) for mismatch in (
         None, "connector", "publication", "publication_filter", "publication_columns", "publication_generated",
-        "manifest", "target", "delivery_settings", "scope_superseded",
+        "manifest", "target", "delivery_settings", "scope_superseded", "readiness",
+        "gateway_missing", "allocation_stale", "allocation_scope", "allocation_source", "exclusion", "fence",
+        "response_loss", "superseded_pending", "revision_restart", "later_owner",
     )],
-    *[(True, mismatch) for mismatch in (None, "connector", "delivery_settings", "scope_superseded")],
+    *[(True, mismatch) for mismatch in (None, "connector", "delivery_settings", "scope_superseded", "containment")],
 ])
 def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
     management, tmp_path, monkeypatch, capsys, mismatch, stopping,
@@ -265,7 +267,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
     current = dict(previous, owner_epoch=1, runtime_instance_id="agent-one",
                    control_revision=pending["control_revision"] + 1)
     profile_scope = dict(source_id=SOURCE, connector_name="cap_one", host="pg.internal", port=5432,
-                         database="db", tables=["public.orders" if stopping and mismatch == "connector"
+                         database="db", tables=["public.orders" if mismatch == "connector"
                                                 else "public.items"], publication="capture_pub",
                          slot="capture_slot", topic_prefix="cap", server_version_num=180000)
     target_authority = dict(current, resource_binding_id=current["binding_id"], capture_generation="1")
@@ -287,17 +289,15 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
         path.chmod(0o600)
         return str(path)
 
-    def signed(purpose, operation_id, scope, **claims):
+    def signed(purpose, operation_id, scope, *, authority=current, **claims):
         now = utc_now()
         return jwt.encode(dict(iss="gateway", aud="capture", iat=now, nbf=now, exp=now + timedelta(seconds=60),
-                               jti="proof", purpose=purpose, authority=current, operation_id=operation_id, scope=scope,
+                               jti="proof", purpose=purpose, authority=authority, operation_id=operation_id, scope=scope,
                                **claims), SIGNING_KEY, algorithm="EdDSA", headers={"kid": "trusted"})
 
     signing_key = private("gateway.pem", SIGNING_KEY.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
-    allocation_proof = signed(
-        "owner_allocation", "allocated", profile_scope, previous_authority=previous,
-        facts=dict(old_agent_excluded=True, old_tasks_excluded=True, target_fence_installed=True),
-    )
+    allocation_scope = dict(profile=profile_scope, published_scope=pending["published_scope"])
+    allocation_proof = signed("owner_allocation", "allocated", allocation_scope, previous_authority=previous)
     allocation = private("owner.json", dict(operation_id="allocated", signature=allocation_proof))
 
     class SourceConnection:
@@ -334,17 +334,51 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
 
     mutations = []
     installed = {}
+    allocation_calls = []
+    receipts = {}
+    containment = {"withhold_stop": mismatch == "containment"}
 
     class Transport:
         def request(self, method, path, payload=None, **options):
+            if path == "/v1/capture/owner-allocations":
+                allocation_calls.append(payload)
+                command = payload["command"]
+                op = command["operation_id"]
+                assert payload["authorization"] == allocation_proof
+                assert control.capture_status(SOURCE)["control"]["owner_epoch"] == previous["owner_epoch"]
+                assert all(command != exposed for exposed in control.pending_commands(SOURCE))
+                if mismatch == "gateway_missing" or (mismatch == "containment" and len(allocation_calls) > 1):
+                    raise RuntimeBlocked("private_http_unconfirmed")
+                result = allocation_observation(payload)
+                if command["kind"] == "stop" or mismatch == "readiness":
+                    result["checks"].update(source_pressure="unknown", credential_valid="fail")
+                if mismatch == "allocation_stale":
+                    result["observed_at"] = (utc_now() - timedelta(minutes=1)).isoformat()
+                if mismatch == "allocation_source":
+                    result["command"] = dict(command, source_id="other-source")
+                if mismatch == "exclusion":
+                    result["exclusion"] = {"old_agent_excluded": True, "old_tasks_excluded": True}
+                if mismatch == "fence":
+                    result["target_fence"]["mirror_receipts"] = {}
+                if mismatch in {"response_loss", "superseded_pending"}:
+                    if op not in receipts:
+                        receipts[op] = result["target_fence"]
+                        raise RuntimeBlocked("private_http_uncertain")
+                    result["target_fence"] = receipts[op]
+                signed_scope = allocation_scope if mismatch != "allocation_scope" else dict(allocation_scope, published_scope=[])
+                return {"signature": signed("observation:owner_allocation", op, signed_scope,
+                                            authority=current, observation=result)}
             if path == "/v1/capture/observations":
                 command = payload["command"]
                 assert command["published_scope"][0]["mirror_id"] == opened["mirror_id"]
                 phase = payload["phase"]
-                checks = {"source_pressure": "unknown", "credential_valid": "fail"} if stopping else None
+                if containment["withhold_stop"]:
+                    raise RuntimeBlocked("private_http_unconfirmed")
+                checks = {"source_pressure": "unknown", "credential_valid": "fail"} if phase in {"before_stop", "stopped"} else None
                 result = observation(command, phase, checks=checks)
                 result.pop("signature")
                 return dict(result, signature=signed(f"observation:{phase}", command["operation_id"], profile_scope,
+                                                     authority={key: command[key] for key in control.AUTHORITY_KEYS},
                                                      observation=result))
             if method == "PUT":
                 mutations.append(path)
@@ -352,8 +386,9 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
                 return None
             if path.endswith("/config"):
                 return installed.get(path)
-            running = (not any(path.endswith("/stop") for path in mutations) if stopping
-                       else any(path.endswith("/resume") for path in mutations))
+            running = (not any(path.endswith("/stop") for path in mutations)
+                       and (stopping or mismatch == "revision_restart"
+                            or any(path.endswith("/resume") for path in mutations)))
             state = "RUNNING" if running else "STOPPED"
             return dict(connector=dict(state=state), tasks=[dict(state=state)])
 
@@ -367,7 +402,6 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
     monkeypatch.setattr(delivery_composition, "applier_engine", lambda settings: SimpleNamespace(dispose=lambda: None))
     monkeypatch.setattr(delivery_composition, "target_metadata", lambda *args: None if mismatch == "target" else metadata)
     monkeypatch.setattr(delivery_composition, "open_delivery", lambda **args: SimpleNamespace(poll_once=lambda: 0, close=lambda: None))
-    monkeypatch.setenv("DATABASE_URL", "postgresql://fixture/management?sslmode=verify-full")
     settings = dict(target={}, tables=[table], kafka={}, group_id="scope-test", limits={}, max_age_seconds=30)
     entry = dict(source_id=SOURCE, connector_name="cap_one", connect_tls={}, signals_tls={},
                  signing_trust=dict(public_key_files={"trusted": signing_key}, issuer="gateway", audience="capture"),
@@ -378,14 +412,6 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
 
     if mismatch == "delivery_settings":
         entry["delivery_settings_file"] = str(tmp_path / "missing-delivery.json")
-    if mismatch == "connector" and not stopping:
-        assert control.allocate_owner(
-            source_id=SOURCE, runtime_instance_id="agent-one", operation_id="allocated",
-            signed_proof=allocation_proof,
-            verifier=entrypoint.SignedAuthority(keys={"trusted": SIGNING_KEY.public_key()}, issuer="gateway", audience="capture"),
-            scope=profile_scope,
-        )["control_revision"] == 3
-        entry["postgresql_profile"]["scope"] = dict(profile_scope, tables=["public.orders"])
     if mismatch == "scope_superseded":
         record_evidence = entrypoint.record_applied_evidence
 
@@ -395,9 +421,113 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             return record_evidence(**kwargs)
 
         monkeypatch.setattr(entrypoint, "record_applied_evidence", withdraw_before_acceptance)
-    config = private("runtime.json", dict(state_directory=str(tmp_path), poll_interval_seconds=1, sources=[entry],
-                                         management_database_url_file=private("management.url", b"postgresql://fixture/management?sslmode=verify-full")))
+    runtime_config = dict(state_directory=str(tmp_path), poll_interval_seconds=1, sources=[entry],
+                          management_database_url_file=private("management.url", b"postgresql://fixture/management?sslmode=verify-full"))
+    config = private("runtime.json", runtime_config)
     monkeypatch.setattr("sys.argv", ["runtime", "--config-file", config, "--once"])
+    if mismatch in {"response_loss", "superseded_pending", "containment"}:
+        assert entrypoint.main() == 2
+        assert mutations == []
+        assert len(allocation_calls) == 1
+        if mismatch == "response_loss":
+            assert control.pending_commands(SOURCE) == (pending,)
+            competing = dict(current, runtime_instance_id="agent-two")
+            private("owner.json", dict(operation_id="competing", signature=signed(
+                "owner_allocation", "competing", allocation_scope, authority=competing, previous_authority=previous,
+            )))
+            entry["readiness_policy"]["runtime_instance_id"] = "agent-two"
+            private("runtime.json", runtime_config)
+            assert entrypoint.main() == 2
+            assert len(allocation_calls) == 1
+            assert mutations == []
+            entry["readiness_policy"]["runtime_instance_id"] = "agent-one"
+            private("runtime.json", runtime_config)
+            private("owner.json", dict(operation_id="allocated", signature=allocation_proof))
+            commit_allocation = entrypoint.allocate_owner
+
+            def lose_promotion_response(**kwargs):
+                commit_allocation(**kwargs)
+                raise RuntimeBlocked("promotion_response_lost")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(entrypoint, "allocate_owner", lose_promotion_response)
+                assert entrypoint.main() == 2
+            assert mutations == []
+            committed, = control.pending_commands(SOURCE)
+            assert committed["operation_id"] == "allocated"
+            assert committed["owner_epoch"] == 1
+            assert allocation_calls[0] == allocation_calls[1]
+            assert len(receipts) == 1
+            assert entrypoint.main() == 0
+            assert len(allocation_calls) == 2
+            assert mutations == ["/connectors/cap_one/config", "/connectors/cap_one/resume"]
+            return
+        if mismatch == "superseded_pending":
+            with transaction() as session:
+                service.reconcile_references(session, channel_id="workflow", channel_version=2, object_ids=[])
+            assert entrypoint.main() == 2
+            assert len(allocation_calls) == 1
+            assert mutations == []
+            assert control.capture_status(SOURCE)["control"]["owner_epoch"] == 0
+            return
+        containment["withhold_stop"] = False
+        stop_command, = control.pending_commands(SOURCE)
+        previous = {key: stop_command[key] for key in control.AUTHORITY_KEYS}
+        current = dict(previous, owner_epoch=2, control_revision=previous["control_revision"] + 1)
+        allocation_proof = signed("owner_allocation", "unavailable", allocation_scope,
+                                  authority=current, previous_authority=previous)
+        private("owner.json", dict(operation_id="unavailable", signature=allocation_proof))
+        assert entrypoint.main() == 2
+        assert len(allocation_calls) == 2
+        assert mutations == ["/connectors/cap_one/stop"]
+        assert control.capture_status(SOURCE)["control"]["stop_ack"]["operation_id"] == "allocated"
+        return
+    if mismatch == "revision_restart":
+        assert entrypoint.main() == 0
+        with transaction() as session:
+            service.reconcile_references(session, channel_id="workflow", channel_version=2, object_ids=[])
+        assert entrypoint.main() == 0
+        assert len(allocation_calls) == 1
+        assert mutations == ["/connectors/cap_one/config", "/connectors/cap_one/stop"]
+        status = control.capture_status(SOURCE)["control"]
+        assert status["owner_epoch"] == 1
+        assert status["stop_ack"]["operation_id"] != "allocated"
+        return
+    if mismatch == "later_owner":
+        assert entrypoint.main() == 0
+        first_proof = allocation_proof
+        baseline_mutations = list(mutations)
+        with control.source_control_transaction(SOURCE) as (session, source):
+            disabled = replace(source, status="disabled")
+            get_source_store().save_source_on(session, disabled)
+            control.record_source_intent(session, source, disabled, actor_user_id=None, actor_token_id=None)
+        stop_command, = control.pending_commands(SOURCE)
+        previous = {key: stop_command[key] for key in control.AUTHORITY_KEYS}
+        current = dict(previous, owner_epoch=2, runtime_instance_id="agent-two",
+                       control_revision=previous["control_revision"] + 1)
+        allocation_proof = signed("owner_allocation", "takeover", allocation_scope,
+                                  authority=current, previous_authority=previous)
+        private("owner.json", dict(operation_id="takeover", signature=allocation_proof))
+        entry["readiness_policy"]["runtime_instance_id"] = "agent-two"
+        private("runtime.json", runtime_config)
+        containment["withhold_stop"] = True
+        assert entrypoint.main() == 2
+        assert control.capture_status(SOURCE)["control"]["owner_epoch"] == 2
+        containment["withhold_stop"] = False
+        private("owner.json", dict(operation_id="allocated", signature=first_proof))
+        entry["readiness_policy"]["runtime_instance_id"] = "agent-one"
+        private("runtime.json", runtime_config)
+        assert entrypoint.main() == 2
+        assert mutations == baseline_mutations
+        assert control.capture_status(SOURCE)["control"]["stop_ack"] is None
+        private("owner.json", dict(operation_id="takeover", signature=allocation_proof))
+        entry["readiness_policy"]["runtime_instance_id"] = "agent-two"
+        private("runtime.json", runtime_config)
+        assert entrypoint.main() == 0
+        assert len(allocation_calls) == 2
+        assert mutations == [*baseline_mutations, "/connectors/cap_one/stop"]
+        assert control.capture_status(SOURCE)["control"]["stop_ack"]["operation_id"] == "takeover"
+        return
     assert entrypoint.main() == (2 if mismatch and not stopping else 0)
     if stopping:
         assert mutations == ["/connectors/cap_one/stop"]
@@ -414,6 +544,8 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
     elif mismatch:
         assert mutations == []
         assert control.capture_status(SOURCE)["control"]["applied_revision"] is None
+        if mismatch in {"readiness", "gateway_missing", "allocation_stale", "allocation_scope", "allocation_source", "exclusion", "fence"}:
+            assert control.capture_status(SOURCE)["control"]["owner_epoch"] == 0
     else:
         assert mutations == ["/connectors/cap_one/config", "/connectors/cap_one/resume"]
         assert installed[mutations[0]]["table.include.list"] == r"public\.items"

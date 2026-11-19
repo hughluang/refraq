@@ -17,6 +17,8 @@ from backend.metadata.capture.control import AUTHORITY_KEYS, capture_status
 from backend.metadata.capture.runtime import CaptureRuntime, CommandJournal, RuntimeBlocked
 from backend.metadata.capture.runtime_adapters import ConnectLifecycle, ReadinessSignals, STOP_PROOFS
 from backend.metadata.capture.runtime_store import protected_read
+from backend.metadata.mirrors import service as mirrors
+from backend.metadata.mirrors.store import MemoryMirrorStore
 from backend.metadata.sources.store import SourceRecord, get_source_store, reset_source_store
 
 
@@ -105,11 +107,32 @@ CHECKS = ["profile_qualified", "source_pressure", "delivery_bounded", "credentia
           "alarm_drill", "owner_excluded", "target_fenced"]
 
 
+def allocation_observation(payload):
+    cmd, previous = payload["command"], payload["previous_authority"]
+    refs = ["sha256:" + hashlib.sha256(kind.encode()).hexdigest()
+            for kind in ("agent", "task", "inventory")]
+    return dict(
+        command=cmd, previous_authority=previous, observed_at=utc_now().isoformat(),
+        checks=dict.fromkeys(CHECKS, "pass"),
+        exclusion=dict(method="terminated" if previous["owner_epoch"] else "initial_absence",
+                       agent_receipt=refs[0], task_receipt=refs[1]),
+        target_fence=dict(authority={key: cmd[key] for key in AUTHORITY_KEYS}, operation_id=cmd["operation_id"],
+                          inventory_receipt=refs[2], mirror_receipts={
+                              table["mirror_id"]: "sha256:" + hashlib.sha256(table["mirror_id"].encode()).hexdigest()
+                              for table in cmd["published_scope"]
+                          }),
+    )
+
+
 @pytest.fixture
-def managed_command(monkeypatch):
+def managed_command(monkeypatch, request):
     monkeypatch.setenv("REFRAQ_STORE_BACKEND", "memory")
+    monkeypatch.setattr(mirrors, "_store", MemoryMirrorStore())
+    monkeypatch.setattr(mirrors, "_target", None)
     get_settings.cache_clear()
     reset_source_store()
+    request.addfinalizer(get_settings.cache_clear)
+    request.addfinalizer(reset_source_store)
     cmd = command()
     store = get_source_store()
     now = utc_now()
@@ -123,9 +146,7 @@ def managed_command(monkeypatch):
         "stop_ack": None, "observed_at": None, "applied_revision": None,
     }
     store.capture_operations[cmd["operation_id"]] = {"command": cmd, "evidence": None}
-    yield cmd
-    reset_source_store()
-    get_settings.cache_clear()
+    return cmd
 
 
 TERMINAL_STOP_PROOFS = (

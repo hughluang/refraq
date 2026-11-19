@@ -19,8 +19,9 @@ from backend.metadata.capture.runtime import CaptureRuntime
 from backend.metadata.capture.runtime_adapters import ConnectLifecycle, ReadinessSignals
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked
 from backend.metadata.capture.test_runtime import (
-    CHECKS, TRUST, FakeHTTP, managed_command, observation,
+    CHECKS, TRUST, FakeHTTP, allocation_observation, managed_command, observation,
 )
+from backend.metadata.errors import SourceCaptureControlConflict
 from backend.metadata.mirrors import service as mirrors
 from backend.metadata.mirrors.store import MemoryMirrorStore
 from backend.metadata.sources.store import get_source_store
@@ -62,21 +63,41 @@ def test_signed_authority_rejects_wrong_key_scope_expiry_and_task():
 def test_owner_allocation_uses_current_previous_term_and_emits_real_intent(managed_command):
     store = get_source_store()
     state = store.capture_bindings[managed_command["source_id"]]
+    store.get_source(managed_command["source_id"]).capture_revision = state["credential_revision"]
     previous = {key: state[key] for key in AUTHORITY_KEYS}
     authority = {**previous, "owner_epoch": 2, "runtime_instance_id": "agent-two", "control_revision": 3}
     key = Ed25519PrivateKey.generate()
-    scope = {"connector_name": "cap_one"}
-    proof = token(key, authority=authority, scope=scope, previous_authority=previous,
-                  facts={"old_agent_excluded": True, "old_tasks_excluded": True,
-                         "target_fence_installed": True})
-    cmd = allocate_owner(source_id=state["source_id"], runtime_instance_id="agent-two",
-                         operation_id="cop_new", signed_proof=proof, verifier=verifier(key), scope=scope)
-    assert cmd["owner_epoch"] == 2
-    assert store.capture_operations["cop_new"]["command"] == cmd
-    assert "allocation" not in capture_status(state["source_id"])["control"]
-    with pytest.raises(Exception):
-        allocate_owner(source_id=state["source_id"], runtime_instance_id="agent-two",
-                       operation_id="cop_replay", signed_proof=proof, verifier=verifier(key), scope=scope)
+    profile = {"connector_name": "cap_one"}
+    scope = {"profile": profile, "published_scope": []}
+    proof = token(key, authority=authority, scope=scope, previous_authority=previous)
+    observations = []
+
+    def handler(request):
+        assert request.url.path == "/v1/capture/owner-allocations"
+        payload = json.loads(request.content)
+        observations.append(payload)
+        result = allocation_observation(payload)
+        result["checks"] = {"source_pressure": "unknown"}
+        return httpx.Response(200, json={"signature": token(
+            key, authority=authority, scope=scope, purpose="observation:owner_allocation", observation=result,
+        )})
+
+    http = FakeHTTP(handler)
+    signals = ReadinessSignals(http, verifier=verifier(key), runtime_instance_id="agent-two",
+                               max_age_seconds=30, required_checks=CHECKS, scope=profile)
+    request = dict(source_id=state["source_id"], operation_id="cop_new", signed_proof=proof, signals=signals)
+    try:
+        cmd = allocate_owner(**request)
+        assert cmd["owner_epoch"] == 2
+        assert store.capture_operations["cop_new"]["command"] == cmd
+        assert "allocation" not in capture_status(state["source_id"])["control"]
+        assert allocate_owner(**request) == cmd
+        assert len(observations) == 1
+        for altered in (dict(operation_id="cop_replay"), dict(signed_proof=proof + "other")):
+            with pytest.raises((RuntimeBlocked, SourceCaptureControlConflict)):
+                allocate_owner(**(request | altered))
+    finally:
+        http.client.close()
 
 
 def test_credential_files_rotate_revoke_and_refuse_stale_revision(tmp_path, managed_command, monkeypatch):
