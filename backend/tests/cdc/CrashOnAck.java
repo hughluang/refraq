@@ -14,13 +14,20 @@ public final class CrashOnAck implements ProducerInterceptor<byte[], byte[]> {
 
     @Override
     public void onAcknowledgement(RecordMetadata record, Exception error) {
+        Path release = Path.of("/trial/crash-release");
         if (error != null || record == null || !record.topic().equals("trial.public.items")
-                || !Files.exists(Path.of("/trial/crash-arm"))) {
+                || !Files.exists(Path.of("/trial/crash-arm")) || Files.exists(release)) {
             return;
         }
         try {
             Files.createFile(Path.of("/tmp/eos-ack-blocked"));
-            Thread.sleep(45_000);
+            long deadline = System.nanoTime() + 45_000_000_000L;
+            while (System.nanoTime() - deadline < 0) {
+                if (Files.exists(release)) {
+                    return;
+                }
+                Thread.sleep(100);
+            }
         } catch (IOException | InterruptedException failure) {
             Runtime.getRuntime().halt(72);
         }

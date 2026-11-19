@@ -116,9 +116,13 @@ class EosTrial(Trial):
             yield
         finally:
             trigger.unlink()
+            trigger.with_name('crash-release').unlink(missing_ok=True)
 
     def await_crash_boundary(self):
         self.wait('worker', lambda: self.exe('worker', 'test', '-f', '/tmp/eos-ack-blocked', check=False) is not None)
+
+    def release_crash_boundary(self):
+        (self.root / 'worker/crash-release').touch()
 
     def kill_worker(self):
         name = self.prefix + 'worker'
@@ -129,6 +133,36 @@ class EosTrial(Trial):
         self.docker('start', self.prefix + 'worker')
         self.wait('worker', lambda: self.rest('', check=False))
         self.await_stream()
+
+    def disconnect_postgres(self):
+        name = self.prefix + 'pg'
+        self.docker('network', 'disconnect', self.prefix, name)
+        assert self.docker('inspect', '-f', '{{len .NetworkSettings.Networks}}', name) == '0'
+
+    def reconnect_postgres(self):
+        terminated = self.sql("SELECT pg_terminate_backend(active_pid, 5000) FROM pg_replication_slots "
+                              "WHERE slot_name='trial' AND active;")
+        assert terminated in ('', 't'), 'Old replication sender did not exit'
+        self.docker('network', 'connect', '--alias', 'pg', self.prefix, self.prefix + 'pg')
+
+    def crash_postgres(self):
+        assert self.exe('pg', 'sh', '-ec', 'head -n 1 "$PGDATA/postmaster.pid"') == '1'
+        name = self.prefix + 'pg'
+        self.docker('kill', '--signal', 'QUIT', name)
+        assert self.docker('wait', name) == '0'
+
+    def resume_postgres(self):
+        self.docker('start', self.prefix + 'pg')
+        self.wait('pg', lambda: self.sql('SELECT NOT pg_is_in_recovery();', check=False) == 't' and
+                  self.exe('pg', 'pg_isready', '-h', '127.0.0.1', check=False) is not None)
+
+    def slot_lsns(self, *, active):
+        row = self.sql("SELECT active, restart_lsn - '0/0'::pg_lsn, confirmed_flush_lsn - '0/0'::pg_lsn "
+                       "FROM pg_replication_slots WHERE slot_name='trial';")
+        status, restart, confirmed = row.split('|')
+        assert (status == 't') == active, f'Unexpected slot state: {row}'
+        assert 0 < int(restart) <= int(confirmed), f'Unexpected slot LSNs: {row}'
+        return int(restart), int(confirmed)
 
     def source_lineage(self):
         postgres = self.sql('SELECT system_identifier FROM pg_control_system();')

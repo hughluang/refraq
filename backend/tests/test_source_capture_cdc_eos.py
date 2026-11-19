@@ -14,6 +14,14 @@ def eos():
         yield profile
 
 
+@pytest.fixture
+def isolated_eos():
+    from backend.tests.cdc.eos import disposable_eos_profile
+
+    with disposable_eos_profile() as profile:
+        yield profile
+
+
 def test_transaction_visibility_and_eof(eos):
     kafka = eos.kafka
     topic = 'transport-proof'
@@ -139,6 +147,147 @@ def test_source_offset_lineage_across_pre_and_post_commit_worker_crashes(eos):
     assert final[0][-1][0] < final[1][-1][0] < final[2][-1][0]
     assert kafka.identity('offsets') == offset_identity
     assert eos.source_lineage() == lineage
+
+
+def test_source_eos_resumes_after_kafka_commit_before_slot_feedback(isolated_eos):
+    eos = isolated_eos
+    kafka = eos.kafka
+    topic = 'trial.public.items'
+    lineage = eos.source_lineage()
+    initial_lsn = eos.confirmed_lsn()
+    assert eos.sql("INSERT INTO items VALUES (7,'first') RETURNING id;") == '7'
+    seed = eos.await_checkpoint(initial_lsn)
+    seed_offset = eos.committed_source_offset()
+    assert seed_offset == (0, seed[1])
+    before_feedback = eos.slot_lsns(active=True)
+    assert before_feedback[1] == seed[0]
+    identities = kafka.identity(topic), kafka.identity('offsets')
+    initial = _events(kafka.scan(topic), end=2)
+    assert _changes(initial) == [(0, 7, 'c', None, 'first')]
+
+    with eos.arm_crash():
+        assert eos.sql("UPDATE items SET value='second' WHERE id=7 RETURNING id;") == '7'
+        eos.await_crash_boundary()
+        assert kafka.bounds(topic).positions == (0, 2, 3)
+        assert _events(kafka.scan(topic), end=2) == initial
+        pending = _events(kafka.scan(topic, committed=False), end=3)
+        assert pending[:1] == initial
+        assert _changes(pending[1:]) == [(2, 7, 'u', 'first', 'second')]
+        assert eos.committed_source_offset() == seed_offset
+        eos.disconnect_postgres()
+        assert eos.slot_lsns(active=True) == before_feedback
+        eos.release_crash_boundary()
+
+        eos.wait('worker', lambda: all(kafka.bounds(name).positions[1] >= 4 for name in (topic, 'offsets')))
+        assert kafka.bounds(topic).positions == (0, 4, 4)
+        assert kafka.bounds('offsets').positions == (0, 4, 4)
+        visible = _events(kafka.scan(topic), end=4)
+        assert visible == pending
+        durable = eos.committed_source_offset()
+        assert durable[0] == 2
+        assert before_feedback[1] < durable[1]['lsn_commit']
+        assert durable[1]['lsn'] == visible[-1][-1][0] > before_feedback[1]
+        assert eos.slot_lsns(active=True) == before_feedback, 'PostgreSQL received newer slot feedback before the cut'
+        eos.kill_worker()
+
+    assert eos.committed_source_offset() == durable
+    eos.reconnect_postgres()
+    assert eos.source_lineage() == lineage
+    assert eos.slot_lsns(active=False) == before_feedback
+    assert _events(kafka.scan(topic), end=4) == visible
+    print(f'Kafka commit before feedback slot={before_feedback} Connect offsets={seed_offset}->{durable} '
+          f'visible={_changes(visible)}')
+
+    eos.resume_worker()
+    assert eos.source_offset() == durable[1]
+    assert eos.committed_source_offset() == durable
+    assert eos.sql("INSERT INTO items VALUES (8,'resumed') RETURNING id;") == '8'
+    final = eos.await_checkpoint(before_feedback[1], durable[1])
+    final_offset = eos.committed_source_offset()
+    assert final_offset == (4, final[1])
+    assert final[0] >= durable[1]['lsn_commit']
+    assert kafka.bounds(topic).positions == (0, 6, 6)
+    records = _events(kafka.scan(topic), end=6)
+    assert records[:2] == visible
+    assert _changes(records[2:]) == [(4, 8, 'c', None, 'resumed')]
+    assert records[-1][-1][0] == final_offset[1]['lsn'] > durable[1]['lsn']
+    _assert_source_fault_logs(eos, topic)
+    assert eos.sql('SELECT id, value FROM items ORDER BY id;') == '7|second\n8|resumed'
+    assert (kafka.identity(topic), kafka.identity('offsets')) == identities
+    assert eos.source_lineage() == lineage
+    print(f'Kafka commit recovery slot={eos.slot_lsns(active=True)} Connect offset={final_offset} '
+          f'visible={_changes(records)}')
+
+
+def test_source_eos_resumes_after_postgres_crash_with_slot_rewind(isolated_eos):
+    eos = isolated_eos
+    kafka = eos.kafka
+    topic = 'trial.public.items'
+    lineage = eos.source_lineage()
+    initial_lsn = eos.confirmed_lsn()
+    assert eos.sql("INSERT INTO items VALUES (7,'first') RETURNING id;") == '7'
+    seed = eos.await_checkpoint(initial_lsn)
+    seed_offset = eos.committed_source_offset()
+    assert seed_offset == (0, seed[1])
+    assert _changes(_events(kafka.scan(topic), end=2)) == [(0, 7, 'c', None, 'first')]
+    identities = kafka.identity(topic), kafka.identity('offsets')
+
+    eos.sql('CHECKPOINT;')
+    disk_checkpoint = eos.sql('SELECT checkpoint_lsn FROM pg_control_checkpoint();')
+    persisted = eos.slot_lsns(active=True)
+    assert persisted[1] == seed[0]
+
+    assert eos.sql("UPDATE items SET value='second' WHERE id=7 RETURNING id;") == '7'
+    settled = eos.await_checkpoint(*seed)
+    durable = eos.committed_source_offset()
+    assert durable == (2, settled[1])
+    visible = _events(kafka.scan(topic), end=4)
+    assert _changes(visible) == [(0, 7, 'c', None, 'first'), (2, 7, 'u', 'first', 'second')]
+    assert persisted[1] < visible[-1][-1][0] == durable[1]['lsn']
+    before_crash = eos.slot_lsns(active=True)
+    assert before_crash[1] == settled[0]
+    assert persisted[1] < durable[1]['lsn_commit'] <= before_crash[1]
+    assert eos.sql('SELECT checkpoint_lsn FROM pg_control_checkpoint();') == disk_checkpoint
+
+    eos.crash_postgres()
+    eos.kill_worker()
+    assert eos.committed_source_offset() == durable
+    eos.resume_postgres()
+    assert eos.source_lineage() == lineage
+    rewound = eos.slot_lsns(active=False)
+    assert rewound == persisted and rewound[1] < before_crash[1], 'PostgreSQL crash did not rewind the slot'
+    assert eos.sql('SELECT value FROM items WHERE id=7;') == 'second'
+    assert eos.committed_source_offset() == durable
+    assert _events(kafka.scan(topic), end=4) == visible
+    print(f'PostgreSQL crash checkpoint={disk_checkpoint} slot={persisted}->{before_crash}->{rewound} '
+          f'Connect offsets={seed_offset}->{durable} visible={_changes(visible)}')
+
+    eos.resume_worker()
+    assert eos.source_offset() == durable[1]
+    assert eos.committed_source_offset() == durable
+    assert eos.sql("INSERT INTO items VALUES (8,'resumed') RETURNING id;") == '8'
+    final = eos.await_checkpoint(*settled)
+    final_offset = eos.committed_source_offset()
+    assert final_offset == (4, final[1])
+    assert kafka.bounds(topic).positions == (0, 6, 6)
+    records = _events(kafka.scan(topic), end=6)
+    assert records[:2] == visible
+    assert _changes(records[2:]) == [(4, 8, 'c', None, 'resumed')]
+    assert records[-1][-1][0] == final_offset[1]['lsn'] > durable[1]['lsn']
+    _assert_source_fault_logs(eos, topic)
+    assert eos.sql('SELECT id, value FROM items ORDER BY id;') == '7|second\n8|resumed'
+    assert (kafka.identity(topic), kafka.identity('offsets')) == identities
+    assert eos.source_lineage() == lineage
+    print(f'PostgreSQL crash recovery slot={eos.slot_lsns(active=True)} Connect offset={final_offset} '
+          f'visible={_changes(records)}')
+
+
+def _assert_source_fault_logs(eos, topic):
+    expected = [
+        (0, 0, 'DATA'), (1, 1, 'COMMIT'), (2, 2, 'DATA'), (3, 3, 'COMMIT'), (4, 4, 'DATA'), (5, 5, 'COMMIT'),
+    ]
+    assert eos.log_batches(topic) == expected
+    assert eos.log_batches('offsets') == expected
 
 
 def _events(scan, *, end):
