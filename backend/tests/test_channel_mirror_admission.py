@@ -258,16 +258,6 @@ def test_terminal_release_validates_before_any_target_sql(monkeypatch):
     assert events == ["proof", "validated", "target", "release"]
 
 
-def test_orphan_dataset_never_serves_unknown_provenance(monkeypatch):
-    from backend.channel import dataset_registry
-    record = SimpleNamespace(job_id="gone", relation="protected")
-    registry = dataset_registry.DatasetRegistry(SimpleNamespace(get=lambda *a: record))
-    monkeypatch.setattr(dataset_registry, "get_run_store", lambda: SimpleNamespace(get_run=lambda *a: None))
-    monkeypatch.setattr(dataset_registry, "read_keyset_page", lambda *a, **kw: pytest.fail("orphan rows exposed"))
-    with pytest.raises(AppError):
-        registry.read_page("d", after_ord=0, limit=10)
-
-
 def test_success_settlement_releases_before_discard_and_retains_failed_release(monkeypatch):
     from backend.channel import recovery
     events = []

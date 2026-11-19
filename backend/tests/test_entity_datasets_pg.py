@@ -31,6 +31,7 @@ from backend.entity.datasets import (
     normalized_type_of,
     physical_relation,
     postgres_type,
+    read_keyset_page,
 )
 from backend.entity.ddl import ENTITY_OWNER_ROLE, READER_ROLE, ident
 from backend.metadata.catalog.normalized_type import CLOSED_NORMALIZED_TYPES
@@ -317,7 +318,6 @@ def dataset_registry(monkeypatch: pytest.MonkeyPatch):
 def test_ctas_resolves_unqualified_names_in_entity_data(
     dataset_registry: tuple[DatasetRegistry, MemoryDatasetStore],
 ) -> None:
-    from backend.entity.datasets import read_keyset_page
     from backend.entity.entity_db import get_entity_engine
 
     _registry, _store = dataset_registry
@@ -375,7 +375,7 @@ def test_ctas_round_trip_stores_rows_without_rls(
         },
     ]
     assert "relation" not in reference
-    page = registry.read_page(record.id, after_ord=0, limit=10)
+    page = read_keyset_page(record.relation, after_ord=0, limit=10)
     assert {(row["n"], row["label"]) for row in page} == {(1, "a"), (2, "b")}
     assert registry.is_lost(record.id) is False
     from backend.entity.entity_db import get_entity_engine
@@ -413,7 +413,7 @@ def test_ctas_embeds_a_trailing_comment_and_extra_semicolons(
     )
     assert commented.status == "ready"
     assert commented.row_count == 1
-    assert registry.read_page(commented.id, after_ord=0, limit=5)[0]["n"] == 1
+    assert read_keyset_page(commented.relation, after_ord=0, limit=5)[0]["n"] == 1
     doubled = registry.create_from_query(
         job_id="job_1",
         node_id="node_1",
@@ -421,7 +421,7 @@ def test_ctas_embeds_a_trailing_comment_and_extra_semicolons(
         query="SELECT 2 AS n;;",
     )
     assert doubled.row_count == 1
-    assert registry.read_page(doubled.id, after_ord=0, limit=5)[0]["n"] == 2
+    assert read_keyset_page(doubled.relation, after_ord=0, limit=5)[0]["n"] == 2
 
 
 @pytest.mark.integration
@@ -435,10 +435,10 @@ def test_keyset_page_continues_after_ord(
         seq=1,
         query="SELECT * FROM (VALUES (10), (20), (30)) AS t(n)",
     )
-    first = registry.read_page(record.id, after_ord=0, limit=2)
+    first = read_keyset_page(record.relation, after_ord=0, limit=2)
     assert len(first) == 2
     assert first[0]["_ord"] < first[1]["_ord"]
-    second = registry.read_page(record.id, after_ord=first[-1]["_ord"], limit=2)
+    second = read_keyset_page(record.relation, after_ord=first[-1]["_ord"], limit=2)
     assert [row["_ord"] for row in second] == [first[-1]["_ord"] + 1]
     assert {row["n"] for row in first + second} == {10, 20, 30}
 
@@ -564,10 +564,10 @@ def test_chunked_copy_round_trip_uses_normalized_types(
             "nullable": None,
         },
     ]
-    first = registry.read_page(record.id, after_ord=0, limit=2)
+    first = read_keyset_page(record.relation, after_ord=0, limit=2)
     assert [row["_ord"] for row in first] == [1, 2]
     assert [row["n"] for row in first] == [1, 2]
-    second = registry.read_page(record.id, after_ord=2, limit=2)
+    second = read_keyset_page(record.relation, after_ord=2, limit=2)
     assert [(row["_ord"], row["n"], row["label"]) for row in second] == [(3, 3, "c")]
     assert second[0]["amount"] == Decimal("3.25")
     assert registry.is_lost(record.id) is False
@@ -784,5 +784,5 @@ def test_sql_registry_persists_a_ready_dataset_and_ignores_dropped_bytes(
     assert loaded.size_bytes == record.size_bytes
     assert loaded.relation == record.relation
     assert store.used_bytes() == record.size_bytes
-    page = registry.read_page(record.id, after_ord=0, limit=10)
+    page = read_keyset_page(record.relation, after_ord=0, limit=10)
     assert {(row["n"], row["label"]) for row in page} == {(1, "a"), (2, "b")}

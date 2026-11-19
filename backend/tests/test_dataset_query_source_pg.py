@@ -116,7 +116,8 @@ def test_dataset_query_streams_a_source_without_loading_every_row(
 ) -> None:
     from decimal import Decimal
 
-    from backend.channel.dataset_registry import DatasetRegistry, get_dataset_store
+    from backend.channel.dataset_registry import get_dataset_store
+    from backend.entity.datasets import read_keyset_page
     from backend.channel.nodes.volume import materialize
     from backend.metadata.connectors.base import SourceEndpoint, StreamColumn
     from backend.metadata.connectors.runtime import PreparedEngine
@@ -225,9 +226,7 @@ def test_dataset_query_streams_a_source_without_loading_every_row(
     assert probe is not None
     assert probe.origin == "job"
     assert probe.normalized_type == "unknown"
-    page = DatasetRegistry(get_dataset_store()).read_page(
-        result.output["dataset"]["dataset_id"], after_ord=1000, limit=1
-    )
+    page = read_keyset_page(stored.relation, after_ord=1000, limit=1)
     assert page[0]["n"] == 1001
     assert page[0]["qty"] == Decimal("1.50")
     assert page[0]["tag"] == "k"
@@ -574,7 +573,8 @@ def _live_node(source_id: str, sql: str, *, timeout: int = 30) -> dict:
 def test_dataset_query_streams_a_registered_source(live_source) -> None:
     from decimal import Decimal
 
-    from backend.channel.dataset_registry import DatasetRegistry, get_dataset_store
+    from backend.channel.dataset_registry import get_dataset_store
+    from backend.entity.datasets import read_keyset_page
 
     source_id, engine = live_source
     sql = _LIVE_SQL[engine]
@@ -590,9 +590,7 @@ def test_dataset_query_streams_a_registered_source(live_source) -> None:
     assert stored is not None
     physical = {column["name"]: column["type"] for column in stored.columns}
     assert physical["qty"] == "numeric(12,2)"
-    page = DatasetRegistry(get_dataset_store()).read_page(
-        result.output["dataset"]["dataset_id"], after_ord=1000, limit=1
-    )
+    page = read_keyset_page(stored.relation, after_ord=1000, limit=1)
     assert int(page[0]["n"]) == 1001
     assert Decimal(str(page[0]["qty"])) == Decimal("1.50")
 

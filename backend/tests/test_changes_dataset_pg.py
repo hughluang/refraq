@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from jsonschema import Draft202012Validator
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
@@ -326,11 +327,12 @@ def _occurred_at(conn: Connection, entity_id: str) -> list[datetime]:
 
 
 def _page(dataset_id: str, *, after_ord: int, limit: int) -> list[dict]:
-    from backend.channel.dataset_registry import DatasetRegistry, get_dataset_store
+    from backend.channel.dataset_registry import get_dataset_store
+    from backend.entity.datasets import read_keyset_page
 
-    return DatasetRegistry(get_dataset_store()).read_page(
-        dataset_id, after_ord=after_ord, limit=limit
-    )
+    record = get_dataset_store().get(dataset_id)
+    assert record is not None
+    return read_keyset_page(record.relation, after_ord=after_ord, limit=limit)
 
 
 def _rows(dataset_id: str, *, limit: int = 1000) -> list[dict]:
@@ -394,7 +396,22 @@ def test_changes_dataset_declares_a_bounded_volume_load() -> None:
     assert node.output_view.dataset == "dataset"
     assert node.output_view.metrics == ("count",)
     schema = node.config_schema
-    assert schema["required"] == ["entity_id"]
+    validator = Draft202012Validator(schema)
+    mirror = {"kind": "mirror", "mirror_id": "mir_orders"}
+    assert validator.is_valid({"entity_id": "ent_orders"})
+    assert validator.is_valid({"entity_id": "ent_orders", "sources": ["channel_run"], "limit": 1})
+    assert validator.is_valid({"source": mirror, "limit": 10, "statement_timeout_sec": 30})
+    for config in (
+        {},
+        {"sources": ["user"]},
+        {"entity_id": ""},
+        {"entity_id": "ent_orders", "source": mirror},
+        {"source": mirror, "sources": ["user"]},
+        {"source": {"kind": "entity", "mirror_id": "mir_orders"}},
+        {"source": {"kind": "mirror"}},
+        {"source": {"kind": "mirror", "mirror_id": ""}},
+    ):
+        assert not validator.is_valid(config), config
     assert "shape" not in schema["properties"]
     limit = schema["properties"]["limit"]
     assert limit["type"] == "integer"

@@ -177,18 +177,26 @@ def test_unknown_mirror_provenance_denies_and_entity_payload_keeps_existing_rule
 def test_stored_data_endpoints_refuse_unknown_provenance(monkeypatch, endpoint):
     from backend.channel.routers import runs
     from backend.core.pagination import PageParams
+    from backend.jobs.store import create_queued_job
 
     run = run_record()
     run.channel_id = "channel_one"
-    monkeypatch.setattr(runs, "get_run_store", lambda: SimpleNamespace(get_run=lambda job_id: run))
+    job = create_queued_job(
+        kind="channel_run", input={"channel_id": run.channel_id, "target": "draft"},
+        trigger_kind="user", trigger_ref="usr_reader",
+    )
+    run.job_id = job.id
+    monkeypatch.setattr(runs, "get_run_store", lambda: SimpleNamespace(
+        get_run=lambda job_id: run if job_id == run.job_id else None,
+    ))
     actor = SimpleNamespace(id="usr_viewer")
     calls = {
-        "executions": lambda: runs.http_list_executions("channel_one", "job_read", actor, page=PageParams(limit=10, offset=0)),
-        "output": lambda: runs.http_execution_output("channel_one", "job_read", 1, actor),
-        "rounds": lambda: runs.http_execution_rounds("channel_one", "job_read", 1, actor),
-        "dataset": lambda: runs.http_dataset_rows("channel_one", "job_read", "dataset_one", actor),
-        "sample": lambda: runs.http_node_sample("channel_one", "job_read", None, actor),
-        "preview": lambda: runs.http_preview_template("channel_one", "job_read", None, actor),
+        "executions": lambda: runs.http_list_executions(run.channel_id, job.id, actor, page=PageParams(limit=10, offset=0)),
+        "output": lambda: runs.http_execution_output(run.channel_id, job.id, 1, actor),
+        "rounds": lambda: runs.http_execution_rounds(run.channel_id, job.id, 1, actor),
+        "dataset": lambda: runs.http_dataset_rows(run.channel_id, job.id, "dataset_one", actor),
+        "sample": lambda: runs.http_node_sample(run.channel_id, job.id, None, actor),
+        "preview": lambda: runs.http_preview_template(run.channel_id, job.id, None, actor),
     }
     with pytest.raises(AppError) as error:
         calls[endpoint]()

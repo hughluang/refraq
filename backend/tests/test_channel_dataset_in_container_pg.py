@@ -20,7 +20,7 @@ from backend.channel.dataset_registry import (
 from backend.channel.engine import execute
 from backend.channel.graph import validate
 from backend.channel.nodes import list_node_types
-from backend.entity.datasets import list_dataset_relations
+from backend.entity.datasets import list_dataset_relations, read_keyset_page
 from backend.tests.entity_pg import bootstrapped_entity_database
 from backend.tests.test_channel_engine import _RESOLVER, _edge, _node
 from backend.tests.test_channel_until import RecordingHooks
@@ -101,7 +101,7 @@ def _assert_table(dataset_id: str, expected_n: int) -> str:
     assert record.status == "ready"
     assert record.expires_at is None
     assert record.relation in list_dataset_relations()
-    page = DatasetRegistry(get_dataset_store()).read_page(dataset_id, after_ord=0, limit=10)
+    page = read_keyset_page(record.relation, after_ord=0, limit=10)
     assert [row["n"] for row in page] == [expected_n]
     return record.relation
 

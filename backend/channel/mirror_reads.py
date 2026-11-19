@@ -2,7 +2,9 @@
 
 from typing import Any
 
+from backend.admin.errors import AuthForbidden
 from backend.admin.user_store import get_user_store
+from backend.channel.mirror_changes import is_mirror
 from backend.channel.run_store import get_run_store
 from backend.core.errors import AppError
 from backend.metadata.source_access import authorize_source_read_on
@@ -100,12 +102,18 @@ def object_ids(graph: Any) -> list[str]:
                    if node.get("type") == "read.mirror"})
 
 
+def _mirror_history_node(node: dict[str, Any]) -> bool:
+    if node.get("type") not in {"read.changes", "volume.changes_dataset"}:
+        return False
+    config = node.get("config")
+    return isinstance(config, dict) and is_mirror(config)
+
+
 def authorize_graph(graph: Any, user_id: str | None, *, session=None) -> None:
     ids = object_ids(graph)
     mirror_ids = sorted({node["config"]["source"]["mirror_id"]
                          for node in (graph or {}).get("nodes", [])
-                         if node.get("type") in {"read.changes", "volume.changes_dataset"}
-                         and (node.get("config", {}).get("source") or {}).get("kind") == "mirror"})
+                         if _mirror_history_node(node)})
     if not ids and not mirror_ids:
         return
     if _reads is None:
@@ -123,19 +131,21 @@ def authorize_graph(graph: Any, user_id: str | None, *, session=None) -> None:
 def mirror_graph(graph: Any) -> bool:
     if not isinstance(graph, dict):
         return False
-    for node in graph.get("nodes") or []:
-        config = node.get("config") or {}
-        source = config.get("source") or {}
-        if node.get("type") == "read.mirror" or source.get("kind") == "mirror":
-            return True
-    return False
+    return any(
+        node.get("type") == "read.mirror" or _mirror_history_node(node)
+        for node in graph.get("nodes") or []
+    )
 
 
 def _authorize(user_id: str | None, sources: list[str]) -> None:
     user = get_user_store().get_by_id(user_id) if user_id else None
     if user is None or user.status != "active" or getattr(user, "identity_source", None) == "system":
         raise MirrorDataForbidden()
-    if any(not allows(user_id, source, "sources:data_read") for source in sources):
+    try:
+        allowed = all(allows(user_id, source, "sources:data_read") for source in sources)
+    except AuthForbidden as exc:
+        raise MirrorDataForbidden() from exc
+    if not allowed:
         raise MirrorDataForbidden()
 
 

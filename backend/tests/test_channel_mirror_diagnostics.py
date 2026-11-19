@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.admin.errors import AuthForbidden
 from backend.channel import channel_run, mirror_reads, runner, tasks
 from backend.channel.nodes.spec import ERROR_OUTPUT, NodeResult
 from backend.channel.routers import runs
@@ -145,7 +146,10 @@ def test_worker_preserves_legacy_payload_restrictions_when_old_records_exist(mon
         runs.http_execution_output(channel.id, job.id, old.seq, actor, limit=10, offset=0)
 
 
-def test_error_workflow_inherits_sources_and_rechecks_both_identities(monkeypatch, grants):
+@pytest.mark.parametrize("viewer_has_source_membership", [False, True])
+def test_error_workflow_inherits_sources_and_rechecks_both_identities(
+    monkeypatch, grants, viewer_has_source_membership,
+):
     _node_result(monkeypatch, "failed")
     graph = _error_graph()
     graph["settings"]["mirror_execution_user_id"] = RECEIVER
@@ -171,6 +175,15 @@ def test_error_workflow_inherits_sources_and_rechecks_both_identities(monkeypatc
     assert retry_run.mirror_state["source_ids"] == [SOURCE]
     assert _job_view(retry.id, RECEIVER).input["error_source"]["job_id"] == parent_id
     grants.remove(ACTOR)
+    if viewer_has_source_membership:
+        original_allows = mirror_reads.allows
+
+        def allows(user_id, source, permission):
+            if user_id == ACTOR:
+                raise AuthForbidden()
+            return original_allows(user_id, source, permission)
+
+        monkeypatch.setattr(mirror_reads, "allows", allows)
     assert "error_source" not in _job_view(job_id, ACTOR).input
     assert "error_source" not in _job_view(retry.id, ACTOR).input
 

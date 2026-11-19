@@ -21,6 +21,7 @@ from backend.admin.user_store import get_user_store  # noqa: E402
 from backend.channel.run_store import ChannelRunRecord, get_run_store  # noqa: E402
 from backend.channel.runner import run_channel_job  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
+from backend.jobs.store import claim_queued, create_queued_job, mark_succeeded  # noqa: E402
 from backend.main import app  # noqa: E402
 
 
@@ -633,10 +634,18 @@ def _seed(client: TestClient, graph: dict, *, name: str) -> tuple[str, str]:
     created = client.post("/channels", json={"name": name, "description": None})
     assert created.status_code == 201, created.text
     channel_id = created.json()["channel"]["id"]
-    job_id = f"job_{channel_id}"
+    actor = get_user_store().get_by_account("admin")
+    assert actor is not None
+    job = create_queued_job(
+        kind="channel_run",
+        input={"channel_id": channel_id, "target": "draft", "ignore_checkpoints": False},
+        trigger_kind="user",
+        trigger_ref=actor.id,
+        created_by=actor.id,
+    )
     get_run_store().insert_run(
         ChannelRunRecord(
-            job_id=job_id,
+            job_id=job.id,
             channel_id=channel_id,
             target="draft",
             version=None,
@@ -647,11 +656,14 @@ def _seed(client: TestClient, graph: dict, *, name: str) -> tuple[str, str]:
             outcome="succeeded",
             failed_node_id=None,
             skipped_node_ids=[],
-            created_at=utc_now(),
+            created_at=job.created_at,
             context=None,
         )
     )
-    return channel_id, job_id
+    assert claim_queued(job.id) is not None
+    settled = mark_succeeded(job.id)
+    assert settled is not None and settled.status == "succeeded"
+    return channel_id, job.id
 
 
 def _finish(record: Any, **fields: Any) -> Any:

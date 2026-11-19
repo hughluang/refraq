@@ -199,11 +199,11 @@ def entity_db(monkeypatch: pytest.MonkeyPatch):
 
 
 def _page(dataset_id: str, *, after_ord: int, limit: int) -> list[dict]:
-    from backend.channel.dataset_registry import DatasetRegistry, get_dataset_store
+    from backend.entity.datasets import read_keyset_page
 
-    return DatasetRegistry(get_dataset_store()).read_page(
-        dataset_id, after_ord=after_ord, limit=limit
-    )
+    record = _record(dataset_id)
+    assert record is not None
+    return read_keyset_page(record.relation, after_ord=after_ord, limit=limit)
 
 
 def _record(dataset_id: str):

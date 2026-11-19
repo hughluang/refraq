@@ -1389,3 +1389,69 @@ def _assert_dataset_row_page(
     assert still.status_code == 200, still.text
     assert still.json()["items"][0]["_ord"] == 1
     assert "CHANNEL_DATASET_QUOTA_EXCEEDED" not in still.text
+
+    _assert_dataset_viewer_grants(channel_client, channel_id, job_id, page_set.id)
+
+
+def _assert_dataset_viewer_grants(
+    channel_client: TestClient, channel_id: str, job_id: str, dataset_id: str
+) -> None:
+    from contextlib import closing
+
+    from backend.admin.user_store import get_user_store
+    from backend.channel.diagnostics import DIAGNOSTICS_VERSION
+    from backend.channel.run_store import get_run_store
+    from backend.metadata.source_access import create_membership, delete_membership
+    from backend.tests.problem import assert_problem
+
+    ordinary_permissions = ["console:access", "channel:read"]
+    role = channel_client.post("/roles", json={
+        "key": "dataset_viewer", "name": "Dataset viewer", "permissions": ordinary_permissions,
+    })
+    assert role.status_code == 201, role.text
+    role_id = role.json()["role"]["id"]
+    credentials = {"account": "dataset_viewer", "password": "dataset-test-only"}
+    user = channel_client.post("/users", json={
+        **credentials, "display_name": "Dataset viewer", "role_id": role_id,
+    })
+    assert user.status_code == 201, user.text
+    viewer_id = user.json()["user"]["id"]
+    executor = get_user_store().get_by_account("root")
+    assert executor is not None and executor.id != viewer_id
+    store = get_run_store()
+    run = store.get_run(job_id)
+    assert run is not None
+    url = f"/channels/{channel_id}/runs/{job_id}/datasets/{dataset_id}/rows"
+    sources = ["src_dataset_a", "src_dataset_b"]
+
+    with closing(TestClient(channel_client.app)) as viewer:
+        login = viewer.post("/auth/login", json=credentials)
+        assert login.status_code == 200, login.text
+        ordinary = viewer.get(url, params={"limit": 1})
+        assert ordinary.status_code == 200, ordinary.text
+        assert ordinary.json()["items"] == [{"_ord": 1, "code": "S-01"}]
+
+        run.mirror_execution_user_id = executor.id
+        run.mirror_state = {"source_ids": sources}
+        run.context = {**(run.context or {}), "diagnostics_version": DIAGNOSTICS_VERSION}
+        store.update_run(run)
+        memberships = [create_membership(
+            subject_type="user", subject_id=viewer_id, target=source, level="viewer",
+        ) for source in sources]
+        try:
+            assert_problem(viewer.get(url), status=403, code="AUTH_FORBIDDEN")
+            granted = channel_client.patch(f"/roles/{role_id}", json={
+                "permissions": [*ordinary_permissions, "sources:data_read"],
+            })
+            assert granted.status_code == 200, granted.text
+            first = viewer.get(url, params={"limit": 1})
+            assert first.status_code == 200, first.text
+            assert first.json()["items"] == ordinary.json()["items"]
+            assert first.json()["next_after_ord"] == 1
+
+            assert delete_membership(memberships.pop().id)
+            denied = viewer.get(url, params={"after_ord": first.json()["next_after_ord"]})
+            assert_problem(denied, status=403, code="AUTH_FORBIDDEN")
+        finally:
+            for membership in memberships:
+                delete_membership(membership.id)

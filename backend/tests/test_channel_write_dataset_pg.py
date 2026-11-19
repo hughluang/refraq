@@ -19,20 +19,20 @@ def data_client(monkeypatch: pytest.MonkeyPatch):
         _postgres_available,
         _serve,
     )
+    from backend.worker.parameters import assemble_system_parameters
 
     if not _postgres_available():
         pytest.skip("Postgres not available (start: docker compose up -d)")
     with bootstrapped_entity_database(_MAINTENANCE_DATABASE_URL, "refraq_wdata") as urls:
+        assemble_system_parameters()
         yield from _serve(monkeypatch, urls)
 
 
 @pytest.fixture()
 def dataset_store(data_client):
     from backend.channel.dataset_registry import get_dataset_store, reset_dataset_store
-    from backend.worker.parameters import assemble_system_parameters
 
     reset_dataset_store()
-    assemble_system_parameters()
     store = get_dataset_store()
     try:
         yield data_client, store
@@ -217,6 +217,7 @@ def test_invalid_row_in_the_last_dataset_chunk_leaves_the_target_unchanged(
     admin = get_user_store().get_by_account("admin")
     assert admin is not None
     monkeypatch.setattr("backend.entity.rows.WRITE_CHUNK_SIZE", 2)
+    monkeypatch.setattr("backend.channel.nodes.write.entity.WRITE_CHUNK_SIZE", 2)
     record = _load(
         store,
         [
@@ -256,7 +257,7 @@ def test_dataset_pages_use_a_readonly_owner_connection(
     (_client, _stem, _physical, entity_id), store = dataset_store
     admin = get_user_store().get_by_account("admin")
     assert admin is not None
-    monkeypatch.setattr("backend.entity.rows.WRITE_CHUNK_SIZE", 2)
+    monkeypatch.setattr("backend.channel.nodes.write.entity.WRITE_CHUNK_SIZE", 2)
     record = _load(
         store,
         [("A", 1, "n"), ("B", 2, "n"), ("C", 3, "n"), ("D", 4, "n"), ("E", 5, "n")],
