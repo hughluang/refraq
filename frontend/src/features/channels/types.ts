@@ -33,6 +33,7 @@ export type GraphSettings = {
   run_timeout_sec: number | null;
   run_retry_limit?: number | null;
   error_channel_id: string | null;
+  mirror_execution_user_id?: string | null;
   /** Absent means keep. A published run uses the version's values. */
   keep_succeeded_runs?: boolean;
   keep_failed_runs?: boolean;
@@ -201,7 +202,7 @@ export type ChannelVersion = {
 
 export type Confirmation = {
   draft_revision: number;
-  mirrors_to_open: { object_id: string; locator: string }[];
+  mirrors_to_open: { source_id: string; object_id: string; mirror_id: string }[];
   runs_to_cancel: { job_id: string; version: number; started_at: string }[];
   missing_run_timeout: boolean;
 };

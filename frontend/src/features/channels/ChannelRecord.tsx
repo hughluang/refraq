@@ -46,6 +46,8 @@ import { AdjustmentsIcon, ErrorIcon, ListIcon, VariableIcon, VersionsIcon } from
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextareaField } from "@/components/form/TextareaField";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import { userRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { TextField } from "@/components/form/TextField";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
@@ -284,9 +286,13 @@ function ChannelExisting({
     else url.searchParams.delete("run_panel");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   };
-  const [preview, setPreview] = useState<Confirmation | null>(null);
+  const [publishReview, setPublishReview] = useState<{
+    channelId: string;
+    graph: Graph;
+    confirmation: Confirmation;
+  } | null>(null);
+  const preview = publishReview?.channelId === channelId ? publishReview.confirmation : null;
   const [publishJobId, setPublishJobId] = useState<string | null>(null);
-  const [publishRevision, setPublishRevision] = useState(1);
   const [reloadToken, setReloadToken] = useState(0);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [runRequest, setRunRequest] = useState<{ stopAt: string | null } | null>(null);
@@ -331,6 +337,7 @@ function ChannelExisting({
     timeout: number | string;
     retryLimit: number | string;
     errorChannelId: string | null;
+    mirrorExecutionUserId: string;
     keepSucceededRuns: boolean;
     keepFailedRuns: boolean;
     keepTestRuns: boolean;
@@ -340,9 +347,18 @@ function ChannelExisting({
       timeout: "",
       retryLimit: "",
       errorChannelId: null,
+      mirrorExecutionUserId: "",
       keepSucceededRuns: true,
       keepFailedRuns: true,
       keepTestRuns: true,
+    },
+    validate: {
+      mirrorExecutionUserId: (value) => {
+        const id = value.trim();
+        return !id || /^[A-Za-z0-9_-]{1,64}$/.test(id)
+          ? null
+          : t("channels.settings.mirrorExecutionUserIdInvalid");
+      },
     },
   });
   const formRef = useRef(form);
@@ -356,6 +372,7 @@ function ChannelExisting({
 
   useEffect(() => {
     let cancelled = false;
+    setPublishReview(null);
     setLoading(true);
     setLoadFailed(false);
     loadedChannelRef.current = null;
@@ -549,7 +566,7 @@ function ChannelExisting({
     if (!(error instanceof ApiError) || error.code !== "CHANNEL_GRAPH_INVALID" || !graph) {
       return null;
     }
-    setPreview(null);
+    setPublishReview(null);
     setRunRequest(null);
     const blocking = refusedProblems(error);
     return validateDraft(channelId, graph).then((result) =>
@@ -750,6 +767,15 @@ function ChannelExisting({
   const showEdit = mode === "show" && Boolean(canWrite?.can);
   const showLifecycle = Boolean(canWrite?.can);
   const startPublish = () => {
+    if (!showLifecycle) return;
+    const unattended = graph.nodes.some(({ type }) => ["trigger.scheduled", "trigger.inbound", "trigger.error"].includes(type));
+    const readsMirror = graph.nodes.some(({ type, config }) => type === "read.mirror" ||
+      (["read.changes", "volume.changes_dataset"].includes(type) && config.source != null &&
+        typeof config.source === "object" && "kind" in config.source && config.source.kind === "mirror"));
+    if (unattended && readsMirror && !graph.settings.mirror_execution_user_id) {
+      notifyError(new RecordInvalid(t("channels.settings.mirrorExecutionUserRequired")), t("channels.publish.failed"));
+      return;
+    }
     if (!occupyPage()) return;
     void (async () => {
       let saved: Awaited<ReturnType<typeof persist>>;
@@ -775,9 +801,14 @@ function ChannelExisting({
       setProblems(result.problems);
       setPorts(result.ports);
       setExpressionContext(result.context);
-      setPublishRevision(saved.revision);
       try {
-        setPreview(await previewPublish(channelId));
+        const confirmation = await previewPublish(channelId);
+        if (confirmation.draft_revision !== saved.revision ||
+            !validationResultApplies(saved.graph, graphRef.current)) {
+          notifyError(new RecordInvalid(t("channels.publish.reviewChanged")), t("channels.publish.failed"));
+          return;
+        }
+        setPublishReview({ channelId, graph: saved.graph, confirmation });
       } catch (error) {
         await catchFailure(error, t("channels.publish.failed"));
       }
@@ -828,6 +859,7 @@ function ChannelExisting({
       timeout: graph.settings.run_timeout_sec ?? "",
       retryLimit: graph.settings.run_retry_limit ?? "",
       errorChannelId: graph.settings.error_channel_id,
+      mirrorExecutionUserId: graph.settings.mirror_execution_user_id ?? "",
       keepSucceededRuns: graph.settings.keep_succeeded_runs !== false,
       keepFailedRuns: graph.settings.keep_failed_runs !== false,
       keepTestRuns: graph.settings.keep_test_runs !== false,
@@ -845,6 +877,7 @@ function ChannelExisting({
     timeout: number | string;
     retryLimit: number | string;
     errorChannelId: string | null;
+    mirrorExecutionUserId: string;
     keepSucceededRuns: boolean;
     keepFailedRuns: boolean;
     keepTestRuns: boolean;
@@ -852,6 +885,7 @@ function ChannelExisting({
     form.setFieldValue("description", values.description.trim().slice(0, DESCRIPTION_MAX));
     const next = runTimeoutSec(values.timeout);
     const retryLimit = runRetryLimit(values.retryLimit);
+    const mirrorExecutionUserId = values.mirrorExecutionUserId.trim() || null;
     setGraph((current) =>
       current
         ? {
@@ -861,6 +895,9 @@ function ChannelExisting({
               run_timeout_sec: next,
               run_retry_limit: retryLimit,
               error_channel_id: values.errorChannelId,
+              ...(mirrorExecutionUserId !== null || current.settings.mirror_execution_user_id !== undefined
+                ? { mirror_execution_user_id: mirrorExecutionUserId }
+                : {}),
               keep_succeeded_runs: values.keepSucceededRuns,
               keep_failed_runs: values.keepFailedRuns,
               keep_test_runs: values.keepTestRuns,
@@ -1285,6 +1322,15 @@ function ChannelExisting({
               clearable
               onChange={(next) => detailsForm.setFieldValue("errorChannelId", next)}
             />
+            <RecordPicker
+              editable
+              clearable
+              adapter={userRecordAdapter()}
+              label={t("channels.settings.mirrorExecutionUserId")}
+              description={t("channels.settings.mirrorExecutionUserIdHint")}
+              {...detailsForm.fieldProps("mirrorExecutionUserId")}
+              onChange={(id) => detailsForm.setFieldValue("mirrorExecutionUserId", id ?? "")}
+            />
             <RunKeepingFields
               keepSucceededRuns={detailsForm.values.keepSucceededRuns}
               keepFailedRuns={detailsForm.values.keepFailedRuns}
@@ -1346,6 +1392,13 @@ function ChannelExisting({
                 errorChannelsFailed ? t("channels.settings.errorChannelLoadFailed") : undefined
               }
             />
+            <RecordPicker
+              editable={false}
+              adapter={userRecordAdapter()}
+              label={t("channels.settings.mirrorExecutionUserId")}
+              description={t("channels.settings.mirrorExecutionUserIdHint")}
+              value={graph.settings.mirror_execution_user_id ?? ""}
+            />
             <RunKeepingFields
               keepSucceededRuns={graph.settings.keep_succeeded_runs !== false}
               keepFailedRuns={graph.settings.keep_failed_runs !== false}
@@ -1364,33 +1417,52 @@ function ChannelExisting({
       )}
       {stopRunAction.dialog}
       <ConfirmActionModal
-        opened={preview != null}
-        onClose={() => setPreview(null)}
+        opened={showLifecycle && preview != null}
+        onClose={() => setPublishReview(null)}
         title={t("channels.publish.title")}
         confirmLabel={t("channels.publish.confirm")}
         loading={busy}
         onConfirm={() => {
+          if (!showLifecycle || !publishReview || !preview) return;
+          if (preview.draft_revision !== revision ||
+              !validationResultApplies(publishReview.graph, graphRef.current)) {
+            setPublishReview(null);
+            notifyError(new RecordInvalid(t("channels.publish.reviewChanged")), t("channels.publish.failed"));
+            return;
+          }
           if (!occupyPage()) return;
-          void publishChannel(channelId, publishRevision)
-            .then(async () => {
-              setPreview(null);
+          void publishChannel(channelId, preview)
+            .then(() => {
+              setPublishReview(null);
               setProblems([]);
               setPorts([]);
               setExpressionContext(null);
               open?.({ type: "success", message: t("channels.publish.done") });
               setReloadToken((value) => value + 1);
             })
-            .catch((error: unknown) => catchFailure(error, t("channels.publish.failed")))
+            .catch((error: unknown) => {
+              if (error instanceof ApiError &&
+                  (error.code === "CHANNEL_DRAFT_CONFLICT" || error.code === "MIRROR_CONTROL_CONFLICT")) {
+                setPublishReview(null);
+                notifyError(new RecordInvalid(t("channels.publish.reviewChanged")), t("channels.publish.failed"));
+                return;
+              }
+              return catchFailure(error, t("channels.publish.failed"));
+            })
             .finally(releasePage);
         }}
       >
         <Stack gap="xs">
           <Text size="sm">{t("channels.publish.mirrors")}</Text>
-          <Text size="sm" c="dimmed">
-            {preview && preview.mirrors_to_open.length > 0
-              ? preview.mirrors_to_open.map((item) => item.locator).join(", ")
-              : t("channels.publish.mirrorsEmpty")}
-          </Text>
+          {preview && preview.mirrors_to_open.length > 0 ? (
+            preview.mirrors_to_open.map((item) => (
+              <Text key={item.object_id} size="sm" c="dimmed">
+                {t("channels.publish.mirrorBinding", item)}
+              </Text>
+            ))
+          ) : (
+            <Text size="sm" c="dimmed">{t("channels.publish.mirrorsEmpty")}</Text>
+          )}
           <Text size="sm">{t("channels.publish.runs")}</Text>
           {preview && preview.runs_to_cancel.length > 0 ? (
             <Stack gap={4}>

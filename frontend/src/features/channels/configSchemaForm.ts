@@ -115,9 +115,16 @@ export function nullForcedProperties(
   return next;
 }
 
+export function hasMirrorChangeSource(schema: SchemaObject): boolean {
+  const properties = schema.properties;
+  return properties?.entity_id?.["x-refraq-ref"] === "entity" &&
+    properties.source?.properties?.kind?.const === "mirror";
+}
+
 export function defaultConfig(schema: SchemaObject): Record<string, unknown> {
   const config: Record<string, unknown> = {};
   for (const field of fieldsFromSchema(schema)) {
+    if (field.key === "source" && hasMirrorChangeSource(schema)) continue;
     if (field.kind === "integer" && !field.nullable) continue;
     config[field.key] = defaultValue(field);
   }

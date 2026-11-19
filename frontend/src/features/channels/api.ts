@@ -187,13 +187,20 @@ export function previewPublish(id: string) {
   });
 }
 
-export function publishChannel(id: string, draftRevision: number) {
+export function publishChannel(id: string, { draft_revision, mirrors_to_open }: Confirmation) {
   return apiClient<{ version: ChannelVersion; confirmation: Confirmation }>(
     `/channels/${id}/publish`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ draft_revision: draftRevision }),
+      body: JSON.stringify({
+        draft_revision,
+        mirrors_to_open: mirrors_to_open.map(({ source_id, object_id, mirror_id }) => ({
+          source_id,
+          object_id,
+          mirror_id,
+        })),
+      }),
     },
   );
 }

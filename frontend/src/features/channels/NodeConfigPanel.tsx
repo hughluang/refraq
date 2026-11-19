@@ -10,6 +10,12 @@ import { FieldDisclosureContext, FieldMarks } from "@/components/form/FieldChrom
 import type { FieldNote } from "@/components/form/fieldNotes";
 import { JsonField } from "@/components/form/JsonField";
 import { NumberField } from "@/components/form/NumberField";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import { RECORD_PICKER_LIMIT, type RecordPickerAdapter } from "@/components/form/recordPickerAdapters";
+import { getMirror, listMirrors } from "@/features/mirrors/api";
+import type { Mirror } from "@/features/mirrors/types";
+import { getCatalogObject, searchCatalogObjects } from "@/features/sources/api/catalog";
+import type { CatalogObject } from "@/features/sources/types";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
@@ -26,6 +32,7 @@ import {
   emptyRow,
   fieldVisible,
   fieldsFromSchema,
+  hasMirrorChangeSource,
   nullForcedProperties,
   type FieldSpec,
   type SchemaObject,
@@ -94,6 +101,26 @@ type Props = {
   onClose: () => void;
   onChange: (nodeId: string, data: FlowNodeData) => void;
   onRun: (nodeId: string) => void;
+};
+
+const mirrorOption = (mirror: Mirror) => ({ id: mirror.id, name: mirror.qualified_table, key: mirror.source_key });
+const tableOption = (object: CatalogObject) => ({ id: object.id, name: object.name, key: object.locator_key });
+
+const mirrorAdapter: RecordPickerAdapter = {
+  async search(q) {
+    const page = await listMirrors({ q, limit: RECORD_PICKER_LIMIT, offset: 0 });
+    return page.items.map(mirrorOption);
+  },
+  resolve: (ids, signal) => Promise.all(ids.map(async (id) => mirrorOption((await getMirror(id, signal)).mirror))),
+};
+
+const catalogTableAdapter: RecordPickerAdapter = {
+  async search(q) {
+    if (!q) return [];
+    const page = await searchCatalogObjects(q, { object_type: "table", limit: RECORD_PICKER_LIMIT });
+    return page.items.filter((object) => object.is_present).map(tableOption);
+  },
+  resolve: (ids, signal) => Promise.all(ids.map(async (id) => tableOption((await getCatalogObject(id, signal)).object))),
 };
 
 const EMPTY_GRAPH: ProblemGraph = { nodes: [], edges: [] };
@@ -181,6 +208,11 @@ export function NodeConfigPanel({
   const configEditable = editable && !configLocked;
   const typeLabel = spec ? nodeTypeLabel(t, spec) : data.nodeType;
   const summary = spec ? nodeTypeSummary(t, spec) : "";
+  const chooseChangeSource = schema != null && hasMirrorChangeSource(schema);
+  const changeSource = data.config.source;
+  const mirrorSource = chooseChangeSource && isRecord(changeSource) && changeSource.kind === "mirror"
+    ? changeSource
+    : null;
   const fields = (schema && data.nodeType !== "trigger.inbound" ? fieldsFromSchema(schema) : []).filter((field) => {
     if (
       data.nodeType === "trigger.scheduled" &&
@@ -188,11 +220,14 @@ export function NodeConfigPanel({
     ) {
       return false;
     }
+    if (chooseChangeSource && field.key === "source") return false;
+    if (mirrorSource && (field.key === "entity_id" || field.key === "sources")) return false;
     return fieldVisible(field, data.config);
   });
-  const entityId = typeof data.config.entity_id === "string" ? data.config.entity_id : "";
+  const entityId = !mirrorSource && typeof data.config.entity_id === "string" ? data.config.entity_id : "";
   const head = useEntityHeadAttributes(entityId);
   const attached = new Set<string>(fields.map((field) => field.key));
+  if (chooseChangeSource) attached.add("source");
   if (data.nodeType === "trigger.scheduled") {
     attached.add("cron");
     attached.add("interval_seconds");
@@ -369,6 +404,51 @@ export function NodeConfigPanel({
               }}
               onChange={(config) => update({ config })}
             />
+          ) : null}
+          {chooseChangeSource ? (
+            <>
+              <SelectField
+                editable={configEditable}
+                label={t("channels.config.changeSource.kind")}
+                data={[
+                  { value: "entity", label: t("channels.config.changeSource.entity") },
+                  { value: "mirror", label: t("channels.config.changeSource.mirror") },
+                ]}
+                value={mirrorSource ? "mirror" : "entity"}
+                allowDeselect={false}
+                notes={mirrorSource ? undefined : toNotes(fieldMessages(t, problems, "source", graph))}
+                openSignal={mirrorSource ? undefined : signalFor(problems, "source", revealKey)}
+                onChange={(kind) => {
+                  const config = { ...data.config };
+                  if (kind === "mirror" && !mirrorSource) {
+                    delete config.entity_id;
+                    delete config.sources;
+                    config.source = { kind: "mirror", mirror_id: "" };
+                  } else if (kind === "entity" && mirrorSource) {
+                    delete config.source;
+                    config.entity_id = "";
+                  } else {
+                    return;
+                  }
+                  update({ config });
+                }}
+              />
+              {mirrorSource ? (
+                <RecordPicker
+                  adapter={mirrorAdapter}
+                  editable={configEditable}
+                  label={t("channels.config.changeSource.mirrorId")}
+                  description={t("channels.config.changeSource.mirrorIdHint")}
+                  value={typeof mirrorSource.mirror_id === "string" ? mirrorSource.mirror_id : ""}
+                  notes={toNotes(fieldMessages(t, problems, "source", graph))}
+                  openSignal={signalFor(problems, "source", revealKey)}
+                  onChange={(id) => setConfig("source", {
+                    kind: "mirror",
+                    mirror_id: id ?? "",
+                  })}
+                />
+              ) : null}
+            </>
           ) : null}
           {fields.map((field) => (
             <ConfigField
@@ -805,12 +885,29 @@ function ConfigField({
       />
     );
   }
+  const description = fieldDescription(t, nodeType, field.key, "") || undefined;
+  const textValue = typeof value === "string" ? value : null;
+  if (nodeType === "read.mirror" && field.key === "object_id") {
+    return (
+      <RecordPicker
+        adapter={catalogTableAdapter}
+        label={caption}
+        description={description}
+        editable={editable}
+        value={textValue}
+        notes={notes}
+        openSignal={openSignal}
+        onChange={(id) => onChange(id ?? "")}
+      />
+    );
+  }
   return (
     <TextField
       editable={editable}
       {...labelProps}
-      value={typeof value === "string" ? value : ""}
-      size={labeled ? undefined : "xs"}
+      description={description}
+      value={textValue ?? ""}
+        size={labeled ? undefined : "xs"}
       w={labeled ? undefined : "100%"}
       notes={notes}
       openSignal={openSignal}
