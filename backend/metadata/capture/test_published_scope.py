@@ -19,6 +19,7 @@ from backend.metadata.capture import control, delivery_composition, runtime as e
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime import CaptureRuntime
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked
+from backend.metadata.capture.store import save_binding
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
 from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, allocation_observation, observation
 from backend.metadata.mirrors import service
@@ -128,6 +129,36 @@ def test_committed_confirmed_open_becomes_current_capture_command(management, tm
         assert mirror["published_generation_id"] is None
     finally:
         journal.close()
+
+
+@pytest.mark.parametrize("case", ["partial_scope", "superseded_revision"])
+def test_applied_open_preparation_requires_current_complete_scope(management, monkeypatch, case):
+    transaction, _ = management
+    objects = ["items", "orders"] if case == "partial_scope" else ["items"]
+    with transaction() as session:
+        items, *_ = publish(session, "workflow", 1, objects)
+        mirror_id = items["mirror_id"]
+        store = service._storage()
+        operation, = store.ops(session, mirror_id)
+        store.save_op(session, dict(operation, state="applied", publication_receipt={"recorded": True}))
+    if case == "superseded_revision":
+        service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")
+        with transaction() as session:
+            publish(session, "workflow", 2, objects)
+    control.reconcile_published_scope(SOURCE)
+    with transaction() as session:
+        state = control.load_binding(session, SOURCE)
+        state.update(owner_epoch=1, runtime_instance_id="agent-one", applied_revision=state["control_revision"])
+        stamp = {key: state[key] for key in control.AUTHORITY_KEYS}
+        state["allocation"] = dict(command={"operation_id": "owner"}, evidence={"target_fence": dict(
+            operation_id="owner", authority=stamp, mirror_receipts={mirror_id: "receipt"},
+        )})
+        save_binding(session, state)
+    authority = service.Authority(**delivery_composition._target_authority(stamp))
+    monkeypatch.setattr(service, "_observe_applied_open", lambda *args: pytest.fail("partial scope was observed"))
+    with pytest.raises(service.MirrorError, match="MIRROR_CONTROL_CONFLICT"):
+        service.current_open_preparations(authority=authority, published_scope=state["published_scope"],
+                                          observe_committed=pytest.fail)
 
 
 @pytest.mark.parametrize("management", ["without_credentials"], indirect=True)
@@ -252,7 +283,7 @@ def test_rollbacks_leave_older_scope_and_command_current(management, tmp_path):
 @pytest.mark.parametrize(("stopping", "mismatch"), [
     *[(False, mismatch) for mismatch in (
         None, "connector", "publication", "publication_filter", "publication_columns", "publication_generated",
-        "manifest", "target", "delivery_settings", "scope_superseded", "readiness",
+        "manifest", "target", "anchored_target", "delivery_settings", "scope_superseded", "readiness",
         "gateway_missing", "allocation_stale", "allocation_scope", "allocation_source", "exclusion", "fence",
         "response_loss", "superseded_pending", "revision_restart", "later_owner",
     )],
@@ -290,6 +321,8 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
                     schema_fingerprint="fingerprint", native_types=table["native_types"], table_identity="items",
                     capture_generation="1", key_columns=["id"], column_names=["id", "body"], cleanup_pending=False,
                     status="building")
+    if mismatch == "anchored_target":
+        metadata.update(status="published", anchored_profile={"kind": "disposable_read_committed_v1", "leader_epoch": 3})
 
     def private(name, data):
         path = tmp_path / name
@@ -408,7 +441,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
         **args, connect=lambda **kwargs: SourceConnection(),
     ))
     monkeypatch.setattr(delivery_composition, "applier_engine", lambda settings: SimpleNamespace(dispose=lambda: None))
-    monkeypatch.setattr(delivery_composition, "current_open_preparations", lambda **kwargs: [])
+    monkeypatch.setattr(delivery_composition, "current_open_preparations", lambda **kwargs: ([], []))
     monkeypatch.setattr(delivery_composition, "target_metadata", lambda *args: None if mismatch == "target" else metadata)
     monkeypatch.setattr(delivery_composition, "open_delivery", lambda **args: SimpleNamespace(poll_once=lambda: 0, close=lambda: None))
     settings = dict(target={}, tables=[table], kafka={}, group_id="scope-test", limits={}, max_age_seconds=30)

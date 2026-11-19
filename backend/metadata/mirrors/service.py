@@ -398,8 +398,8 @@ def initial_history_epoch(mirror_id):
     return uuid5(NAMESPACE_URL, f"refraq:mirror:initial-history:{mirror_id}").hex
 
 
-def current_open_preparations(*, authority: Authority, published_scope):
-    """Select committed opens and replace a claim that belongs to a retired authority."""
+def current_open_preparations(*, authority: Authority, published_scope, observe_committed):
+    """Select current applied opens before preparing pending allocations for the Source."""
     store = _storage()
     source_id = authority.source_id
     with store.transaction() as session:
@@ -409,22 +409,46 @@ def current_open_preparations(*, authority: Authority, published_scope):
         scope = read_published_scope(session, source_id)
         if not _current_open_authority(state, authority, scope) or scope != published_scope:
             _error("MIRROR_CONTROL_CONFLICT")
-        assignment_fence = state.get("allocation", {}).get("evidence", {}).get("target_fence")
+        allocation = state.get("allocation", {})
+        assignment_fence = allocation.get("evidence", {}).get("target_fence")
         assignment_receipts = {}
         if assignment_fence and all(state.get(key) == value for key, value in assignment_fence["authority"].items()):
             assignment_receipts = assignment_fence["mirror_receipts"]
-        selected = []
-        for entry in scope:
-            if not entry["included"]:
-                continue
-            mirror_id, revision = entry["mirror_id"], entry["mirror_revision"]
-            operations = [op for op in store.ops(session, mirror_id) if op["kind"] == "open"
-                          and op["state"] == "pending" and op["control_revision"] == revision]
-            if not operations:
-                continue
-            if len(operations) != 1:
+        included = [entry for entry in scope if entry["included"]]
+        pending, applied = [], []
+        has_publication = False
+        for entry in included:
+            history = [op for op in store.ops(session, entry["mirror_id"]) if op["kind"] == "open"]
+            has_publication |= any("publication_receipt" in op for op in history)
+            current = [op for op in history if op["state"] in {"pending", "applied"}
+                       and op["control_revision"] == entry["mirror_revision"]]
+            if len(current) > 1:
                 _error("MIRROR_CONTROL_CONFLICT")
-            operation, = operations
+            if current:
+                operation, = current
+                (applied if operation["state"] == "applied" else pending).append((entry, operation))
+        if has_publication or applied:
+            if len(applied) != len(included) or not isinstance(store, SqlMirrorStore):
+                _error("MIRROR_CONTROL_CONFLICT")
+            stamp = dict(asdict(authority), capture_generation=state["capture_generation"])
+            stamp["binding_id"] = stamp.pop("resource_binding_id")
+            if (not assignment_fence or assignment_fence.get("authority") != stamp
+                    or assignment_fence.get("operation_id") != allocation["command"]["operation_id"]):
+                _error("MIRROR_CONTROL_CONFLICT")
+            source = session.get(SourceRow, source_id, populate_existing=True)
+            if (source is None or source.status != "active" or source.engine != "postgresql"
+                    or not source.capture_credential_ciphertext
+                    or source.capture_revision != authority.credential_revision
+                    or state.get("applied_revision") != authority.control_revision):
+                _error("MIRROR_CONTROL_CONFLICT")
+            return [], [
+                _observe_applied_open(session, store, state, entry, operation, authority,
+                                      assignment_receipts.get(entry["mirror_id"]), observe_committed)
+                for entry, operation in applied
+            ]
+        selected = []
+        for entry, operation in pending:
+            mirror_id, revision = entry["mirror_id"], entry["mirror_revision"]
             claim = operation.get("allocation")
             if claim is not None and claim["binding"]["authority"] != asdict(authority):
                 old = Authority(**claim["binding"]["authority"])
@@ -439,7 +463,7 @@ def current_open_preparations(*, authority: Authority, published_scope):
             selected.append(dict(entry, operation_id=operation_id,
                                  history_epoch=_preparation_history_epoch(session, mirror_id),
                                  assignment_fence_receipt=assignment_receipts.get(mirror_id)))
-        return selected
+        return selected, []
 
 
 def _preparation_history_epoch(session, mirror_id, *, lock=False):
@@ -583,6 +607,15 @@ class CommittedOpenPublication:
     history_bound: dict
 
 
+@dataclass(frozen=True)
+class AppliedOpenPreparation:
+    mirror_id: str
+    operation_id: str
+    binding: OpenGenerationBinding
+    identity: OpenPublicationIdentity
+    observed: CommittedOpenPublication
+
+
 class ObserveCommittedOpenPublication(Protocol):
     def __call__(
         self, *, mirror_id: str, operation_id: str, binding: OpenGenerationBinding,
@@ -672,6 +705,44 @@ def _validate_observed_publication(observed, *, mirror_id, operation_id, binding
                    or terminal["event"].get("type") != kind
                    for terminal, (kind, offset) in zip(terminals, required))):
         _error("MIRROR_CONTROL_CONFLICT")
+
+
+def _observe_applied_open(session, store, state, entry, operation, authority, fence_receipt, observe_committed):
+    mirror_id = entry["mirror_id"]
+    receipt = operation.get("publication_receipt")
+    if (not isinstance(receipt, dict) or receipt.get("authority") != asdict(authority)
+            or receipt.get("history_epoch") != initial_history_epoch(mirror_id)
+            or not isinstance(fence_receipt, str) or not fence_receipt):
+        _error("MIRROR_CONTROL_CONFLICT")
+    expected = OpenPublicationIdentity(**dict(receipt, authority=authority))
+    if (not expected.generation_id or not expected.snapshot_operation_id or not expected.certificate_ref
+            or type(expected.scan_offset) is not int or type(expected.completion_offset) is not int
+            or not 0 <= expected.scan_offset < expected.completion_offset):
+        _error("MIRROR_CONTROL_CONFLICT")
+    binding = _open_publication_binding(operation, expected)
+    mirror_row = session.get(MirrorRow, mirror_id, with_for_update=True, populate_existing=True)
+    if mirror_row is None:
+        _error("MIRROR_CONTROL_CONFLICT")
+    mirror = mirror_row.state
+    if (mirror["published_generation_id"] != expected.generation_id
+            or mirror.get("capture_generation") != authority.capture_generation
+            or mirror.get("history_epoch") != expected.history_epoch):
+        _error("MIRROR_CONTROL_CONFLICT")
+    _require_open_binding(session, store, mirror, binding)
+    snapshot = _publication_snapshot(state, mirror_id, operation, binding, expected)
+    gate = session.get(HistoryGateRow, mirror_id, with_for_update=True, populate_existing=True)
+    if gate is None or gate.status != "available" or gate.history_epoch != expected.history_epoch:
+        _error("MIRROR_CONTROL_CONFLICT")
+    operation_id = operation["id"]
+    with observe_committed(mirror_id=mirror_id, operation_id=operation_id, binding=binding, expected=expected) as observed:
+        _validate_observed_publication(observed, mirror_id=mirror_id, operation_id=operation_id,
+                                       binding=binding, expected=expected, snapshot=snapshot)
+        bound = observed.history_bound
+        if (observed.allocation.get("fence_receipt") != fence_receipt or not isinstance(bound, dict)
+                or bound.get("mirror_id") != mirror_id or bound.get("source_id") != authority.source_id
+                or bound.get("history_epoch") != expected.history_epoch):
+            _error("MIRROR_CONTROL_CONFLICT")
+        return AppliedOpenPreparation(mirror_id, operation_id, binding, expected, observed)
 
 
 def reconcile_open_publication(

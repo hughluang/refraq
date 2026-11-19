@@ -1,7 +1,7 @@
 """Protected delivery installation and independent lease admission."""
 
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import math
 import time
 from uuid import uuid4
@@ -18,6 +18,7 @@ from backend.metadata.capture.runtime_store import RuntimeBlocked, protected_jso
 from backend.metadata.capture.snapshot import SnapshotBinding
 from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.bootstrap import validate_target
+from backend.metadata.mirrors.publication import Publication
 from backend.metadata.mirrors.service import (
     MirrorError, OpenGenerationBinding, current_open_preparations, initial_history_epoch, read_published_scope,
     reconcile_open_generation, require_current_open_allocations,
@@ -64,6 +65,56 @@ def _target_authority(command):
     authority["resource_binding_id"] = authority.pop("binding_id")
     authority["capture_generation"] = str(authority["capture_generation"])
     return authority
+
+
+@dataclass(frozen=True)
+class RetainedOpenCandidate:
+    mirror_id: str
+    operation_id: str
+    generation_id: str
+    binding: OpenGenerationBinding
+    topic: str
+    certificate_ref: str
+    source_checkpoint: dict
+    target_seek_offset: int
+
+
+def _confirmed_checkpoint(evidence, scope, *, data_topics, data_partitions):
+    checkpoint = evidence.get("durable_source_checkpoint")
+    exclusion = evidence.get("producer_exclusion")
+    if not isinstance(checkpoint, dict) or not isinstance(exclusion, dict):
+        raise RuntimeBlocked("published_open_checkpoint_unconfirmed")
+    topic = checkpoint.get("topic")
+    partition = checkpoint.get("partition")
+    notification = evidence["source_completion"]
+    lineage = exclusion.get("source_lineage")
+    if (not isinstance(topic, str) or not topic or topic in data_topics or topic == notification["notification_topic"]
+            or not isinstance(partition, dict) or set(partition) != {"runtime_cluster_id", "topic_incarnation_id", "partition"}
+            or not isinstance(partition["topic_incarnation_id"], str) or not partition["topic_incarnation_id"]
+            or type(partition["partition"]) is not int or partition["partition"] != 0
+            or any(partition["runtime_cluster_id"] != data.runtime_cluster_id
+                   or partition["topic_incarnation_id"] == data.topic_incarnation_id for data in data_partitions)
+            or partition["topic_incarnation_id"] == notification["notification_partition"]["topic_incarnation_id"]
+            or checkpoint.get("key") != [scope["connector_name"], {"server": scope["topic_prefix"]}]
+            or exclusion.get("slot") != scope["slot"] or exclusion.get("publication") != scope["publication"]
+            or not isinstance(lineage, list) or len(lineage) != 4
+            or any(not isinstance(value, str) or not value for value in lineage)):
+        raise RuntimeBlocked("published_open_checkpoint_unconfirmed")
+    value = checkpoint.get("value")
+    witness = checkpoint.get("wal_witness")
+    if (not isinstance(value, dict) or not isinstance(witness, dict) or value.get("messageType") != "COMMIT"
+            or any(type(value.get(key)) is not int for key in ("txId", "lsn", "lsn_proc", "lsn_commit"))
+            or any(type(witness.get(key)) is not int
+                   for key in ("xid", "wal_start", "wal_end", "commit_lsn", "previous_checkpoint_offset"))
+            or any(type(checkpoint.get(key)) is not int for key in ("offset", "eof"))
+            or type(exclusion.get("confirmed_flush_lsn")) is not int
+            or not 0 <= witness["previous_checkpoint_offset"] < checkpoint["offset"] < checkpoint["eof"]
+            or not 0 < witness["xid"] == value["txId"]
+            or not 0 < witness["wal_start"] < witness["wal_end"] <= exclusion["confirmed_flush_lsn"]
+            or not witness["wal_start"] <= witness["commit_lsn"] <= witness["wal_end"]
+            or not witness["commit_lsn"] == value["lsn"] == value["lsn_proc"] == value["lsn_commit"]):
+        raise RuntimeBlocked("published_open_checkpoint_unconfirmed")
+    return checkpoint
 
 
 class SourceDelivery:
@@ -138,28 +189,52 @@ class SourceDelivery:
                         or binding["topic_incarnation_id"] == notification["topic_incarnation_id"]):
                     raise RuntimeBlocked("delivery_snapshot_profile_mismatch")
 
-    def prepare(self, command):
-        if self.prepared_command == command:
-            return
+    def prepare(self, command) -> tuple[RetainedOpenCandidate, ...]:
+        """Prepare ordinary tables or recover the observed Source's sealed candidates."""
         self._load_installation()
         scope = command["published_scope"]
         self._validate_manifest(scope)
         authority = Authority(**_target_authority(command))
+        if authority.source_id != self.source_id or authority.runtime_instance_id != self.signals.runtime_instance_id:
+            raise RuntimeBlocked("delivery_current_authority_required")
         try:
-            opens = {opened["table_identity"]: opened for opened in current_open_preparations(
-                authority=authority, published_scope=scope,
-            )}
+            pending, applied = current_open_preparations(
+                authority=authority, published_scope=scope, observe_committed=self._observe_committed,
+            )
+            if applied:
+                manifest = {table["decoder"]["table_identity"]: table for table in self.manifest_tables}
+                data_topics = {table["topic"] for table in self.manifest_tables}
+                data_partitions = tuple(opened.binding.partition_identity for opened in applied)
+                candidates = []
+                prior_exclusion = None
+                for opened in applied:
+                    evidence = opened.observed.certificate["evidence"]
+                    checkpoint = _confirmed_checkpoint(evidence, self.profile.scope,
+                                                       data_topics=data_topics, data_partitions=data_partitions)
+                    exclusion = evidence["producer_exclusion"]
+                    if candidates and (checkpoint != candidates[0].source_checkpoint or exclusion != prior_exclusion):
+                        raise RuntimeBlocked("published_open_checkpoint_unconfirmed")
+                    prior_exclusion = exclusion
+                    candidates.append(self._resume_candidate(manifest[opened.binding.table_identity], opened, checkpoint))
+                self.tables = []
+                self.prepared_command = command
+                return tuple(candidates)
+            opens = {opened["table_identity"]: opened for opened in pending}
+            if (self.prepared_command == command and len(self.tables) == len(self.manifest_tables)
+                    and all(table.get("open") == opens.get(table["decoder"]["table_identity"]) for table in self.tables)):
+                return ()
             self.tables = [self._prepare_table(command, authority, table, opens.get(table["decoder"]["table_identity"]))
                            for table in self.manifest_tables]
         except (MirrorError, KeyError, TypeError, ValueError):
+            self.prepared_command = None
             raise RuntimeBlocked("open_generation_preparation_blocked") from None
+        except RuntimeBlocked:
+            self.prepared_command = None
+            raise
         self.prepared_command = command
+        return ()
 
-    def _prepare_table(self, command, authority, table, opened):
-        if opened is None:
-            if not {"authority", "generation_id"} <= table.keys():
-                raise RuntimeBlocked("current_mirror_open_required")
-            return table
+    def _manifest_binding(self, authority, table, *, table_identity, qualified_table, history_epoch):
         if set(table) != {"decoder", "partition_identity", "schema_fingerprint", "topic", "native_types", "start_offset"}:
             raise RuntimeBlocked("open_generation_manifest_required")
         if "capture_generation" in table["decoder"]:
@@ -171,14 +246,64 @@ class SourceDelivery:
         if set(native_types) != set(decoder.columns) or type(table["start_offset"]) is not int:
             raise RuntimeBlocked("open_generation_manifest_invalid")
         aliases = {"timestamp without time zone": "timestamp", "timestamp with time zone": "timestamptz"}
-        expected = OpenGenerationBinding(
-            authority=authority, object_id=opened["table_identity"], table_identity=decoder.table_identity,
-            qualified_table=opened["qualified_table"], history_epoch=opened["history_epoch"],
+        self._validate_topic(decoder, table["topic"], partition)
+        return decoder_data, OpenGenerationBinding(
+            authority=authority, object_id=table_identity, table_identity=decoder.table_identity,
+            qualified_table=qualified_table, history_epoch=history_epoch,
             schema_fingerprint=table["schema_fingerprint"],
             columns={name: aliases.get(native_types[name], native_types[name]) for name in decoder.columns},
             key_columns=tuple(decoder.key_fields), partition_identity=partition, start_offset=table["start_offset"],
         )
-        self._validate_topic(decoder, table["topic"], partition)
+
+    @contextmanager
+    def _observe_committed(self, **request):
+        try:
+            with self.engine.connect() as connection:
+                validate_target(connection.connection.driver_connection, expected_role="refraq_mirror_applier")
+            timeout_ms = self.settings["target"]["timeout_seconds"] * 1000
+            with Publication(self.engine, timeout_ms=timeout_ms).observe_committed(**request) as observed:
+                yield observed
+        except (MirrorError, RuntimeBlocked):
+            raise
+        except Exception:
+            raise RuntimeBlocked("published_open_target_unconfirmed") from None
+
+    def _resume_candidate(self, table, opened, checkpoint):
+        binding = opened.binding
+        expected = opened.identity
+        observed = opened.observed
+        _, manifest_binding = self._manifest_binding(
+            binding.authority, table, table_identity=binding.table_identity,
+            qualified_table=binding.qualified_table, history_epoch=binding.history_epoch,
+        )
+        if (manifest_binding != binding or tuple(manifest_binding.columns) != tuple(binding.columns)
+                or observed.allocation["native_types"] != table["native_types"]):
+            raise RuntimeBlocked("published_open_manifest_mismatch")
+        evidence = observed.certificate["evidence"]
+        profile = observed.allocation.get("anchored_profile")
+        seal = observed.allocation.get("anchored_seal")
+        seek = observed.applied_offset + 1
+        if (not isinstance(profile, dict) or profile.get("kind") != "disposable_read_committed_v1"
+                or type(profile.get("leader_epoch")) is not int or profile["leader_epoch"] < 0
+                or not isinstance(seal, dict) or seal != observed.allocation.get("anchored_coverage")
+                or seal != evidence.get("ordered_delivery_proof") or seal.get("authority") != asdict(binding.authority)
+                or type(seal.get("eof")) is not int or seal["eof"] != seek or seal.get("end") != seek
+                or evidence["end_offset"] != observed.applied_offset
+                or any(seal.get(bound) != dict(low=0, stable=seek, high=seek, leader_epoch=profile["leader_epoch"])
+                       for bound in ("before", "after"))):
+            raise RuntimeBlocked("published_open_seal_unconfirmed")
+        return RetainedOpenCandidate(opened.mirror_id, opened.operation_id, expected.generation_id, binding,
+                                     table["topic"], expected.certificate_ref, checkpoint, seek)
+
+    def _prepare_table(self, command, authority, table, opened):
+        if opened is None:
+            if not {"authority", "generation_id"} <= table.keys():
+                raise RuntimeBlocked("current_mirror_open_required")
+            return table
+        decoder_data, expected = self._manifest_binding(
+            authority, table, table_identity=opened["table_identity"], qualified_table=opened["qualified_table"],
+            history_epoch=opened["history_epoch"],
+        )
         request, proof, fence = self.signals.open_generation_proof(command, opened, table)
         if opened["assignment_fence_receipt"] is not None and opened["assignment_fence_receipt"] != fence:
             raise RuntimeBlocked("generation_assignment_fence_mismatch")
@@ -201,6 +326,8 @@ class SourceDelivery:
         return dict(installed, generation_id=generation_id)
 
     def _require_current_allocations(self, session, authority):
+        if not self.tables:
+            raise RuntimeBlocked("retained_position_resume_driver_required")
         allocations = [(table["open"], table["generation_id"]) for table in self.tables if "open" in table]
         if allocations:
             require_current_open_allocations(session, authority=Authority(**_target_authority(authority)),
@@ -282,6 +409,8 @@ class SourceDelivery:
                 or metadata["cleanup_pending"] is not False
                 or metadata["status"] not in {"building", "catching_up", "published"}):
             raise RuntimeBlocked("delivery_installed_metadata_mismatch")
+        if any(metadata.get(key) is not None for key in ("anchored_profile", "anchored_coverage", "anchored_seal")):
+            raise RuntimeBlocked("retained_position_resume_driver_required")
         self._validate_topic(decoder, binding.topic, binding.partition_identity)
         return binding, decoder, metadata
 

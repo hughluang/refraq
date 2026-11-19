@@ -1,6 +1,6 @@
 """Native target and protected runtime gates for open preparation."""
 
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import timedelta
@@ -10,6 +10,7 @@ import json
 import ssl
 from threading import Thread
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import uuid4
 
 from cryptography import x509
@@ -42,7 +43,7 @@ from backend.metadata.mirrors.history import History, SqlHistoryTarget
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.publication import Publication, persist_verified_certificate
 from backend.metadata.mirrors.schemas import MirrorResponse
-from backend.metadata.mirrors.types import Authority, PartitionIdentity, Record
+from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity, ReadCommittedBounds, Record, SealedScan
 from backend.tests.test_mirror_generation_allocation import target_dsn as target_dsn
 
 
@@ -220,7 +221,7 @@ def private_gateway(private, dispatch):
 
 
 def reconcile_open_publication_observation(transaction, target_dsn, restricted, tmp_path, mirror_id, attempt,
-                                           *, wrong_terminal):
+                                           *, wrong_terminal, rehydrate=None, checkpoint_fault=None):
     operation_id, generation_id = attempt
 
     def reconcile(expected, observer):
@@ -251,6 +252,42 @@ def reconcile_open_publication_observation(transaction, target_dsn, restricted, 
                        end_offset=-1, source_completion=source_completion, producer_exclusion="fixture-exclusion",
                        durable_source_checkpoint="fixture-checkpoint", ordered_delivery_proof="fixture-empty-delivery",
                        key_fingerprint="fixture-key", empty_table_proof=True)
+    if rehydrate is not None:
+        profile = AnchoredProfile(leader_epoch=3)
+        bounds = ReadCommittedBounds(low=0, stable=0, high=0, leader_epoch=3)
+        scan = SealedScan(start=0, end=0, before=bounds, after=bounds, offsets=(), eof=0)
+        with psycopg.connect(target_dsn) as connection:
+            connection.execute("UPDATE source_mirror_state.generations SET anchored_profile = %s::jsonb WHERE id = %s",
+                               (json.dumps(asdict(profile)), generation_id))
+        owner = create_engine("postgresql+psycopg://", creator=lambda: psycopg.connect(
+            target_dsn, options="-c role=refraq_mirror_owner",
+        ))
+        try:
+            assert Application(owner).apply_batch(
+                authority=authority, generation_id=generation_id, partition_identity=PartitionIdentity(**binding["data_partition"]),
+                records=[], anchored_profile=profile, scan=scan,
+            ) == {"offset": -1, "commit_seq": 0}
+        finally:
+            owner.dispose()
+        certificate.update(
+            ordered_delivery_proof=dict(asdict(scan), offsets=[], authority=asdict(authority)),
+            producer_exclusion=dict(network="fixture", peers=["broker", "postgres"], slot="capture_slot",
+                                    publication="capture_pub", source_lineage=["365", "1", "602", "4:7"],
+                                    confirmed_flush_lsn=130),
+            durable_source_checkpoint=dict(topic="offsets", key=["cap_one", {"server": "cap"}],
+                                           partition=dict(runtime_cluster_id="cluster", topic_incarnation_id="offsets", partition=0),
+                                           offset=7, eof=8,
+                                           value=dict(messageType="COMMIT", txId=55, lsn=123, lsn_proc=123, lsn_commit=123),
+                                           wal_witness=dict(xid=55, wal_start=120, wal_end=124, commit_lsn=123,
+                                                            previous_checkpoint_offset=5)),
+            empty_table_proof=dict(source_rows=0, exclusive_eof=0),
+        )
+        if checkpoint_fault == "malformed":
+            certificate["durable_source_checkpoint"].update(topic=12, value={"unrelated": "content"})
+        if checkpoint_fault == "contradictory":
+            certificate["durable_source_checkpoint"]["value"]["lsn_commit"] += 1
+        if checkpoint_fault == "alias":
+            certificate["durable_source_checkpoint"]["topic"] = source_completion["notification_topic"]
     publication = dict(operation_id=operation_id, generation_id=generation_id,
                        authority=authority, certificate=certificate)
     verifier = SimpleNamespace(verify=lambda **facts: "fixture-verifier" if facts == {
@@ -282,6 +319,10 @@ def reconcile_open_publication_observation(transaction, target_dsn, restricted, 
     assert service.get_mirror(mirror_id) == before
 
     assert publisher.publish_generation(**publication) == generation_id
+    if rehydrate is not None:
+        assert reconcile(expected, publisher.observe_committed) == "applied"
+        rehydrate(source_state["allocation"]["command"], expected, certificate)
+        return
     if wrong_terminal:
         with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
             reconcile(expected, publisher.observe_committed)
@@ -418,6 +459,10 @@ def reconcile_open_publication_observation(transaction, target_dsn, restricted, 
                                    "target_fence_drift", "withdraw_with_management_timeout",
                                    "snapshot_loss", "snapshot_loss_open_publication_observation",
                                    "snapshot_loss_open_publication_observation_wrong_terminal",
+                                   "snapshot_loss_open_publication_observation_rehydrate",
+                                   "snapshot_loss_open_publication_observation_rehydrate_malformed",
+                                   "snapshot_loss_open_publication_observation_rehydrate_contradictory",
+                                   "snapshot_loss_open_publication_observation_rehydrate_alias",
                                    "snapshot_wrong_table", "snapshot_wrong_signer",
                                    "snapshot_wrong_incarnation", "snapshot_replaced_relation", "snapshot_replacement_epoch"])
 def test_protected_executable_prepares_current_open(case, native_target, management, monkeypatch, tmp_path, request):
@@ -740,7 +785,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                      postgresql_profile=dict(scope=profile, tls=dict(sslmode="verify-full", sslrootcert=tls["ca_file"])),
                      readiness_policy=dict(runtime_instance_id="agent-one", max_age_seconds=30, required_checks=CHECKS),
                      credential_files=dict(directory=str(tmp_path), provider_directory="/private/capture"),
-                     delivery_settings_file=private("delivery.json", dict(target={}, tables=[manifest], kafka={},
+                     delivery_settings_file=private("delivery.json", dict(target={"timeout_seconds": 3}, tables=[manifest], kafka={},
                                                                            group_id="native", limits={}, max_age_seconds=30)),
                      owner_allocation_file=owner_request("first-owner", "agent-one"))
         if snapshots:
@@ -768,7 +813,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
         elif snapshots:
             assert runtime.main() == 0
             assert mutations == ["configure", "resume"] and len(submissions) == 1
-            entry.pop("owner_allocation_file")
+            owner_file = entry.pop("owner_allocation_file")
             private("runtime.json", config)
             if case == "snapshot_replaced_relation":
                 with psycopg.connect(source_dsn) as connection:
@@ -792,11 +837,120 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                     (submissions[0],),
                 ]
             if case.startswith("snapshot_loss_open_publication_observation"):
-                try:
+                with ExitStack() as agents:
+                    agents.callback(restricted.dispose)
+                    recover = None
+                    checkpoint_fault = None
+                    if "_rehydrate" in case:
+                        if not case.endswith("rehydrate"):
+                            checkpoint_fault = case.rsplit("_", 1)[1]
+                        journal = agents.enter_context(closing(runtime.CommandJournal(tmp_path)))
+                        http = agents.enter_context(closing(runtime.PrivateHTTP(**tls)))
+                        signals = runtime.ReadinessSignals(http, verifier=TRUST, scope=profile, **entry["readiness_policy"])
+
+                        def new_delivery(journal):
+                            return agents.enter_context(closing(delivery_composition.SourceDelivery(
+                                settings_file=entry["delivery_settings_file"], source_id=SOURCE, journal=journal,
+                                signals=signals, verifier=TRUST,
+                                profile=SimpleNamespace(scope=profile, snapshot=profile["snapshot"]),
+                            )))
+
+                        warm = new_delivery(journal)
+                        with transaction() as session:
+                            command = control.load_binding(session, SOURCE)["allocation"]["command"]
+                        assert not warm.prepare(command)
+                        assert len(warm.snapshot_bindings(command)) == 1
+
+                        def recover(command, expected, certificate):
+                            before = service.get_mirror(mirror_id)
+                            fresh_state = tmp_path / "fresh-state"
+                            fresh_state.mkdir(mode=0o700)
+                            fresh_journal = agents.enter_context(closing(runtime.CommandJournal(fresh_state)))
+                            with monkeypatch.context() as blocked:
+                                request_gateway = Mock()
+                                activate = Mock()
+                                blocked.setattr(http, "request", request_gateway)
+                                blocked.setattr(delivery_composition, "open_delivery", activate)
+                                connect, snapshot, credentials = Mock(), Mock(), Mock()
+                                captures = []
+                                for delivery in (warm, new_delivery(fresh_journal)):
+                                    capture = runtime.CaptureRuntime(
+                                        journal=delivery.journal, connect=connect, signals=signals, credentials=credentials,
+                                        delivery=delivery, prepare_delivery=delivery.prepare, snapshot=snapshot,
+                                    )
+                                    captures.append(capture)
+                                    if checkpoint_fault:
+                                        with pytest.raises(RuntimeBlocked, match="^published_open_checkpoint_unconfirmed$"):
+                                            capture.poll_once(SOURCE, owner_allocation_file=owner_file)
+                                        with pytest.raises(RuntimeBlocked, match="^snapshot_preparation_superseded$"):
+                                            delivery.snapshot_bindings(command)
+                                        continue
+                                    with pytest.raises(RuntimeBlocked, match="^retained_position_resume_driver_required$"):
+                                        capture.poll_once(SOURCE, owner_allocation_file=owner_file)
+                                    candidate, = delivery.prepare(command)
+                                    assert candidate.mirror_id == mirror_id
+                                    assert candidate.operation_id == attempts[-1][0]
+                                    assert candidate.binding.authority == expected.authority
+                                    assert candidate.generation_id == expected.generation_id
+                                    assert candidate.certificate_ref == expected.certificate_ref
+                                    assert candidate.binding.history_epoch == expected.history_epoch
+                                    assert candidate.source_checkpoint == certificate["durable_source_checkpoint"]
+                                    assert candidate.target_seek_offset == 0
+                                    assert delivery.snapshot_bindings(command) == []
+                                if checkpoint_fault:
+                                    for external in (connect, snapshot, credentials, request_gateway, activate):
+                                        assert external.mock_calls == []
+                                    return
+                                with psycopg.connect(target_dsn) as connection:
+                                    connection.execute(
+                                        "UPDATE source_mirror_state.generations SET anchored_coverage = NULL WHERE id = %s",
+                                        (expected.generation_id,),
+                                    )
+                                with pytest.raises(RuntimeBlocked, match="^published_open_seal_unconfirmed$"):
+                                    warm.prepare(command)
+                                with psycopg.connect(target_dsn) as connection:
+                                    connection.execute(
+                                        "UPDATE source_mirror_state.generations SET anchored_coverage = %s::jsonb WHERE id = %s",
+                                        (json.dumps(certificate["ordered_delivery_proof"]), expected.generation_id),
+                                    )
+                                    connection.execute(
+                                        "UPDATE source_mirror_state.mirrors SET published_generation_id = NULL WHERE id = %s",
+                                        (mirror_id,),
+                                    )
+                                for capture in captures:
+                                    with pytest.raises(RuntimeBlocked, match="^published_open_target_unconfirmed$"):
+                                        capture.poll_once(SOURCE, owner_allocation_file=owner_file)
+                                with psycopg.connect(target_dsn) as connection:
+                                    connection.execute(
+                                        "UPDATE source_mirror_state.mirrors SET published_generation_id = %s WHERE id = %s",
+                                        (expected.generation_id, mirror_id),
+                                    )
+                                    connection.execute(
+                                        "UPDATE source_mirror_state.certificates "
+                                        "SET evidence = evidence || '{\"key_fingerprint\": \"remapped\"}'::jsonb "
+                                        "WHERE operation_id = %s", (attempts[-1][0],),
+                                    )
+                                for capture in captures:
+                                    with pytest.raises(RuntimeBlocked, match="^open_generation_preparation_blocked$"):
+                                        capture.poll_once(SOURCE, owner_allocation_file=owner_file)
+                                    with pytest.raises(RuntimeBlocked, match="^snapshot_preparation_superseded$"):
+                                        capture.delivery.snapshot_bindings(command)
+                                for external in (connect, snapshot, credentials, request_gateway, activate):
+                                    assert external.mock_calls == []
+                            assert service.get_mirror(mirror_id) == before
+                            assert len(attempts) == len(submissions) == len(owner_receipts) == 1
+                            reads_before_stop = list(snapshot_reads)
+                            withdraw()
+                            stopping = runtime.CaptureRuntime(journal=journal, connect=Connect(http, "cap_one"),
+                                                              signals=signals, delivery=warm, prepare_delivery=warm.prepare,
+                                                              snapshot=snapshot)
+                            assert stopping.poll_once(SOURCE) == "applied"
+                            assert mutations == ["configure", "resume", "stop"] and snapshot_reads == reads_before_stop
+                            assert control.capture_status(SOURCE)["control"]["stop_ack"] is not None
+
                     reconcile_open_publication_observation(transaction, target_dsn, restricted, tmp_path, mirror_id,
-                                                           attempts[-1], wrong_terminal=case.endswith("wrong_terminal"))
-                finally:
-                    restricted.dispose()
+                                                           attempts[-1], wrong_terminal=case.endswith("wrong_terminal"),
+                                                           rehydrate=recover, checkpoint_fault=checkpoint_fault)
                 return
             reads_before_stop = list(snapshot_reads)
             withdraw()

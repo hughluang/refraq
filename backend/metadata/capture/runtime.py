@@ -179,7 +179,8 @@ class CaptureRuntime:
                     with source_control_transaction(source_id) as (session, source):
                         candidate = self._current_command(session, source, include_applied=True)
                     if candidate and candidate["kind"] == "reconcile":
-                        self.prepare_delivery(candidate)
+                        if self.prepare_delivery(candidate):
+                            raise RuntimeBlocked("retained_position_resume_driver_required")
                         prepared = candidate
                 except RuntimeBlocked as exc:
                     preparation_error = exc
