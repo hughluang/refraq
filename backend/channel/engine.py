@@ -18,7 +18,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from backend.channel.diagnostics import safe_result
 from backend.channel.graph import ancestor_closure, execution_sort_key, refine_ports
+from backend.channel.mirror_changes import is_mirror
 from backend.channel.node_support import (
     InputCapture,
     bind_execution_input,
@@ -75,6 +77,7 @@ class _Run:
         *,
         timeout_sec: int | None,
         clock: float,
+        protect_diagnostics: bool,
     ) -> None:
         self.nodes = {str(node["id"]): node for node in graph["nodes"]}
         self.by_type = by_type
@@ -83,6 +86,7 @@ class _Run:
         self.reachable = reachable
         self.timeout_sec = timeout_sec
         self.clock = clock
+        self.protect_diagnostics = protect_diagnostics
         self.links = _links(graph, self.nodes)
         self.outgoing: dict[str, list[int]] = {node_id: [] for node_id in self.nodes}
         self.incoming: dict[str, list[int]] = {node_id: [] for node_id in self.nodes}
@@ -345,7 +349,13 @@ class _Run:
     def _policy(self, node_id: str, result: NodeResult) -> RunOutcome | None:
         if result.status != "failed":
             return None
-        policy = self.nodes[node_id].get("on_error") or "stop"
+        node = self.nodes[node_id]
+        if (node["type"] in {"read.changes", "volume.changes_dataset"}
+                and is_mirror(node.get("config") or {})
+                and result.error_code in {"CHANNEL_CHECKPOINT_INVALID", "MIRROR_HISTORY_INVALID",
+                                          "MIRROR_READ_UNAVAILABLE", "AUTH_FORBIDDEN"}):
+            return self._failure(node_id, result)
+        policy = node.get("on_error") or "stop"
         if policy == "continue":
             result.output = None
             return None
@@ -372,8 +382,11 @@ class _Run:
             try:
                 result = self._invoke(node_id, node, spec, seq)
             except _RoundStopped as stopped:
-                self.hooks.on_finish(seq, node, _round_stop_result(stopped))
+                result = _round_stop_result(stopped)
+                self.hooks.on_finish(seq, node, safe_result(result) if self.protect_diagnostics else result)
                 raise
+            if self.protect_diagnostics:
+                result = safe_result(result)
             if result.status == "skipped" and result.output is None:
                 result.output = {"skipped": True, "reason": result.error_message}
             return seq, result
@@ -515,6 +528,8 @@ class _ContainerBody:
         if error is None:
             entry: Any = {"value": value}
         else:
+            if self._run.protect_diagnostics:
+                error = safe_result(error)
             entry = {"error": {"code": error.error_code, "message": error.error_message}}
         self._run.hooks.note_round_template(self._seq, self._index, path, entry)
         return value, error
@@ -530,6 +545,7 @@ def execute(
     timeout_sec: int | None = None,
     started: float | None = None,
     stop_at_node_id: str | None = None,
+    protect_diagnostics: bool = False,
 ) -> RunOutcome:
     nodes = {str(node["id"]): node for node in graph["nodes"]}
     if trigger_node_id not in nodes:
@@ -553,6 +569,7 @@ def execute(
         reachable,
         timeout_sec=timeout_sec,
         clock=clock,
+        protect_diagnostics=protect_diagnostics,
     )
     outcome = runner.walk(reachable, start=trigger_node_id)
     if outcome is not None:

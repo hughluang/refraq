@@ -20,6 +20,7 @@ from backend.channel.models import ChannelCheckpointRow
 from backend.channel.run_store import get_run_store
 from backend.core.config import get_settings
 from backend.core.db import session_scope
+from backend.core.errors import AppError
 from backend.core.time import utc_now
 from backend.entity.changes import capture_bound, commit_seq_ready, legacy_commit_position
 from backend.metadata.mirrors.history import settlement_guard
@@ -308,6 +309,11 @@ def advance_from_run(run: Any) -> None:
         store.advance(run.channel_id, node_id, stream, position)
 
 
+class MirrorCheckpointInvalid(AppError):
+    code = "CHANNEL_CHECKPOINT_INVALID"
+    http_status = 409
+
+
 def advance_from_run_in_session(session: Any, run: Any) -> None:
     """Validate all Mirror gates before updating cursors; never commit the session."""
     if getattr(run, "outcome", None) != "completed" or getattr(
@@ -364,9 +370,7 @@ def advance_from_run_in_session(session: Any, run: Any) -> None:
                     or current["history_epoch"] != position.history_epoch
                     or set(source_ids or ()) != set(position.source_ids)
                 ):
-                    raise ValueError(
-                        "Mirror checkpoint epoch or Source provenance mismatch"
-                    )
+                    raise MirrorCheckpointInvalid()
             session.execute(
                 _ADVANCE_MIRROR,
                 dict(

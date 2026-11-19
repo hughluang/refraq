@@ -10,6 +10,7 @@ from backend.channel.models import ChannelRunRow
 from backend.core.db import session_scope
 from backend.channel.checkpoints import advance_from_run
 from backend.channel.dataset_registry import drop_datasets_for_jobs
+from backend.channel.diagnostics import job_diagnostics_protected
 from backend.channel.mirror_reads import require_run_data_access, release_completed_run
 from backend.core.errors import AppError
 from backend.channel.run_store import get_run_store
@@ -233,10 +234,13 @@ def _queue_retry(job: JobRecord, run: Any) -> None:
         )
         channel_run.dispatch(queued.id)
     except Exception as exc:
+        message = "Retry run was not queued"
+        if not job_diagnostics_protected(job, run):
+            message = f"{message}: {exc}"
         append_job_log(
             job.id,
             level="error",
-            message=f"Retry run was not queued: {exc}",
+            message=message,
         )
 
 
@@ -292,10 +296,13 @@ def _start_error_workflow(
         )
         channel_run.dispatch(queued.id)
     except Exception as exc:
+        message = "Error workflow was not queued"
+        if not job_diagnostics_protected(job, run):
+            message = f"{message}: {exc}"
         append_job_log(
             job.id,
             level="error",
-            message=f"Error workflow was not queued: {exc}",
+            message=message,
         )
 
 

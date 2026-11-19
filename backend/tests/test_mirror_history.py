@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
+from backend.metadata.mirrors import history as history_api
 from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorRow
@@ -25,6 +26,11 @@ class Target:
         self.calls = []
         self.fail = False
         self.applied = {}
+        self.entries = {mid: [dict(
+            position=point(mid, seq=1, entry=1), origin="live", operation="upsert",
+            source_id="source", generation_id="generation", capture_generation="capture",
+            typed_key={"id": 7}, before=None, after={"secret": "image"},
+        )] for mid in self.bounds}
 
     def capture_bound(self, *, mirror_id):
         self.calls.append(mirror_id)
@@ -33,9 +39,13 @@ class Target:
         return deepcopy(self.bounds[mirror_id])
 
     def read_incremental(self, *, mirror_id, after, through, limit):
-        return dict(self.capture_bound(mirror_id=mirror_id), entries=[
-            dict(position=point(mirror_id, seq=1, entry=1), origin="live", before=None, after={"secret": "image"})
-        ], next_position=through)
+        def cursor(position):
+            return position["commit_seq"], position["entry_seq"]
+
+        entries = [entry for entry in self.entries[mirror_id]
+                   if cursor(after) < cursor(entry["position"]) <= cursor(through)][:limit]
+        next_position = entries[-1]["position"] if len(entries) == limit else through
+        return dict(self.capture_bound(mirror_id=mirror_id), entries=deepcopy(entries), next_position=next_position)
 
     def invalidate(self, *, operation_id, transitions):
         if self.fail:
@@ -78,10 +88,33 @@ def proposal(mid="a", epoch="epoch"):
     return dict(mirror_id=mid, history_epoch=epoch, position=point(mid, epoch, 2, 1), source_ids=["source"])
 
 
+@pytest.mark.parametrize("metadata_epoch", ["epoch", None, "different"])
+def test_bound_api_admits_missing_gate_only_with_metadata_target_agreement(setup_history, monkeypatch, metadata_epoch):
+    history, factory, target, auth = setup_history
+    monkeypatch.setattr(history_api, "_history", history)
+    with factory.begin() as session:
+        session.delete(session.get(HistoryGateRow, "a"))
+        session.get(MirrorRow, "a").state = {"history_epoch": metadata_epoch}
+    if metadata_epoch != "epoch":
+        with pytest.raises(MirrorError):
+            history_api.capture_bound(mirror_id="a", execution_user_id="user")
+        with factory() as session:
+            assert session.get(HistoryGateRow, "a") is None
+    else:
+        bound = history_api.capture_bound(mirror_id="a", execution_user_id="user")
+        page = history_api.read_incremental(mirror_id="a", execution_user_id="user",
+                                           after=bound["lower_bound"], through=bound["upper_bound"], limit=10)
+        assert page["source_ids"] == ["source"]
+        with factory() as session:
+            assert session.get(HistoryGateRow, "a").history_epoch == "epoch"
+
+
 def test_pages_and_final_settlement_reauthorize(setup_history):
     history, factory, target, auth = setup_history
     bound = history.capture_bound(mirror_id="a", execution_user_id="user")
     page = history.read_incremental(mirror_id="a", execution_user_id="user", after=bound["lower_bound"], through=bound["upper_bound"], limit=10)
+    assert auth["calls"][0]["execution_user_id"] == "user"
+    assert auth["calls"][0]["session"].bind is factory.kw["bind"]
     assert page["source_ids"] == ["source"]
     assert page["entries"][0]["after"] == {"secret": "image"}
     auth["allowed"] = False
@@ -90,6 +123,37 @@ def test_pages_and_final_settlement_reauthorize(setup_history):
     assert error.value.code == "AUTH_FORBIDDEN"
     with pytest.raises(MirrorError):
         history.read_incremental(mirror_id="a", execution_user_id="user", after=bound["lower_bound"], through=bound["upper_bound"], limit=10)
+
+
+@pytest.mark.parametrize("writer_verb,before,after,operation", [
+    ("upsert", None, {"tenant": "x", "id": 7, "value": None}, "insert"),
+    ("upsert", {"tenant": "x", "id": 7, "value": None}, {"tenant": "x", "id": 7, "value": "new"}, "update"),
+    ("delete", {"tenant": "x", "id": 7, "value": "old"}, None, "delete"),
+])
+def test_authorized_history_projects_effective_writer_operation(setup_history, writer_verb, before, after, operation):
+    history, _, target, _ = setup_history
+    stored = target.entries["a"][0]
+    stored.update(operation=writer_verb, before=before, after=after, typed_key={"tenant": "x", "id": 7})
+    bound = history.capture_bound(mirror_id="a", execution_user_id="user")
+
+    page = history.read_incremental(mirror_id="a", execution_user_id="user",
+                                    after=bound["lower_bound"], through=bound["upper_bound"], limit=1)
+
+    assert page["entries"] == [dict(stored, operation=operation)]
+    assert page["next_position"] == stored["position"]
+    assert stored["operation"] == writer_verb
+
+
+def test_authorized_history_rejects_entry_with_no_images(setup_history):
+    history, _, target, _ = setup_history
+    target.entries["a"][0].update(operation="delete", before=None, after=None)
+    bound = history.capture_bound(mirror_id="a", execution_user_id="user")
+
+    with pytest.raises(MirrorError) as error:
+        history.read_incremental(mirror_id="a", execution_user_id="user",
+                                 after=bound["lower_bound"], through=bound["upper_bound"], limit=10)
+
+    assert error.value.code == "MIRROR_HISTORY_INVALID"
 
 
 def test_sorted_locks_same_transaction_and_no_commit(setup_history):

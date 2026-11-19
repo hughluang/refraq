@@ -9,7 +9,12 @@ from backend.metadata.mirrors.service import MirrorError
 __all__ = ["authorize_source_data"]
 
 
-def authorize_source_data(*, execution_user_id: str, source_id: str) -> None:
+def authorize_source_data(*, execution_user_id: str, source_id: str, session=None) -> None:
+    if session is not None:
+        source_access.authorize_source_read_on(
+            session=session, execution_user_id=execution_user_id, source_id=source_id,
+        )
+        return
     user = get_user_store().get_by_id(execution_user_id)
     if user is None or user.status != "active" or user.identity_source == "system":
         raise MirrorError("AUTH_FORBIDDEN", 403)

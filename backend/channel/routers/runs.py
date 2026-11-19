@@ -16,7 +16,13 @@ from backend.channel.errors import (
     ChannelRequestInvalid,
     ChannelRunNotFound,
 )
-from backend.channel.mirror_reads import require_run_data_access
+from backend.channel.diagnostics import (
+    job_diagnostics_protected,
+    public_error,
+    require_followup_access,
+    safe_diagnostics_stored,
+)
+from backend.channel.mirror_reads import MirrorDataForbidden
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import NodeType
 from backend.channel.run_store import (
@@ -272,7 +278,7 @@ def http_list_executions(
     status: Literal["running", "succeeded", "failed", "skipped", "cancelled"] | None = None,
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> dict[str, Any]:
-    require_run_data_access(_owned(channel_id, job_id), _actor.id)
+    run, protect = _payload_access(channel_id, job_id, _actor.id)
     items, total = get_run_store().query_executions(
         job_id,
         node_id=node_id,
@@ -283,7 +289,8 @@ def http_list_executions(
         offset=page.offset,
     )
     return {
-        "items": [_execution_body(item) for item in items],
+        "items": [_execution_body(item, protect=protect,
+                                  include_payload=not protect or safe_diagnostics_stored(run)) for item in items],
         "total": total,
         "limit": page.limit,
         "offset": page.offset,
@@ -300,7 +307,7 @@ def http_execution_output(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
-    require_run_data_access(_owned(channel_id, job_id), _actor.id)
+    _require_stored_payload(channel_id, job_id, _actor.id)
     record = get_run_store().get_execution(job_id, seq)
     if record is None:
         raise ChannelRunNotFound()
@@ -318,8 +325,7 @@ def http_execution_rounds(
     _actor: UserRecord = Depends(require_permission("channel:read")),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> dict[str, Any]:
-    run = _owned(channel_id, job_id)
-    require_run_data_access(run, _actor.id)
+    run = _require_stored_payload(channel_id, job_id, _actor.id)
     record = get_run_store().get_execution(job_id, seq)
     if record is None:
         raise ChannelRunNotFound()
@@ -347,7 +353,7 @@ def http_dataset_rows(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
     """Page dataset rows. This read does not consult the capacity ceiling."""
-    require_run_data_access(_owned(channel_id, job_id), _actor.id)
+    _require_stored_payload(channel_id, job_id, _actor.id)
     record = get_dataset_store().get(dataset_id)
     if record is None:
         raise ChannelDatasetUnavailable("not_found")
@@ -385,7 +391,7 @@ def http_preview_template(
     body: TemplatePreviewRequest,
     _actor: UserRecord = Depends(require_permission("channel:write")),
 ) -> dict[str, Any]:
-    require_run_data_access(_owned(channel_id, job_id), _actor.id)
+    _require_stored_payload(channel_id, job_id, _actor.id)
     return preview_template(
         channel_id=channel_id,
         job_id=job_id,
@@ -409,7 +415,7 @@ def http_node_sample(
     catalog: Sequence[NodeType] = Depends(get_node_catalog),
 ) -> dict[str, Any]:
     """Read a Node Sample. The request executes no node and writes nothing."""
-    require_run_data_access(_owned(channel_id, job_id), _actor.id)
+    _require_stored_payload(channel_id, job_id, _actor.id)
     return node_sample(
         channel_id=channel_id,
         job_id=job_id,
@@ -421,10 +427,16 @@ def http_node_sample(
     )
 
 
-def _execution_body(item: NodeExecutionRecord) -> dict[str, Any]:
-    preview, truncated = output_preview_with_truncated(item.output)
+def _execution_body(item: NodeExecutionRecord, *, protect: bool, include_payload: bool) -> dict[str, Any]:
+    error_code, error_message = item.error_code, item.error_message
+    if protect and (error_code is not None or error_message is not None):
+        error_code, error_message = public_error(error_code, fallback=(
+            "CHANNEL_NODE_SKIPPED" if item.status == "skipped" else "CHANNEL_NODE_FAILED"
+        ))
+    preview, truncated = output_preview_with_truncated(item.output if include_payload else None)
+    input_totals = item.input_totals if include_payload else {}
     input_preview, input_truncated = output_preview_with_truncated(
-        item.input, totals=item.input_totals
+        item.input if include_payload else None, totals=input_totals
     )
     return {
         "seq": item.seq,
@@ -434,17 +446,17 @@ def _execution_body(item: NodeExecutionRecord) -> dict[str, Any]:
         "status": item.status,
         "started_at": format_instant(item.started_at) if item.started_at else None,
         "finished_at": format_instant(item.finished_at) if item.finished_at else None,
-        "output_bytes": item.output_bytes,
+        "output_bytes": item.output_bytes if include_payload else 0,
         "output_preview": preview,
         "output_truncated": truncated,
         "input_preview": input_preview,
         "input_truncated": input_truncated,
-        "input_totals": item.input_totals,
-        "preview_only": item.preview_only,
-        "preview_totals": item.preview_totals,
-        "error_code": item.error_code,
-        "error_message": item.error_message,
-        "error_detail": item.error_detail,
+        "input_totals": input_totals,
+        "preview_only": item.preview_only if include_payload else False,
+        "preview_totals": item.preview_totals if include_payload else {},
+        "error_code": error_code,
+        "error_message": error_message,
+        "error_detail": None if protect else item.error_detail,
     }
 
 
@@ -486,6 +498,22 @@ def _owned(channel_id: str, job_id: str) -> Any:
     if record is None or record.channel_id != channel_id:
         raise ChannelRunNotFound()
     return record
+
+
+def _payload_access(channel_id: str, job_id: str, user_id: str) -> tuple[Any, bool]:
+    run = _owned(channel_id, job_id)
+    job = get_job_store().get(job_id)
+    if job is None:
+        raise MirrorDataForbidden()
+    require_followup_access(job, run, user_id)
+    return run, job_diagnostics_protected(job, run)
+
+
+def _require_stored_payload(channel_id: str, job_id: str, user_id: str) -> Any:
+    run, protect = _payload_access(channel_id, job_id, user_id)
+    if protect and not safe_diagnostics_stored(run):
+        raise MirrorDataForbidden()
+    return run
 
 
 def _snapshot_nodes(graph: Any) -> list[dict[str, str]]:
@@ -532,6 +560,10 @@ def _present(
     names: Mapping[str, tuple[str | None, str | None]],
 ) -> dict[str, Any]:
     actor_name, schedule_name = names[job.id]
+    error_code, error_message = job.error_code, job.error_summary
+    if job_diagnostics_protected(job, record) and (error_code is not None or error_message is not None):
+        error_code, error_message = public_error(error_code)
+    state = record.mirror_state
     return {
         "job_id": job.id,
         "status": job.status,
@@ -546,7 +578,8 @@ def _present(
         "trigger_schedule_name": schedule_name,
         "ignore_checkpoints": record.ignore_checkpoints,
         "mirror_execution_user_id": record.mirror_execution_user_id,
-        "mirror_state": record.mirror_state,
+        "mirror_state": ({key: state[key] for key in ("source_ids", "pins", "freshness", "history_bounds", "terminal_seal")
+                          if key in state} if isinstance(state, dict) else None),
         "stop_at_node_id": record.stop_at_node_id,
         "failed_node_id": record.failed_node_id,
         "stopped_node_id": record.stopped_node_id,
@@ -555,6 +588,6 @@ def _present(
         "scheduled_for": format_instant(job.scheduled_for) if job.scheduled_for else None,
         "started_at": format_instant(job.started_at) if job.started_at else None,
         "finished_at": format_instant(job.finished_at) if job.finished_at else None,
-        "error_code": job.error_code,
-        "error_message": job.error_summary,
+        "error_code": error_code,
+        "error_message": error_message,
     }

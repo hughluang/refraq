@@ -139,12 +139,13 @@ def _jobs(channel_id: str, trigger_kind: str) -> list:
 
 def test_pinned_run_keeps_its_version_when_a_newer_one_is_published() -> None:
     channel = _publish("Pin", _graph("return {'n': 1}", limit=0, error_channel_id=None))
+    parent_id = _run_published(channel)
     _republish(channel.id, _graph("return {'n': 2}", limit=0, error_channel_id=None))
     job, _record = mint_followup_run(
         channel_id=channel.id,
         channel_name=channel.name,
         trigger_kind="retry",
-        trigger_ref="job_origin",
+        trigger_ref=parent_id,
         trigger_node="nd_trigger",
         version=1,
         job_input={
@@ -153,7 +154,7 @@ def test_pinned_run_keeps_its_version_when_a_newer_one_is_published() -> None:
             "ignore_checkpoints": False,
             "pin_version": True,
             "version": 1,
-            "retry_of_job_id": "job_origin",
+            "retry_of_job_id": parent_id,
         },
     )
     assert run_channel_job(job.id) == {"status": "succeeded"}
@@ -169,22 +170,25 @@ def test_pinned_run_keeps_its_version_when_a_newer_one_is_published() -> None:
 
 def test_missing_pinned_version_cancels_the_run() -> None:
     channel = _publish("Missing pin", _graph("return {'n': 1}", limit=0, error_channel_id=None))
+    parent_id = _run_published(channel)
     job, _record = mint_followup_run(
         channel_id=channel.id,
         channel_name=channel.name,
         trigger_kind="retry",
-        trigger_ref="job_origin",
+        trigger_ref=parent_id,
         trigger_node="nd_trigger",
-        version=9,
+        version=1,
         job_input={
             "channel_id": channel.id,
             "target": "published",
             "ignore_checkpoints": False,
             "pin_version": True,
-            "version": 9,
-            "retry_of_job_id": "job_origin",
+            "version": 1,
+            "retry_of_job_id": parent_id,
         },
     )
+    job.input["version"] = 9
+    get_job_store().save(job)
     assert run_channel_job(job.id) == {"status": "cancelled"}
     followups, _total = get_job_store().list(kind="channel_run", trigger_ref=job.id)
     assert followups == []
@@ -262,21 +266,28 @@ def test_error_run_does_not_start_another_run() -> None:
             },
         )
         source = _publish("Source", _graph("return {'n': 1}", limit=0, error_channel_id=None))
+        source_id = _run_published(source)
         job, _record = mint_followup_run(
             channel_id=error.id,
             channel_name=error.name,
             trigger_kind="error",
-            trigger_ref="job_source",
+            trigger_ref=source_id,
             trigger_node="nd_error",
             version=None,
             job_input={
                 "channel_id": error.id,
                 "target": "published",
                 "ignore_checkpoints": False,
-                "error_source": {"channel_id": source.id, "job_id": "job_source"},
+                "error_source": {
+                    "channel_id": source.id, "channel_name": source.name, "job_id": source_id,
+                    "version": 1, "attempt": 1,
+                    "error": {"code": "CHANNEL_NODE_FAILED", "message": "Source failed", "node_id": "nd_code"},
+                    "triggered_by": None, "triggered_at": "2026-01-01T00:00:00Z",
+                },
             },
         )
         assert run_channel_job(job.id) == {"status": "failed"}
+        assert get_run_store().get_run(job.id).failed_node_id == "nd_code"
         followups, _total = get_job_store().list(kind="channel_run", trigger_ref=job.id)
         assert followups == []
         assert get_channel_store().get(source.id).failure_streak == 0

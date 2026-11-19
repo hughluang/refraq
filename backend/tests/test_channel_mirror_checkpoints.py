@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session
 
 from backend.channel import checkpoints
+from backend.tests.test_mirror_history import setup_history as setup_history
 
 
 def mirror_run():
@@ -138,3 +139,157 @@ def test_mirror_run_proposals_retain_epoch_and_provenance(monkeypatch):
     }}}]
     restored = checkpoints.RunCheckpoints("chn_a", run)
     assert restored.proposed("node_a", "mir_a") == positions.proposed("node_a", "mir_a")
+
+
+@pytest.fixture
+def worker_history(setup_history, monkeypatch):
+    from backend.channel import channel_run, mirror_reads, runner
+
+    history, factory, target, auth = setup_history
+    monkeypatch.setattr(channel_run, "authorize_graph", lambda *args, **kw: None)
+    monkeypatch.setattr(runner, "authorize_graph", lambda *args, **kw: None)
+    monkeypatch.setattr(mirror_reads, "_reads", object())
+    monkeypatch.setattr(mirror_reads, "_authorize", lambda *_: None)
+    monkeypatch.setattr(mirror_reads, "capture_bound", history.capture_bound)
+    monkeypatch.setattr(mirror_reads, "read_incremental", history.read_incremental)
+    monkeypatch.setattr(checkpoints, "settlement_guard", history.settlement_guard)
+    return factory, target, auth
+
+
+def publish_incremental_graph(*, second_policy=None, second_type="read.changes"):
+    from backend.tests.test_channel_recovery import _graph, _node, _publish
+
+    graph = _graph("return {}", limit=0, error_channel_id=None)
+    graph["nodes"][1] = _node("nd_code", "first", "read.changes", {"source": {"kind": "mirror", "mirror_id": "a"}})
+    if second_policy is not None:
+        second = _node("nd_second", "second", second_type, {"source": {"kind": "mirror", "mirror_id": "b"}})
+        graph["nodes"].append({**second, "on_error": second_policy})
+        graph["edges"].append({"id": "ed_first_second", "source": {"node_id": "nd_code", "port": "main"},
+                               "target": {"node_id": "nd_second", "port": "main"}})
+    return _publish("Incremental checkpoint settlement", graph)
+
+
+@pytest.mark.parametrize("policy", ["continue", "error_output"])
+@pytest.mark.parametrize("second_type", ["read.changes", "volume.changes_dataset"])
+@pytest.mark.parametrize("failure,expected_code", [
+    ("invalidation", "MIRROR_HISTORY_INVALID"),
+    ("outage", "MIRROR_READ_UNAVAILABLE"),
+    ("revocation", "AUTH_FORBIDDEN"),
+    ("durable_lineage", "CHANNEL_CHECKPOINT_INVALID"),
+])
+def test_mirror_history_failure_blocks_settlement(worker_history, monkeypatch, policy, second_type, failure, expected_code):
+    from backend.channel import runner
+    from backend.channel.run_store import get_run_store
+    from backend.jobs.store import get_job_store
+    from backend.metadata.mirrors.history_models import HistoryGateRow
+    from backend.tests.test_channel_recovery import _run_published
+
+    factory, target, auth = worker_history
+    if failure == "invalidation":
+        with factory.begin() as session:
+            session.get(HistoryGateRow, "b").status = "invalidating"
+    elif failure == "durable_lineage":
+        monkeypatch.setattr(checkpoints.RunCheckpoints, "durable", lambda self, node_id, stream: (
+            checkpoints.MirrorCheckpointPosition("old_epoch", 0, 0, ("source",)) if stream == "b" else None
+        ))
+    else:
+        original_read = target.read_incremental
+
+        def read(**kwargs):
+            page = original_read(**kwargs)
+            target.fail = failure == "outage"
+            auth["allowed"] = failure != "revocation"
+            return page
+
+        monkeypatch.setattr(target, "read_incremental", read)
+    settlements = []
+    monkeypatch.setattr(runner, "complete_mirror_success", lambda *args: settlements.append(args))
+    channel = publish_incremental_graph(second_policy=policy, second_type=second_type)
+    job_id = _run_published(channel)
+
+    run = get_run_store().get_run(job_id)
+    assert "a" in run.checkpoint_proposals["nd_code"]
+    assert run.failed_node_id == "nd_second"
+    assert get_job_store().get(job_id).error_code == expected_code
+    assert get_run_store().get_execution(job_id, 3).output is None
+    assert not settlements
+
+
+@pytest.mark.parametrize("failure,expected_code", [
+    ("invalidation", "MIRROR_HISTORY_INVALID"),
+    ("retention", "MIRROR_HISTORY_INVALID"),
+    ("outage", "MIRROR_READ_UNAVAILABLE"),
+    ("revocation", "AUTH_FORBIDDEN"),
+    ("durable_lineage", "CHANNEL_CHECKPOINT_INVALID"),
+])
+def test_final_settlement_preserves_failure_and_rolls_back(worker_history, monkeypatch, failure, expected_code):
+    from backend.channel import runner
+    from backend.channel.run_store import get_run_store
+    from backend.jobs.store import get_job_store
+    from backend.metadata.mirrors.history_models import HistoryGateRow
+    from backend.tests.test_channel_recovery import _run_published
+
+    factory, target, auth = worker_history
+    engine = factory.kw["bind"]
+
+    @event.listens_for(engine, "before_cursor_execute", retval=True)
+    def sqlite_syntax(connection, cursor, statement, parameters, context, many):
+        return statement.replace(" FOR UPDATE", "").replace("CAST(? AS jsonb)", "?"), parameters
+
+    with factory.begin() as session:
+        session.execute(text("CREATE TABLE job_success (job_id TEXT PRIMARY KEY)"))
+        session.execute(text("CREATE TABLE channel_checkpoints (channel_id TEXT, node_id TEXT, "
+                             "stream TEXT, stream_kind TEXT, history_epoch TEXT, source_ids JSON, "
+                             "position_xact BIGINT, position_seq BIGINT, updated_at TEXT, "
+                             "PRIMARY KEY(channel_id, node_id, stream))"))
+
+    channel = publish_incremental_graph(second_policy="stop" if failure == "durable_lineage" else None)
+    if failure == "durable_lineage":
+        with factory.begin() as session:
+            session.execute(text("INSERT INTO channel_checkpoints "
+                                 "(channel_id, node_id, stream, stream_kind, history_epoch, source_ids) "
+                                 "VALUES (:channel, 'nd_second', 'b', 'mirror', 'old_epoch', :sources)"),
+                            {"channel": channel.id, "sources": '["source"]'})
+
+    scope_calls = []
+    earlier_writes = []
+
+    @event.listens_for(engine, "after_cursor_execute")
+    def record_checkpoint_write(connection, cursor, statement, parameters, context, many):
+        if statement.startswith("INSERT INTO channel_checkpoints"):
+            earlier_writes.append(cursor.rowcount)
+
+    def settlement_scope():
+        scope_calls.append("settlement")
+        with factory.begin() as session:
+            gate = session.get(HistoryGateRow, "a")
+            if failure == "invalidation":
+                gate.status = "invalidating"
+            elif failure == "retention":
+                gate.lower_commit_seq = 3
+                target.bounds["a"]["lower_bound"]["commit_seq"] = 3
+                target.bounds["a"]["upper_bound"]["commit_seq"] = 3
+        target.fail = failure == "outage"
+        auth["allowed"] = failure != "revocation"
+        return factory.begin()
+
+    def record_success(job_id, *, result, session):
+        session.execute(text("INSERT INTO job_success VALUES (:job_id)"), {"job_id": job_id})
+        return SimpleNamespace(status="succeeded")
+
+    monkeypatch.setattr(runner, "session_scope", settlement_scope)
+    monkeypatch.setattr(runner, "mark_succeeded", record_success)
+    job_id = _run_published(channel)
+
+    assert scope_calls == ["settlement"]
+    read = get_run_store().get_execution(job_id, 2)
+    assert read.status == "succeeded"
+    assert read.output["count"] == 1
+    job = get_job_store().get(job_id)
+    assert job.status == "failed"
+    assert job.error_code == expected_code
+    assert earlier_writes == ([1] if failure == "durable_lineage" else [])
+    with factory.begin() as session:
+        assert session.scalar(text("SELECT count(*) FROM job_success")) == 0
+        rows = list(session.execute(text("SELECT stream, history_epoch FROM channel_checkpoints")))
+        assert rows == ([("b", "old_epoch")] if failure == "durable_lineage" else [])

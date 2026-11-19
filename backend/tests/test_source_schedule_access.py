@@ -19,6 +19,7 @@ from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E
 from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
+from backend.channel.run_store import ChannelRunRecord, get_run_store  # noqa: E402
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
 from backend.jobs.store import create_queued_job, get_job_store, reset_job_store  # noqa: E402
@@ -607,8 +608,16 @@ def test_job_detail_logs_and_cancel_follow_the_stamp(client: TestClient) -> None
     plain = create_queued_job(
         kind="channel_run",
         input={"channel_id": "chn_1", "target": "draft"},
+        trigger_kind="user",
+        trigger_ref="usr_author",
         log_body="2026-01-01T00:00:00Z INFO plain",
     )
+    get_run_store().insert_run(ChannelRunRecord(
+        job_id=plain.id, channel_id="chn_1", target="draft", draft_revision=1, version=None,
+        graph={"nodes": [{"id": "trigger", "type": "trigger.manual", "config": {}}], "edges": [], "settings": {}},
+        trigger_node_id="trigger", ignore_checkpoints=False, outcome=None, failed_node_id=None,
+        skipped_node_ids=[], created_at=plain.created_at,
+    ))
     assert client.get(f"/jobs/{hidden.id}").status_code == 200
 
     role_id = _collector_role()
@@ -627,6 +636,7 @@ def test_job_detail_logs_and_cancel_follow_the_stamp(client: TestClient) -> None
 
     detail = client.get(f"/jobs/{plain.id}")
     assert detail.status_code == 200, detail.text
+    assert detail.json()["job"]["input"] == {"channel_id": "chn_1", "target": "draft"}
     logs = client.get(f"/jobs/{plain.id}/logs")
     assert logs.status_code == 200, logs.text
     assert "INFO plain" in logs.json()["body"]

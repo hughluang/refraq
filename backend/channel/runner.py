@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -9,8 +10,17 @@ from backend.admin.user_store import get_user_store
 from backend.channel import channel_run
 from backend.channel.dataset_registry import seal_dataset_expiry
 from backend.channel.checkpoints import advance_from_run_in_session
-from backend.channel.mirror_reads import mirror_graph, require_run_data_access, authorize_graph
+from backend.channel.diagnostics import (
+    DIAGNOSTICS_VERSION,
+    error_lineage_verified,
+    job_diagnostics_protected,
+    protected_run,
+    public_error,
+    safe_diagnostics_stored,
+)
+from backend.channel.mirror_reads import MirrorDataForbidden, mirror_graph, require_run_data_access, authorize_graph
 from backend.core.db import session_scope
+from backend.core.errors import AppError
 from backend.channel import recovery
 from backend.channel.run_store import get_run_store, note_killed_run
 from backend.channel.sandbox import SandboxFailed
@@ -27,6 +37,7 @@ from backend.jobs.store import (
 )
 
 __all__ = ["note_killed_run", "run_channel_job"]
+logger = logging.getLogger(__name__)
 
 
 def complete_mirror_success(run: Any, result: dict) -> Any:
@@ -40,6 +51,32 @@ def complete_mirror_success(run: Any, result: dict) -> Any:
 
 
 def run_channel_job(job_id: str) -> dict[str, str]:
+    try:
+        return _run_channel_job(job_id)
+    except Exception as exc:
+        if not protect_job_diagnostics(job_id):
+            raise
+        logger.error("Protected Channel execution failed")
+        code, message = public_error(exc.code if isinstance(exc, AppError) else None,
+                                     fallback="JOB_EXECUTION_FAILED")
+        try:
+            current = mark_failed(job_id, error_code=code, error_summary=message)
+            seal_dataset_expiry(job_id)
+        except Exception:
+            logger.error("Protected Channel failure could not be recorded")
+            return {"status": "failed"}
+        return {"status": current.status if current is not None else "missing"}
+
+
+def protect_job_diagnostics(job_id: str) -> bool:
+    try:
+        job = get_job_store().get(job_id)
+        return job is None or job_diagnostics_protected(job, get_run_store().get_run(job_id))
+    except Exception:
+        return True
+
+
+def _run_channel_job(job_id: str) -> dict[str, str]:
     claimed = claim_for_execution(job_id, claimed_by=current_worker_id())
     if claimed is None:
         record = get_job_store().get(job_id)
@@ -80,7 +117,11 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     started = utc_now()
     actor = _actor(claimed)
     context = channel_run.expression_context(channel, run, started, actor, claimed.trigger_kind)
-    run.context = context
+    protects_diagnostics = job_diagnostics_protected(claimed, run)
+    if protects_diagnostics and (safe_diagnostics_stored(run) or store.get_execution(job_id, 1) is None):
+        run.context = {**context, "diagnostics_version": DIAGNOSTICS_VERSION}
+    else:
+        run.context = context
     store.update_run(run)
     elapsed = 0.0
     if claimed.started_at is not None:
@@ -90,6 +131,8 @@ def run_channel_job(job_id: str) -> dict[str, str]:
         )
     timeout = (graph.get("settings") or {}).get("run_timeout_sec")
     try:
+        if not error_lineage_verified(claimed, run):
+            raise MirrorDataForbidden()
         outcome = channel_run.execute_channel_run(
             graph=graph,
             trigger_node_id=trigger,
@@ -103,16 +146,21 @@ def run_channel_job(job_id: str) -> dict[str, str]:
             started=time.monotonic() - elapsed,
             pinned=bool((claimed.input or {}).get("pin_version")),
         )
-    except SandboxFailed as exc:
-        failed = mark_failed(
-            job_id, error_code="CHANNEL_SANDBOX_FAILED", error_summary=str(exc)
-        )
+    except (SandboxFailed, AppError) as exc:
+        if not protects_diagnostics and not isinstance(exc, SandboxFailed):
+            raise
+        code = exc.code if isinstance(exc, AppError) else "CHANNEL_SANDBOX_FAILED"
+        if protects_diagnostics:
+            code, message = public_error(code)
+        else:
+            message = str(exc)
+        failed = mark_failed(job_id, error_code=code, error_summary=message)
         if failed is not None and failed.status == "failed":
             recovery.settle_failure(
                 job=failed,
                 run=run,
-                error_code="CHANNEL_SANDBOX_FAILED",
-                error_message=str(exc),
+                error_code=code,
+                error_message=message,
                 node_id=None,
             )
         seal_dataset_expiry(job_id)
@@ -138,9 +186,12 @@ def run_channel_job(job_id: str) -> dict[str, str]:
             try:
                 require_run_data_access(run, run.mirror_execution_user_id)
                 done = complete_mirror_success(run, result)
-            except Exception:
-                mark_failed(job_id, error_code="MIRROR_SETTLEMENT_FAILED",
-                            error_summary="Mirror checkpoint settlement failed")
+            except Exception as exc:
+                code, message = public_error(
+                    exc.code if isinstance(exc, AppError) else None,
+                    fallback="MIRROR_SETTLEMENT_FAILED",
+                )
+                mark_failed(job_id, error_code=code, error_summary=message)
                 seal_dataset_expiry(job_id)
                 return {"status": "failed"}
         else:
@@ -155,6 +206,8 @@ def run_channel_job(job_id: str) -> dict[str, str]:
         return {"status": "cancelled"}
     code = outcome.error_code or "CHANNEL_NODE_FAILED"
     message = outcome.error_message or "Channel run failed"
+    if protects_diagnostics or protected_run(run):
+        code, message = public_error(code)
     failed = mark_failed(job_id, error_code=code, error_summary=message)
     if failed is not None and failed.status == "failed":
         recovery.settle_failure(

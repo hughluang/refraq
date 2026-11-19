@@ -80,18 +80,27 @@ class History:
         self.target = target
         self.authorize_source_read = authorize_source_read
 
-    def _gate(self, session, mirror_id):
+    def _gate(self, session, mirror_id, *, admit=False):
         gate = session.execute(select(HistoryGateRow).where(
             HistoryGateRow.mirror_id == mirror_id).with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
         if gate is None:
-            _invalid()
+            if not admit:
+                _invalid()
+            mirror = session.execute(select(MirrorRow).where(
+                MirrorRow.id == mirror_id).with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
+            if mirror is None or not (mirror.state or {}).get("history_epoch"):
+                _invalid()
+            self.initialize_gate(session, mirror_id=mirror_id,
+                                 history_epoch=mirror.state["history_epoch"])
+            gate = session.get(HistoryGateRow, mirror_id)
         return gate
 
     def _authorize(self, session, mirror_id, execution_user_id):
         mirror = session.get(MirrorRow, mirror_id, populate_existing=True)
         if mirror is None:
             raise MirrorError("MIRROR_NOT_FOUND", 404)
-        self.authorize_source_read(execution_user_id=execution_user_id, source_id=mirror.source_id)
+        self.authorize_source_read(session=session, execution_user_id=execution_user_id,
+                                   source_id=mirror.source_id)
         return mirror.source_id
 
     def _bounds(self, gate, bound, source_id):
@@ -113,7 +122,9 @@ class History:
             return
         bound = self.target.capture_bound(mirror_id=mirror_id)
         lower = _position(bound["lower_bound"], mirror_id, history_epoch)
-        if bound.get("source_id") != mirror.source_id or bound.get("history_epoch") != history_epoch:
+        upper = _position(bound["upper_bound"], mirror_id, history_epoch)
+        if (bound.get("source_id") != mirror.source_id or bound.get("history_epoch") != history_epoch
+                or upper < lower):
             _invalid()
         session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch=history_epoch,
                                    lower_commit_seq=lower[0], lower_entry_seq=lower[1], status="available"))
@@ -121,8 +132,8 @@ class History:
 
     def capture_bound(self, *, mirror_id, execution_user_id):
         with self.session_factory() as session, session.begin():
-            gate = self._gate(session, mirror_id)
             source = self._authorize(session, mirror_id, execution_user_id)
+            gate = self._gate(session, mirror_id, admit=True)
             bound = self.target.capture_bound(mirror_id=mirror_id)
             self._bounds(gate, bound, source)
             return bound
@@ -141,15 +152,21 @@ class History:
             if not lower <= start <= next_pair <= end <= upper:
                 _invalid()
             previous = start
-            if len(result["entries"]) > limit:
+            entries = result["entries"]
+            if len(entries) > limit:
                 _invalid()
-            for entry in result["entries"]:
+            projected = []
+            for entry in entries:
                 current = _position(entry["position"], mirror_id, gate.history_epoch)
                 if not previous < current <= next_pair or entry.get("origin") != "live":
                     _invalid()
                 previous = current
-            result["source_ids"] = [source]
-            return result
+                before, after_image = entry["before"], entry["after"]
+                if before is None and after_image is None:
+                    _invalid()
+                operation = "insert" if before is None else "delete" if after_image is None else "update"
+                projected.append({**entry, "operation": operation})
+            return {**result, "entries": projected, "source_ids": [source]}
 
     def settlement_guard(self, session, *, proposals, execution_user_id):
         """Validate without commit; caller must update checkpoints in THIS transaction."""

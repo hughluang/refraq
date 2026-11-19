@@ -90,16 +90,21 @@ def resolve_object_binding(object_id, *, session=None):
     return resolve_object_bindings(object_ids=[object_id], session=session)[0]
 
 
-def authorize_object_reads(*, object_ids, execution_user_id, session=None):
+def authorize_object_reads(*, object_ids, execution_user_id, mirror_ids=(), session=None):
     """Resolve and authorize using one caller session; never open a nested session."""
     if _source_read_authorizer is None:
         _error("MIRROR_READ_UNAVAILABLE", 503)
     if session is None:
         with _storage().transaction() as owned:
             return authorize_object_reads(
-                object_ids=object_ids, execution_user_id=execution_user_id, session=owned,
+                object_ids=object_ids, mirror_ids=mirror_ids,
+                execution_user_id=execution_user_id, session=owned,
             )
     bindings = resolve_object_bindings(object_ids=object_ids, session=session)
+    for mirror_id in sorted(set(mirror_ids)):
+        mirror = _find(session, mirror_id)
+        bindings.append({key: mirror[key] for key in
+                         ("id", "source_id", "object_id", "table_identity", "qualified_table")})
     for source_id in sorted({binding["source_id"] for binding in bindings}):
         outcome = _source_read_authorizer(
             session=session, execution_user_id=execution_user_id, source_id=source_id,

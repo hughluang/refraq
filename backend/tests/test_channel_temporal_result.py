@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -11,7 +12,10 @@ from backend.channel.dataset_registry import DatasetRecord, MemoryDatasetStore
 from backend.channel.nodes.volume import batch_read
 from backend.channel.nodes.volume.batch_read import NODE_TYPE
 from backend.channel.routers import runs
+from backend.channel.run_store import ChannelRunRecord, get_run_store
 from backend.channel.template import render
+from backend.core.errors import AppError
+from backend.jobs.store import create_queued_job, get_job_store
 from backend.tests.channel_hooks_fake import FakeHooks, _user
 
 _OFFSET = timezone(timedelta(hours=8))
@@ -361,7 +365,7 @@ def test_dataset_rows_encode_a_declared_timestamp_like_batch_read(
             {"name": "note", "type": "text", "normalized_type": "string"},
         ]
     )
-    _plant_rows(
+    run = _plant_rows(
         monkeypatch,
         record,
         [
@@ -374,9 +378,9 @@ def test_dataset_rows_encode_a_declared_timestamp_like_batch_read(
         ],
     )
     body = runs.http_dataset_rows(
-        "chn",
-        "job",
-        "dset",
+        run.channel_id,
+        run.job_id,
+        record.id,
         _user(),
         after_ord=0,
         limit=50,
@@ -387,6 +391,15 @@ def test_dataset_rows_encode_a_declared_timestamp_like_batch_read(
     assert item["note"] == "2024-06-01"
     assert item["legacy"] is legacy
     assert item["_ord"] == 1
+
+
+def test_dataset_rows_deny_a_run_without_its_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    record = _dataset_record(columns=[{"name": "note", "type": "text", "normalized_type": "string"}])
+    run = _plant_rows(monkeypatch, record, [{"_ord": 1, "note": "stored payload"}])
+    get_job_store().delete(run.job_id)
+
+    with pytest.raises(AppError, match="AUTH_FORBIDDEN"):
+        runs.http_dataset_rows(run.channel_id, run.job_id, record.id, _user(), after_ord=0, limit=50)
 
 
 class _Scripted:
@@ -456,22 +469,26 @@ def _dataset_record(*, columns: list[dict]) -> DatasetRecord:
 
 def _plant_rows(
     monkeypatch: pytest.MonkeyPatch, record: DatasetRecord, page: list[dict]
-) -> None:
-    class _Datasets:
-        def get(self, dataset_id: str) -> DatasetRecord | None:
-            return record if dataset_id == record.id else None
-
-    class _Runs:
-        def get_run(self, job_id: str):
-            if job_id != record.job_id:
-                return None
-            return type("Run", (), {"channel_id": "chn", "job_id": job_id})()
-
-    monkeypatch.setattr(runs, "get_dataset_store", lambda: _Datasets())
-    monkeypatch.setattr(runs, "get_run_store", lambda: _Runs())
+) -> ChannelRunRecord:
+    channel_id = "chn"
+    job = create_queued_job(
+        kind="channel_run", input={"channel_id": channel_id, "target": "draft"},
+        trigger_kind="user", trigger_ref="usr_author",
+    )
+    run = ChannelRunRecord(
+        job_id=job.id, channel_id=channel_id, target="draft", version=None, draft_revision=1,
+        graph={"nodes": [{"id": "trigger", "type": "trigger.manual", "config": {}}], "edges": [], "settings": {}},
+        trigger_node_id="trigger", ignore_checkpoints=False, outcome="succeeded", failed_node_id=None,
+        skipped_node_ids=[], created_at=job.created_at,
+    )
+    get_run_store().insert_run(run)
+    store = MemoryDatasetStore()
+    store.save(replace(record, job_id=job.id))
+    monkeypatch.setattr(runs, "get_dataset_store", lambda: store)
     monkeypatch.setattr(
         runs,
         "read_keyset_page",
         lambda relation, *, after_ord, limit: page,
     )
     monkeypatch.setattr(runs, "any_row_exists", lambda relation: True)
+    return run

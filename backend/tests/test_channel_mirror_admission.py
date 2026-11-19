@@ -8,6 +8,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from backend.channel import mirror_reads
+from backend.metadata.mirrors import service as mirrors
+from backend.metadata.mirrors.store import MemoryMirrorStore
 from backend.metadata.source_access import authorize_source_read_on
 from backend.core.errors import AppError
 from backend.channel import service, channel_run
@@ -42,6 +44,32 @@ def session():
             session.execute(text(statement))
         yield session
     engine.dispose()
+
+
+@pytest.mark.parametrize("node_type", ["read.changes", "volume.changes_dataset"])
+def test_incremental_preflight_rechecks_real_same_session_grants(session, monkeypatch, node_type):
+    store = MemoryMirrorStore()
+    store.mirrors["m"] = dict(id="m", source_id="s", object_id="o",
+                              table_identity="o", qualified_table="public.orders")
+    mirrors.bind_management(store=store)
+    mirrors.bind_source_read_authorizer(authorize_source_read_on)
+    monkeypatch.setattr(mirror_reads, "_reads", object())
+    graph = {"nodes": [{"type": node_type, "config": {
+        "source": {"kind": "mirror", "mirror_id": "m", "source_id": "untrusted"}}}]}
+    try:
+        mirror_reads.authorize_graph(graph, "u", session=session)
+        session.execute(text("UPDATE roles SET permissions = '[]'"))
+        with pytest.raises(AppError):
+            mirror_reads.authorize_graph(graph, "u", session=session)
+        session.execute(text('UPDATE roles SET permissions = \'["sources:data_read"]\''))
+        session.execute(text("DELETE FROM source_memberships"))
+        with pytest.raises(AppError):
+            mirror_reads.authorize_graph(graph, "u", session=session)
+        with pytest.raises(AppError):
+            mirror_reads.authorize_graph(graph, None, session=session)
+    finally:
+        mirrors.bind_management()
+        mirrors.bind_source_read_authorizer()
 
 
 def test_same_session_revocation_and_role_identity_changes(session):
@@ -136,9 +164,11 @@ def test_real_persistent_terminal_evidence_and_release_order(monkeypatch):
     engine.dispose()
 
 
-def test_publish_forwards_explicit_confirmation_and_same_session(monkeypatch):
+@pytest.mark.parametrize("node_type", ["read.mirror", "read.changes", "volume.changes_dataset"])
+def test_publish_forwards_explicit_confirmation_and_same_session(monkeypatch, node_type):
     graph = empty_graph()
-    graph["nodes"] = [{"type": "read.mirror", "config": {"object_id": "o"}}]
+    graph["nodes"] = [{"type": node_type, "config": {"object_id": "o", "source": {
+        "kind": "mirror", "mirror_id": "m"}}}]
     record = SimpleNamespace(id="c", draft_revision=1, draft_graph=graph)
     version = SimpleNamespace(graph=graph, number=1, published_by_user_id="u")
     marker = object()
@@ -161,18 +191,30 @@ def test_publish_forwards_explicit_confirmation_and_same_session(monkeypatch):
     monkeypatch.setattr(service, "sync_published_schedule", lambda *a: None)
     monkeypatch.setattr(service, "sync_published_inbound_path", lambda *a: None)
     monkeypatch.setattr(service, "_audit", lambda **kw: None)
-    with pytest.raises(AppError):
-        service.publish_channel(channel_id="c", draft_revision=1, actor_user_id="u", actor_token_id=None)
+    if node_type == "read.mirror":
+        with pytest.raises(AppError):
+            service.publish_channel(channel_id="c", draft_revision=1, actor_user_id="u", actor_token_id=None)
     service.publish_channel(channel_id="c", draft_revision=1, actor_user_id="u", actor_token_id=None,
                             mirrors_to_open=confirmations)
     assert calls[0] == ("auth", marker)
     assert calls[1][1] is marker
     assert calls[1][2]["confirmed_mirrors_to_open"] is confirmations
     assert calls[2] == ("refs", marker)
+    graph["nodes"].append({"type": "trigger.scheduled", "config": {}})
+    with pytest.raises(AppError, match="Unattended mirror graphs require an execution identity"):
+        service.publish_channel(channel_id="c", draft_revision=1, actor_user_id="u", actor_token_id=None,
+                                mirrors_to_open=confirmations)
+    graph["settings"]["mirror_execution_user_id"] = "selected"
+    calls.clear()
+    service.publish_channel(channel_id="c", draft_revision=1, actor_user_id="u", actor_token_id=None,
+                            mirrors_to_open=confirmations)
+    assert calls[:2] == [("auth", marker), ("auth", marker)]
 
 
-def test_scheduler_uses_admission_session_without_external_identity_reads(monkeypatch):
-    graph = {"nodes": [{"type": "read.mirror", "config": {"object_id": "o"}}],
+@pytest.mark.parametrize("node_type", ["read.mirror", "read.changes", "volume.changes_dataset"])
+def test_scheduler_uses_admission_session_without_external_identity_reads(monkeypatch, node_type):
+    graph = {"nodes": [{"type": node_type, "config": {"object_id": "o", "source": {
+        "kind": "mirror", "mirror_id": "m"}}}],
              "settings": {"mirror_execution_user_id": "u"}}
     marker = SimpleNamespace(scalar=lambda *a: SimpleNamespace(graph=graph, number=3))
     events = []

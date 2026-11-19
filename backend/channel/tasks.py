@@ -58,9 +58,13 @@ def run_job(job_id: str) -> dict[str, str]:
         return result
     except Exception as exc:  # noqa: BLE001
         current = get_job_store().get(job_id)
-        logger.exception("channel_run failed")
+        protected = runner.protect_job_diagnostics(job_id)
+        if protected:
+            logger.error("Protected Channel supervision failed")
+        else:
+            logger.exception("channel_run failed")
         if current is not None and current.status not in TERMINAL:
-            summary = str(exc)[:400]
+            summary = "Channel execution failed" if protected else str(exc)[:400]
             mark_failed(job_id, error_code="JOB_EXECUTION_FAILED", error_summary=summary)
             seal_dataset_expiry(job_id)
             _release_settled_inbound_dedup(job_id, "failed")
@@ -68,6 +72,10 @@ def run_job(job_id: str) -> dict[str, str]:
         if current is not None and current.status in TERMINAL:
             seal_dataset_expiry(job_id)
             _release_settled_inbound_dedup(job_id, current.status)
+            if protected:
+                return {"status": current.status}
+        if protected:
+            return {"status": "failed"}
         raise
 
 

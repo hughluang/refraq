@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy.exc import DBAPIError
 
+from backend.channel import mirror_changes
 from backend.channel.change_range import (
     ChangeRange,
     ChangeRangeError,
@@ -23,6 +24,7 @@ from backend.channel.dataset_registry import (
     DatasetRegistry,
     get_dataset_store,
 )
+from backend.channel.diagnostics import public_error
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
     MAIN_INPUT,
@@ -33,6 +35,7 @@ from backend.channel.nodes.spec import (
     OutputView,
     object_schema,
 )
+from backend.core.errors import AppError
 from backend.channel.run_store import get_run_store
 from backend.entity.changes import ChangePosition, purge_mark
 from backend.entity.history.service import (
@@ -90,12 +93,17 @@ def _refine(
     upstream: Mapping[str, Any],
     resolver: Any,
 ) -> dict[str, Any]:
-    del config, upstream, resolver
+    del upstream, resolver
+    if mirror_changes.is_mirror(config):
+        return {"main": {**_OUTPUT, "properties": {**_OUTPUT["properties"],
+                "source_ids": {"type": "array", "items": {"type": "string"}}}}, "error": None}
     return {"main": _OUTPUT, "error": None}
 
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
+    if mirror_changes.is_mirror(config):
+        return _execute_mirror(node, hooks)
     entity_id = str(config["entity_id"])
     node_id = str(node["id"])
     limit = int(config.get("limit", _DEFAULT_LIMIT))
@@ -140,6 +148,46 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         status="succeeded",
         output={"dataset": reference, "count": record.row_count},
     )
+
+
+def _execute_mirror(node, hooks):
+    config = node["config"]
+    deadline = time.monotonic() + int(config.get("statement_timeout_sec", _DEFAULT_TIMEOUT_SEC))
+    progress = [None]
+    try:
+        opened = mirror_changes.open_range(node, hooks)
+
+        def chunks():
+            for entries, position in mirror_changes.pages(opened, hooks, int(config.get("limit", _DEFAULT_LIMIT))):
+                _halt(hooks, deadline)
+                yield tuple((_json_cell(entry["position"]), entry["operation"],
+                             _json_cell(entry["typed_key"]), _json_cell(entry["before"]),
+                             _json_cell(entry["after"]), _json_cell(entry)) for entry in entries)
+                progress[0] = position
+            _halt(hooks, deadline)
+
+        columns = tuple(DatasetColumnSpec(name, kind) for name, kind in (
+            ("position", "json"), ("operation", "string"), ("typed_key", "json"),
+            ("before", "json"), ("after", "json"), ("entry", "json")))
+        record = DatasetRegistry(get_dataset_store()).create_from_chunks(
+            job_id=hooks.run_id, node_id=str(node["id"]), seq=_execution_seq(node, hooks),
+            columns=columns, chunks=chunks(),
+        )
+        mirror_changes.propose(opened, hooks, progress[0])
+        return NodeResult(status="succeeded", output={
+            "dataset": dataset_reference(dataset_id=record.id, columns=record.columns, count=record.row_count),
+            "count": record.row_count, "source_ids": opened.source_ids,
+        })
+    except _LoadHalted as exc:
+        if exc.kind != "timeout":
+            raise
+        return _failed("CHANNEL_NODE_FAILED", _TIMEOUT_MESSAGE)
+    except AppError as exc:
+        return _failed(*public_error(exc.code, fallback="MIRROR_READ_UNAVAILABLE"))
+    except DatasetQuotaExceeded:
+        return _failed(DatasetQuotaExceeded.code, _QUOTA_MESSAGE)
+    except Exception:
+        return _failed("MIRROR_READ_UNAVAILABLE", "Mirror history dataset load failed.")
 
 
 def _pages(
@@ -326,7 +374,7 @@ NODE_TYPE = NodeType(
     trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT, ERROR_OUTPUT),
-    config_schema=object_schema(
+    config_schema=mirror_changes.source_schema(object_schema(
         {
             "entity_id": {
                 "type": "string",
@@ -374,7 +422,7 @@ NODE_TYPE = NodeType(
             },
         },
         ["entity_id"],
-    ),
+    )),
     output_view=OutputView(kind="dataset", dataset="dataset", metrics=("count",)),
     execute=_execute,
     refine=_refine,

@@ -194,3 +194,25 @@ def test_release_calls_bound_validator_before_target_and_keeps_run_identity():
                   verify_terminal_proof=terminal_proof_adapter(validate))
     reads.release_run_pins(run_id="run", terminal_proof=proof)
     assert events == ["validated", "released"]
+
+
+def test_direct_mirror_authorization_uses_immutable_source_and_caller_session(registry, monkeypatch):
+    with registry.transaction() as session:
+        opened = service.ensure_open_intent(session, operation_id="open", channel_id="c",
+                                            channel_version=1, object_ids=["o1"])
+    mid = opened[0]["mirror_id"]
+    seen = []
+    service.bind_source_read_authorizer(lambda **kwargs: seen.append(kwargs))
+    try:
+        with registry.transaction() as session:
+            monkeypatch.setattr(registry, "transaction", lambda: pytest.fail("Nested session"))
+            bindings = service.authorize_object_reads(
+                object_ids=[], mirror_ids=[mid, mid], execution_user_id="u", session=session,
+            )
+            assert bindings[0]["source_id"] == "s1"
+            assert seen == [dict(session=session, execution_user_id="u", source_id="s1")]
+            with pytest.raises(service.MirrorError, match="MIRROR_NOT_FOUND"):
+                service.authorize_object_reads(object_ids=[], mirror_ids=["unknown"],
+                                               execution_user_id="u", session=session)
+    finally:
+        service.bind_source_read_authorizer()

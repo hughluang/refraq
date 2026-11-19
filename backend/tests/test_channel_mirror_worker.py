@@ -79,14 +79,19 @@ def test_runtime_assembles_and_closes_actual_adapters(monkeypatch):
     assert events[-3] == ("reads", None)
 
 
+@pytest.mark.parametrize("node_type", ["read.mirror", "read.changes", "volume.changes_dataset"])
 @pytest.mark.parametrize("kind", ["user", "inbound", "retry", "error"])
-def test_mint_authorization_and_both_inserts_use_one_session(monkeypatch, kind):
-    graph = {"nodes": [{"type": "read.mirror", "config": {"object_id": "o"}}],
+def test_mint_authorization_and_both_inserts_use_one_session(monkeypatch, kind, node_type):
+    graph = {"nodes": [{"type": node_type, "config": {"object_id": "o", "source": {
+        "kind": "mirror", "mirror_id": "m"}}}],
              "settings": {"mirror_execution_user_id": "selected"}}
+    parent = SimpleNamespace(
+        channel_id="c", version=3, graph=graph, mirror_execution_user_id="selected",
+        mirror_state={"source_ids": ["s"]}, failed_node_id="failed", stopped_node_id=None,
+    )
+    parent_job = SimpleNamespace(kind="channel_run", trigger_kind="user", input={}, error_code="CHANNEL_NODE_FAILED")
     marker = SimpleNamespace(
-        get=lambda model, key, **kw: SimpleNamespace(
-            draft_revision=1, draft_graph=graph, channel_id="c", version=3,
-            mirror_execution_user_id="selected"),
+        get=lambda model, key, **kw: parent if model is channel_run.ChannelRunRow else SimpleNamespace(),
         scalar=lambda *a: SimpleNamespace(graph=graph, number=3),
     )
     @contextmanager
@@ -99,9 +104,18 @@ def test_mint_authorization_and_both_inserts_use_one_session(monkeypatch, kind):
         assert identity == ("actor" if kind == "user" else "selected")
         seen.append("authorized")
     monkeypatch.setattr(channel_run, "authorize_graph", authorize)
+    def load_parent_job(job_id, *, session):
+        assert job_id == "actor" and session is marker
+        return parent_job
+    def authorize_parent(record, identity, *, session):
+        assert record is parent and identity == "selected" and session is marker
+        seen.append("authorized inherited sources")
+    monkeypatch.setattr(channel_run, "get_job_store", lambda: SimpleNamespace(get=load_parent_job))
+    monkeypatch.setattr(channel_run, "require_run_data_access", authorize_parent)
+    authorizations = ["authorized", "authorized inherited sources"] if kind in {"retry", "error"} else ["authorized"]
     def create(**kw):
         assert kw["session"] is marker
-        assert seen == ["authorized"]
+        assert seen == authorizations
         assert kw["input"]["version"] == 3
         return SimpleNamespace(id="job")
     monkeypatch.setattr(channel_run, "create_queued_job", create)
@@ -110,9 +124,10 @@ def test_mint_authorization_and_both_inserts_use_one_session(monkeypatch, kind):
     _, record = channel_run._mint_run(
         channel_id="c", channel_name="C", target="published", version=None,
         draft_revision=None, graph=None, trigger_node="t", ignore_checkpoints=False,
-        stop_at_node_id=None, payload={}, trigger_kind=kind, trigger_ref="actor",
+        stop_at_node_id=None, payload={"error_source": {"job_id": "actor", "channel_id": "c"}}
+        if kind == "error" else {}, trigger_kind=kind, trigger_ref="actor",
     )
-    assert seen == ["authorized", marker]
+    assert seen == [*authorizations, marker]
     assert record.mirror_execution_user_id == ("actor" if kind == "user" else "selected")
 
 
@@ -181,7 +196,9 @@ def test_seal_commits_before_release_and_preserves_retry_pins(monkeypatch, retry
 def test_retry_retains_original_execution_identity_and_rechecks_it(monkeypatch, persistent, identity):
     graph = {"nodes": [{"type": "read.mirror", "config": {"object_id": "o"}}],
              "settings": {"mirror_execution_user_id": "different_selected_user"}}
-    parent = SimpleNamespace(channel_id="c", version=3, mirror_execution_user_id=identity)
+    parent = SimpleNamespace(channel_id="c", version=3, mirror_execution_user_id=identity,
+                             graph=graph, mirror_state={"source_ids": ["s"]})
+    parent_job = SimpleNamespace(kind="channel_run", trigger_kind="user", input={})
     marker = SimpleNamespace(
         get=lambda model, key, **kw: parent if key == "parent" else SimpleNamespace(),
         scalar=lambda *a: SimpleNamespace(graph=graph, number=3),
@@ -195,12 +212,17 @@ def test_retry_retains_original_execution_identity_and_rechecks_it(monkeypatch, 
     records = []
     monkeypatch.setattr(channel_run, "get_run_store", lambda: SimpleNamespace(
         get_run=lambda *a: parent, insert_run=lambda r, **kw: records.append(r)))
+    monkeypatch.setattr(channel_run, "get_job_store", lambda: SimpleNamespace(get=lambda *a, **kw: parent_job))
     def authorize(g, selected, **kw):
         assert selected == identity
         assert kw.get("session") is (marker if persistent else None)
         if selected is None:
             raise mirror_reads.MirrorDataForbidden()
     monkeypatch.setattr(channel_run, "authorize_graph", authorize)
+    def authorize_parent(record, selected, *, session):
+        assert record is parent and selected == identity
+        assert session is (marker if persistent else None)
+    monkeypatch.setattr(channel_run, "require_run_data_access", authorize_parent)
     monkeypatch.setattr(channel_run, "create_queued_job", lambda **kw: SimpleNamespace(id="child"))
     def mint():
         return channel_run.mint_followup_run(

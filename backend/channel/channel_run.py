@@ -15,8 +15,15 @@ from backend.channel.models import ChannelVersionRow, ChannelRunRow
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
 from backend.channel.checkpoints import LocalCheckpoints, RunCheckpoints
 from backend.channel.context import channel_context, platform_context, run_context
+from backend.channel.diagnostics import (
+    ERROR_SOURCE_VERIFIED,
+    error_lineage_verified,
+    protected_run,
+    public_error,
+    run_sources,
+)
 from backend.channel.engine import RunOutcome, execute
-from backend.channel.mirror_reads import execution_identity, read_run_page, require_run_data_access, resolve_object, authorize_graph, mirror_graph
+from backend.channel.mirror_reads import execution_identity, read_run_page, require_run_data_access, resolve_object, authorize_graph, mirror_graph, capture_run_history, read_run_history
 from backend.channel.node_support import (
     InputCapture,
     bind_execution_input,
@@ -38,7 +45,7 @@ from backend.core.time import format_instant, utc_now
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.channel.models import ChannelRow
-from backend.channel.mirror_reads import MirrorReadUnavailable
+from backend.channel.mirror_reads import MirrorDataForbidden, MirrorReadUnavailable
 from backend.jobs.store import (
     JobRecord,
     UniqueScheduledForError,
@@ -127,6 +134,8 @@ def _mint_run(*, channel_id, channel_name, target, version, draft_revision,
     with _mint_session() as session:
         admitted_graph = graph
         admitted_version = version
+        parent = None
+        payload = {key: value for key, value in payload.items() if key != ERROR_SOURCE_VERIFIED}
         if session is not None:
             channel = session.get(ChannelRow, channel_id, with_for_update=True)
             if channel is None:
@@ -145,8 +154,9 @@ def _mint_run(*, channel_id, channel_name, target, version, draft_revision,
                 admitted_graph, admitted_version = published.graph, published.number
             identity = (trigger_ref if trigger_kind == "user" else
                         (admitted_graph.get("settings") or {}).get("mirror_execution_user_id"))
-            if mirror_graph(admitted_graph) and trigger_kind == "retry":
+            if trigger_kind in {"retry", "error"}:
                 parent = session.get(ChannelRunRow, trigger_ref, with_for_update=True)
+            if mirror_graph(admitted_graph) and trigger_kind == "retry":
                 if parent is None or parent.channel_id != channel_id or parent.version != admitted_version:
                     raise MirrorReadUnavailable()
                 identity = parent.mirror_execution_user_id
@@ -154,19 +164,39 @@ def _mint_run(*, channel_id, channel_name, target, version, draft_revision,
             if not mirror_graph(admitted_graph):
                 identity = None
         else:
-            if trigger_kind == "retry":
-                published = get_channel_store().get_version(channel_id, version)
-                admitted_graph = published.graph if published is not None else None
-            if mirror_graph(admitted_graph) and trigger_kind == "retry":
+            if trigger_kind in {"retry", "error"}:
                 parent = get_run_store().get_run(trigger_ref)
+                if version is None:
+                    versions, _total = get_channel_store().list_versions(channel_id, limit=1, offset=0)
+                    published = versions[0] if versions else None
+                else:
+                    published = get_channel_store().get_version(channel_id, version)
+                admitted_graph = published.graph if published is not None else None
+                if version is None and published is not None:
+                    admitted_version = published.number
+            if mirror_graph(admitted_graph) and trigger_kind == "retry":
                 if parent is None or parent.channel_id != channel_id or parent.version != version:
                     raise MirrorReadUnavailable()
                 identity = parent.mirror_execution_user_id
                 authorize_graph(admitted_graph, identity)
             else:
-                identity = _preflight_identity(channel_id, graph, version, trigger_kind,
+                identity = _preflight_identity(channel_id, admitted_graph, version, trigger_kind,
                                                trigger_ref if trigger_kind == "user" else None)
-        if mirror_graph(admitted_graph) and target == "published":
+        inherited = _followup_state(
+            parent, trigger_kind, trigger_ref, payload,
+            protect_recipient=mirror_graph(admitted_graph), session=session,
+        )
+        if inherited is not None:
+            if admitted_graph is None:
+                raise MirrorReadUnavailable()
+            if trigger_kind == "retry":
+                if parent.channel_id != channel_id or parent.version != admitted_version:
+                    raise MirrorReadUnavailable()
+                identity = parent.mirror_execution_user_id
+            else:
+                identity = (admitted_graph.get("settings") or {}).get("mirror_execution_user_id")
+            require_run_data_access(parent, identity, session=session)
+        if (mirror_graph(admitted_graph) or inherited is not None) and target == "published":
             payload = {**payload, "pin_version": True, "version": admitted_version}
         job = create_queued_job(
             kind="channel_run", input=payload, trigger_kind=trigger_kind,
@@ -181,8 +211,38 @@ def _mint_run(*, channel_id, channel_name, target, version, draft_revision,
             created_at=utc_now(), stop_at_node_id=stop_at_node_id,
             admitted=True, admitted_identity=identity,
         )
+        record.mirror_state = inherited
         get_run_store().insert_run(record, session=session)
     return job, record
+
+
+def _followup_state(parent, trigger_kind, trigger_ref, payload, *, protect_recipient, session):
+    if trigger_kind not in {"error", "retry"}:
+        return None
+    sources = run_sources(parent)
+    parent_job = get_job_store().get(trigger_ref, session=session) if parent is not None else None
+    if (parent_job is None or parent_job.kind != "channel_run"
+            or sources is None or not error_lineage_verified(parent_job, parent)):
+        raise MirrorDataForbidden()
+    if trigger_kind == "retry":
+        payload.pop("error_source", None)
+        source = parent_job.input.get("error_source")
+    else:
+        source = payload.get("error_source")
+        if (not isinstance(source, dict) or source.get("job_id") != trigger_ref
+                or source.get("channel_id") != parent.channel_id):
+            raise MirrorDataForbidden()
+    if isinstance(source, dict):
+        if trigger_kind == "error" and (sources or protect_recipient):
+            code, message = public_error(parent_job.error_code)
+            source = {**source, "error": {
+                "code": code, "message": message, "node_id": parent.failed_node_id or parent.stopped_node_id,
+            }}
+        payload["error_source"] = source
+        payload[ERROR_SOURCE_VERIFIED] = True
+    if not sources:
+        return None
+    return {"source_ids": sources, "inherited_source_ids": sources}
 
 
 @contextmanager
@@ -468,8 +528,10 @@ def execute_channel_run(
     started: float | None,
     pinned: bool = False,
 ) -> RunOutcome:
+    if mirror_graph(graph) and run.mirror_execution_user_id is None:
+        raise MirrorDataForbidden()
     user = ensure_system_user(get_user_store())
-    if run.mirror_state is not None:
+    if run.mirror_state is not None or (run.mirror_execution_user_id is not None and not mirror_graph(graph)):
         require_run_data_access(run, run.mirror_execution_user_id)
     if run.mirror_execution_user_id is not None:
         authorize_graph(graph, run.mirror_execution_user_id)
@@ -503,6 +565,7 @@ def execute_channel_run(
             timeout_sec=timeout_sec,
             started=started,
             stop_at_node_id=run.stop_at_node_id,
+            protect_diagnostics=protected_run(run),
         )
 
 
@@ -539,6 +602,13 @@ class _RunHooks:
         self.checkpoints = (
             RunCheckpoints(channel_id, run) if run is not None else LocalCheckpoints()
         )
+
+    def capture_mirror_history(self, *, mirror_id: str) -> dict:
+        return capture_run_history(self._run, mirror_id=mirror_id)
+
+    def read_mirror_changes(self, *, mirror_id, after, through, limit) -> dict:
+        return read_run_history(self._run, mirror_id=mirror_id, after=after,
+                                through=through, limit=limit)
 
     def read_mirror_page(self, *, object_id: str, after_key: Any, limit: int) -> dict:
         mirror = resolve_object(object_id)
@@ -632,6 +702,11 @@ class _RunHooks:
         record.preview_totals = {}
         record.output = result.output
         if captured is not None:
+            if protected_run(self._run):
+                for path, entry in captured.fields.items():
+                    if "error" in entry:
+                        code, message = public_error(entry["error"].get("code"))
+                        captured.record_error(path, code, message)
             record.input, record.input_totals = _clip_captured(captured.fields)
         store.finish_execution(record)
 
@@ -696,6 +771,7 @@ def _execute_graph(
     timeout_sec: int | None,
     started: float | None,
     stop_at_node_id: str | None,
+    protect_diagnostics: bool = False,
 ) -> RunOutcome:
     return execute(
         graph,
@@ -706,4 +782,5 @@ def _execute_graph(
         timeout_sec=timeout_sec,
         started=started,
         stop_at_node_id=stop_at_node_id,
+        protect_diagnostics=protect_diagnostics,
     )

@@ -451,11 +451,11 @@ def publish_channel(
 
     def _publish_mirrors(session: Any, version: ChannelVersionRecord) -> None:
         ids = object_ids(version.graph)
-        if not ids and not any(mirror_graph(item.graph) for item in previous):
+        if not mirror_graph(version.graph) and not any(mirror_graph(item.graph) for item in previous):
             return
         if session is None:
             raise ChannelRequestInvalid("Mirror publication requires a SQL transaction")
-        if ids:
+        if mirror_graph(version.graph):
             authorize_graph(version.graph, actor_user_id, session=session)
             selected = (version.graph.get("settings") or {}).get("mirror_execution_user_id")
             unattended = any(node.get("type") in {"trigger.scheduled", "trigger.inbound", "trigger.error"}
