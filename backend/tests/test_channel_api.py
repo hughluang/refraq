@@ -444,6 +444,7 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "trigger.manual",
         "trigger.scheduled",
         "read.changes",
+        "read.mirror",
         "read.source_query",
         "read.sql",
         "transform.code",

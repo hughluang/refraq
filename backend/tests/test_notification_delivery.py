@@ -1,7 +1,7 @@
 """Offline failure and HTTP adapter contracts."""
 
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from backend.tests.test_notifications import session, policy, replace, config
+from backend.tests.test_notifications import config, notification_clock, policy, replace, session
 from backend.admin.notifications.configuration import read_channel, request_route_test, ensure_routes_verified
 from backend.admin.notifications.delivery import DeliveryBudget, deliver_due
 from backend.admin.notifications.errors import NotificationDeliveryUnconfirmed
@@ -18,12 +18,14 @@ from backend.admin.notifications.service import enqueue_notification
 
 
 @pytest.mark.parametrize("redirect", [False, True])
-def test_persisted_bounded_retry_then_independent_fallback(session, policy, redirect):
+def test_persisted_bounded_retry_then_independent_fallback(session, policy, notification_clock, redirect):
+    enqueued_at = notification_clock.now()
     replace(session, policy)
     enqueue_notification(session, event_id="episode-1", event_type="cdc.buffer_blocked",
         scope={"source_id": "source-1"}, evidence={"state": "blocked"}, severity="critical",
         responder="site-oncall", safe_action="inspect_buffer")
     session.commit()
+    assert session.get(NotificationEventRow, "episode-1").next_attempt_at == enqueued_at
     seen = []
     def handler(request):
         seen.append(request.url.host)
@@ -35,30 +37,32 @@ def test_persisted_bounded_retry_then_independent_fallback(session, policy, redi
         assert "authorization" not in request.headers
         return httpx.Response(204)
     budget = DeliveryBudget(2, (10,), 1, 1)
-    now = datetime(2026, 11, 19, tzinfo=timezone.utc)
-    def tick(at):
-        result = deliver_due(session, policy=policy, budget=budget, now=at, transport=httpx.MockTransport(handler))
+    def tick():
+        result = deliver_due(session, policy=policy, budget=budget, now=notification_clock.now(), transport=httpx.MockTransport(handler))
         session.commit()
         session.expire_all()
         return result
-    assert tick(now) == 1
+    assert tick() == 1
     row = session.get(NotificationEventRow, "episode-1")
     assert row.attempts == 1
-    assert row.next_attempt_at == now + timedelta(seconds=10)
-    assert tick(now + timedelta(seconds=9)) == 0
-    assert tick(now + timedelta(seconds=10)) == 1
-    assert tick(now + timedelta(seconds=10)) == 1
+    assert row.next_attempt_at == enqueued_at + timedelta(seconds=10)
+    notification_clock.advance(timedelta(seconds=9))
+    assert tick() == 0
+    notification_clock.advance(timedelta(seconds=1))
+    assert tick() == 1
+    assert tick() == 1
     row = session.get(NotificationEventRow, "episode-1")
     assert row.state == "delivered"
     assert row.outcomes == {"primary": "failed", "fallback": "delivered"}
     assert [attempt["route"] for attempt in row.attempt_history] == ["primary", "primary", "fallback"]
     assert "top-secret" not in str(row.attempt_history)
-    assert tick(now + timedelta(days=1)) == 0
+    notification_clock.set(enqueued_at + timedelta(days=1))
+    assert tick() == 0
     assert seen == ["primary.invalid", "primary.invalid", "fallback.invalid"]
     assert "top-secret" not in str(read_channel(session))
 
 
-def test_failed_test_still_exercises_fallback_and_never_admits(session, policy):
+def test_failed_test_still_exercises_fallback_and_never_admits(session, policy, notification_clock):
     replace(session, policy)
     request_route_test(session, actor_user_id="operator", actor_token_id=None)
     session.commit()
@@ -67,9 +71,8 @@ def test_failed_test_still_exercises_fallback_and_never_admits(session, policy):
         seen.append(request.url.host)
         return httpx.Response(503, text="top-secret")
     budget = DeliveryBudget(1, (), 1, 1)
-    now = datetime(2026, 11, 19, tzinfo=timezone.utc)
     for _ in range(2):
-        deliver_due(session, policy=policy, budget=budget, now=now, transport=httpx.MockTransport(handler))
+        deliver_due(session, policy=policy, budget=budget, now=notification_clock.now(), transport=httpx.MockTransport(handler))
         session.commit()
     assert seen == ["primary.invalid", "fallback.invalid"]
     assert read_channel(session)["channel"]["delivery_state"] == {"state": "failed", "primary": "failed", "fallback": "failed"}
@@ -77,7 +80,7 @@ def test_failed_test_still_exercises_fallback_and_never_admits(session, policy):
         ensure_routes_verified(session)
 
 
-def test_configuration_change_invalidates_pending_test(session, policy):
+def test_configuration_change_invalidates_pending_test(session, policy, notification_clock):
     replace(session, policy)
     pending = request_route_test(session, actor_user_id="operator", actor_token_id=None)
     session.commit()
@@ -86,7 +89,7 @@ def test_configuration_change_invalidates_pending_test(session, policy):
     def handler(request):
         pytest.fail("Superseded tests must not deliver")
     deliver_due(session, policy=policy, budget=DeliveryBudget(1, (), 1, 1),
-        now=datetime(2026, 11, 19, tzinfo=timezone.utc), transport=httpx.MockTransport(handler))
+        now=notification_clock.now(), transport=httpx.MockTransport(handler))
     session.commit()
     assert session.get(NotificationEventRow, pending["operation_id"]).state == "failed"
     with pytest.raises(NotificationDeliveryUnconfirmed):

@@ -1,6 +1,6 @@
 """Offline contracts for the Foundation notification boundary."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 
 import httpx
@@ -18,11 +18,25 @@ from backend.admin.notifications.configuration import (
 )
 from backend.admin.notifications.models import NotificationChannelRow, NotificationEventRow
 from backend.admin.notifications.errors import NotificationRouteInvalid, NotificationDeliveryUnconfirmed
+from backend.core.time import FixedClock, reset_clock, set_clock
 
 
 @compiles(JSONB, "sqlite")
 def _sqlite_jsonb(element, compiler, **kw):
     return "JSON"
+
+
+@pytest.fixture(params=[
+    pytest.param(datetime(2025, 11, 19, tzinfo=timezone.utc), id="2025-11-19"),
+    pytest.param(datetime(2027, 11, 19, tzinfo=timezone.utc), id="2027-11-19"),
+])
+def notification_clock(request):
+    clock = FixedClock(request.param)
+    set_clock(clock)
+    try:
+        yield clock
+    finally:
+        reset_clock()
 
 
 @pytest.fixture
@@ -106,11 +120,12 @@ def test_event_outbox_deduplicates_in_caller_transaction_and_rejects_raw_evidenc
         enqueue_notification(session, **args)
 
 
-def test_test_request_is_pending_until_both_routes_deliver(session, policy):
+def test_test_request_is_pending_until_both_routes_deliver(session, policy, notification_clock):
     from backend.admin.notifications.delivery import DeliveryBudget, deliver_due
     replace(session, policy)
     pending = request_route_test(session, actor_user_id="operator", actor_token_id=None)
     session.commit()
+    assert session.get(NotificationEventRow, pending["operation_id"]).next_attempt_at == notification_clock.now()
     with pytest.raises(NotificationDeliveryUnconfirmed):
         ensure_routes_verified(session)
     seen = []
@@ -118,11 +133,10 @@ def test_test_request_is_pending_until_both_routes_deliver(session, policy):
         seen.append((request.url.host, request.headers["idempotency-key"]))
         return httpx.Response(204)
     budget = DeliveryBudget(max_attempts_per_route=2, retry_delays_seconds=(10,), timeout_seconds=1, batch_size=1)
-    now = datetime(2026, 11, 19, tzinfo=timezone.utc)
-    deliver_due(session, policy=policy, budget=budget, now=now, transport=httpx.MockTransport(handler))
+    deliver_due(session, policy=policy, budget=budget, now=notification_clock.now(), transport=httpx.MockTransport(handler))
     session.commit()
     assert read_channel(session)["channel"]["delivery_state"]["state"] == "pending"
-    deliver_due(session, policy=policy, budget=budget, now=now, transport=httpx.MockTransport(handler))
+    deliver_due(session, policy=policy, budget=budget, now=notification_clock.now(), transport=httpx.MockTransport(handler))
     session.commit()
     ensure_routes_verified(session)
     assert seen == [("primary.invalid", pending["operation_id"]), ("fallback.invalid", pending["operation_id"])]
