@@ -15,26 +15,33 @@ from backend.admin.errors import AuthForbidden
 from backend.admin.models import (
     AuditEventRow,
     RoleRow,
+    SystemParameterRow,
     UserGroupMemberRow,
     UserGroupRow,
     UserRow,
 )
+from backend.admin.system_parameters import registry as parameter_registry
+from backend.admin.system_parameters import reset_parameter_store
 from backend.channel import mirror_reads
 from backend.channel import service as channels
 from backend.channel.channel_run import mint_on_demand_run
 from backend.channel.errors import ChannelRequestInvalid
 from backend.channel.models import (
+    ChannelDatasetRow,
+    ChannelNodeExecutionRow,
     ChannelRow,
     ChannelRunRow,
     ChannelVersionRow,
     InboundPathRow,
 )
 from backend.channel.run_store import get_run_store
+from backend.channel.runner import run_channel_job
 from backend.core import db
 from backend.core.config import reset_settings_cache
 from backend.core.secrets import encrypt_secret
 from backend.core.time import utc_now
 from backend.jobs.models import JobRow
+from backend.jobs.store import get_job_store
 from backend.metadata.capture import control
 from backend.metadata.capture.runtime import CaptureRuntime
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked
@@ -71,6 +78,7 @@ from backend.metadata.source_access import (
 )
 from backend.metadata.sources.store import SourceRecord, get_source_store
 from backend.tags.models import TagAssignmentRow, TagRow, TagSubjectRevisionRow
+from backend.tags.store import reset_tag_store
 from backend.tests.test_capture_preparation import (
     management_engine as management_engine,
     native_target as native_target,
@@ -78,6 +86,7 @@ from backend.tests.test_capture_preparation import (
 from backend.tests.test_channel_api_pg import TRIGGER
 from backend.tests.test_mirror_generation_allocation import target_dsn as target_dsn
 from backend.worker.models import ScheduledTaskRow
+from backend.worker.parameters import assemble_system_parameters
 
 
 SOURCE = "publication-source"
@@ -97,9 +106,12 @@ def channel_management(management_engine, monkeypatch, request):
     request.addfinalizer(reset_settings_cache)
     reset_source_access_store()
     request.addfinalizer(reset_source_access_store)
+    reset_tag_store()
+    request.addfinalizer(reset_tag_store)
     models = (
         AuditEventRow,
         RoleRow,
+        SystemParameterRow,
         UserRow,
         UserGroupRow,
         UserGroupMemberRow,
@@ -119,6 +131,8 @@ def channel_management(management_engine, monkeypatch, request):
         ChannelVersionRow,
         InboundPathRow,
         ChannelRunRow,
+        ChannelNodeExecutionRow,
+        ChannelDatasetRow,
         ScheduledTaskRow,
         TagRow,
         TagAssignmentRow,
@@ -129,10 +143,17 @@ def channel_management(management_engine, monkeypatch, request):
     )
     sessions = sessionmaker(management_engine, autoflush=False)
     monkeypatch.setattr(db, "get_session_factory", lambda: sessions)
+    reset_parameter_store()
+    request.addfinalizer(reset_parameter_store)
+    monkeypatch.setattr(parameter_registry, "_registry", {})
+    monkeypatch.setattr(parameter_registry, "_group_order", ())
+    monkeypatch.setattr(parameter_registry, "_frozen", False)
+    assemble_system_parameters()
     monkeypatch.setattr(mirrors, "_store", None)
     monkeypatch.setattr(mirrors, "_source_read_authorizer", authorize_source_read_on)
     now = utc_now()
     with sessions.begin() as session:
+        assert session.get(SystemParameterRow, "schedule_timezone") is not None
         session.add_all(
             [
                 RoleRow(
@@ -602,6 +623,37 @@ def test_confirmed_channel_open_rechecks_grants_and_keeps_pin_across_switch(
     )
     job, _ = mint_on_demand_run(**start)
     runs = get_run_store()
+    worker_job, _ = mint_on_demand_run(**start)
+    assert runs.get_run(worker_job.id).graph is None
+    assert run_channel_job(worker_job.id) == {"status": "succeeded"}
+    completed = get_job_store().get(worker_job.id)
+    assert completed.status == "succeeded"
+    assert completed.result == {
+        "schema": "channel_run.v1",
+        "channel_id": channel.id,
+        "version": version.number,
+        "outcome": "completed",
+    }
+    worker_run = runs.get_run(worker_job.id)
+    assert worker_run.mirror_execution_user_id == READER
+    assert worker_run.graph == version.graph
+    trigger_execution, execution = runs.list_executions(worker_job.id)
+    assert (trigger_execution.node_id, trigger_execution.status) == (
+        start["trigger_node_id"],
+        "succeeded",
+    )
+    assert (execution.node_id, execution.status) == (read_node["id"], "succeeded")
+    assert execution.output == {
+        "rows": [first, second],
+        "generation_id": generation_id,
+        "source_ids": [SOURCE],
+        "freshness": "unknown",
+    }
+    assert worker_run.mirror_state["source_ids"] == [SOURCE]
+    assert worker_run.mirror_state["pins"] == {
+        mirror_id: {"generation_id": generation_id, "source_id": SOURCE}
+    }
+
     run = runs.get_run(job.id)
     assert run.mirror_execution_user_id == READER
     page = mirror_reads.read_run_page(run, mirror_id=mirror_id, after_key=None, limit=1)
@@ -649,7 +701,20 @@ def test_confirmed_channel_open_rechecks_grants_and_keeps_pin_across_switch(
         updated,
     )
 
+    revoked_job, _ = mint_on_demand_run(**start)
+    assert get_job_store().get(revoked_job.id).status == "queued"
+    assert runs.get_run(revoked_job.id).mirror_execution_user_id == READER
     assert delete_membership(READER)
+    assert run_channel_job(revoked_job.id) == {"status": "failed"}
+    denied = get_job_store().get(revoked_job.id)
+    assert (denied.status, denied.error_code, denied.result) == (
+        "failed",
+        "AUTH_FORBIDDEN",
+        None,
+    )
+    assert runs.list_executions(revoked_job.id) == []
+    assert runs.get_run(revoked_job.id).mirror_state is None
+
     run = runs.get_run(job.id)
     with pytest.raises(mirror_reads.MirrorDataForbidden):
         mirror_reads.read_run_page(run, **next_page)
