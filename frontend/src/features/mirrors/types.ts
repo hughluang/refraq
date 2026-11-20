@@ -3,7 +3,7 @@ export type RecoveryAction = "retry" | "run_now" | "postpone" | "manual" | "reco
 export type RecoveryRequest = {
   action: RecoveryAction;
   expected_history_epoch: string | number;
-  reason: string;
+  reason?: string;
   channel_id?: string;
   channel_version?: number;
 };
@@ -32,11 +32,11 @@ export type Mirror = {
   retained_lower_bound: unknown;
   committed_upper_bound: unknown;
   control: Record<string, unknown>;
-  progress: Record<string, unknown>;
+  progress: { stage: "scan" | "catching_up"; notification_offset: number; observed_at: string | null; generation_id: string } | null;
   profile: Record<string, unknown>;
   readiness: ReadinessItem[];
   fault: Record<string, unknown> | null;
-  operations?: Record<string, unknown>[];
+  operations?: { kind: string; state: string; control_revision: number; requested_at: string }[];
   published_reference_count: number;
 };
 export type PendingOperation = { operation_id: string; state: "pending" };

@@ -77,6 +77,7 @@ export type ColumnSemanticsPatch = {
 };
 
 export type CatalogObject = {
+  sync_table?: { source_name: string; qualified_table: string } | null;
   id: string;
   locator_key: string;
   source_id: string;

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import keyword
 import re
-from typing import Any, Literal
+from uuid import UUID
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
+    StringConstraints,
     field_validator,
     model_serializer,
     model_validator,
@@ -38,6 +40,7 @@ class RetryIn(BaseModel):
 
 
 _RESERVED_REFS = frozenset({"nodes", "channel", "run", "platform"})
+NodeName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
 
 
 class NodeIn(BaseModel):
@@ -46,7 +49,7 @@ class NodeIn(BaseModel):
     id: str = Field(pattern=_ID_RE.pattern)
     ref: str = Field(min_length=1, max_length=64)
     type: str = Field(min_length=1, max_length=64)
-    name: str
+    name: NodeName
     position: PositionIn
     config: dict[str, Any]
     on_error: Literal["stop", "continue", "error_output"] = "stop"
@@ -61,14 +64,6 @@ class NodeIn(BaseModel):
         if value is None:
             raise ValueError("execution_order must be a non-negative integer")
         return value
-
-    @field_validator("name")
-    @classmethod
-    def _name(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned or len(cleaned) > 128:
-            raise ValueError("name must be 1 to 128 characters")
-        return cleaned
 
     @field_validator("ref")
     @classmethod
@@ -247,12 +242,22 @@ class ChannelTagAssignmentIn(BaseModel):
     names: list[str] = Field(default_factory=list)
 
 
+class TableSetupIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    object_id: str = Field(min_length=1, max_length=128)
+    request_id: UUID
+    manual_name: NodeName = "Run manually"
+    read_name: NodeName = "Read current rows"
+
+
 class ChannelCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
     description: str | None = None
     tags: ChannelTagAssignmentIn | None = None
+    table_setup: TableSetupIn | None = None
 
     @field_validator("name")
     @classmethod
@@ -407,12 +412,27 @@ class SourceDisplayOut(BaseModel):
         return presented
 
 
+class MirrorBindingOut(BaseModel):
+    source_id: str
+    source_name: str
+    qualified_table: str
+    object_id: str
+    mirror_id: str
+    node_ids: list[str]
+    effect: Literal["first_open", "reopen", "shared"]
+    copy_published: bool
+    needs_attention: bool
+    current_reference: bool | None = None
+    publication_effect: Literal["first_open", "reopen", "shared", "request"] | None = None
+
+
 class DraftResponse(BaseModel):
     """Stored draft. ``graph`` is the stored document, not re-checked as ``GraphIn``."""
 
     draft_revision: int
     draft_updated_at: Instant
     graph: dict[str, Any]
+    mirror_bindings: list[MirrorBindingOut] = Field(default_factory=list)
     source_displays: list[SourceDisplayOut] = Field(default_factory=list)
 
 
@@ -451,6 +471,7 @@ class RunToCancelOut(BaseModel):
 
 
 class ConfirmationOut(BaseModel):
+    mirror_bindings: list[MirrorBindingOut] = Field(default_factory=list)
     draft_revision: int
     mirrors_to_open: list[dict[str, Any]]
     runs_to_cancel: list[RunToCancelOut]
@@ -469,6 +490,7 @@ class VersionOut(VersionSummaryOut):
     """Stored version. ``graph`` is the stored document, not re-checked as ``GraphIn``."""
 
     graph: dict[str, Any]
+    mirror_bindings: list[MirrorBindingOut] = Field(default_factory=list)
     source_displays: list[SourceDisplayOut] = Field(default_factory=list)
 
 

@@ -3069,3 +3069,56 @@ def _usage_row(
         created_at=created_at,
         expires_at=expires_at,
     )
+
+
+def test_review_identifies_distinct_tables_and_rechecks_source_visibility(client):
+    from backend.metadata.mirrors import service as mirrors
+    from backend.metadata.mirrors.store import MemoryMirrorStore
+
+    registry = MemoryMirrorStore()
+    mirrors.bind_management(store=registry)
+    try:
+        nodes = []
+        for suffix, name in [("a", "Sales"), ("b", "Returns")]:
+            source = _registered_source(client, key=suffix, name=name)
+            registry.bindings[suffix] = dict(
+                source_id=source["id"], source_name=name, source_key=suffix,
+                qualified_table="public.orders", object_id=suffix, table_identity=suffix,
+            )
+        for number, object_id in enumerate(["a", "b", "a"]):
+            nodes.append(dict(TRIGGER_GRAPH["nodes"][0], type="read.mirror", id=f"nd_{number}",
+                              ref=f"orders_{number}", config={"object_id": object_id, "freshness_policy": "fail"}))
+        channel = _channel(client, "Order review")
+        _save_draft(client, channel, dict(TRIGGER_GRAPH, nodes=nodes))
+        path = f"/channels/{channel}/publish/preview"
+        review = client.post(path)
+        assert review.status_code == 200, review.text
+        first, second = review.json()["mirror_bindings"]
+        assert (first["source_name"], first["qualified_table"], first["effect"], first["node_ids"]) == (
+            "Sales", "public.orders", "first_open", ["nd_0", "nd_2"])
+        assert second["source_name"] == "Returns"
+        mid = first["mirror_id"]
+        registry.mirrors[mid] = dict(registry.bindings["a"], id=mid, enabled=True, status="waiting")
+        assert client.post(path).json()["mirror_bindings"][0]["effect"] == "shared"
+        registry.mirrors[mid]["enabled"] = False
+        assert client.post(path).json()["mirror_bindings"][0]["effect"] == "reopen"
+        writer = _writer_client("unassigned_author")
+        try:
+            denied = writer.post(path)
+            assert denied.status_code == 403
+            assert "Sales" not in denied.text
+            assert writer.get(f"/channels/{channel}/draft").json()["mirror_bindings"] == []
+            draft = client.get(f"/channels/{channel}/draft").json()
+            draft["graph"]["nodes"][0]["config"]["freshness_policy"] = "continue"
+            saved = writer.put(f"/channels/{channel}/draft", json={
+                "base_revision": draft["draft_revision"], "graph": draft["graph"],
+            })
+            assert saved.status_code == 403
+        finally:
+            writer.__exit__(None, None, None)
+        del registry.bindings["a"]
+        assert client.post(path).status_code == 404
+        remaining = client.get(f"/channels/{channel}/draft").json()["mirror_bindings"]
+        assert [table["source_name"] for table in remaining] == ["Returns"]
+    finally:
+        mirrors.bind_management()

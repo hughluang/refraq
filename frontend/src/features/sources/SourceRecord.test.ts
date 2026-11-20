@@ -102,7 +102,7 @@ vi.mock("@refinedev/core", () => ({
   },
   useNotification: () => ({ open: notify }),
   useCan: ({ action }: { action?: string }) => ({
-    data: { can: action === "delete" ? gate.canDelete : gate.canEdit },
+    data: { can: action === "list" || (action === "delete" ? gate.canDelete : gate.canEdit) },
   }),
   usePermissions: () => ({ data: permissions.data, isLoading: false }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
@@ -273,6 +273,7 @@ describe("SourceRecord", () => {
     await renderRecord({ mode: "show", sourceId: "src_1" });
 
     expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Choose a table to synchronize" }).getAttribute("href")).toBe("/console/catalog?source=src_1");
     expect(screen.getByText(copy["sources.capture.set"])).toBeTruthy();
     expect(screen.getByText("23:00")).toBeTruthy();
     expect(screen.getByText("02:00")).toBeTruthy();

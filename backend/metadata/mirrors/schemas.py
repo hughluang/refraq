@@ -55,6 +55,13 @@ class HistoryPosition(StrictModel):
     entry_seq: int = Field(strict=True, ge=0)
 
 
+class SnapshotProgress(StrictModel):
+    stage: Literal["scan", "catching_up"]
+    notification_offset: int = Field(ge=0)
+    generation_id: str
+    observed_at: Instant | None
+
+
 class Mirror(StrictModel):
     id: str
     source_id: str
@@ -71,7 +78,7 @@ class Mirror(StrictModel):
     retained_lower_bound: HistoryPosition | None = None
     committed_upper_bound: HistoryPosition | None = None
     control: Control
-    progress: None = None
+    progress: SnapshotProgress | None = None
     profile: Profile
     readiness: list[Readiness]
     fault: None = None

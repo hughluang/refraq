@@ -16,11 +16,13 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { RecordPicker } from "@/components/form/RecordPicker";
-import { sourceRecordAdapter } from "@/components/form/recordPickerAdapters";
+import { RECORD_PICKER_LIMIT, type RecordPickerAdapter } from "@/components/form/recordPickerAdapters";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
-import { listCatalogObjects } from "@/features/sources/api/catalog";
-import { listSources } from "@/features/sources/api/sources";
+import { listCatalogObjects, listCatalogSources } from "@/features/sources/api/catalog";
+import { listSourceSchedules, runSchedule } from "@/features/schedules/api";
+import { ApiError } from "@/lib/api";
+import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import {
   objectCategoryLabel,
   objectTypeLabel,
@@ -29,6 +31,62 @@ import type { CatalogObject } from "@/features/sources/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
+
+const catalogSourceAdapter: RecordPickerAdapter = {
+  async search(q, signal) {
+    return (await listCatalogSources({ q, limit: RECORD_PICKER_LIMIT, signal })).items;
+  },
+  async resolve(ids, signal) {
+    const pages = await Promise.all(ids.map(source_id => listCatalogSources({ source_id, signal })));
+    return pages.flatMap(page => page.items);
+  },
+};
+
+function CollectStructure({ sourceId }: { sourceId: string }) {
+  const t = useTranslate();
+  const [schedule, setSchedule] = useState("");
+  const [state, setState] = useState<"loading" | "contact" | "ready" | "error" | "running" | "queued">("loading");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let current = true;
+    async function discover() {
+      for (let offset = 0; ; ) {
+        const page = await listSourceSchedules(sourceId, { limit: 100, offset });
+        if (!current) return;
+        const structure = page.items.find(item => item.work_kind === "structure");
+        if (structure) {
+          setSchedule(structure.id);
+          setState("ready");
+          return;
+        }
+        offset += page.items.length;
+        if (!page.items.length || offset >= page.total) {
+          setState("contact");
+          return;
+        }
+      }
+    }
+    setState("loading");
+    void discover().catch((err: unknown) => {
+      if (current) setState(err instanceof ApiError && [403, 404].includes(err.status) ? "contact" : "error");
+    });
+    return () => { current = false; };
+  }, [sourceId, attempt]);
+  if (state === "loading") return null;
+  if (state === "contact" || state === "queued") return <Text size="sm">{t(`catalog.collect.${state}`)}</Text>;
+  if (state === "error") return <Button variant="light" onClick={() => setAttempt(attempt + 1)}>{t("common.retry")}</Button>;
+  async function collect() {
+    setState("running");
+    try {
+      await runSchedule(schedule);
+      setState("queued");
+    } catch (err) {
+      setState(err instanceof ApiError && [403, 404].includes(err.status) ? "contact" : "ready");
+      presentProblemNotification(t, err);
+    }
+  }
+  return <Button variant="light" loading={state === "running"} onClick={() => void collect()}>{t("catalog.collect.action")}</Button>;
+}
 
 const PAGE_SIZE = 100;
 const COLUMN_COUNT = 7;
@@ -83,7 +141,7 @@ export function CatalogBrowse() {
 
   const urlSource = query.select("source");
   const [fallbackId, setFallbackId] = useState<string | null>(null);
-  const [phase, setPhase] = useState<"loading" | "empty" | "ready" | "unloaded">(
+  const [phase, setPhase] = useState<"loading" | "empty" | "ready" | "unloaded" | "restricted">(
     urlSource ? "ready" : "loading",
   );
   const sourceId = urlSource || fallbackId;
@@ -125,7 +183,7 @@ export function CatalogBrowse() {
       return;
     }
     setPhase("loading");
-    void listSources({ limit: 1, offset: 0 })
+    void listCatalogSources({ limit: 1, offset: 0 })
       .then((data) => {
         if (generation !== probeGeneration.current) return;
         const first = data.items[0];
@@ -138,6 +196,10 @@ export function CatalogBrowse() {
       })
       .catch((err: unknown) => {
         if (generation !== probeGeneration.current) return;
+        if (err instanceof ApiError && [403, 404].includes(err.status)) {
+          setPhase("restricted");
+          return;
+        }
         setPhase("unloaded");
         presentProblemNotification(t, err, { onRetry: () => void load() });
       });
@@ -150,12 +212,17 @@ export function CatalogBrowse() {
     };
   }, [load]);
 
+  const clearObjectFilters = () => {
+    query.clear();
+    if (urlSource) query.setFilter("source", urlSource);
+  };
   const refreshAction = (
-    <Button size="sm" variant="light" onClick={() => void reload()}>
+    <Button size="sm" variant="light" onClick={() => phase === "empty" ? load() : void reload()}>
       {t("catalog.refresh")}
     </Button>
   );
 
+  if (phase === "restricted" || list.accessDenied) return <ForbiddenState reason="metadata:read" />;
   return (
     <PageChrome
       title={t("catalog.title")}
@@ -169,7 +236,7 @@ export function CatalogBrowse() {
             <RecordPicker
               editable
               label={t("catalog.fields.source")}
-              adapter={sourceRecordAdapter()}
+              adapter={catalogSourceAdapter}
               value={sourceId}
               w={320}
               onChange={(value) => {
@@ -177,7 +244,7 @@ export function CatalogBrowse() {
               }}
             />
             <ListToolbar
-              query={query}
+              query={{ ...query, clear: clearObjectFilters, isFiltered: objectFiltered }}
               searchPlaceholder={t("catalog.fields.search")}
               filters={[
                 {
@@ -222,14 +289,15 @@ export function CatalogBrowse() {
         <PageBodySkeleton />
       ) : phase === "empty" ? (
         <EmptyState message={t("catalog.list.noSources")} />
-      ) : (
+      ) : phase === "unloaded" ? null : (
         <>
           <ListTable
             list={list}
             columnCount={COLUMN_COUNT}
             emptyMessage={t("catalog.empty")}
             noMatchMessage={t("catalog.list.noMatch")}
-            onClearFilters={query.clear}
+            emptyAction={sourceId && <CollectStructure key={sourceId} sourceId={sourceId} />}
+            onClearFilters={clearObjectFilters}
             head={
               <Table.Tr>
                 <Table.Th>{t("catalog.fields.name")}</Table.Th>

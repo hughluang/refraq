@@ -38,6 +38,7 @@ import { OverviewTab } from "@/features/sources/catalog-detail/OverviewTab";
 import { isSampleEligible } from "@/features/sources/catalog-detail/catalogObjectKind";
 import { SampleTab } from "@/features/sources/catalog-detail/SampleTab";
 import type { CatalogObject } from "@/features/sources/types";
+import { ApiError } from "@/lib/api";
 import { copyText } from "@/lib/copy-text";
 
 type CatalogObjectDetailProps = {
@@ -59,6 +60,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     canSampleLoading,
     canSampleData,
   );
+  const { data: canAuthor } = useCan({ resource: ModuleId.channels, action: ModuleAction.edit });
   const writable = Boolean(canWrite?.can);
 
   const [object, setObject] = useState<CatalogObject | null>(null);
@@ -101,7 +103,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
       } catch (err) {
         if (controller.signal.aborted) return;
         setFailed(true);
-        if (!refresh) {
+        if (!refresh || (err instanceof ApiError && [401, 403, 404].includes(err.status))) {
           setObject(null);
         }
         presentProblemNotification(t, err, { onRetry: () => {
@@ -226,7 +228,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
       {({ list, panels }) => (
         <PageChrome
           title={t("catalog.title")}
-          recordTitle={title}
+          recordTitle={object.sync_table ? `${object.sync_table.source_name} / ${title}` : title}
           titleBasis="10rem"
           description={object.business_name ?? undefined}
           recent={{ moduleId: "catalog", title }}
@@ -234,6 +236,11 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           tabs={list}
           actions={
             <Group gap="xs">
+              {object.sync_table && canAuthor?.can && (
+                <Button component={ConsoleLink} href={`/console/channels/new?object=${encodeURIComponent(object.id)}`} size="sm">
+                  {t("channels.create.setupTable")}
+                </Button>
+              )}
               <Button
                 component={ConsoleLink}
                 href="/console/catalog"

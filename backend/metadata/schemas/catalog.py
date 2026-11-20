@@ -93,7 +93,13 @@ class CatalogIndexOut(BaseModel):
     is_present: bool = True
 
 
+class CatalogSyncTable(BaseModel):
+    source_name: str
+    qualified_table: str
+
+
 class CatalogObjectOut(BaseModel):
+    sync_table: CatalogSyncTable | None = None
     id: str
     locator_key: str
     source_id: str
@@ -277,4 +283,15 @@ class SemanticsChangeOut(BaseModel):
 
 
 class SemanticsChangeListResponse(OffsetPage[SemanticsChangeOut]):
+    pass
+
+
+class CatalogSourceOut(BaseModel):
+    id: str
+    key: str
+    name: str
+    engine: str | None
+
+
+class CatalogSourceListResponse(OffsetPage[CatalogSourceOut]):
     pass

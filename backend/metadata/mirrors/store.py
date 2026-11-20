@@ -73,6 +73,9 @@ class MemoryMirrorStore:
     def refs(self, session):
         return deepcopy(self.references)
 
+    def version_mirrors(self, session, channel_id, version):
+        return {mid for (cid, mid), number in self.references.items() if cid == channel_id and version == number}
+
     def replace_refs(self, session, channel_id, version, mirror_ids):
         self.references = {key: value for key, value in self.references.items() if key[0] != channel_id}
         self.references.update({(channel_id, mid): version for mid in mirror_ids})
@@ -160,6 +163,10 @@ class SqlMirrorStore:
 
     def refs(self, session):
         return {(row.channel_id, row.mirror_id): row.channel_version for row in session.scalars(select(MirrorReferenceRow))}
+
+    def version_mirrors(self, session, channel_id, version):
+        return set(session.scalars(select(MirrorReferenceRow.mirror_id).where(
+            MirrorReferenceRow.channel_id == channel_id, MirrorReferenceRow.channel_version == version)))
 
     def replace_refs(self, session, channel_id, version, mirror_ids):
         for row in session.scalars(select(MirrorReferenceRow).where(MirrorReferenceRow.channel_id == channel_id)):

@@ -1,6 +1,19 @@
 import { apiClient } from "@/lib/api";
 import type { CatalogObject, SemanticsChange } from "@/features/sources/types";
-import { listSources } from "./sources";
+import type { OffsetPage } from "@/lib/pagination";
+
+type CatalogSource = { id: string; key: string; name: string; engine: string | null };
+
+export function listCatalogSources(opts: {
+  source_id?: string; q?: string; limit?: number; offset?: number; signal?: AbortSignal;
+}) {
+  const params = new URLSearchParams();
+  if (opts.source_id) params.set("source_id", opts.source_id);
+  if (opts.q) params.set("q", opts.q);
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  if (opts.offset != null) params.set("offset", String(opts.offset));
+  return apiClient<OffsetPage<CatalogSource>>(`/catalog/sources?${params}`, { signal: opts.signal });
+}
 
 export function listCatalogObjects(
   sourceId: string,
@@ -46,7 +59,7 @@ export async function resolveCatalogObject(objectRef: string, signal?: AbortSign
   const pageSize = 100;
   let sourceTotal = Infinity;
   for (let offset = 0; offset < sourceTotal; offset += pageSize) {
-    const page = await listSources({ q: sourceKey, limit: pageSize, offset, signal });
+    const page = await listCatalogSources({ q: sourceKey, limit: pageSize, offset, signal });
     if (offset === 0) sourceTotal = page.total;
     const source = page.items.find((item) => item.key === sourceKey && item.engine === engine);
     if (source) {

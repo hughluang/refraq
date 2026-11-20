@@ -1,6 +1,7 @@
 """Confirmed Channel publication through the guarded PostgreSQL Mirror target."""
 
 from contextlib import ExitStack, closing
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from uuid import uuid4
 
@@ -35,6 +36,7 @@ from backend.channel.models import (
     InboundPathRow,
 )
 from backend.channel.run_store import get_run_store
+from backend.channel.schemas.channels import TableSetupIn
 from backend.channel.runner import run_channel_job
 from backend.core import db
 from backend.core.config import reset_settings_cache
@@ -444,6 +446,26 @@ class FixtureCertificateVerifier:
 
 
 @pytest.mark.integration
+def test_concurrent_table_setup_records_one_creation(channel_management):
+    with channel_management.begin() as session:
+        role = session.get(RoleRow, "publisher-role")
+        role.permissions = [*role.permissions, "metadata:read"]
+
+    setup = TableSetupIn(object_id="items", request_id=uuid4())
+    def create():
+        return channels.create_channel(name="Items", description=None, actor_user_id=PUBLISHER,
+                                       actor_token_id=None, table_setup=setup, names=["Items"])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        requests = [pool.submit(create) for _ in range(2)]
+        first, replay = [request.result() for request in requests]
+    assert replay.id == first.id
+    with channel_management() as session:
+        actions = session.scalars(select(AuditEventRow.action).where(AuditEventRow.resource_id == first.id)).all()
+        assert sorted(actions) == ["channel.create", "tags.replace"]
+
+
+@pytest.mark.integration
 def test_confirmed_channel_open_rechecks_grants_and_keeps_pin_across_switch(
     channel_management, native_target, restricted_target, tmp_path
 ):
@@ -470,7 +492,7 @@ def test_confirmed_channel_open_rechecks_grants_and_keeps_pin_across_switch(
         **actor,
     )
     publish = dict(channel_id=channel.id, draft_revision=draft.draft_revision, **actor)
-    confirmed = channels.preview_publish(channel.id)["mirrors_to_open"]
+    confirmed = channels.preview_publish(channel.id, PUBLISHER)["mirrors_to_open"]
     (opening,) = confirmed
     mirror_id = opening["mirror_id"]
     assert opening == dict(source_id=SOURCE, object_id="items", mirror_id=mirror_id)
@@ -510,6 +532,9 @@ def test_confirmed_channel_open_rechecks_grants_and_keeps_pin_across_switch(
     )
     assert version.number == 1
     assert confirmation["mirrors_to_open"] == confirmed
+    assert confirmation["mirror_bindings"][0]["effect"] == "first_open"
+    table, = channels.version_mirror_bindings(PUBLISHER, version)
+    assert (table["effect"], table["publication_effect"]) == ("shared", "first_open")
     assert channels.get_version(channel.id, 1).graph == graph
     with channel_management() as session:
         ref = session.get(MirrorReferenceRow, (channel.id, mirror_id))

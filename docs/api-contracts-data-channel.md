@@ -628,11 +628,13 @@ On `succeeded` only:
 { "name": "Material master", "description": null, "tags": { "tag_ids": [], "names": [] } }
 ```
 
-`name` is required. `description` is optional. `tags` is optional. `tag_ids` and `names` both default to empty. Any other field is `422 REQUEST_INVALID`.
+`name` is required. `description`, `tags` and `table_setup` are optional. `tag_ids` and `names` both default to empty. Any other field is `422 REQUEST_INVALID`.
 
 An omitted `tags`, or both arrays empty, leaves the new channel with no Tags and `tag_revision` 1. `tag_ids` names existing Tags. `names` creates Tags in the same request. A rejected name or a set of more than ten leaves neither the channel nor a new Tag. A name that folds onto an existing Tag attaches it and does not return `TAG_NAME_CONFLICT`.
 
-`201` `{ "channel": { … } }`. The draft starts as `{ "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } }` with `draft_revision` 1. `active` is `false`.
+For catalog table setup, send `table_setup` with a Catalog Object `object_id` and a UUID `request_id`. Optional `manual_name` and `read_name` supply the initial editable node names in the author’s locale. Each must contain 1 to 128 characters after trimming whitespace. The service checks current catalog access and table eligibility. It creates a manual trigger connected to one `read.mirror` node with `freshness_policy: fail`. Retrying with the same actor, object and request ID returns the current Channel, including subsequent edits, Tags and the latest published version. Capture starts through confirmed publication.
+
+`201` `{ "channel": { … } }`. Without `table_setup` the draft starts as `{ "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } }` with `draft_revision` 1. `active` is `false`.
 
 ### 5.3 `GET /channels`
 
@@ -759,6 +761,8 @@ Publish body:
 - The caller must hold every Permission declared by node types present in the draft, including nodes that did not change. Missing one is `403 AUTH_FORBIDDEN`; `detail` names the node.
 - `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` lists the running published runs the new version will stop between nodes. Publish stores the version, reconciles the schedule row, and reconciles the inbound path. It does not change `active` and it does not cancel Jobs itself.
 - A published **Inbound Trigger** whose path another channel holds is `409` `CHANNEL_INBOUND_PATH_TAKEN`. One whose **Inbound Credential** does not exist is `422` `CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND`. Both are refused before the version is stored. Saving the draft does not change the path row. A later publish whose trigger is not inbound withdraws the row. Deactivation does not.
+
+Draft, preview and version detail expose `mirror_bindings` for tables visible under current Source grants. Each binding identifies the Source and qualified table, object and mirror IDs, and all referring node IDs. The preview names the effect of confirming (`first_open`, `reopen` or `shared`). The version detail distinguishes the recorded `publication_effect` from the current binding, published copy and attention state. For legacy receipts, `publication_effect` is `request` for an explicitly confirmed open and null when the effect is unknown. Clients confirm the previewed revision and exact `mirrors_to_open` tuples.
 
 ### 5.9 `GET /channels/{id}/versions` and `GET /channels/{id}/versions/{number}`
 

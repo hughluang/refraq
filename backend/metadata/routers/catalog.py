@@ -6,12 +6,15 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
+from backend.metadata.mirrors.service import catalog_sync_table
 from backend.admin.deps import get_actor_token_id, require_permission
+from backend.admin.errors import AuthForbidden
 from backend.admin.user_store import UserRecord
 from backend.core.admission import await_admitted
 from backend.core.pagination import (
     CATALOG_OBJECT_LIST,
     CATALOG_SEARCH,
+    SOURCE_LIST,
     JOIN_LIST,
     SEMANTICS_CHANGE_LIST,
     PageParams,
@@ -30,6 +33,7 @@ from backend.metadata.errors import (
     SourceNotFound,
 )
 from backend.metadata.source_access import allows
+from backend.metadata.sources.store import get_source_store
 from backend.metadata.sources.service import require_source
 from backend.metadata.catalog.present import (
     ObjectPresentProfile,
@@ -41,6 +45,8 @@ from backend.metadata.catalog.embedding import embedding_configured
 from backend.metadata.query import service as query_service
 from backend.metadata.query.compile_sample import SampleFilterSpec, SampleOrderSpec
 from backend.metadata.schemas.catalog import (
+    CatalogSourceOut,
+    CatalogSourceListResponse,
     CatalogColumnOut,
     CatalogColumnResponse,
     CatalogColumnSearchResponse,
@@ -118,14 +124,17 @@ def _column_out(view: catalog_views.ColumnView) -> CatalogColumnOut:
 
 
 def _object_out(
-    view: catalog_views.ObjectView, *, detail: bool = False
+    view: catalog_views.ObjectView, *, detail_for: str | None = None
 ) -> CatalogObjectOut:
-    profile = (
-        ObjectPresentProfile.HTTP_DETAIL
-        if detail
-        else ObjectPresentProfile.HTTP_SUMMARY
-    )
-    return CatalogObjectOut.model_validate(present_object(view, profile=profile))
+    if detail_for is None:
+        return CatalogObjectOut.model_validate(present_object(view, profile=ObjectPresentProfile.HTTP_SUMMARY))
+    payload = present_object(view, profile=ObjectPresentProfile.HTTP_DETAIL)
+    try:
+        payload["sync_table"] = catalog_sync_table(view.id, user_id=detail_for)
+    except AuthForbidden:
+        # A semantics writer can save without a catalog read grant.
+        payload["sync_table"] = None
+    return CatalogObjectOut.model_validate(payload)
 
 
 def _join_out(view: catalog_views.JoinView) -> JoinOut:
@@ -134,6 +143,26 @@ def _join_out(view: catalog_views.JoinView) -> JoinOut:
 
 def _join_out_from_record(record) -> JoinOut:
     return _join_out(catalog_views.join_view(record))
+
+
+@router.get("/catalog/sources", response_model=CatalogSourceListResponse)
+def list_catalog_sources(
+    source_id: str | None = None,
+    q: str | None = None,
+    page: PageParams = Depends(page_params(SOURCE_LIST)),
+    user: UserRecord = Depends(require_permission("metadata:read")),
+) -> CatalogSourceListResponse:
+    visible = catalog_reads.search_visible_source_ids(user.id)
+    if source_id is not None:
+        requested = frozenset([source_id])
+        visible = requested if visible is None else visible & requested
+    records, total = get_source_store().list_sources(
+        visible_ids=visible, query_text=q, limit=page.limit, offset=page.offset
+    )
+    return CatalogSourceListResponse(
+        items=[CatalogSourceOut.model_validate(record, from_attributes=True) for record in records],
+        total=total, limit=page.limit, offset=page.offset,
+    )
 
 
 @router.get("/sources/{source_id}/objects", response_model=CatalogObjectListResponse)
@@ -227,9 +256,7 @@ def get_object(
     user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectResponse:
     _require_object_permission(user.id, object_id, "metadata:read")
-    return CatalogObjectResponse(
-        object=_object_out(catalog_reads.get_object(object_id), detail=True)
-    )
+    return CatalogObjectResponse(object=_object_out(catalog_reads.get_object(object_id), detail_for=user.id))
 
 @router.get("/objects/{object_id}/ddl", response_model=CatalogDdlResponse)
 def get_object_ddl(
@@ -333,7 +360,7 @@ def patch_object_semantics(
     return CatalogObjectResponse(
         object=_object_out(
             catalog_views.object_view(record, include_columns=True),
-            detail=True,
+            detail_for=user.id,
         )
     )
 
@@ -374,7 +401,7 @@ def patch_columns_semantics_batch(
         semantic_source="user_input",
     )
     return CatalogColumnsSemanticsBatchResponse(
-        object=_object_out(catalog_reads.get_object(object_id), detail=True),
+        object=_object_out(catalog_reads.get_object(object_id), detail_for=user.id),
         updated_count=result["updated_count"],
         requested_count=result["requested_count"],
         skipped_columns=result["skipped_columns"],

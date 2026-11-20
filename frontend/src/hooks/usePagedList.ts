@@ -2,6 +2,7 @@
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
+import { ApiError } from "@/lib/api";
 import type { ListPresentation } from "@/lib/list-state";
 import { listPresentationOf } from "@/lib/list-state";
 import {
@@ -37,6 +38,7 @@ export type UsePagedListResult<T> = {
   loading: boolean;
   error: string | null;
   errorRequestId: string | null;
+  accessDenied: boolean;
   reload: () => Promise<void>;
   pageSize: number;
   presentation: ListPresentation;
@@ -65,8 +67,8 @@ export function usePagedList<T>({
   const [items, setItems] = useState<T[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(initialLoading);
-  const [error, setError] = useState<string | null>(null);
-  const [errorRequestId, setErrorRequestId] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ message: string; requestId: string | null; accessDenied: boolean } | null>(null);
+  const error = failure?.message ?? null;
   const generationRef = useRef(0);
   const resetKey = JSON.stringify(resetDeps);
   const resetKeyRef = useRef(resetKey);
@@ -90,30 +92,20 @@ export function usePagedList<T>({
   const applyResult = useCallback(
     (result: PagedListLoadResult<T>) => {
       if (result.kind === "stale") return;
-      if (result.kind === "disabled") {
+      setLoading(false);
+      if (result.kind !== "error") {
+        setFailure(null);
+        setItems(result.kind === "ok" ? result.page.items : []);
+        setTotal(result.kind === "ok" ? result.page.total : 0);
+        return;
+      }
+      const accessDenied = result.error instanceof ApiError && [403, 404].includes(result.error.status);
+      setFailure({ message: result.message, requestId: result.requestId, accessDenied });
+      if (accessDenied) {
         setItems([]);
         setTotal(0);
-        setError(null);
-        setErrorRequestId(null);
-        setLoading(false);
-        return;
       }
-      if (result.kind === "ok") {
-        setItems(result.page.items);
-        setTotal(result.page.total);
-        setError(null);
-        setErrorRequestId(null);
-        setLoading(false);
-        return;
-      }
-      if (result.kind === "redirect") {
-        setLoading(false);
-        return;
-      }
-      setError(result.message);
-      setErrorRequestId(result.requestId);
       onError?.(result.error);
-      setLoading(false);
     },
     [onError],
   );
@@ -167,7 +159,8 @@ export function usePagedList<T>({
     setPage,
     loading,
     error,
-    errorRequestId,
+    errorRequestId: failure?.requestId ?? null,
+    accessDenied: failure?.accessDenied ?? false,
     reload: load,
     pageSize,
     presentation: listPresentationOf({

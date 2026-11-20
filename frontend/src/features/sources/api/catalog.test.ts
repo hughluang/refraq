@@ -15,8 +15,8 @@ it("resolves exact locators through stable source browsing, never ranked search"
   vi.stubGlobal("fetch", fetch);
   expect(await resolveCatalogObject(locator)).toEqual({ object: { id: "object-17", columns: [] } });
   expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-    "/api/sources?q=demo&limit=100&offset=0",
-    "/api/sources?q=demo&limit=100&offset=100",
+    "/api/catalog/sources?q=demo&limit=100&offset=0",
+    "/api/catalog/sources?q=demo&limit=100&offset=100",
     "/api/sources/src/objects?q=orders&limit=100&offset=0&object_type=table&include_absent=true",
     "/api/sources/src/objects?q=orders&limit=100&offset=100&object_type=table&include_absent=true",
     "/api/objects/object-17",

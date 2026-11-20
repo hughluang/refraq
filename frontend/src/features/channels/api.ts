@@ -73,6 +73,7 @@ export function listChannels(params?: {
 }
 
 export function createChannel(body: {
+  table_setup?: { object_id: string; request_id: string; manual_name?: string; read_name?: string };
   name: string;
   description: string | null;
   tags?: { tag_ids: string[]; names: string[] };

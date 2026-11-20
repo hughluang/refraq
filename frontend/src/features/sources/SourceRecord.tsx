@@ -894,6 +894,7 @@ function CaptureSettings({ form, source, editable }: {
   editable: boolean;
 }) {
   const t = useTranslate();
+  const catalog = useCan({ resource: ModuleId.catalog, action: ModuleAction.list });
   const [expanded, setExpanded] = useState(Boolean(source?.capture_credential_set || source?.snapshot_window));
   const intent = form.values.captureIntent;
   useEffect(() => {
@@ -929,6 +930,11 @@ function CaptureSettings({ form, source, editable }: {
             {t(expanded ? "sources.workflow.hideCapture" : "sources.workflow.showCapture")}
           </Button>
         </Group>
+        {source?.kind === "database" && catalog.data?.can && (
+          <Button component={ConsoleLink} href={`/console/catalog?source=${encodeURIComponent(source.id)}`} variant="light" size="sm" w="fit-content">
+            {t("catalog.chooseSyncTable")}
+          </Button>
+        )}
         <Stack id="source-capture-settings" gap="lg" hidden={!expanded} style={!expanded ? { display: "none" } : undefined}>
           <Stack gap="sm">
             <DisplayField label={t("sources.capture.credential")} value={credential} helper={t("sources.capture.helper")} />

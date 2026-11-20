@@ -101,6 +101,7 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
+| `GET` | `/catalog/sources` | `metadata:read` | Page visible Source identities (id, key, name, engine), including Sources without collected objects. Accepts `source_id`, `q`, `limit`, and `offset`. A hidden or unknown id returns an empty page. |
 | `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: `q`, `object_type`, `include_absent`, `business_semantics_ready`, `limit`, `offset`) |
 | `GET` | `/objects/{id}` | `metadata:read` | Object detail including columns |
 | `GET` | `/objects/{id}/ddl` | `metadata:read` | DDL text when stored |
@@ -110,6 +111,8 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 **Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 100, max 500. `total` is the filtered set. Order: `schema_name`, `name`, `object_type`.
 
 `GET /sources/{id}/objects`: no level, or an unknown Source, is `404` `SOURCE_NOT_FOUND`. A level without `metadata:read` is `403` `AUTH_FORBIDDEN`. `GET /objects/{id}`, DDL, semantics-changes, object semantics write, and batch column semantics (`PATCH /objects/{id}/columns/semantics`) use `404` `CATALOG_OBJECT_NOT_FOUND` when the caller has no level on the object's Source. `PATCH /columns/{id}/semantics` uses `404` `CATALOG_COLUMN_NOT_FOUND` when that column's Source is hidden. Join read uses the object's not-found code. `POST /joins` and `POST /joins:batch` use `404` `CATALOG_COLUMN_NOT_FOUND` when an endpoint Source is hidden. `PATCH`, reject, restore, and delete of a join use `404` `CATALOG_JOIN_NOT_FOUND` when an endpoint Source is hidden. A level without `metadata:write` on a write is `403` `AUTH_FORBIDDEN`.
+
+Object detail, object semantics saves and batch column semantics saves include `object.sync_table`. It contains `source_name` and `qualified_table` for a supported, present table when the caller has `metadata:read` on the Source. Otherwise the field is null.
 
 List `q` is optional. When set, it matches a literal case-insensitive substring of `schema_name`, `name`, or `business_name` (not `locator_key`, not `business_description`). `include_absent` defaults true (tombstones stay in **Current catalog**). `business_semantics_ready` is optional `true` | `false`; omit means no readiness filter.
 

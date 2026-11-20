@@ -43,6 +43,10 @@ def test_shared_open_is_transactional_and_reused(opened):
         )
     assert second == [dict(source_id="s1", object_id="o1", mirror_id=mid)]
     assert len(store.operations) == 1
+    assert store.receipts["op1"]["result"][0]["effect"] == "first_open"
+    assert store.receipts["op2"]["result"][0]["effect"] == "shared"
+    assert service.current_version_mirrors(channel_id="c2", version=1) == {mid}
+    assert service.current_version_mirrors(channel_id="c1", version=2) == set()
     assert service.get_mirror(mid)["published_reference_count"] == 2
     with pytest.raises(RuntimeError):
         with store.transaction() as session:
@@ -56,6 +60,31 @@ def test_shared_open_is_transactional_and_reused(opened):
             session, channel_id="c1", channel_version=2, object_ids=[]
         )
     assert service.get_mirror(mid)["published_reference_count"] == 1
+
+
+def test_reopen_receipt_keeps_effect_on_replay(opened):
+    store, mid = opened
+    service.set_enabled(mid, enabled=False, actor_user_id="operator")
+    binding = service.resolve_object_binding("o1")
+    assert binding["effect"] == "reopen"
+    identity = dict(source_id="s1", object_id="o1", mirror_id=mid)
+    args = dict(operation_id="channel:c1:2", channel_id="c1", channel_version=2,
+                object_ids=["o1"], confirmed_mirrors_to_open=[identity])
+    with store.transaction() as session:
+        assert service.ensure_open_intent(session, **args) == [identity]
+    assert service.resolve_object_binding("o1")["effect"] == "shared"
+    with store.transaction() as session:
+        assert service.ensure_open_intent(session, **args) == [identity]
+    assert service.publication_effects(channel_id="c1", version=2) == {"o1": "reopen"}
+
+
+def test_legacy_publication_only_proves_confirmed_requests(opened):
+    store, mid = opened
+    identity = dict(source_id="s1", object_id="o1", mirror_id=mid)
+    shared = dict(source_id="s1", object_id="o2", mirror_id="m2")
+    with store.transaction() as session:
+        store.save_receipt(session, "channel:c1:1", {"confirmed_mirrors_to_open": [identity]}, [identity, shared])
+    assert service.publication_effects(channel_id="c1", version=1) == {"o1": "request"}
 
 
 def test_invalid_binding_does_not_partially_open():
@@ -375,3 +404,38 @@ def test_authorization_requires_active_user_role_and_membership(monkeypatch):
     )
     with pytest.raises(AppError, match="AUTH_FORBIDDEN"):
         authorize_source_data(execution_user_id="u", source_id="s")
+
+
+def test_progress_projects_only_current_correlated_notifications(opened, monkeypatch):
+    from backend.metadata.capture.store import get_source_store
+    from backend.metadata.mirrors.schemas import Mirror
+
+    store, mid = opened
+    op = next(iter(store.operations.values()))
+    authority = dict(source_id="s1", resource_binding_id="binding", owner_epoch=1,
+                     runtime_instance_id="runtime", control_revision=4, credential_revision=2,
+                     capture_generation="3")
+    binding = dict(authority=authority, object_id="o1", table_identity="o1", qualified_table="public.orders",
+                   history_epoch="epoch", schema_fingerprint="schema", partition_identity={"partition": 0})
+    op["allocation"] = dict(generation_id="generation", observed=True, mirror_revision=1, binding=binding)
+    snapshot = dict(id="signal", receipt=True, state="snapshotting", binding=dict(
+        authority=authority, mirror_id=mid, mirror_revision=1, allocation_operation_id=op["id"],
+        generation_id="generation", table_identity="o1", qualified_table="public.orders",
+        history_epoch="epoch", schema_fingerprint="schema", data_partition={"partition": 0}))
+    state = dict(authority, desired="configured", binding_id="binding", applied_revision=4,
+                 published_scope=service.read_published_scope(store, "s1"),
+                 incremental_snapshots=dict(active="generation", generations={"generation": snapshot}))
+    monkeypatch.setitem(get_source_store().capture_bindings, "s1", state)
+
+    assert Mirror.model_validate(service.get_mirror(mid)).progress is None
+    snapshot["scan"] = dict(offset=1, timestamp=1700000000123)
+    progress = Mirror.model_validate(service.get_mirror(mid)).progress
+    assert progress.stage == "scan"
+    assert progress.observed_at.isoformat() == "2023-11-14T22:13:20.123000+00:00"
+    snapshot.update(state="catching_up", completion=dict(offset=2, timestamp=1700000001456))
+    assert service.list_mirrors()["items"][0]["progress"]["stage"] == "catching_up"
+    snapshot["binding"]["allocation_operation_id"] = "unrelated"
+    assert service.get_mirror(mid)["progress"] is None
+    snapshot["binding"]["allocation_operation_id"] = op["id"]
+    state["owner_epoch"] += 1
+    assert service.get_mirror(mid)["progress"] is None

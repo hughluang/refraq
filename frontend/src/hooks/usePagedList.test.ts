@@ -40,6 +40,25 @@ function pageOf<T>(items: T[], query: PageQuery): OffsetPage<T> {
 }
 
 describe("usePagedList resetDeps reload", () => {
+  it("clears restricted rows and reports the latest retry failure", async () => {
+    const fetch = vi.fn((query: PageQuery) => Promise.resolve(pageOf(["visible"], query)));
+    const { result } = renderHook(() => usePagedList({ pageSize: 50, fetch }));
+    await act(async () => {});
+    expect(result.current.items).toEqual(["visible"]);
+
+    fetch.mockRejectedValueOnce(new ApiError(403, "AUTH_FORBIDDEN", "Access revoked"));
+    await act(() => result.current.reload());
+    expect(result.current.accessDenied).toBe(true);
+    expect(result.current.items).toEqual([]);
+
+    fetch.mockRejectedValueOnce(new ApiError(500, "UNKNOWN", "Offline", "retry-failed"));
+    await act(() => result.current.reload());
+    expect(result.current.accessDenied).toBe(false);
+    expect(result.current.errorRequestId).toBe("retry-failed");
+    expect(result.current.presentation.state).toBe("unloaded");
+    expect(result.current.items).toEqual([]);
+  });
+
   it("reloads on page 1 when only resetDeps change (stable fetch)", async () => {
     const fetch = vi.fn((query: PageQuery) => pageOf(["a", "b", "c"], query));
     const { result, rerender } = renderHook(

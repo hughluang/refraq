@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from sqlalchemy import false, func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert
 
 from backend.channel.errors import ChannelDraftConflict, ChannelNotFound
 from backend.channel.models import ChannelRow, ChannelVersionRow
@@ -74,6 +75,7 @@ class ChannelStore(Protocol):
         self,
         record: ChannelRecord,
         *,
+        replay_existing: bool = False,
         after: Callable[[Session | None], None] | None = None,
     ) -> ChannelRecord: ...
 
@@ -165,9 +167,14 @@ class MemoryChannelStore:
         self,
         record: ChannelRecord,
         *,
+        replay_existing: bool = False,
         after: Callable[[Session | None], None] | None = None,
     ) -> ChannelRecord:
         with self._lock:
+            if record.id in self._channels:
+                if not replay_existing:
+                    raise ValueError("Channel id already exists")
+                return _clone_channel(self._channels[record.id])
             self._channels[record.id] = _clone_channel(record)
             if after is not None:
                 try:
@@ -366,24 +373,29 @@ class SqlChannelStore:
         self,
         record: ChannelRecord,
         *,
+        replay_existing: bool = False,
         after: Callable[[Session | None], None] | None = None,
     ) -> ChannelRecord:
         with session_scope() as session:
-            session.add(
-                ChannelRow(
-                    id=record.id,
-                    name=record.name,
-                    description=record.description,
-                    active=record.active,
-                    draft_graph=copy.deepcopy(record.draft_graph),
-                    draft_revision=record.draft_revision,
-                    draft_updated_at=record.draft_updated_at,
-                    created_at=record.created_at,
-                    updated_at=record.updated_at,
-                    failure_streak=record.failure_streak,
-                )
+            statement = insert(ChannelRow).values(
+                id=record.id,
+                name=record.name,
+                description=record.description,
+                active=record.active,
+                draft_graph=copy.deepcopy(record.draft_graph),
+                draft_revision=record.draft_revision,
+                draft_updated_at=record.draft_updated_at,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
+                failure_streak=record.failure_streak,
             )
-            session.flush()
+            if replay_existing:
+                statement = statement.on_conflict_do_nothing(index_elements=[ChannelRow.id])
+            if session.scalar(statement.returning(ChannelRow.id)) is None:
+                existing = session.get(ChannelRow, record.id)
+                if existing is None:
+                    raise ChannelNotFound()
+                return _channel_from_row(existing)
             if after is not None:
                 after(session)
             return _clone_channel(record)

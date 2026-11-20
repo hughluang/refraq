@@ -13,7 +13,7 @@ import { listExecutions } from "@/features/channels/api";
 import { nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { RunErrorText } from "@/features/channels/RunErrorText";
 import type { Graph, NodeExecution } from "@/features/channels/types";
-import { successRequestId } from "@/lib/api";
+import { ApiError, successRequestId } from "@/lib/api";
 import { formatJobDuration } from "@/lib/datetime";
 import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
@@ -92,6 +92,11 @@ export function RunExecutionBrowser({
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
+        if (reason instanceof ApiError && [401, 403, 404].includes(reason.status)) {
+          setItems([]);
+          setSelected(null);
+          setTotal(0);
+        }
         setFailure(reason);
         presentProblemNotification(tRef.current, reason, {
           onRetry: () => retryRef.current(),

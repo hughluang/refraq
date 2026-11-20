@@ -6,8 +6,10 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createChannel,
   getChannel,
   getDraft,
+  getVersion,
   getRun,
   listChannels,
   listNodeTypes,
@@ -19,6 +21,7 @@ import {
   validateDraft,
 } from "@/features/channels/api";
 import type { UserRow } from "@/features/users/types";
+import * as feedback from "@/components/feedback/presentProblemNotification";
 import en from "@/locales/en-US/common.json";
 import zh from "@/locales/zh-CN/common.json";
 import {
@@ -38,7 +41,7 @@ vi.mock("@refinedev/core", () => ({
     options?.defaultValue ?? key,
   useNotification: () => ({ open: notify }),
   useCan: () => ({ data: { can: true } }),
-  usePermissions: () => ({ data: [] as string[] }),
+  usePermissions: () => ({ data: ["sources:data_read"] }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
 }));
 
@@ -254,6 +257,33 @@ describe("ChannelRecord draft access", () => {
     }));
   });
 
+  it("shows the selected table before create and preserves the request across a refreshed form", async () => {
+    window.history.replaceState(null, "", "/console/channels/new?object=obj_orders");
+    vi.stubGlobal("fetch", vi.fn(async (input) => String(input).includes("/objects/")
+      ? Response.json({ object: { id: "obj_orders", sync_table: { source_name: "Sales", qualified_table: "public.orders" } } })
+      : Response.json({ items: [], total: 0 })));
+    vi.mocked(createChannel).mockRejectedValue(new Error("response lost"));
+    const { ChannelRecord } = await import("@/features/channels/ChannelRecord");
+    const openCreate = () => render(createElement(MantineProvider, { env: "test" }, createElement(ChannelRecord, { mode: "create" })));
+    const initial = openCreate();
+    await screen.findByText("Sales / public.orders");
+    expect(createChannel).not.toHaveBeenCalled();
+    const submit = async () => {
+      fireEvent.change(screen.getByRole("textbox", { name: /channels.fields.name/ }), { target: { value: "Verify Orders" } });
+      fireEvent.click(screen.getByRole("button", { name: "channels.create.submit" }));
+    };
+    await submit();
+    await waitFor(() => expect(createChannel).toHaveBeenCalledTimes(1));
+    const first = vi.mocked(createChannel).mock.calls[0][0];
+    expect(first.table_setup).toEqual({ object_id: "obj_orders", request_id: expect.any(String), manual_name: "channels.seed.manual", read_name: "channelNodeTypes.read.mirror.label" });
+    initial.unmount();
+    openCreate();
+    await screen.findByText("Sales / public.orders");
+    await submit();
+    await waitFor(() => expect(createChannel).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(createChannel).mock.calls[1][0].table_setup).toEqual(first.table_setup);
+  });
+
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
@@ -356,6 +386,51 @@ describe("ChannelRecord draft access", () => {
       false,
     );
     expect(document.querySelector(".channel-flow-node")?.textContent).toContain("Manual");
+  });
+
+  it("restores the published table and its synchronization link on a fresh visit", async () => {
+    const version = { number: 3, channel_id: "chn_1", published_at: now, published_by_name: null, published_by_user_id: "usr_1" };
+    const graph = triggerGraph();
+    vi.mocked(getChannel).mockResolvedValue({ channel: { ...channel(), latest_version: version } });
+    const notice = vi.spyOn(feedback, "presentProblemNotification").mockImplementation(() => {});
+    vi.mocked(getVersion).mockRejectedValueOnce(new Error("Version temporarily unavailable")).mockResolvedValue({ version: { ...version,
+      graph: { ...graph, nodes: [...graph.nodes, {
+        ...graph.nodes[0], id: "orders", type: "read.mirror", config: { object_id: "obj_orders" },
+      }] },
+      mirror_bindings: [{ object_id: "obj_orders", source_id: "src_sales", source_name: "Sales",
+        qualified_table: "public.orders", node_ids: ["orders"], mirror_id: "mir_orders", effect: "shared" }],
+    } });
+    await renderRecord("show");
+    await waitFor(() => expect(notice).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Sales / public.orders")).toBeNull();
+    const retry = notice.mock.calls[0][2]?.onRetry;
+    expect(retry).toBeTypeOf("function");
+    act(() => retry!());
+    expect(await screen.findByText("Sales / public.orders")).toBeTruthy();
+    expect(getDraft).toHaveBeenCalledTimes(1);
+    notice.mockRestore();
+    expect(screen.getByRole("link", { name: "channels.tableReview.follow" }).getAttribute("href")).toBe(
+      "/console/mirrors/mir_orders?channel=chn_1&version=3",
+    );
+    expect(screen.getByRole("link", { name: "channels.verify.run" })).toBeTruthy();
+    expect(screen.queryByText("channels.tableReceipt.first_open")).toBeNull();
+  });
+
+  it("confirms the published graph when the saved draft has no trigger", async () => {
+    const graph = triggerGraph();
+    const version = { number: 2, channel_id: "chn_1", published_at: now, published_by_name: null, published_by_user_id: "usr_1" };
+    vi.mocked(getChannel).mockResolvedValue({ channel: { ...channel(), latest_version: version } });
+    vi.mocked(getVersion).mockResolvedValue({ version: { ...version, mirror_bindings: [{ object_id: "obj_orders", mirror_id: "mirror1", source_id: "sales", source_name: "Sales", qualified_table: "public.orders", node_ids: ["orders"], effect: "shared" }], graph: { ...graph, nodes: [...graph.nodes, {
+      ...graph.nodes[0], id: "orders", type: "read.mirror", config: { object_id: "obj_orders" },
+    }] } } });
+    vi.mocked(startRun).mockResolvedValue({ run: runningDetail().run });
+    window.history.replaceState(null, "", "/console/channels/chn_1/edit?verifyObject=obj_orders&verifyNode=orders");
+    await renderRecord("edit");
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("channels.verify.confirm");
+    fireEvent.click(within(dialog).getByRole("button", { name: "channels.run.confirm" }));
+    await waitFor(() => expect(startRun).toHaveBeenCalledWith("chn_1", { target: "published" }));
+    expect(saveDraft).not.toHaveBeenCalled();
   });
 
   it("opens the same run confirmation from the header and a node", async () => {
@@ -684,6 +759,7 @@ describe("ChannelRecord draft access", () => {
     vi.mocked(previewPublish).mockResolvedValue({
       ...publishPreview,
       draft_revision: 2,
+      mirror_bindings: [{ source_id: "source_wh", object_id: "catalog_orders", mirror_id: "mirror_reserved", source_name: "Warehouse", qualified_table: "public.orders", node_ids: ["nd_mirror"], effect: "first_open" }],
       mirrors_to_open: [{ source_id: "source_wh", object_id: "catalog_orders", mirror_id: "mirror_reserved" }],
     });
     const actualApi = await vi.importActual<typeof import("@/features/channels/api")>("@/features/channels/api");
@@ -697,7 +773,7 @@ describe("ChannelRecord draft access", () => {
     }));
     expect(previewPublish).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "channels.details.title" }));
+    fireEvent.click(screen.getByRole("button", { name: "channels.settings.mirrorExecutionUserRequired" }));
     const settings = within(await screen.findByRole("dialog", { name: "channels.details.title" }));
     fireEvent.click(settings.getByRole("button", { name: "channels.settings.mirrorExecutionUserId" }));
     fireEvent.click(await screen.findByText("Warehouse runner"));
@@ -706,6 +782,8 @@ describe("ChannelRecord draft access", () => {
 
     fireEvent.click(publish);
     const review = within(await screen.findByRole("dialog", { name: "channels.publish.title" }));
+    expect(review.getByText("Warehouse / public.orders")).toBeTruthy();
+    expect(review.getByText("channels.tableReview.first_open")).toBeTruthy();
     expect(saveDraft).toHaveBeenCalledWith("chn_1", expect.objectContaining({
       base_revision: 1,
       graph: expect.objectContaining({

@@ -20,6 +20,8 @@ import {
 
 const api = vi.hoisted(() => ({
   getRun: vi.fn(),
+  getVersion: vi.fn(),
+  getExecutionOutput: vi.fn(),
   listNodeTypes: vi.fn(),
   rerunRun: vi.fn(),
   listExecutions: vi.fn(),
@@ -60,6 +62,8 @@ const i18n = vi.hoisted(() => ({
 }));
 
 vi.mock("@/features/channels/api", () => ({
+  getVersion: api.getVersion,
+  getExecutionOutput: api.getExecutionOutput,
   getRun: (channelId: string, jobId: string, init?: { signal?: AbortSignal }) =>
     api.getRun(channelId, jobId, init),
   listNodeTypes: () => api.listNodeTypes(),
@@ -298,6 +302,65 @@ describe("ChannelRunDetail load feedback", () => {
     resetSessionStoreForTests();
     bindClientI18n({ t: (key: string) => key } as never);
     vi.useRealTimers();
+  });
+
+  it("opens the table read in the actual version and discards its records on denied refresh", async () => {
+    window.history.replaceState(null, "", "?verifyObject=orders&verifyNode=old-id");
+    const snapshot = detail("succeeded", [{ node_id: "new-id", execution_count: 1, status_counts: { succeeded: 1 } }]);
+    api.getRun.mockResolvedValueOnce({ ...detail("queued"), graph: null, run: { ...run("queued"), version: null } })
+      .mockResolvedValue({ ...snapshot, graph: { ...EMPTY_GRAPH, nodes: [
+      { id: "other", name: "Read refunds", type: "read.mirror", config: { object_id: "refunds", freshness_policy: "continue" } },
+      { id: "new-id", name: "Read orders", type: "read.mirror", config: { object_id: "orders", freshness_policy: "continue" } },
+    ] } });
+    api.getVersion.mockResolvedValue({ version: { mirror_bindings: [
+      { source_name: "Sales", qualified_table: "public.orders", object_id: "orders", node_ids: ["new-id"] },
+    ] } });
+    api.listExecutions.mockResolvedValue({ items: [{ seq: 3, node_id: "new-id", status: "succeeded" }] });
+    api.getExecutionOutput.mockImplementation(async (_id, _job, _seq, query) =>
+      query.path === "rows" ? { items: [{ order_id: "ORD-104" }], total: 1 } : { value: { status: "unknown" } });
+    renderDetail();
+    await advance(0);
+    expect(screen.getByText("channels.runDetail.graphPending")).toBeTruthy();
+    await advance(LIVE_STATUS_INTERVAL_MS);
+    expect(screen.getByText("ORD-104")).toBeTruthy();
+    expect(screen.getByText(/public.orders/)).toBeTruthy();
+    expect(api.getVersion).toHaveBeenCalledWith("chn_1", 3);
+    expect(screen.getByText("channels.verify.unknown")).toBeTruthy();
+    api.getExecutionOutput.mockRejectedValue(new ApiError(403, "FORBIDDEN", "Restricted", null));
+    fireEvent.click(screen.getByRole("button", { name: "common.refresh" }));
+    await advance(0);
+    expect(screen.getByText("channels.verify.denied")).toBeTruthy();
+    expect(screen.queryByText("ORD-104")).toBeNull();
+    expect(screen.queryByText(/public.orders/)).toBeNull();
+  });
+
+  it.each([
+    ["ready", "fail", "succeeded", "empty"],
+    ["stale", "skip", "succeeded", "skipped"],
+    ["stale", "continue", "succeeded", "stale"],
+    ["unknown", "fail", "failed", "policy"],
+  ])("explains %s freshness under %s after a %s read", async (freshness, policy, status, message) => {
+    window.history.replaceState(null, "", "?verifyObject=orders&verifyNode=orders-read");
+    api.getRun.mockResolvedValue({ ...detail(status, [{ node_id: "orders-read", execution_count: 1, status_counts: {} }]),
+      graph: { ...EMPTY_GRAPH, nodes: [{ id: "orders-read", name: "Read orders", type: "read.mirror",
+        config: { object_id: "orders", freshness_policy: policy } }] } });
+    api.listExecutions.mockResolvedValue({ items: [{ seq: 4, node_id: "orders-read", status, error_code: status === "failed" ? "MIRROR_READ_UNAVAILABLE" : null }] });
+    api.getVersion.mockResolvedValue({ version: { mirror_bindings: [] } });
+    api.getExecutionOutput.mockImplementation(async (_id, _job, _seq, query) =>
+      query.path === "rows" ? { items: [], total: 0 } : { value: freshness });
+    renderDetail();
+    await advance(0);
+    expect(screen.getByText(`channels.verify.${message}`)).toBeTruthy();
+    if (message === "skipped" || message === "policy") expect(screen.queryByText("channels.verify.empty")).toBeNull();
+  });
+
+  it("links back to the current Channel if the actual graph removed the selected table", async () => {
+    window.history.replaceState(null, "", "?verifyObject=orders&verifyNode=gone");
+    api.getRun.mockResolvedValue(detail("succeeded"));
+    renderDetail();
+    await advance(0);
+    expect(screen.getByText("channels.verify.removed")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "channels.verify.current" }).getAttribute("href")).toBe("/console/channels/chn_1");
   });
 
   it.each([true, false])("shows the full lifecycle with recovery=%s before claim", async (recovery) => {

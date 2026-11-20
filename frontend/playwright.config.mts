@@ -11,6 +11,9 @@ const python =
   process.env.E2E_PYTHON ??
   (fs.existsSync(venvPython) ? venvPython : "python3");
 
+// Keep direct fixture launchers supported alongside Python interpreter overrides.
+const apiLauncher = python.endsWith(".py") ? `"${python}"` : `"${python}" frontend/e2e/catalog-relations-api.py`;
+
 const apiPort = process.env.E2E_API_PORT ?? "8010";
 const consolePort = process.env.E2E_CONSOLE_PORT ?? "4173";
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
@@ -51,7 +54,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `"${python}" -m uvicorn backend.main:app --host 127.0.0.1 --port ${apiPort}`,
+      command: `${apiLauncher} -m uvicorn backend.main:app --host 127.0.0.1 --port ${apiPort}`,
       cwd: repoRoot,
       url: `${apiOrigin}/healthz`,
       timeout: 120_000,
