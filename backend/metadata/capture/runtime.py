@@ -84,12 +84,15 @@ class CaptureRuntime:
     def reconcile_owner(self, source_id, request_file):
         try:
             request = protected_json(request_file)
-            operation_id = request["operation_id"]
-            signature = request["signature"]
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, RecursionError, TypeError, ValueError):
             raise RuntimeBlocked("owner_allocation_file_invalid") from None
+        if not isinstance(request, dict) or request.keys() != {"operation_id", "signature"}:
+            raise RuntimeBlocked("owner_allocation_file_invalid")
+        signature = request["signature"]
+        if not isinstance(signature, str) or not signature.isascii():
+            raise RuntimeBlocked("owner_allocation_file_invalid")
         reconcile_published_scope(source_id)
-        return allocate_owner(source_id=source_id, operation_id=operation_id,
+        return allocate_owner(source_id=source_id, operation_id=request["operation_id"],
                               signed_proof=signature, signals=self.signals)
 
     def reconcile(self, command, source, phase, *, session):

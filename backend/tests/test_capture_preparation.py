@@ -527,7 +527,9 @@ def reject_damaged_coverage(target_dsn, generation_id, coverage, prepare):
 @pytest.mark.parametrize("case", ["success", "loss", "bad_incarnation", "bad_key", "bad_metadata", "drift_before_resume",
                                    "withdraw_during_allocation", "takeover", "prefilled_manifest", "history_gate_race",
                                    "wrong_fence", "different_allocation_fence", "wrong_start_offset", "target_key_drift",
-                                   "wrong_owner_receipt", "grant_loss", "authority_during_binding", "cross_source_binding",
+                                   "wrong_owner_receipt", "owner_replacement_intent", "owner_malformed_signature",
+                                   "owner_nested_request", "grant_loss",
+                                   "authority_during_binding", "cross_source_binding",
                                    "target_fence_drift", "withdraw_with_management_timeout",
                                    "snapshot_loss", "snapshot_loss_open_publication_observation",
                                    "snapshot_loss_open_publication_observation_wrong_terminal",
@@ -606,16 +608,19 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
         return Authority(stamp["source_id"], stamp["binding_id"], stamp["owner_epoch"], stamp["runtime_instance_id"],
                          stamp["control_revision"], stamp["credential_revision"], str(stamp["capture_generation"]))
 
-    def owner_request(operation_id, instance):
+    def owner_request(operation_id, instance, *, lineage_change=False, recovery_scope=False, **file_fields):
         with control.source_control_transaction(SOURCE) as (session, _):
             state = control.load_binding(session, SOURCE)
         previous = {key: state[key] for key in control.AUTHORITY_KEYS}
         candidate = dict(previous, owner_epoch=previous["owner_epoch"] + 1, runtime_instance_id=instance,
                          control_revision=previous["control_revision"] + 1)
         scope = dict(profile=profile, published_scope=state["published_scope"])
-        return private("owner.json", dict(operation_id=operation_id, signature=signed(
-            "owner_allocation", candidate, scope, operation_id, previous_authority=previous,
-        )))
+        if lineage_change:
+            candidate["capture_generation"] += 1
+        if recovery_scope:
+            scope["recovery_operation_id"] = "recovery-operation"
+        proof = signed("owner_allocation", candidate, scope, operation_id, previous_authority=previous)
+        return private("owner.json", {"operation_id": operation_id, "signature": proof, **file_fields})
 
     applier_password = uuid4().hex
     with psycopg.connect(target_dsn, autocommit=True) as connection:
@@ -875,6 +880,44 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
         config_file = private("runtime.json", config)
         monkeypatch.setattr("sys.argv", ["runtime", "--config-file", config_file, "--once"])
         contained = case in {"withdraw_during_allocation", "withdraw_with_management_timeout"}
+        if case in {"owner_replacement_intent", "owner_malformed_signature", "owner_nested_request"}:
+            with transaction() as session:
+                before = control.load_binding(session, SOURCE)
+            if case == "owner_replacement_intent":
+                for fields in (
+                    {"lineage_change": True}, {"recovery_scope": True}, {"recovery_operation_id": "recovery-operation"},
+                ):
+                    owner_request("replacement-intent", "agent-one", **fields)
+                    assert runtime.main() == 2
+                    assert owner_receipts == attempts == mutations == []
+                    with transaction() as session:
+                        assert control.load_binding(session, SOURCE) == before
+                        assert control.load_operation(session, "replacement-intent") is None
+            owner_request("first-owner", "agent-one")
+            assert runtime.main() == 0
+            with transaction() as session:
+                committed = control.load_binding(session, SOURCE)
+                operation = control.load_operation(session, "first-owner")
+                assert committed["capture_generation"] == before["capture_generation"]
+                assert committed["owner_epoch"] == before["owner_epoch"] + 1
+                assert committed["allocation"]["command"] == operation["command"]
+            assert runtime.main() == 0
+            with transaction() as session:
+                assert control.load_binding(session, SOURCE) == committed
+            assert len(owner_receipts) == len(attempts) == 1
+            assert mutations == ["configure", "resume"]
+            withdraw()
+            if case == "owner_malformed_signature":
+                private("owner.json", {"operation_id": "replacement-intent", "signature": "\ud800"})
+            elif case == "owner_nested_request":
+                private("owner.json", b"[" * 20_000 + b"0" + b"]" * 20_000)
+            else:
+                owner_request("replacement-intent", "agent-one", recovery_operation_id="recovery-operation")
+            assert runtime.main() == 2
+            assert control.capture_status(SOURCE)["control"]["stop_ack"] is not None
+            assert len(owner_receipts) == len(attempts) == 1
+            assert mutations == ["configure", "resume", "stop"]
+            return
         if case == "snapshot_replacement_epoch":
             assert runtime.main() == 2
             assert mutations == ["configure", "resume"]
