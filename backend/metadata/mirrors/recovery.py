@@ -292,20 +292,20 @@ class Recovery:
             if from_time is not None and now < datetime.fromisoformat(from_time):
                 return journal["state"]
             request = journal["request"]
-            if request["action"] in {"manual", "postpone"}:
-                if not journal.get("replacement_epoch"):
-                    journal["state"] = request["action"]
-                row.journal = journal
-                return request["action"]
             try:
+                if journal.get("replacement_epoch"):
+                    self.history.consume_invalidation(operation_id=operation_id)
+                if request["action"] in {"manual", "postpone"}:
+                    if not journal.get("replacement_epoch"):
+                        journal["state"] = request["action"]
+                    row.journal = journal
+                    return request["action"]
                 evidence = self.runtime.inspect(session=session, mirror=mirror, now=now)
                 if not isinstance(evidence, dict) or any(evidence.get(key) != value for key, value in (
                     ("source_id", source.id), ("mirror_id", mirror.id), ("table_identity", mirror.table_identity))) or not (
                     evidence.get("observed_at") is not None and evidence.get("valid_until") is not None
                     and evidence["observed_at"] <= now < evidence["valid_until"]):
                     raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
-                if journal["state"] == "invalidated":
-                    self.history.consume_invalidation(operation_id=operation_id)
                 if journal.get("submission_uncertain") and not journal.get("replacement_epoch") and evidence.get("validity") != "retained":
                     raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
                 if evidence.get("validity") == "lost" and journal["state"] != "invalidated":

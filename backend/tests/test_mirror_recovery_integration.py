@@ -1,8 +1,11 @@
 """Recovery route contracts against an isolated PostgreSQL Management database."""
 
+from datetime import timedelta
 from hashlib import sha256
 import json
+import os
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -26,14 +29,19 @@ from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.service import MirrorError
 from backend.tests.test_capture_preparation import management_engine as management_engine
-from backend.tests.test_mirror_generation_allocation import target_dsn as target_dsn
 from backend.tests.test_mirror_recovery import Runtime, Target
 
 
-@pytest.mark.integration
-@pytest.mark.parametrize("replay", ["fresh", "current_identity", "prior_identity"])
-def test_recovery_admission_requires_replacement_to_own_epoch(management_engine, monkeypatch, replay):
-    """Replay cases seed identities persisted by earlier admission of a stale replacement."""
+@pytest.fixture(scope="module")
+def target_dsn():
+    dsn = os.getenv("REFRAQ_MIRROR_ALLOCATION_TEST_DSN")
+    if not dsn:
+        pytest.skip("Set REFRAQ_MIRROR_ALLOCATION_TEST_DSN to a disposable PostgreSQL server")
+    return dsn
+
+
+@pytest.fixture
+def recovery_store(management_engine):
     for model in (SourceRow, MirrorRow, HistoryGateRow, HistoryInvalidationRow, RecoveryRow, AuditEventRow):
         model.__table__.create(management_engine)
     factory = sessionmaker(management_engine)
@@ -48,6 +56,139 @@ def test_recovery_admission_requires_replacement_to_own_epoch(management_engine,
         for mirror_id in ("a", "b"):
             session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch="epoch", lower_commit_seq=0,
                                        lower_entry_seq=0, status="available"))
+    return factory
+
+
+@pytest.fixture
+def recovery_scheduler(recovery_store):
+    runtime = Runtime()
+    runtime.validity = "lost"
+    runtime.affected = ["b", "a"]
+    target = Target()
+    target.invalidate = Mock(return_value=True)
+    history = History(session_factory=recovery_store, target=target)
+    clock = Mock(return_value=utc_now())
+    service = recovery.Recovery(session_factory=recovery_store, history=history,
+                                runtime=recovery.RuntimeDispatchAdapter(runtime), clock=clock,
+                                retry_delays=(10,), jitter=lambda lower, upper: upper)
+    return service, runtime, target.invalidate, clock
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("replacement_control", ["manual", "postpone", "observation_unavailable"])
+def test_committed_invalidation_precedes_replacement_controls(recovery_store, recovery_scheduler, replacement_control):
+    factory = recovery_store
+    service, runtime, invalidate_target, _ = recovery_scheduler
+    operation_id = service.request_recovery("a", action="retry", expected_history_epoch="epoch",
+                                            actor_user_id="user")["operation_id"]
+    assert service.dispatch(operation_id=operation_id) == "invalidated"
+    invalidate_target.assert_not_called()
+    with factory() as session:
+        receipt = session.get(HistoryInvalidationRow, operation_id)
+        assert receipt.status == "pending"
+        transitions = receipt.transitions
+        assert [transition["mirror_id"] for transition in transitions] == ["a", "b"]
+        assert all(session.get(HistoryGateRow, mid).status == "invalidating" for mid in ("a", "b"))
+    runtime.epoch = service.get_operation(operation_id)["replacement_epoch"]
+
+    if replacement_control == "observation_unavailable":
+        runtime.inspect = Mock(side_effect=MirrorError("MIRROR_READ_UNAVAILABLE", 503))
+        expected = "invalidated"
+    else:
+        request = service.request_recovery("a", action=replacement_control, expected_history_epoch=runtime.epoch,
+                                           actor_user_id="user", reason="Hold replacement")
+        assert request["operation_id"] == operation_id
+        expected = replacement_control
+    assert service.dispatch(operation_id=operation_id) == expected
+
+    with factory() as session:
+        receipt = session.get(HistoryInvalidationRow, operation_id)
+        assert receipt.status == "applied"
+        assert receipt.transitions == transitions
+        for transition in transitions:
+            gate = session.get(HistoryGateRow, transition["mirror_id"])
+            assert (gate.status, gate.history_epoch) == ("available", transition["history_epoch"])
+    assert runtime.calls == []
+    [call] = invalidate_target.call_args_list
+    assert call.kwargs["operation_id"] == operation_id
+    assert call.kwargs["transitions"] == transitions
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("exhaust_budget", [False, True], ids=["eligible_retry", "audited_rearm"])
+def test_target_acknowledgement_retries_the_exact_invalidation(recovery_store, recovery_scheduler, exhaust_budget):
+    service, runtime, invalidate_target, clock = recovery_scheduler
+    hold = dict(action="manual", expected_history_epoch="epoch", actor_user_id="user", reason="Hold replacement")
+    unverified = service.request_recovery("a", **hold)["operation_id"]
+    assert service.dispatch(operation_id=unverified) == "manual"
+    invalidate_target.assert_not_called()
+    with recovery_store() as session:
+        assert session.get(HistoryInvalidationRow, unverified) is None
+        assert session.get(HistoryGateRow, "a").history_epoch == "epoch"
+
+    operation_id = service.request_recovery("a", action="retry", expected_history_epoch="epoch",
+                                            actor_user_id="user")["operation_id"]
+    assert service.dispatch(operation_id=operation_id) == "invalidated"
+    committed = service.get_operation(operation_id)
+    hold["expected_history_epoch"] = runtime.epoch = committed["replacement_epoch"]
+    if exhaust_budget:
+        assert service.request_recovery("a", **hold)["operation_id"] == operation_id
+    runtime.inspect = Mock(wraps=runtime.inspect)
+    invalidate_target.return_value = False
+
+    def assert_still_closed():
+        with recovery_store() as session:
+            assert session.get(HistoryInvalidationRow, operation_id).status == "pending"
+            assert all(session.get(HistoryGateRow, mid).status == "invalidating" for mid in ("a", "b"))
+        assert runtime.calls == []
+        runtime.inspect.assert_not_called()
+
+    assert service.dispatch(operation_id=operation_id) == "invalidated"
+    assert service.get_operation(operation_id)["fault_code"] == "MIRROR_READ_UNAVAILABLE"
+    assert_still_closed()
+    assert service.dispatch(operation_id=operation_id) == "invalidated"
+    assert invalidate_target.call_count == 1
+    clock.return_value += timedelta(seconds=10)
+
+    if exhaust_budget:
+        assert service.dispatch(operation_id=operation_id) == "blocked"
+        assert_still_closed()
+        invalidate_target.return_value = True
+        clock.return_value += timedelta(seconds=10)
+        assert service.request_recovery("a", **hold)["operation_id"] == operation_id
+        assert service.dispatch(operation_id=operation_id) == "blocked"
+        assert invalidate_target.call_count == 2
+        hold["action"] = "postpone"
+        assert service.request_recovery("a", **hold)["operation_id"] == operation_id
+
+    invalidate_target.return_value = True
+    assert service.dispatch(operation_id=operation_id) == ("postpone" if exhaust_budget else "dispatched")
+    with recovery_store() as session:
+        receipt = session.get(HistoryInvalidationRow, operation_id)
+        assert receipt.status == "applied"
+        transitions = receipt.transitions
+        assert all(session.get(HistoryGateRow, mid).status == "available" for mid in ("a", "b"))
+    assert invalidate_target.call_count == (3 if exhaust_budget else 2)
+    for call in invalidate_target.call_args_list:
+        assert call.kwargs["operation_id"] == operation_id
+        assert call.kwargs["transitions"] == transitions
+
+    if exhaust_budget:
+        assert runtime.calls == []
+        runtime.inspect.assert_not_called()
+        assert service.request_recovery("a", **dict(hold, action="run_now"))["operation_id"] == operation_id
+        assert service.dispatch(operation_id=operation_id) == "dispatched"
+    assert service.dispatch(operation_id=operation_id) == "dispatched"
+    [command] = runtime.calls
+    for key in ("operation_id", "capture_generation", "generation_id"):
+        assert command[key] == committed[key]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("replay", ["fresh", "current_identity", "prior_identity"])
+def test_recovery_admission_requires_replacement_to_own_epoch(recovery_store, monkeypatch, replay):
+    """Replay cases seed identities persisted by earlier admission of a stale replacement."""
+    factory = recovery_store
 
     runtime = Runtime()
     history = History(session_factory=factory, target=Target())
