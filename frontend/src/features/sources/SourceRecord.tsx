@@ -1,9 +1,11 @@
 "use client";
 
-import { Box, Button, Modal, Stack, Tooltip } from "@mantine/core";
+import { Box, Button, Divider, Group, Modal, Paper, SimpleGrid, Stack, Text, Title, Tooltip } from "@mantine/core";
 import { useCan, useNotification, usePermissions, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { FormSection } from "@/components/form/FormSection";
+import { SourceConnectionProbe } from "@/features/sources/SourceConnectionProbe";
 import { DisplayField } from "@/components/display/DisplayField";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
@@ -34,8 +36,6 @@ import {
   getSourceAccess,
   listSources,
   patchSource,
-  testSource,
-  testSourceDraft,
 } from "@/features/sources/api/sources";
 import { MembershipCollection } from "@/features/sources/MembershipCollection";
 import {
@@ -51,7 +51,7 @@ import {
   sourceEditPath,
   sourceShowPath,
 } from "@/features/sources/sourceRecordTab";
-import { SpecTree, defaultsFromSchema } from "@/features/sources/SpecTree";
+import { SpecTree, defaultsFromSchema, validateSourceAccess } from "@/features/sources/SpecTree";
 import { StructureDiffList } from "@/features/sources/structure-diffs/StructureDiffList";
 import type {
   ConnectorSpec,
@@ -61,7 +61,8 @@ import type {
 } from "@/features/sources/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { ApiError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
+
+import "./source-record.css";
 
 const FORM_ID = "source-record-form";
 const DEFAULT_ENGINE: Engine = "postgresql";
@@ -141,42 +142,73 @@ const CAPTURE_ERROR_ALIASES = {
   snapshot_window: "windowStart",
 };
 
-function captureValidation(t: (key: string) => string) {
-  return {
-    windowStart: (value: string, values: Values) =>
-      !values.anyTime && !/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(value)
-        ? t("sources.capture.invalidTime") : null,
-    windowEnd: (value: string, values: Values) => {
-      if (values.anyTime) return null;
-      if (!/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(value)) return t("sources.capture.invalidTime");
-      return value === values.windowStart ? t("sources.capture.equalTime") : null;
-    },
-    captureUsername: (value: string, values: Values) =>
-      values.captureIntent === "replace" && !value ? t("sources.validation.required") : null,
-    capturePassword: (value: string, values: Values) =>
-      values.captureIntent === "replace" && !value ? t("sources.validation.required") : null,
-  };
+function validateDefinition(values: Values, schema: ConnectorSpec | null, create: boolean, t: (key: string) => string) {
+  const errors: Record<string, string> = {};
+  const required = t("sources.validation.required");
+  if (create && !values.key.trim()) errors.key = required;
+  if (!values.name.trim()) errors.name = required;
+  if (!values.engine) errors.engine = required;
+  if (schema) Object.assign(errors, validateSourceAccess(schema, values.access, t));
+  if (values.captureIntent === "replace") {
+    if (!values.captureUsername) errors.captureUsername = required;
+    if (!values.capturePassword) errors.capturePassword = required;
+  }
+  if (!values.anyTime) {
+    const time = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
+    if (!time.test(values.windowStart)) errors.windowStart = t("sources.capture.invalidTime");
+    if (!time.test(values.windowEnd)) errors.windowEnd = t("sources.capture.invalidTime");
+    else if (values.windowEnd === values.windowStart) errors.windowEnd = t("sources.capture.equalTime");
+  }
+  return errors;
 }
 
-async function applyEngine(
-  next: Engine,
-  form: UseConsoleFormReturn<Values>,
-  setSchema: (schema: ConnectorSpec | null) => void,
-  t: (key: string) => string,
-): Promise<void> {
-  try {
-    const res = await getAccessSchema(next);
-    setSchema(res.schema);
-    form.setFieldValue("engine", next);
-    form.setFieldValue("access", defaultsFromSchema(res.schema));
-  } catch (err) {
-    presentProblemNotification(t, err);
+function focusSourceError(getInputNode: (path: string) => HTMLElement | null, path: string | undefined) {
+  if (!path) return;
+  requestAnimationFrame(() => {
+    const input = document.getElementsByName(path)[0] ?? getInputNode(path);
+    const panel = input?.closest("details");
+    if (panel) panel.open = true;
+    input?.focus();
+  });
+}
+
+function useEngineSwitch(form: UseConsoleFormReturn<Values>, setSchema: (schema: ConnectorSpec) => void, existing: boolean) {
+  const t = useTranslate();
+  const confirm = useConfirmAction<Engine>();
+  const [switching, setSwitching] = useState(false);
+  const pending = useRef(false);
+
+  async function apply(next: Engine) {
+    if (pending.current) return;
+    pending.current = true;
+    setSwitching(true);
+    try {
+      const { schema } = await getAccessSchema(next);
+      form.setValues({ engine: next, access: defaultsFromSchema(schema) });
+      for (const path of Object.keys(form.errors)) {
+        if (path.startsWith("access.")) form.clearFieldError(path);
+      }
+      setSchema(schema);
+    } catch (err) {
+      presentProblemNotification(t, err);
+    } finally {
+      pending.current = false;
+      setSwitching(false);
+    }
   }
+
+  function choose(next: Engine | null) {
+    if (!next || next === form.values.engine || pending.current) return;
+    if (existing || form.isDirty("access")) confirm.open(next);
+    else void apply(next);
+  }
+
+  return { switching, choose, dialog: <EngineSwitchDialog confirm={confirm} onApply={(next) => void apply(next)} /> };
 }
 
 export function SourceRecord(props: Props) {
   if (props.mode === "create") return <SourceCreate />;
-  return <SourceExisting mode={props.mode} sourceId={props.sourceId} />;
+  return <SourceExisting key={props.mode + props.sourceId} mode={props.mode} sourceId={props.sourceId} />;
 }
 
 function SourceCreate() {
@@ -186,17 +218,12 @@ function SourceCreate() {
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const [testing, setTesting] = useState(false);
-  const engineConfirm = useConfirmAction<Engine>();
   const form = useConsoleForm<Values>({
     initialValues: EMPTY,
-    validate: {
-      key: (value) => (value.trim() ? null : t("sources.validation.required")),
-      ...captureValidation(t),
-      name: (value) => (value.trim() ? null : t("sources.validation.required")),
-      engine: (value) => (value ? null : t("sources.validation.required")),
-    },
+    validate: (values) => validateDefinition(values, schema, true, t),
   });
+
+  const engineSwitch = useEngineSwitch(form, setSchema, false);
 
   useEffect(() => {
     let cancelled = false;
@@ -245,7 +272,7 @@ function SourceCreate() {
                 {t("common.cancel")}
               </Button>
               <HeaderAction primary>
-                <Button type="submit" form={FORM_ID} size="sm" loading={form.submitting}>
+                <Button type="submit" form={FORM_ID} size="sm" loading={form.submitting} disabled={engineSwitch.switching}>
                   {t("common.save")}
                 </Button>
               </HeaderAction>
@@ -280,32 +307,19 @@ function SourceCreate() {
             .catch((err: unknown) => {
               presentSaveFailure(t, err, (error) => form.applyApiError(error, CAPTURE_ERROR_ALIASES));
             });
-        })}
+        }, (errors) => focusSourceError(form.getInputNode, Object.keys(errors)[0]))}
       >
         <SourceFields
           form={form}
           schema={schema}
           mode="create"
           editable
-          testing={testing}
-          onEngineChange={(next) =>
-            confirmEngine(
-              form.values.engine,
-              next,
-              engineConfirm.open,
-              (engine) => applyEngine(engine, form, setSchema, t),
-              form.setFieldValue,
-            )
-          }
-          onTest={() =>
-            void runProbe(form.values, null, t, open, form.setFieldError, setTesting)
-          }
+          canTest
+          switching={engineSwitch.switching}
+          onEngineChange={engineSwitch.choose}
         />
       </form>
-      <EngineSwitchDialog
-        confirm={engineConfirm}
-        onApply={(next) => void applyEngine(next, form, setSchema, t)}
-      />
+      {engineSwitch.dialog}
     </PageChrome>
   );
 }
@@ -340,7 +354,8 @@ function SourceExisting({
   const [membersAllowed, setMembersAllowed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const [editingAccess, setEditingAccess] = useState(false);
+  const [loadingAccess, setLoadingAccess] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -352,35 +367,28 @@ function SourceExisting({
   ];
   const consoleTab = useConsoleTab(tabItems);
   const tab = consoleTab.value;
-  const engineConfirm = useConfirmAction<Engine>();
   const form = useConsoleForm<Values>({
     initialValues: EMPTY,
-    validate: {
-      ...captureValidation(t),
-      name: (value) => (value.trim() ? null : t("sources.validation.required")),
-      engine: (value) => (value ? null : t("sources.validation.required")),
-    },
+    validate: (values) => validateDefinition(values, editingAccess ? schema : null, false, t),
   });
 
+  const engineSwitch = useEngineSwitch(form, setSchema, true);
   const formRef = useRef(form);
   formRef.current = form;
-  const openRef = useRef(open);
-  openRef.current = open;
   const tRef = useRef(t);
   tRef.current = t;
 
+  const loadGeneration = useRef(0);
   const load = useCallback(
-    async (silent = false) => {
+    async () => {
       if (mode === "edit" && !writeReady) return;
       if (permissionsLoading || permissions == null) return;
+      const generation = ++loadGeneration.current;
       const translate = tRef.current;
-      const notify = openRef.current;
       const currentForm = formRef.current;
-      if (!silent) {
-        setLoading(true);
-        setLoadFailed(false);
-        setMissing(false);
-      }
+      setLoading(true);
+      setLoadFailed(false);
+      setMissing(false);
       const showIdentity = (source: Source) => {
         const engine = selectedEngine(source.engine ?? "") ?? "";
         currentForm.setValues({
@@ -407,6 +415,7 @@ function SourceExisting({
       };
       try {
         const source = await loadVisibleSource(sourceId, canReadSources, canManageAccess);
+        if (generation !== loadGeneration.current) return;
         if (source == null) {
           setRecord(null);
           setMissing(true);
@@ -419,41 +428,34 @@ function SourceExisting({
         }
         const loaded = source.source;
         const engine = formEngine(loaded.engine);
-        const schemaRes = await getAccessSchema(engine);
-        let access: SourceAccess = { ...(loaded.access ?? {}) };
-        if (mode === "edit") {
-          try {
-            const full = await getSourceAccess(sourceId);
-            access = full.access;
-          } catch (err) {
-            access = { ...defaultsFromSchema(schemaRes.schema), ...access };
-            notify?.({
-              type: "error",
-              message: problemMessage(translate, err, translate("sources.access.reenterHint")),
-            });
-          }
-        }
-        const allowMembers = await canListMembers(sourceId, canManageAccess);
+        const [schemaRes, allowMembers] = await Promise.all([
+          getAccessSchema(engine),
+          canListMembers(sourceId, canManageAccess),
+        ]);
+        if (generation !== loadGeneration.current) return;
         setSchema(schemaRes.schema);
-        currentForm.setValues(valuesFrom(loaded, access));
+        currentForm.setValues(valuesFrom(loaded, loaded.access ?? {}));
         currentForm.markSaved();
         setRecord(loaded);
+        setEditingAccess(false);
         setIdentityOnly(false);
         setMissing(false);
         setLoadFailed(false);
         setMembersAllowed(allowMembers);
       } catch (err) {
-        if (!silent) setLoadFailed(true);
-        presentProblemNotification(translate, err, { onRetry: () => void load(false) });
+        if (generation !== loadGeneration.current) return;
+        setLoadFailed(true);
+        presentProblemNotification(translate, err, { onRetry: () => void load() });
       } finally {
-        if (!silent) setLoading(false);
+        if (generation === loadGeneration.current) setLoading(false);
       }
     },
     [canManageAccess, canReadSources, mode, permissions, permissionsLoading, sourceId, writeReady],
   );
 
   useEffect(() => {
-    void load(false);
+    void load();
+    return () => { loadGeneration.current += 1; };
   }, [load]);
 
   const memberClient = useMemo(
@@ -468,48 +470,78 @@ function SourceExisting({
   );
 
   useEffect(() => {
-    if (mode === "edit" && canWrite?.can === false) {
+    if (mode === "edit" && (canWrite?.can === false || (record && !record.can_write))) {
       replace(sourceShowPath(sourceId, tab));
     }
-  }, [canWrite?.can, mode, replace, sourceId, tab]);
+  }, [canWrite?.can, mode, record, replace, sourceId, tab]);
 
   if (mode === "edit" && canWrite?.can !== true) {
     return <PageChrome title={t("sources.title")} status="loading" />;
   }
 
-  if (loading || !record) {
+  if (loading || loadFailed || !record) {
     return (
       <PageChrome
         title={t("sources.title")}
         status={missing ? "notFound" : loadFailed ? "unloaded" : "loading"}
-        onRetry={loadFailed ? () => void load(false) : undefined}
+        onRetry={loadFailed ? () => void load() : undefined}
       />
     );
   }
 
-  const editable = mode === "edit" && !identityOnly;
+  const writable = Boolean(record.can_write && canWrite?.can);
+  const editable = mode === "edit" && writable;
+  const editAccess = async () => {
+    setLoadingAccess(true);
+    try {
+      const { access } = await getSourceAccess(sourceId);
+      form.setInitialValues(valuesFrom(record, access));
+      form.setFieldValue("access", access);
+      setEditingAccess(true);
+    } catch (error) {
+      presentProblemNotification(t, error);
+    } finally {
+      setLoadingAccess(false);
+    }
+  };
+  function focusDefinitionError(errors: Record<string, ReactNode>) {
+    consoleTab.setTab(SOURCE_RECORD_TAB);
+    focusSourceError(form.getInputNode, Object.keys(errors)[0]);
+  }
+
   const save = async (values: Values) => {
     const engine = selectedEngine(values.engine);
     if (!engine) return;
     try {
+      const name = values.name.trim();
+      const description = values.description.trim() || null;
+      const engineChanged = engine !== record.engine;
       const updated = await patchSource(sourceId, {
-        name: values.name.trim(),
-        description: values.description.trim() || null,
-        status: values.status,
-        engine,
-        access: values.access,
+        ...(form.isDirty("name") && name !== record.name && { name }),
+        ...(form.isDirty("description") && description !== (record.description || null) && { description }),
+        ...(values.status !== record.status && { status: values.status }),
+        ...(engineChanged && { engine }),
+        ...(editingAccess && (form.isDirty("access") || engineChanged) && { access: values.access }),
         ...captureWrite(values),
         ...snapshotWrite(values, record),
       });
       setRecord(updated.source);
-      form.setValues(valuesFrom(updated.source, values.access));
+      setEditingAccess(false);
+      form.setValues(valuesFrom(updated.source, updated.source.access ?? {}));
       form.markSaved();
       open?.({ type: "success", message: t("sources.update.success") });
       if (updated.schedules && updated.schedules.length > 0) {
         open?.({ type: "success", message: t("schedules.seededOnSourceUpdate") });
       }
     } catch (err) {
-      presentSaveFailure(t, err, (error) => form.applyApiError(error, CAPTURE_ERROR_ALIASES));
+      presentSaveFailure(t, err, (error) => {
+        const result = form.applyApiError(error, CAPTURE_ERROR_ALIASES);
+        if (result.mapped.length) {
+          consoleTab.setTab(SOURCE_RECORD_TAB);
+          requestAnimationFrame(() => document.querySelector<HTMLElement>("#source-record-form [aria-invalid=true]")?.focus());
+        }
+        return result;
+      });
     }
   };
 
@@ -521,17 +553,12 @@ function SourceExisting({
       editable={editable}
       identityOnly={identityOnly}
       source={record}
-      testing={testing}
-      onEngineChange={(next) =>
-        confirmEngine(
-          form.values.engine,
-          next,
-          engineConfirm.open,
-          (engine) => applyEngine(engine, form, setSchema, t),
-          form.setFieldValue,
-        )
-      }
-      onTest={() => void runProbe(form.values, sourceId, t, open, form.setFieldError, setTesting)}
+      connectionEditable={editable && editingAccess}
+      onEditConnection={editable && !editingAccess ? editAccess : undefined}
+      loadingAccess={loadingAccess}
+      canTest={writable}
+      switching={engineSwitch.switching}
+      onEngineChange={engineSwitch.choose}
     />
   );
 
@@ -570,9 +597,10 @@ function SourceExisting({
                     type="button"
                     size="sm"
                     variant="light"
+                    disabled={form.dirty || form.submitting || loadingAccess || engineSwitch.switching}
                     onClick={() => {
                       setReloadKey((value) => value + 1);
-                      void load(true);
+                      void load();
                     }}
                   >
                     {t("jobs.refresh")}
@@ -580,11 +608,12 @@ function SourceExisting({
                 </>
               }
               standard={recordStandard({
-                mode: identityOnly ? "show" : mode,
-                canWrite: Boolean(canWrite?.can) && !identityOnly,
-                canDelete: Boolean(canDelete?.can),
+                mode: editable ? "edit" : "show",
+                canWrite: writable,
+                canDelete: Boolean(canDelete?.can && record.can_write),
                 deletable: record.status === "disabled",
                 submitting: form.submitting,
+                saveDisabled: loadingAccess || engineSwitch.switching,
                 sourceId,
                 tab,
                 onDelete: () => setConfirmDelete(true),
@@ -600,7 +629,7 @@ function SourceExisting({
         >
           <div hidden={tab !== SOURCE_RECORD_TAB}>
             {editable ? (
-              <form id={FORM_ID} noValidate onSubmit={form.onSubmit((values) => save(values))}>
+              <form id={FORM_ID} noValidate onSubmit={form.onSubmit(save, focusDefinitionError)}>
                 {fields}
               </form>
             ) : (
@@ -613,10 +642,7 @@ function SourceExisting({
           {tab === SOURCE_MEMBERS_TAB && showMembers ? (
             <MembershipCollection client={memberClient} editable={canManageAccess} />
           ) : null}
-          <EngineSwitchDialog
-            confirm={engineConfirm}
-            onApply={(next) => void applyEngine(next, form, setSchema, t)}
-          />
+          {engineSwitch.dialog}
           <ConfirmActionModal
             opened={confirmDelete}
             onClose={() => setConfirmDelete(false)}
@@ -652,6 +678,7 @@ function recordStandard({
   canDelete,
   deletable,
   submitting,
+  saveDisabled,
   sourceId,
   tab,
   onDelete,
@@ -666,6 +693,7 @@ function recordStandard({
   canDelete: boolean;
   deletable: boolean;
   submitting: boolean;
+  saveDisabled: boolean;
   sourceId: string;
   tab: string;
   onDelete: () => void;
@@ -693,7 +721,7 @@ function recordStandard({
           {cancelLabel}
         </Button>
         <HeaderAction primary>
-          <Button type="submit" form={FORM_ID} size="sm" loading={submitting}>
+          <Button type="submit" form={FORM_ID} size="sm" loading={submitting} disabled={saveDisabled}>
             {saveLabel}
           </Button>
         </HeaderAction>
@@ -732,132 +760,219 @@ function SourceFields({
   editable,
   identityOnly = false,
   source,
-  testing,
+  canTest,
+  switching,
+  connectionEditable = editable,
+  onEditConnection,
+  loadingAccess,
   onEngineChange,
-  onTest,
 }: {
-  form: ReturnType<typeof useConsoleForm<Values>>;
+  form: UseConsoleFormReturn<Values>;
   schema: ConnectorSpec | null;
   mode: "create" | "show" | "edit";
   editable: boolean;
   identityOnly?: boolean;
   source?: Source;
-  testing: boolean;
+  canTest: boolean;
+  switching: boolean;
+  connectionEditable?: boolean;
+  onEditConnection?: () => void;
+  loadingAccess?: boolean;
   onEngineChange: (next: Engine | null) => void;
-  onTest: () => void;
 }) {
   const t = useTranslate();
-  const engineOptions = SOURCE_ENGINES.map((value) => ({
-    value,
-    label: engineLabel(t, value),
-  }));
-  const statusOptions = [
-    { value: "active", label: t("sources.status.active") },
-    { value: "disabled", label: t("sources.status.disabled") },
-  ];
+  const engine = selectedEngine(form.values.engine);
+  const engineOptions = SOURCE_ENGINES.map((value) => ({ value, label: engineLabel(t, value) }));
+  const engineField = (
+    <SelectField
+      label={t("sources.fields.engine")}
+      data={engineOptions}
+      required={connectionEditable}
+      editable={connectionEditable}
+      {...form.fieldProps("engine")}
+      value={engine}
+      onChange={(value) => onEngineChange(selectedEngine(value ?? "") ?? null)}
+    />
+  );
+  function validateProbe() {
+    if (!schema) return false;
+    const errors = validateSourceAccess(schema, form.values.access, t);
+    for (const path of Object.keys(form.errors)) {
+      if (path.startsWith("access.")) form.clearFieldError(path);
+    }
+    for (const [path, message] of Object.entries(errors)) form.setFieldError(path, message);
+    const [first] = Object.keys(errors);
+    focusSourceError(form.getInputNode, first);
+    return !first;
+  }
+
   return (
-    <Stack gap="sm">
-      <TextField
-        label={t("sources.fields.key")}
-        required={mode === "create"}
-        editable={mode === "create"}
-        {...form.fieldProps("key")}
-      />
-      <TextField
-        label={t("sources.fields.name")}
-        required={editable}
-        editable={editable}
-        {...form.fieldProps("name")}
-      />
-      {identityOnly ? null : (
-        <TextareaField
-          label={t("sources.fields.description")}
-          autosize
-          minRows={2}
-          editable={editable}
-          {...form.fieldProps("description")}
-        />
-      )}
-      {mode === "create" ? null : (
-        <SelectField
-          label={t("sources.fields.status")}
-          data={statusOptions}
-          editable={editable}
-          {...form.fieldProps("status")}
-        />
-      )}
-      <SelectField
-        label={t("sources.fields.engine")}
-        data={engineOptions}
-        required={editable}
-        editable={editable}
-        placeholder={t("sources.validation.required")}
-        {...form.fieldProps("engine")}
-        value={form.values.engine || null}
-        onChange={(value) => onEngineChange((value as Engine | null) ?? null)}
-      />
-      {identityOnly ? null : (
-        <SpecTree
-          schema={schema}
-          value={form.values.access}
-          onChange={(next) => form.setFieldValue("access", next)}
-          editable={editable}
-        />
-      )}
-      {identityOnly ? null : (
-        <>
-          <DisplayField
-            label={t("sources.capture.credential")}
-            value={t(source?.capture_credential_set ? "sources.capture.set" : "sources.capture.unset")}
-            helper={t("sources.capture.helper")}
-          />
-          {editable ? (
-            <>
-              <Button type="button" variant="default" size="sm" onClick={() => form.setValues({ captureIntent: "replace", captureUsername: "", capturePassword: "" })}>
-                {t("sources.capture.replace")}
-              </Button>
-              {form.values.captureIntent !== "retain" ? (
-                <Button type="button" variant="default" size="sm" onClick={() => form.setValues({ captureIntent: "retain", captureUsername: "", capturePassword: "" })}>
-                  {t("sources.capture.retain")}
-                </Button>
-              ) : null}
-              {source?.capture_credential_set ? (
-                <Button type="button" variant="light" color="red" size="sm" onClick={() => form.setValues({ captureIntent: "clear", captureUsername: "", capturePassword: "" })}>
-                  {t("sources.capture.clear")}
-                </Button>
-              ) : null}
-              {form.values.captureIntent === "clear" ? <DisplayField label={t("sources.capture.clear")} value={t("sources.capture.clearHint")} /> : null}
-              {form.values.captureIntent === "replace" ? (
-                <>
-                  <TextField editable label={t("sources.capture.username")} required autoComplete="off" {...form.fieldProps("captureUsername")} />
-                  <TextField editable type="password" label={t("sources.capture.password")} required autoComplete="new-password" {...form.fieldProps("capturePassword")} />
-                </>
-              ) : null}
-            </>
-          ) : null}
-          <DisplayField label={t("sources.capture.timezone")} value={source?.schedule_timezone} helper={!source?.schedule_timezone ? t("sources.capture.timezonePending") : undefined} />
-          <SwitchField editable={editable} label={t("sources.capture.anyTime")} helper={t("sources.capture.windowHelper")} {...form.fieldProps("anyTime", { type: "checkbox" })} />
-          {!form.values.anyTime ? (
-            <>
-              <TextField editable={editable} label={t("sources.capture.start")} placeholder="HH:mm" required={editable} {...form.fieldProps("windowStart")} />
-              <TextField editable={editable} label={t("sources.capture.end")} placeholder="HH:mm" required={editable} {...form.fieldProps("windowEnd")} />
-            </>
-          ) : null}
-        </>
-      )}
-      {editable && !identityOnly ? (
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          loading={testing}
-          disabled={form.submitting}
-          onClick={onTest}
-        >
-          {t("sources.test")}
-        </Button>
-      ) : null}
-    </Stack>
+    <fieldset disabled={form.submitting} className="source-record-fields">
+      <Stack gap="lg">
+        <Paper withBorder p="md">
+          <FormSection title={t("sources.workflow.identity")}>
+            <TextField label={t("sources.fields.key")} required={mode === "create"} editable={mode === "create"} {...form.fieldProps("key")} />
+            <TextField label={t("sources.fields.name")} required={editable} editable={editable} {...form.fieldProps("name")} />
+            {!identityOnly && (
+              <TextareaField
+                label={t("sources.fields.description")}
+                autosize minRows={2}
+                style={{ gridColumn: "1 / -1" }}
+                editable={editable} {...form.fieldProps("description")}
+              />
+            )}
+            {mode !== "create" && (
+              <SelectField
+                label={t("sources.fields.status")}
+                data={["active", "disabled"].map((value) => ({ value, label: t(`sources.status.${value}`) }))}
+                editable={editable} {...form.fieldProps("status")}
+              />
+            )}
+            {identityOnly && engineField}
+          </FormSection>
+        </Paper>
+        {!identityOnly && (
+          <>
+            <Paper withBorder p="md">
+              <Stack gap="md">
+                <fieldset disabled={switching} aria-busy={switching} className="source-record-fields">
+                  <Stack gap="md">
+                    <FormSection title={t("sources.workflow.connection")}>
+                      {engineField}
+                      {onEditConnection && (
+                        <Group align="end">
+                          <Button type="button" size="sm" variant="default" loading={loadingAccess} onClick={onEditConnection}>
+                            {t("sources.workflow.editConnection")}
+                          </Button>
+                        </Group>
+                      )}
+                    </FormSection>
+                    <SpecTree
+                      key={engine}
+                      schema={schema}
+                      value={form.values.access}
+                      onChange={(next) => {
+                        form.setFieldValue("access", next);
+                        if (schema && Object.keys(form.errors).some((key) => key.startsWith("access."))) {
+                          const errors = validateSourceAccess(schema, next, t);
+                          for (const path of Object.keys(form.errors)) {
+                            if (path.startsWith("access.")) form.setFieldError(path, errors[path]);
+                          }
+                        }
+                      }}
+                      editable={connectionEditable}
+                      errors={form.errors}
+                    />
+                  </Stack>
+                </fieldset>
+                {canTest && engine && (
+                  <>
+                    <Divider />
+                    <SourceConnectionProbe
+                      key={source?.access_updated_at}
+                      sourceId={source?.id}
+                      engine={engine}
+                      draft={!source || (connectionEditable && (form.isDirty("access") || form.isDirty("engine"))) ? form.values.access : undefined}
+                      disabled={switching || form.submitting || Boolean(loadingAccess)}
+                      validateDraft={validateProbe}
+                    />
+                  </>
+                )}
+              </Stack>
+            </Paper>
+            <CaptureSettings form={form} source={source} editable={editable} />
+          </>
+        )}
+      </Stack>
+    </fieldset>
+  );
+}
+
+function CaptureSettings({ form, source, editable }: {
+  form: UseConsoleFormReturn<Values>;
+  source?: Source;
+  editable: boolean;
+}) {
+  const t = useTranslate();
+  const [expanded, setExpanded] = useState(Boolean(source?.capture_credential_set || source?.snapshot_window));
+  const intent = form.values.captureIntent;
+  useEffect(() => {
+    if (form.errors.captureUsername || form.errors.capturePassword || form.errors.windowStart || form.errors.windowEnd) {
+      setExpanded(true);
+    }
+  }, [form.errors]);
+  const configured = Boolean(source?.capture_credential_set);
+  const credential = t(configured ? "sources.capture.set" : "sources.capture.unset");
+  const credentialSummary = intent === "retain" ? credential : t(
+    intent === "clear" ? "sources.workflow.credentialCleared" : "sources.workflow.credentialPending",
+  );
+  const windowSummary = form.values.anyTime
+    ? t("sources.capture.anyTime")
+    : [form.values.windowStart, form.values.windowEnd].filter(Boolean).join("–") || t("sources.workflow.window");
+  const changeIntent = (captureIntent: Values["captureIntent"]) => {
+    form.setValues({ captureIntent, captureUsername: "", capturePassword: "" });
+    form.clearFieldError("captureUsername");
+    form.clearFieldError("capturePassword");
+  };
+  return (
+    <Paper withBorder p="md">
+      <Stack gap="md">
+        <Group justify="space-between" align="center">
+          <Stack gap={2}>
+            <Title order={2}>{t("sources.workflow.capture")}</Title>
+            {!expanded && <Text size="sm" c="dimmed">{credentialSummary} · {windowSummary}</Text>}
+          </Stack>
+          <Button
+            type="button" size="sm" variant="subtle" aria-expanded={expanded}
+            aria-controls="source-capture-settings" onClick={() => setExpanded(!expanded)}
+          >
+            {t(expanded ? "sources.workflow.hideCapture" : "sources.workflow.showCapture")}
+          </Button>
+        </Group>
+        <Stack id="source-capture-settings" gap="lg" hidden={!expanded} style={!expanded ? { display: "none" } : undefined}>
+          <Stack gap="sm">
+            <DisplayField label={t("sources.capture.credential")} value={credential} helper={t("sources.capture.helper")} />
+            {editable && (
+              <Group gap="xs">
+                {intent === "retain" ? (
+                  <>
+                    <Button type="button" variant="default" size="sm" onClick={() => changeIntent("replace")}>
+                      {t(configured ? "sources.capture.replace" : "sources.workflow.setCredential")}
+                    </Button>
+                    {configured && (
+                      <Button type="button" variant="light" color="red" size="sm" onClick={() => changeIntent("clear")}>
+                        {t("sources.capture.clear")}
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <Button type="button" variant="default" size="sm" onClick={() => changeIntent("retain")}>
+                    {t("sources.workflow.undoCredential")}
+                  </Button>
+                )}
+              </Group>
+            )}
+            {intent === "clear" && <Text size="sm" c="red">{t("sources.capture.clearHint")}</Text>}
+            {intent === "replace" && (
+              <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                <TextField editable label={t("sources.capture.username")} required autoComplete="off" {...form.fieldProps("captureUsername")} />
+                <TextField editable type="password" label={t("sources.capture.password")} required autoComplete="new-password" {...form.fieldProps("capturePassword")} />
+              </SimpleGrid>
+            )}
+          </Stack>
+          <FormSection order={3} title={t("sources.workflow.window")}>
+            <DisplayField label={t("sources.capture.timezone")} value={source?.schedule_timezone} helper={!source?.schedule_timezone ? t("sources.capture.timezonePending") : undefined} />
+            <SwitchField editable={editable} label={t("sources.capture.anyTime")} helper={t("sources.capture.windowHelper")} {...form.fieldProps("anyTime", { type: "checkbox" })} />
+            {!form.values.anyTime && (
+              <>
+                <TextField editable={editable} label={t("sources.capture.start")} placeholder="HH:mm" required={editable} {...form.fieldProps("windowStart")} />
+                <TextField editable={editable} label={t("sources.capture.end")} placeholder="HH:mm" required={editable} {...form.fieldProps("windowEnd")} />
+              </>
+            )}
+          </FormSection>
+        </Stack>
+      </Stack>
+    </Paper>
   );
 }
 
@@ -951,56 +1066,4 @@ async function findListedSource(sourceId: string): Promise<Source | null> {
     offset += page.items.length;
   }
   return null;
-}
-
-function confirmEngine(
-  current: Engine | "",
-  next: Engine | null,
-  open: (engine: Engine) => void,
-  apply: (engine: Engine) => Promise<void>,
-  clearEngine: (field: "engine", value: "") => void,
-) {
-  if (!next) {
-    clearEngine("engine", "");
-    return;
-  }
-  if (current === next) return;
-  if (!current) {
-    void apply(next);
-    return;
-  }
-  open(next);
-}
-
-async function runProbe(
-  values: Values,
-  editingId: string | null,
-  t: (key: string) => string,
-  open: ReturnType<typeof useNotification>["open"],
-  setFieldError: (field: "engine", error: string) => void,
-  setTesting: (testing: boolean) => void,
-) {
-  if (!values.engine) {
-    setFieldError("engine", t("sources.validation.required"));
-    return;
-  }
-  if (!String(values.access.password ?? "").trim()) {
-    open?.({ type: "error", message: t("sources.validation.secretForTest") });
-    return;
-  }
-  setTesting(true);
-  try {
-    const result = editingId
-      ? await testSource(editingId, { engine: values.engine, access: values.access })
-      : await testSourceDraft({ engine: values.engine, access: values.access });
-    if (result.ok) {
-      open?.({ type: "success", message: t("sources.test.success") });
-    } else {
-      open?.({ type: "error", message: result.message || t("sources.test.failed") });
-    }
-  } catch (err) {
-    open?.({ type: "error", message: problemMessage(t, err, String(err)) });
-  } finally {
-    setTesting(false);
-  }
 }

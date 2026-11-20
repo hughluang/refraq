@@ -30,6 +30,7 @@ export type Source = {
   engine: string | null;
   /** Omitted when the caller has no level. Do not treat absence as an empty document. */
   access?: SourceAccess | null;
+  can_write?: boolean;
   has_access?: boolean;
   access_updated_at?: string | null;
   capture_credential_set?: boolean;

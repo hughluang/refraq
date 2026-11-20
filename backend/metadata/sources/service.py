@@ -18,6 +18,7 @@ from typing import Any, cast
 from sqlalchemy.orm import Session
 
 from backend.metadata.source_access import (
+    SourceIdSet,
     SourceMembership,
     create_membership_on,
     delete_for_source,
@@ -135,7 +136,8 @@ def list_sources_for_user(
         offset=offset,
         visible_ids=_visible_source_ids(user),
     )
-    return [_project_list_item(user.id, record) for record in records], total
+    writable = source_ids_for(user.id, "sources:write")
+    return [_project_list_item(user.id, record, writable) for record in records], total
 
 
 def _visible_source_ids(user: UserRecord) -> frozenset[str] | AllVisibleSources:
@@ -149,10 +151,12 @@ def _visible_source_ids(user: UserRecord) -> frozenset[str] | AllVisibleSources:
     return granted.source_ids
 
 
-def _project_list_item(user_id: str, record: SourceRecord) -> dict[str, Any]:
+def _project_list_item(
+    user_id: str, record: SourceRecord, writable: SourceIdSet
+) -> dict[str, Any]:
     if effective_level(user_id, record.id) is None:
         return identity_view(record)
-    return public_view(record)
+    return {**public_view(record), "can_write": writable.all_sources or record.id in writable.source_ids}
 
 
 def public_view(record: SourceRecord) -> dict[str, Any]:

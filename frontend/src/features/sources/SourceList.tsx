@@ -198,7 +198,7 @@ export function SourceList() {
                     {
                       key: "edit",
                       label: t("sources.edit"),
-                      hidden: !canWrite?.can,
+                      hidden: !canWrite?.can || !source.can_write,
                       safety: "immediate",
                       onClick: () => push(sourceEditPath(source.id)),
                     },
@@ -206,7 +206,7 @@ export function SourceList() {
                       key: "delete",
                       label: t("sources.delete"),
                       color: "red",
-                      hidden: !canWrite?.can,
+                      hidden: !canWrite?.can || !source.can_write,
                       disabledReason:
                         source.status === "disabled"
                           ? undefined

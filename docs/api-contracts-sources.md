@@ -30,6 +30,7 @@ Transport: success `application/json`; HTTP failures `application/problem+json` 
     "owner": "MES_APP",
     "extra": {}
   },
+  "can_write": true,
   "has_access": true,
   "access_updated_at": "2026-08-05T01:00:00Z"
 }
@@ -45,6 +46,8 @@ For `kind=database`: `engine` and `access` are required on create. Catalog scope
 Registered Metadata engines: `postgresql`, `mssql`, `oracle`, `mysql`. PostgreSQL Spec allows full TLS modes; mssql/oracle/mysql accept `ssl_mode=disable` only. MySQL rejects certificate fields and nonempty `extra`; deployments requiring TLS cannot use this adapter. MySQL structure collection covers tables/views, not routines; unsupported expression indexes fail collection. Controlled Query preserves outer ordering/offset and caps its top-level LIMIT without a derived-table wrapper. MySQL TIME is a signed duration (Normalized Type `interval`), not a time of day. Author statement/stream execution is unsupported. These adapter/API contracts do not qualify a real MySQL version, topology, timeout behavior or CDC profile.
 
 **Read projection:** list/get/`SourceOut` decrypt then **strip** every `x-secret` property before returning `access`. Decrypt failure surfaces as `SOURCE_SECRET_REQUIRED` (does not silently null `access` while `has_access` stays true). Non-secret fields (host, port, username, ssl_mode, dialect scope keys, extra, …) remain.
+**Write capability:** Full HTTP Source projections include `can_write`, the caller's effective `sources:write` permission on this Source. Identity-only list rows omit it. Every write and stored probe still checks the current permission at request time.
+
 **Write/edit full tree:** `GET /sources/{id}/access` (`sources:write`) returns the decrypted document including secrets.
 For non-database kinds (future), `engine` / `access` may be absent.
 

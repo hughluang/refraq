@@ -25,6 +25,7 @@ from backend.metadata.errors import (
     SourceAccessRequired,
     SourceSecretRequired,
 )
+from backend.metadata.source_access import effective_permissions
 from backend.metadata.sources.access import (
     decrypt_access_blob,
     validate_access,
@@ -62,8 +63,11 @@ def require_source_list_access(
     raise AuthForbidden()
 
 
-def _source_out(record: SourceRecord) -> SourceOut:
-    return SourceOut.model_validate(source_service.public_view(record))
+def _source_out(record: SourceRecord, user: UserRecord) -> SourceOut:
+    return SourceOut(
+        **source_service.public_view(record),
+        can_write="sources:write" in effective_permissions(user.id, record.id),
+    )
 
 
 @router.get(
@@ -141,7 +145,7 @@ def post_source(
             else "retain",
         },
     )
-    return SourceResponse(source=_source_out(record))
+    return SourceResponse(source=_source_out(record, user))
 
 
 @router.post("/sources/test", response_model=SourceTestResponse)
@@ -185,7 +189,7 @@ def get_source(
     record = source_service.require_source_permission(
         user.id, source_id, "sources:read"
     )
-    return SourceResponse(source=_source_out(record))
+    return SourceResponse(source=_source_out(record, user))
 
 
 @router.get("/sources/{source_id}/capture-status")
@@ -235,8 +239,8 @@ def patch_source(
         patch_fields=fields,
     )
     if not seeded:
-        return PatchSourceResponse(source=_source_out(record))
-    return PatchSourceResponse(source=_source_out(record), schedules=seeded)
+        return PatchSourceResponse(source=_source_out(record, user))
+    return PatchSourceResponse(source=_source_out(record, user), schedules=seeded)
 
 
 @router.delete(

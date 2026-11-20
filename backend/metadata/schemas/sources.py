@@ -22,6 +22,7 @@ class SourceOut(BaseModel):
     description: str | None = None
     engine: str | None
     access: dict[str, Any] | None = None
+    can_write: bool | None = None
     has_access: bool | None = None
     access_updated_at: Instant | None = None
     capture_credential_set: bool | None = None

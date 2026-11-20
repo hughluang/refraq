@@ -244,6 +244,7 @@ def test_access_manage_lists_identity_rows_without_opening_one_source(
     assert first["description"] == "alpha notes"
     assert first["access"]["host"] == "alpha.hidden.example"
     assert first["has_access"] is True
+    assert first["can_write"] is False
     assert first["access_updated_at"]
     assert "password" not in first["access"]
 
@@ -361,6 +362,7 @@ def test_weaker_level_cannot_mutate_or_read_secrets(
     _patch_probe(monkeypatch)
     _login(client, "admin")
     source = _create(client, f"src-{level}")
+    assert source["can_write"] is True
     create_membership(
         subject_type="user",
         subject_id=_user_id("writer"),
@@ -371,6 +373,7 @@ def test_weaker_level_cannot_mutate_or_read_secrets(
 
     shown = client.get(f"/sources/{source['id']}")
     assert shown.status_code == 200, shown.text
+    assert shown.json()["source"]["can_write"] is False
     assert shown.json()["source"]["access"]["host"] == _HOST
     assert "password" not in shown.json()["source"]["access"]
 
@@ -412,6 +415,7 @@ def test_maintainer_with_write_operates_the_source(
     listed = client.get("/sources")
     assert listed.json()["total"] == 1
     assert listed.json()["items"][0]["access"]["host"] == _HOST
+    assert listed.json()["items"][0]["can_write"] is True
 
     patched = client.patch(f"/sources/{source['id']}", json={"name": "Mine"})
     assert patched.status_code == 200, patched.text

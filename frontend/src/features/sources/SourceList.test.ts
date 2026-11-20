@@ -111,6 +111,7 @@ const LEDGER = {
   engine: "postgresql",
   access: { host: "db.internal", database: "ledger" },
   has_access: true,
+  can_write: true,
   access_updated_at: null,
 };
 

@@ -2,7 +2,7 @@
 
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,6 +24,8 @@ const createSourceMembership = vi.hoisted(() => vi.fn());
 const changeSourceMembership = vi.hoisted(() => vi.fn());
 const deleteSourceMembership = vi.hoisted(() => vi.fn());
 const userSearch = vi.hoisted(() => vi.fn());
+const testStored = vi.hoisted(() => vi.fn());
+const testDraft = vi.hoisted(() => vi.fn());
 const getSourceAccess = vi.hoisted(() => vi.fn());
 const getAccessSchema = vi.hoisted(() => vi.fn());
 const createSource = vi.hoisted(() => vi.fn());
@@ -40,8 +42,8 @@ vi.mock("@/features/sources/api/sources", () => ({
   patchSource: (...args: unknown[]) => patchSource(...args),
   deleteSource: (...args: unknown[]) => deleteSource(...args),
   listSources: (...args: unknown[]) => listSources(...args),
-  testSource: vi.fn(),
-  testSourceDraft: vi.fn(),
+  testSource: (...args: unknown[]) => testStored(...args),
+  testSourceDraft: (...args: unknown[]) => testDraft(...args),
 }));
 
 vi.mock("@/features/sources/api/memberships", () => ({
@@ -117,6 +119,7 @@ const LEDGER = {
   description: "",
   engine: "postgresql",
   access: { host: "db.internal" },
+  can_write: true,
   has_access: true,
   access_updated_at: null,
 };
@@ -193,6 +196,8 @@ describe("SourceRecord", () => {
     userSearch.mockReset();
     listSourceMemberships.mockResolvedValue({ items: [] });
     userSearch.mockResolvedValue([{ id: "usr_ada", name: "Ada", key: "ada" }]);
+    testStored.mockReset();
+    testDraft.mockReset();
     getSourceAccess.mockReset();
     getAccessSchema.mockReset();
     createSource.mockReset();
@@ -292,17 +297,72 @@ describe("SourceRecord", () => {
     fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
 
     await waitFor(() => expect(patchSource).toHaveBeenCalled());
-    expect(patchSource).toHaveBeenCalledWith(
-      "src_1",
-      expect.objectContaining({
-        name: "Ledger West",
-        status: "active",
-        engine: "postgresql",
-        access: { host: "db.internal", password: "secret" },
-      }),
-    );
+    expect(patchSource).toHaveBeenCalledWith("src_1", { name: "Ledger West" });
     expect(replace).not.toHaveBeenCalled();
-    expect(getSourceAccess).toHaveBeenCalledWith("src_1");
+    expect(getSourceAccess).not.toHaveBeenCalled();
+  });
+
+  it("tests the saved connection without fetching credentials and hides writer actions for a viewer", async () => {
+    testStored.mockResolvedValue({ ok: true });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+    fireEvent.click(await screen.findByRole("button", { name: copy["sources.test"] }));
+    await waitFor(() => expect(testStored).toHaveBeenCalledWith("src_1", {}));
+    expect(await screen.findByText(copy["sources.test.success"])).toBeTruthy();
+    expect(getSourceAccess).not.toHaveBeenCalled();
+    cleanup();
+
+    getSource.mockResolvedValue({ source: { ...LEDGER, can_write: false } });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+    expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: copy["sources.test"] })).toBeNull();
+    expect(screen.queryByRole("link", { name: copy["sources.edit"] })).toBeNull();
+    expect(screen.queryByRole("button", { name: copy["sources.delete"] })).toBeNull();
+  });
+
+  it("keeps a draft probe current during metadata edits and preserves untouched saved text", async () => {
+    const saved = { ...LEDGER, description: "  imported notes  " };
+    getSource.mockResolvedValue({ source: saved });
+    getAccessSchema.mockResolvedValue({ schema: { properties: { host: { type: "string" } }, required: ["host"] } });
+    let finishProbe!: (result: { ok: boolean }) => void;
+    testStored.mockImplementationOnce(() => new Promise((resolve) => { finishProbe = resolve; }));
+    patchSource.mockResolvedValue({ source: { ...saved, name: "Ledger West" } });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit connection" }));
+    const host = await screen.findByRole("textbox", { name: /^Host/ });
+    fireEvent.change(host, { target: { value: "another.internal" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["sources.test"] }));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "Ledger West" } });
+    await act(async () => finishProbe({ ok: true }));
+    expect(screen.getByText(copy["sources.test.success"])).toBeTruthy();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ type: "success" }));
+    fireEvent.change(host, { target: { value: saved.access.host } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenCalledWith("src_1", { name: "Ledger West" }));
+  });
+
+  it("retries access loading, tests an edited draft and discards obsolete probe feedback", async () => {
+    getAccessSchema.mockResolvedValue({ schema: { properties: { host: { type: "string" } }, required: ["host"] } });
+    getSourceAccess.mockRejectedValueOnce(new ApiError(503, "UNAVAILABLE", "Unavailable"));
+    let finishProbe!: (result: { ok: boolean }) => void;
+    testStored.mockImplementationOnce(() => new Promise((resolve) => { finishProbe = resolve; }));
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    const editConnection = await screen.findByRole("button", { name: "Edit connection" });
+    fireEvent.click(editConnection);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: /^Host/ })).toBeNull();
+    fireEvent.click(editConnection);
+    const host = await screen.findByRole("textbox", { name: /^Host/ });
+    fireEvent.change(host, { target: { value: "second.internal" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["sources.test"] }));
+    expect(testStored).toHaveBeenCalledWith("src_1", {
+      engine: "postgresql",
+      access: { host: "second.internal", password: "secret" },
+    });
+    expect((screen.getByRole("button", { name: copy["jobs.refresh"] }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(host, { target: { value: "third.internal" } });
+    await act(async () => finishProbe({ ok: true }));
+    expect(screen.queryByText(copy["sources.test.success"])).toBeNull();
+    expect(patchSource).not.toHaveBeenCalled();
   });
 
   it.each([null, { start: "23:00", end: "02:00" }])(
@@ -330,13 +390,14 @@ describe("SourceRecord", () => {
     fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
     await waitFor(() => expect(patchSource).toHaveBeenCalled());
     expect(patchSource.mock.calls[0][1]).not.toHaveProperty("capture_credential");
-    expect(getSourceAccess).toHaveBeenCalledWith("src_1");
+    expect(getSourceAccess).not.toHaveBeenCalled();
   });
 
   it("replaces capture credentials explicitly and clears the drafts after save", async () => {
     patchSource.mockResolvedValue({ source: { ...LEDGER, capture_credential_set: true } });
     await renderRecord({ mode: "edit", sourceId: "src_1" });
-    fireEvent.click(await screen.findByRole("button", { name: "Replace capture credential" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show capture settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set capture credential" }));
     const username = screen.getByLabelText(/^Capture username/) as HTMLInputElement;
     const password = screen.getByLabelText(/^Capture password/) as HTMLInputElement;
     expect(username.value).toBe("");
@@ -380,6 +441,7 @@ describe("SourceRecord", () => {
     getSource.mockResolvedValue({ source: { ...LEDGER, schedule_timezone: "Pacific/Auckland" } });
     patchSource.mockResolvedValue({ source: { ...LEDGER, snapshot_window: { start: "23:00", end: "02:00" }, schedule_timezone: "Pacific/Auckland" } });
     await renderRecord({ mode: "edit", sourceId: "src_1" });
+    fireEvent.click(await screen.findByRole("button", { name: "Show capture settings" }));
     expect(await screen.findByText("Pacific/Auckland")).toBeTruthy();
     fireEvent.click(screen.getByRole("switch", { name: "Any time" }));
     const start = screen.getByRole("textbox", { name: /^Window start/ });
@@ -405,7 +467,8 @@ describe("SourceRecord", () => {
   it("requires both capture fields and preserves the draft when scope locking rejects save", async () => {
     patchSource.mockRejectedValue(new ApiError(409, "SOURCE_CAPTURE_SCOPE_LOCKED", "Capture scope is locked"));
     await renderRecord({ mode: "edit", sourceId: "src_1" });
-    fireEvent.click(await screen.findByRole("button", { name: "Replace capture credential" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show capture settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set capture credential" }));
     fireEvent.change(screen.getByLabelText(/^Capture username/), { target: { value: "capture-user" } });
     fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
     expect(await screen.findByText("Required")).toBeTruthy();
@@ -425,8 +488,9 @@ describe("SourceRecord", () => {
       await renderRecord({ mode: "create" });
       fireEvent.change(await screen.findByLabelText(/^Key/), { target: { value: "ledger" } });
       fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "Ledger" } });
+      fireEvent.click(screen.getByRole("button", { name: "Show capture settings" }));
       expect(screen.getByText(copy["sources.capture.timezonePending"])).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "Replace capture credential" }));
+      fireEvent.click(screen.getByRole("button", { name: "Set capture credential" }));
       fireEvent.change(screen.getByLabelText(/^Capture username/), { target: { value: "capture-user" } });
       fireEvent.change(screen.getByLabelText(/^Capture password/), { target: { value: "draft-value" } });
       fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
@@ -461,6 +525,17 @@ describe("SourceRecord", () => {
     expect(screen.getByLabelText(/^Name/, { selector: "input", hidden: true })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
     await waitFor(() => expect(patchSource).toHaveBeenCalled());
+  });
+
+  it("returns to the record tab when a hidden definition field needs correction", async () => {
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    const name = await screen.findByLabelText(/^Name/);
+    fireEvent.change(name, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("tab", { name: copy["structureDiffs.title"] }));
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: copy["sources.tabs.record"] }).getAttribute("aria-selected")).toBe("true"));
+    expect(patchSource).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.activeElement).toBe(name));
   });
 
   it("shows delete on show and edit when the actor can delete", async () => {
@@ -563,7 +638,9 @@ describe("SourceRecord", () => {
       copy["sources.membership.level.steward"],
       copy["sources.membership.level.maintainer"],
     ]);
+    fireEvent.click(within(levelList!).getByRole("option", { name: copy["sources.membership.level.viewer"], hidden: true }));
     fireEvent.click(within(dialog).getByRole("button", { name: /^Subject/ }));
+    await waitFor(() => expect(userSearch).toHaveBeenCalled(), { timeout: 10000 });
     fireEvent.click(await screen.findByRole("option", { name: /Ada/, hidden: true }));
     fireEvent.click(within(dialog).getByRole("button", { name: copy["sources.membership.add"] }));
 
@@ -693,7 +770,7 @@ describe("SourceRecord", () => {
     expect(screen.getByText(copy["sources.status.active"])).toBeTruthy();
     expect(screen.queryByText(copy["sources.capture.credential"])).toBeNull();
     expect(screen.queryByText(copy["sources.capture.timezone"])).toBeNull();
-    expect(screen.queryByText(copy["sources.spec.section"])).toBeNull();
+    expect(screen.queryByRole("heading", { name: copy["sources.workflow.connection"] })).toBeNull();
     expect(screen.queryByRole("button", { name: copy["sources.test"] })).toBeNull();
     expect(screen.queryByRole("tab", { name: copy["structureDiffs.title"] })).toBeNull();
     expect(screen.queryByLabelText(copy["sources.fields.description"])).toBeNull();
