@@ -24,6 +24,25 @@ def save_binding(session: Session | None, state: dict) -> None:
         for key in ("source_id", "binding_id", "capture_generation")
     ):
         raise SourceCaptureControlConflict()
+    _write_binding(session, state)
+
+
+def promote_replacement_binding(session: Session, state: dict, command: dict) -> None:
+    existing = load_binding(session, command["source_id"])
+    operation = load_operation(session, command["operation_id"])
+    if (existing is None or operation is None or operation["command"] != command
+            or command["kind"] != "replace_owner" or operation["evidence"] is None
+            or existing.get("pending_replacement") != command["operation_id"]
+            or any(existing[key] != value for key, value in command["replacement"]["previous_authority"].items())
+            or any(state[key] != command[key] for key in command["replacement"]["previous_authority"])
+            or state["binding_id"] != existing["binding_id"]
+            or state["capture_generation"] != existing["capture_generation"] + 1
+            or state["owner_epoch"] != existing["owner_epoch"] + 1):
+        raise SourceCaptureControlConflict()
+    _write_binding(session, state)
+
+
+def _write_binding(session: Session | None, state: dict) -> None:
     if session is None:
         get_source_store().capture_bindings[state["source_id"]] = deepcopy(state)
         return

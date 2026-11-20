@@ -80,8 +80,8 @@ from backend.metadata.routers.source_memberships import (
 )
 from backend.metadata.mirrors.router import router as mirrors_router
 from backend.metadata.mirrors.composition import compose_mirrors
-from backend.metadata.mirrors.history import bind_history
-from backend.metadata.mirrors.recovery import bind_recovery
+from backend.metadata.mirrors.history import History, bind_history
+from backend.metadata.mirrors.recovery import Recovery, bind_recovery
 from backend.core.db import get_session_factory
 from backend.channel.mirror_reads import bind_reads, validate_terminal_proof
 from backend.channel.diagnostics import project_job as project_channel_job
@@ -195,8 +195,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         adapters = compose_mirrors(settings, verify_terminal_proof=validate_terminal_proof)
         if adapters is not None:
-            bind_history(session_factory=get_session_factory(), target=adapters.history_target)
+            session_factory = get_session_factory()
+            bind_history(session_factory=session_factory, target=adapters.history_target)
             bind_reads(adapters.reads)
+            if settings.mirror_recovery_retry_delays_seconds is not None:
+                bind_recovery(Recovery(
+                    session_factory=session_factory,
+                    history=History(session_factory=session_factory, target=adapters.history_target),
+                    retry_delays=settings.mirror_recovery_retry_delays_seconds,
+                ))
         _bootstrap_site(settings)
         apply_http_runtime()
         open_entity_pool_when_persistent()

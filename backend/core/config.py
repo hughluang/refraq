@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
@@ -140,6 +140,9 @@ class Settings(BaseSettings):
     )
     mirror_target: MirrorTargetSettings | None = Field(
         default=None, validation_alias="REFRAQ_MIRROR_TARGET", repr=False,
+    )
+    mirror_recovery_retry_delays_seconds: tuple[Annotated[int, Field(gt=0, strict=True)], ...] | None = Field(
+        default=None, min_length=1, validation_alias="REFRAQ_MIRROR_RECOVERY_RETRY_DELAYS_SECONDS",
     )
     notification_reviewed_origins: dict[str, str] = Field(
         default_factory=dict,

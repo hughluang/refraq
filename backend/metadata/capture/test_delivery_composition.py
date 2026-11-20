@@ -82,6 +82,7 @@ def setup_delivery(monkeypatch, tmp_path):
     owner.max_age = 10
     owner.engine = SimpleNamespace(dispose=lambda: None)
     owner.limits = DeliveryLimits()
+    owner.resume_operation_id = None
     owner.stamp = deepcopy(state)
     owner.stamp.pop("desired")
     owner.stamp.pop("published_scope")

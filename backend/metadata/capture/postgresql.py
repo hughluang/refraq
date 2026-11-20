@@ -16,7 +16,7 @@ class PostgreSQLCaptureProfile:
         self.connect = connect
         required = {"source_id", "connector_name", "host", "port", "database", "tables",
                     "publication", "slot", "topic_prefix", "server_version_num"}
-        if (set(scope) - {"snapshot"} != required or set(tls) != {"sslmode", "sslrootcert"}
+        if (set(scope) - {"snapshot", "transaction_metadata"} != required or set(tls) != {"sslmode", "sslrootcert"}
                 or tls.get("sslmode") != "verify-full"
                 or not tls.get("sslrootcert") or not scope["tables"]
                 or any(not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", scope[k])
@@ -25,6 +25,8 @@ class PostgreSQLCaptureProfile:
                        for t in scope["tables"])):
             raise RuntimeBlocked("explicit_postgresql_profile_required")
         self.snapshot = scope.get("snapshot")
+        if "transaction_metadata" in scope and (scope["transaction_metadata"] is not True or self.snapshot is None):
+            raise RuntimeBlocked("explicit_transaction_metadata_profile_required")
         if "snapshot" in scope:
             snapshot = self.snapshot
             if (not isinstance(snapshot, dict) or set(snapshot) != {
@@ -156,4 +158,6 @@ class PostgreSQLCaptureProfile:
                 "notification.enabled.channels": "sink",
                 "notification.sink.topic.name": self.snapshot["notification_topic"],
             })
+        if p.get("transaction_metadata"):
+            config["provide.transaction.metadata"] = "true"
         return config

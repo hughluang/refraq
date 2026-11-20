@@ -460,18 +460,27 @@ def advance_published_target(target_dsn, expected, certificate):
     before = ReadCommittedBounds(low=0, stable=4, high=5, leader_epoch=3)
     after = ReadCommittedBounds(low=0, stable=5, high=6, leader_epoch=3)
     resume = {"certificate": certificate, "history_epoch": expected.history_epoch}
-    for scan, commit_seq in ((AnchoredScan(0, 1, first, first, (0,)), 1),
-                             (AnchoredScan(1, 4, before, after, (2, 3)), 2)):
-        records = [asdict(Record(offset, certificate["table_identity"], expected.authority.capture_generation,
-                                 "upsert", "live", {"id": offset}, {"id": offset, "body": "resumed"}))
-                   for offset in scan.offsets]
-        with psycopg.connect(target_dsn) as owner:
-            owner.execute("SET LOCAL ROLE refraq_mirror_owner")
-            assert owner.execute(
-                "SELECT source_mirror_state.apply_batch(%s, %s, %s, %s, %s, %s, %s)",
-                (Jsonb(asdict(expected.authority)), expected.generation_id, Jsonb(certificate["partition_identity"]),
-                 Jsonb(records), Jsonb(asdict(profile)), Jsonb(asdict(scan)), Jsonb(resume)),
-            ).fetchone() == ({"offset": scan.offsets[-1], "commit_seq": commit_seq},)
+    statement = "SELECT source_mirror_state.apply_batch(%s, %s, %s, %s, %s, %s, %s)"
+    with psycopg.connect(target_dsn, autocommit=True) as applier:
+        applier.execute("SET SESSION AUTHORIZATION refraq_mirror_applier")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            applier.execute("SELECT applied_offset FROM source_mirror_state.generations")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            applier.execute("UPDATE source_mirror_state.generations SET applied_offset = -1 WHERE false")
+        for scan, commit_seq in ((AnchoredScan(0, 1, first, first, (0,)), 1),
+                                 (AnchoredScan(1, 4, before, after, (2, 3)), 2)):
+            records = [asdict(Record(offset, certificate["table_identity"], expected.authority.capture_generation,
+                                     "upsert", "live", {"id": offset}, {"id": offset, "body": "resumed"}))
+                       for offset in scan.offsets]
+            batch = (Jsonb(asdict(expected.authority)), expected.generation_id, Jsonb(certificate["partition_identity"]),
+                     Jsonb(records), Jsonb(asdict(profile)), Jsonb(asdict(scan)))
+            for rejected in (dict(resume, certificate=dict(certificate, end_offset=0)),
+                             dict(resume, history_epoch="stale-history")):
+                with pytest.raises(psycopg.errors.RaiseException, match=r"^MIRROR_RESUME_BLOCKED\b"):
+                    applier.execute(statement, (*batch, Jsonb(rejected)))
+            assert applier.execute(statement, (*batch, Jsonb(resume))).fetchone() == (
+                {"offset": scan.offsets[-1], "commit_seq": commit_seq},
+            )
 
 
 def reject_damaged_initial_seal(target_dsn, generation_id, allocation, prepare):
@@ -987,7 +996,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
 
                             with monkeypatch.context() as blocked:
                                 request_gateway = Mock()
-                                activate = Mock()
+                                activate = Mock(return_value=Mock(poll_once=Mock(return_value=0)))
                                 blocked.setattr(http, "request", request_gateway)
                                 blocked.setattr(delivery_composition, "open_delivery", activate)
                                 connect, snapshot, credentials = Mock(), Mock(), Mock()
@@ -1044,6 +1053,31 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                                 advanced_deliveries = (warm, fresh_delivery("advanced-state"))
                                 for delivery in advanced_deliveries:
                                     confirm_candidate(delivery, seek=4)
+
+                                with monkeypatch.context() as admitted:
+                                    def qualify(method, path, payload):
+                                        assert (method, path) == ("POST", "/v1/capture/retained-position-resume")
+                                        retained_candidate, = payload["scope"]["candidates"]
+                                        assert retained_candidate["target_seek_offset"] == 4
+                                        assert retained_candidate["certificate_ref"] == expected.certificate_ref
+                                        return {"signature": signed("retained_position_resume", **payload,
+                                                                    observed_at=utc_now().isoformat(), verified=True)}
+
+                                    admitted.setattr(http, "request", qualify)
+                                    delivery = fresh_delivery("admitted-resume")
+                                    delivery._load_installation()
+                                    delivery.manifest_tables = [dict(table, anchored_profile=advanced.allocation["anchored_profile"])
+                                                                for table in delivery.manifest_tables]
+                                    capture = capture_for(delivery)
+                                    capture.resume_retained = delivery.resume_retained
+                                    assert capture.poll_once(SOURCE, owner_allocation_file=owner_file) == "idle"
+                                    assert activate.call_args.kwargs["resume"] == {
+                                        "certificate": certificate, "history_epoch": expected.history_epoch,
+                                    }
+                                    assert activate.call_args.kwargs["binding"].generation_id == expected.generation_id
+                                    assert delivery.snapshot_bindings(command) == []
+                                    delivery.retire()
+                                    activate.reset_mock()
 
                                 reject_damaged_coverage(target_dsn, expected.generation_id, coverage,
                                                         lambda: warm.prepare(command))

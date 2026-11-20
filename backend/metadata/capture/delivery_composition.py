@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from hashlib import sha256
 import json
 import math
 import time
@@ -23,8 +24,9 @@ from backend.metadata.mirrors.publication import Publication
 from backend.metadata.mirrors.service import (
     MirrorError, OpenGenerationBinding, current_open_preparations, initial_history_epoch, read_published_scope,
     reconcile_open_generation, require_current_open_allocations,
+    require_current_retained_opens,
 )
-from backend.metadata.mirrors.types import Authority, PartitionIdentity
+from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity
 
 
 FACTS = {"owner_excluded", "target_fenced", "source_pressure", "alarm_drill",
@@ -66,6 +68,18 @@ def _target_authority(command):
     authority["resource_binding_id"] = authority.pop("binding_id")
     authority["capture_generation"] = str(authority["capture_generation"])
     return authority
+
+
+def _manifest_anchor(table):
+    raw = table.get("anchored_profile")
+    if "anchored_profile" not in table:
+        return None
+    if (not isinstance(raw, dict) or set(raw) != {"kind", "leader_epoch"}
+            or type(raw["leader_epoch"]) is not int or raw["leader_epoch"] < 0
+            or raw["kind"] != "disposable_read_committed_v1"
+            or type(table.get("start_offset")) is not int or table["start_offset"] != -1):
+        raise RuntimeBlocked("delivery_anchored_profile_invalid")
+    return AnchoredProfile(raw["leader_epoch"])
 
 
 @dataclass(frozen=True)
@@ -160,6 +174,8 @@ class SourceDelivery:
         self.clients = []
         self.stamp = None
         self.prepared_command = None
+        self.retained = {}
+        self.resume_operation_id = None
 
     def _load_installation(self):
         if self.engine is not None:
@@ -237,6 +253,7 @@ class SourceDelivery:
                 data_topics = {table["topic"] for table in self.manifest_tables}
                 data_partitions = tuple(opened.binding.partition_identity for opened in applied)
                 candidates = []
+                retained = {}
                 prior_exclusion = None
                 for opened in applied:
                     evidence = opened.observed.certificate["evidence"]
@@ -246,10 +263,24 @@ class SourceDelivery:
                     if candidates and (checkpoint != candidates[0].source_checkpoint or exclusion != prior_exclusion):
                         raise RuntimeBlocked("published_open_checkpoint_unconfirmed")
                     prior_exclusion = exclusion
-                    candidates.append(self._resume_candidate(manifest[opened.binding.table_identity], opened, checkpoint))
+                    table = manifest[opened.binding.table_identity]
+                    candidate = self._resume_candidate(table, opened, checkpoint)
+                    entry = next(entry for entry in scope if entry["mirror_id"] == candidate.mirror_id)
+                    table = dict(table, authority=asdict(authority), generation_id=candidate.generation_id,
+                                 decoder={**table["decoder"], "capture_generation": authority.capture_generation},
+                                 open=dict(entry, operation_id=candidate.operation_id,
+                                           history_epoch=candidate.binding.history_epoch),
+                                 fence_receipt=opened.observed.allocation["fence_receipt"])
+                    retained[candidate.generation_id] = (candidate, evidence, table)
+                    candidates.append(candidate)
                 self.tables = []
+                self.retained = retained
                 self.prepared_command = command
                 return tuple(candidates)
+            if self.resume_operation_id is not None:
+                self.retire()
+                self.resume_operation_id = None
+                self.retained = {}
             opens = {opened["table_identity"]: opened for opened in pending}
             if (self.prepared_command == command and len(self.tables) == len(self.manifest_tables)
                     and all(table.get("open") == opens.get(table["decoder"]["table_identity"]) for table in self.tables)):
@@ -265,11 +296,37 @@ class SourceDelivery:
         self.prepared_command = command
         return ()
 
+    def resume_retained(self, command, candidates):
+        generation_ids = {item.generation_id for item in candidates}
+        if (self.prepared_command != command or not candidates
+                or generation_ids != self.retained.keys() or len(generation_ids) != len(candidates)
+                or any(self.retained[item.generation_id][0] != item for item in candidates)):
+            raise RuntimeBlocked("retained_position_resume_inventory_changed")
+        for generation_id in generation_ids:
+            _, _, table = self.retained[generation_id]
+            if _manifest_anchor(table) is None:
+                raise RuntimeBlocked("delivery_anchored_profile_mismatch")
+        authority = {key: command[key] for key in AUTHORITY_KEYS}
+        serialized = [asdict(item) for item in sorted(candidates, key=lambda item: item.mirror_id)]
+        scope = json.loads(json.dumps(dict(profile=self.profile.scope, published_scope=command["published_scope"],
+                                           candidates=serialized)))
+        identity = dict(authority=authority, **scope)
+        identity["candidates"] = [{key: value for key, value in item.items() if key != "target_seek_offset"}
+                                  for item in scope["candidates"]]
+        operation_id = sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        self.signals.resume_retained(command, dict(operation_id=operation_id, authority=authority, scope=scope))
+        if operation_id != self.resume_operation_id:
+            self.retire()
+        self.resume_operation_id = operation_id
+        self.tables = [self.retained[item.generation_id][2] for item in candidates]
+
     def _manifest_binding(self, authority, table, *, table_identity, qualified_table, history_epoch):
-        if set(table) != {"decoder", "partition_identity", "schema_fingerprint", "topic", "native_types", "start_offset"}:
+        if set(table) - {"anchored_profile"} != {"decoder", "partition_identity", "schema_fingerprint",
+                                                "topic", "native_types", "start_offset"}:
             raise RuntimeBlocked("open_generation_manifest_required")
         if "capture_generation" in table["decoder"]:
             raise RuntimeBlocked("open_generation_manifest_required")
+        _manifest_anchor(table)
         decoder_data = dict(table["decoder"], capture_generation=authority.capture_generation)
         decoder = PostgreSQLDecoder(**decoder_data)
         partition = PartitionIdentity(**table["partition_identity"])
@@ -369,6 +426,11 @@ class SourceDelivery:
     def _require_current_allocations(self, session, authority):
         if not self.tables:
             raise RuntimeBlocked("retained_position_resume_driver_required")
+        if self.resume_operation_id is not None:
+            require_current_retained_opens(session, authority=Authority(**_target_authority(authority)),
+                                           published_scope=self.prepared_command["published_scope"],
+                                           candidates=[item[0] for item in self.retained.values()])
+            return
         allocations = [(table["open"], table["generation_id"]) for table in self.tables if "open" in table]
         if allocations:
             require_current_open_allocations(session, authority=Authority(**_target_authority(authority)),
@@ -388,7 +450,7 @@ class SourceDelivery:
             signal_relation_identity=snapshot["signal_relation_identity"],
             notification_topic=snapshot["notification_topic"],
             notification_partition=PartitionIdentity(**snapshot["notification_partition"]),
-        ) for table in self.tables if (opened := table.get("open")) is not None]
+        ) for table in self.tables if self.resume_operation_id is None and (opened := table.get("open")) is not None]
 
     def recheck_snapshot_allocation(self, binding, *, session):
         command = self.prepared_command
@@ -396,15 +458,19 @@ class SourceDelivery:
             raise RuntimeBlocked("snapshot_preparation_superseded")
         table = next(table for table in self.tables if table["generation_id"] == binding.generation_id)
         try:
-            require_current_open_allocations(session, authority=binding.authority,
-                                             allocations=[(table["open"], binding.generation_id)])
+            mode = require_current_open_allocations(session, authority=binding.authority,
+                                                    allocations=[(table["open"], binding.generation_id)])
             self._installed(table, command)
         except RuntimeBlocked:
             raise
         except Exception:
             raise RuntimeBlocked("snapshot_allocation_unconfirmed") from None
-        if binding.history_epoch != initial_history_epoch(binding.mirror_id):
+        if binding.history_epoch != initial_history_epoch(binding.mirror_id) and (
+            command["kind"] != "replace_owner" or command["operation_id"] != binding.allocation_operation_id
+        ):
             raise RuntimeBlocked("snapshot_replacement_allocation_unconfirmed")
+        if command["kind"] == "replace_owner":
+            return command, mode
         return command
 
     def validate_installation(self, command, *, session):
@@ -450,8 +516,29 @@ class SourceDelivery:
                 or metadata["cleanup_pending"] is not False
                 or metadata["status"] not in {"building", "catching_up", "published"}):
             raise RuntimeBlocked("delivery_installed_metadata_mismatch")
-        if any(metadata.get(key) is not None for key in ("anchored_profile", "anchored_coverage", "anchored_seal")):
-            raise RuntimeBlocked("retained_position_resume_driver_required")
+        anchor = _manifest_anchor(table)
+        retained = self.retained.get(binding.generation_id) if self.resume_operation_id is not None else None
+        if retained is not None:
+            candidate, certificate, _ = retained
+            seal = certificate["ordered_delivery_proof"]
+            coverage = metadata.get("anchored_coverage")
+            seek = metadata["applied_offset"] + 1
+            if (anchor is None or metadata["status"] != "published"
+                    or metadata.get("anchored_profile") != asdict(anchor) or metadata.get("anchored_seal") != seal
+                    or seek < candidate.target_seek_offset
+                    or (coverage != seal if seek == seal["eof"] else not _canonical_coverage(
+                        coverage, authority=expected, leader_epoch=anchor.leader_epoch,
+                        earliest=seal["eof"], end=seek, sealed=False))):
+                raise RuntimeBlocked("retained_position_target_changed")
+        elif any(metadata.get(key) is not None for key in ("anchored_profile", "anchored_coverage", "anchored_seal")):
+            if metadata["status"] == "published" or metadata.get("anchored_seal") is not None:
+                raise RuntimeBlocked("retained_position_resume_driver_required")
+            if anchor is None or opened is None or metadata.get("anchored_profile") != asdict(anchor):
+                raise RuntimeBlocked("delivery_anchored_profile_mismatch")
+            if "eof" in (metadata.get("anchored_coverage") or {}):
+                raise RuntimeBlocked("delivery_generation_sealed")
+        elif anchor is not None:
+            raise RuntimeBlocked("delivery_anchored_profile_mismatch")
         self._validate_topic(decoder, binding.topic, binding.partition_identity)
         return binding, decoder, metadata
 
@@ -479,6 +566,10 @@ class SourceDelivery:
                 scope = {"profile": self.profile.scope, "table": table,
                          "target_metadata": metadata, "limits": asdict(limits),
                          "target_timeout_seconds": self.settings["target"]["timeout_seconds"]}
+                if self.resume_operation_id is not None:
+                    candidate = self.retained[binding.generation_id][0]
+                    scope["resume"] = dict(operation_id=self.resume_operation_id, certificate_ref=candidate.certificate_ref,
+                                           history_epoch=candidate.binding.history_epoch)
                 lease = None
                 try:
                     result = self.signals.http.request("POST", "/v1/capture/delivery-leases", {
@@ -518,10 +609,15 @@ class SourceDelivery:
                         self.retire()
                         for table in self.tables:
                             binding, decoder, _ = self._installed(table, stamp)
+                            options = {}
+                            if self.resume_operation_id is not None:
+                                candidate, certificate, _ = self.retained[binding.generation_id]
+                                options["resume"] = dict(certificate=certificate, history_epoch=candidate.binding.history_epoch)
                             self.clients.append(open_delivery(
                                 kafka_config=self.settings["kafka"], group_id=self.settings["group_id"],
                                 applier_engine=self.engine, binding=binding, decoder=decoder,
-                                admission=self.admission, limits=self.limits,
+                                admission=self.admission, limits=self.limits, anchored_profile=_manifest_anchor(table),
+                                **options,
                             ))
                         self.stamp = stamp
             return sum(client.poll_once() for client in self.clients)

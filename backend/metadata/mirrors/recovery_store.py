@@ -4,8 +4,8 @@ from sqlalchemy import ForeignKey, JSON, String, UniqueConstraint, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.core.db import Base
+from backend.metadata.mirrors.errors import MirrorError
 from backend.metadata.models import SourceRow
-from backend.metadata.mirrors.service import MirrorError
 
 
 class RecoveryRow(Base):

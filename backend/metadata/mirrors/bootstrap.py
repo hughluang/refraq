@@ -10,7 +10,7 @@ import re
 import psycopg
 from psycopg import sql
 
-from backend.metadata.mirrors.types import Authority, PartitionIdentity
+from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity
 from dataclasses import asdict
 
 
@@ -19,6 +19,8 @@ ROLES = ("refraq_mirror_owner", "refraq_mirror_applier", "refraq_mirror_gateway"
 TYPES = {"bigint", "integer", "smallint", "boolean", "text", "uuid", "date", "bytea", "jsonb", "timestamp", "timestamptz"}
 FUNCTIONS = {
     "apply_batch(jsonb,text,jsonb,jsonb)": "refraq_mirror_applier",
+    "apply_batch(jsonb,text,jsonb,jsonb,jsonb,jsonb)": "refraq_mirror_applier",
+    "apply_batch(jsonb,text,jsonb,jsonb,jsonb,jsonb,jsonb)": "refraq_mirror_applier",
     "delivery_metadata(text)": "refraq_mirror_applier",
     "publish_generation(text,jsonb,text,jsonb)": "refraq_mirror_applier",
     "observe_committed_publication(text,text,text,jsonb,text)": "refraq_mirror_applier",
@@ -76,7 +78,7 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
                       table_identity: str, history_epoch: str, operation_id: str,
                       schema_fingerprint: str, columns: dict[str, str], key_columns: tuple[str, ...],
                       partition_identity: PartitionIdentity, start_offset: int,
-                      require_prepared_fence: bool = False) -> str:
+                      require_prepared_fence: bool = False, anchored_profile: AnchoredProfile | None = None) -> str:
     """Allocate or recover an exact binding in an admin-owned target transaction.
 
     Managed opens require a preinstalled mirror row for the exact mirror, Source,
@@ -91,6 +93,11 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
         raise ValueError("Target ids must match management mirror and generation identities")
     if partition_identity.partition != 0 or start_offset < -1:
         raise ValueError("Only admitted single-partition contiguous delivery is supported")
+    if anchored_profile is not None and (not isinstance(anchored_profile, AnchoredProfile)
+            or anchored_profile.kind != "disposable_read_committed_v1"
+            or type(anchored_profile.leader_epoch) is not int or anchored_profile.leader_epoch < 0
+            or type(start_offset) is not int or start_offset != -1):
+        raise ValueError("Anchored allocation requires a fresh log origin and a fixed leader epoch")
     if not key_columns or len(set(key_columns)) != len(key_columns) or not set(key_columns) <= columns.keys():
         raise ValueError("Admitted key columns required")
     native_types = []
@@ -110,10 +117,11 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
     target_table = sql.Identifier("source_mirror", table_name)
     authority_data = asdict(authority)
     partition_data = asdict(partition_identity)
+    anchor = asdict(anchored_profile) if anchored_profile is not None else None
     allocation_stamp = json.dumps(dict(authority=authority_data, history_epoch=history_epoch,
                                        start_offset=start_offset, native_types=native_types), sort_keys=True)
     generation = (generation_id, mirror_id, authority.capture_generation, operation_id, table_name,
-                  schema_fingerprint, list(key_columns), list(columns), partition_data)
+                  schema_fingerprint, list(key_columns), list(columns), partition_data, anchor)
     definitions = [sql.SQL("{} {} {}").format(sql.Identifier(name), sql.SQL(native_type),
                    sql.SQL("NOT NULL" if name in key_columns else "")) for name, native_type in columns.items()]
     definitions.append(sql.SQL("PRIMARY KEY ({})").format(sql.SQL(", ").join(map(sql.Identifier, key_columns))))
@@ -134,7 +142,8 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
             raise ValueError("Mirror fence or immutable binding mismatch")
         existing = connection.execute(
             "SELECT id, mirror_id, capture_generation, operation_id, table_name, schema_fingerprint, "
-            "key_columns, column_names, partition_identity, status, cleanup_pending FROM source_mirror_state.generations "
+            "key_columns, column_names, partition_identity, anchored_profile, status, cleanup_pending "
+            "FROM source_mirror_state.generations "
             "WHERE id = %s OR operation_id = %s", (generation_id, operation_id)).fetchone()
         if existing is not None:
             if existing[:-2] != generation:
@@ -164,9 +173,10 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
                 connection.execute(
                     "INSERT INTO source_mirror_state.generations "
                     "(id, mirror_id, capture_generation, operation_id, table_name, schema_fingerprint, "
-                    "key_columns, column_names, partition_identity, applied_offset, status, cleanup_pending) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,'building',false)",
-                    (*generation[:-1], json.dumps(partition_data), start_offset))
+                    "key_columns, column_names, partition_identity, anchored_profile, applied_offset, status, cleanup_pending) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,'building',false)",
+                    (*generation[:-2], json.dumps(partition_data), json.dumps(anchor) if anchor is not None else None,
+                     start_offset))
             except psycopg.errors.UniqueViolation as exc:
                 raise ValueError("Generation allocation binding conflict") from exc
             connection.execute(sql.SQL("CREATE TABLE {} ({})").format(target_table, sql.SQL(", ").join(definitions)))

@@ -214,6 +214,67 @@ class ReadinessSignals:
                                                     "observation:open_generation_binding", command)
         return request, proof, fence
 
+    def replacement_observation(self, command, authorization):
+        reservation = command["replacement"]
+        scope = reservation["scope"]
+        authority = {key: command[key] for key in AUTHORITY_KEYS}
+        result = self.http.request("POST", "/v1/capture/replacement-owner-allocations", {
+            "command": command, "authorization": authorization,
+        })
+        if not isinstance(result, dict) or self.verifier is None:
+            raise RuntimeBlocked("replacement_evidence_unknown")
+        signature = result.get("signature")
+        signed = self.verifier.verify(
+            signature, purpose="observation:replacement_owner", authority=authority,
+            scope=scope, operation_id=command["operation_id"],
+        )
+        observation = signed.get("observation")
+        if not isinstance(observation, dict) or json.dumps(
+            [signed.get("authority"), signed.get("scope"), observation.get("command")], sort_keys=True
+        ) != json.dumps([authority, scope, command], sort_keys=True):
+            raise RuntimeBlocked("replacement_observation_mismatch")
+        self._require_fresh(observation, command)
+        self._require_readiness(observation)
+
+        exclusion = observation.get("exclusion")
+        if (not isinstance(exclusion, dict) or exclusion.get("method") not in ("terminated", "authority_revoked")
+                or any(not _digest_ref(exclusion.get(key)) for key in (
+                    "agent_receipt", "task_receipt", "source_session_receipt", "inflight_drained_receipt"
+                ))):
+            raise RuntimeBlocked("replacement_exclusion_unproven")
+        baseline = observation.get("candidate_baseline")
+        if (not isinstance(baseline, dict)
+                or set(baseline) != {"postgresql", "wal", "slot", "connect", "kafka", "task_running"}
+                or not all(_digest_ref(ref) for ref in baseline.values())):
+            raise RuntimeBlocked("replacement_baseline_unproven")
+        fence = observation.get("target_fence")
+        if not isinstance(fence, dict) or not _digest_ref(fence.get("inventory_receipt")):
+            raise RuntimeBlocked("replacement_fence_unproven")
+        for key, required_ids in (
+            ("loss_receipts", {change["mirror_id"] for change in scope["history_loss"]}),
+            ("mirror_receipts", set(scope["target_inventory"])),
+        ):
+            receipts = fence.get(key)
+            if (not isinstance(receipts, dict) or receipts.keys() != required_ids
+                    or not all(_digest_ref(ref) for ref in receipts.values())):
+                raise RuntimeBlocked("replacement_fence_unproven")
+        return dict(observed_at=observation["observed_at"], observation_digest=hashlib.sha256(signature.encode()).hexdigest(),
+                    exclusion={key: exclusion[key] for key in (
+                        "method", "agent_receipt", "task_receipt", "source_session_receipt", "inflight_drained_receipt"
+                    )}, candidate_baseline=baseline,
+                    target_fence=dict(authority=authority, operation_id=command["operation_id"], **{
+                        key: fence[key] for key in ("inventory_receipt", "loss_receipts", "mirror_receipts")
+                    }))
+
+    def resume_retained(self, command, request):
+        result = self.http.request("POST", "/v1/capture/retained-position-resume", request)
+        if not isinstance(result, dict) or self.verifier is None:
+            raise RuntimeBlocked("retained_position_resume_unconfirmed")
+        proof = self.verifier.verify(result.get("signature"), purpose="retained_position_resume", **request)
+        self._require_fresh(proof, command)
+        if proof.get("verified") is not True:
+            raise RuntimeBlocked("retained_position_resume_unconfirmed")
+
     def allocate_generation(self, command, request, proof, fence, generation_id):
         request = {**request, "scope": {**request["scope"], "generation_id": generation_id}}
         _, committed_fence = self._generation_observation("/v1/capture/generation-allocations", request,

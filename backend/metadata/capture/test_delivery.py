@@ -3,7 +3,7 @@
 import base64
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 from types import SimpleNamespace
 
@@ -295,6 +295,16 @@ class PartitionEOF(Message):
         return KafkaError(KafkaError._PARTITION_EOF)
 
 
+def test_anchored_live_eof_cannot_advance_target_coverage():
+    delivery, _, app, events = runtime([PartitionEOF(3)], anchored_profile=AnchoredProfile(7))
+    delivery.identity.read_committed_bounds = lambda *args: ReadCommittedBounds(0, 3, 3, 7)
+
+    assert delivery.poll_once() == 0
+    assert app.offset == -1
+    assert app.scan is None
+    assert not any(event[0] == "ack" for event in events)
+
+
 @pytest.mark.parametrize(("start", "end", "visible"), [(0, 0, ()), (5, 8, ()), (5, 8, (6,))])
 def test_sealed_range_requires_explicit_eof_from_target_cursor(start, end, visible):
     delivery, _, app, events = runtime(
@@ -522,7 +532,8 @@ def test_identity_uses_immutable_ids_and_single_partition():
         identity.verify(BINDING, 1)
 
 
-def test_real_composition_wires_application_and_safety_settings(monkeypatch):
+@pytest.mark.parametrize("anchored_profile", [None, AnchoredProfile(7)])
+def test_real_composition_wires_application_and_safety_settings(monkeypatch, anchored_profile):
     captured = {}
 
     def consumer(config):
@@ -534,9 +545,11 @@ def test_real_composition_wires_application_and_safety_settings(monkeypatch):
     engine = object()
     delivery = open_delivery(kafka_config={"bootstrap.servers": "broker:9093", "security.protocol": "SSL",
                                           "ssl.ca.location": "/protected/ca"}, group_id="delivery",
-                             applier_engine=engine, binding=BINDING, decoder=decoder(), admission=admission)
+                             applier_engine=engine, binding=BINDING, decoder=decoder(), admission=admission,
+                             anchored_profile=anchored_profile)
     assert delivery.application.engine is engine
-    assert delivery.anchored_profile is None
+    assert delivery.anchored_profile == anchored_profile
+    assert captured["enable.partition.eof"] is (anchored_profile is not None)
     assert captured["enable.auto.commit"] is False
     assert captured["enable.auto.offset.store"] is False
     assert captured["auto.offset.reset"] == "error"
@@ -545,6 +558,103 @@ def test_real_composition_wires_application_and_safety_settings(monkeypatch):
     assert captured["log_level"] == 0
     assert not captured["logger"].propagate
     delivery.close()
+
+
+@pytest.fixture
+def resume_evidence():
+    bounds = asdict(ReadCommittedBounds(0, 5, 5, 7))
+    return {
+        "history_epoch": "published-epoch",
+        "certificate": {
+            "operation_id": "publish-operation", "generation_id": BINDING.generation_id,
+            "capture_generation": BINDING.authority.capture_generation,
+            "partition_identity": asdict(BINDING.partition_identity),
+            "table_identity": "table", "schema_fingerprint": "schema", "key_fingerprint": "key",
+            "end_offset": 4, "empty_table_proof": False,
+            "ordered_delivery_proof": {"start": 3, "end": 5, "eof": 5, "offsets": [4],
+                                       "before": bounds, "after": bounds, "authority": asdict(BINDING.authority)},
+            "source_completion": {"status": "SUCCEEDED"}, "producer_exclusion": {"owner": "runtime"},
+            "durable_source_checkpoint": {"offset": 17},
+        },
+    }
+
+
+def test_open_resumed_delivery_reseeks_after_lost_target_commit_reply(monkeypatch, resume_evidence):
+    profile = AnchoredProfile(7)
+    bounds = ReadCommittedBounds(0, 8, 8, 7)
+    events = []
+    consumer = FakeConsumer([Message(6), PartitionEOF(8)], events)
+    state = SimpleNamespace(offset=4, lose_reply=True)
+    batches = []
+
+    def execute(statement, params):
+        assert "source_mirror_state.apply_batch" in str(statement)
+        assert json.loads(params["profile"]) == asdict(profile)
+        if params["scan"] is None:
+            assert "resume" not in params and json.loads(params["records"]) == []
+            return SimpleNamespace(scalar_one=lambda: {"offset": state.offset})
+        assert "CAST(:resume AS jsonb)" in str(statement)
+        batches.append(params)
+        return SimpleNamespace(scalar_one=lambda: {"offset": 6})
+
+    @contextmanager
+    def target_transaction():
+        previous_attempts = len(batches)
+        yield SimpleNamespace(execute=execute)
+        if len(batches) != previous_attempts:
+            state.offset = 6
+            events.append(("target_commit", 6))
+            if state.lose_reply:
+                raise ConnectionError("lost reply")
+
+    monkeypatch.setattr(delivery_module, "Consumer", lambda config: consumer)
+    monkeypatch.setattr(delivery_module, "AdminClient", lambda config: object())
+    monkeypatch.setattr(KafkaIdentity, "read_committed_bounds", lambda *args: bounds)
+    delivery = open_delivery(kafka_config={"bootstrap.servers": "broker:9093", "security.protocol": "SSL",
+                                          "ssl.ca.location": "/protected/ca"}, group_id="delivery",
+                             applier_engine=SimpleNamespace(begin=target_transaction), binding=BINDING,
+                             decoder=decoder(), admission=admission, anchored_profile=profile, resume=resume_evidence)
+    expected = deepcopy(resume_evidence)
+    resume_evidence["certificate"]["durable_source_checkpoint"]["offset"] += 1
+    with pytest.raises(RuntimeBlocked, match="delivery_seal_invalid"):
+        delivery.apply_sealed_range(partition_identity=BINDING.partition_identity, seal=bounds)
+    assert not events
+    with pytest.raises(RuntimeBlocked, match="capture_delivery_blocked"):
+        delivery.poll_once()
+    (batch,) = batches
+    assert json.loads(batch["resume"]) == expected
+    assert json.loads(batch["scan"]) == (asdict(AnchoredScan(5, 7, bounds, bounds, (6,))) | {"offsets": [6]})
+    state.lose_reply = False
+    assert delivery.poll_once() == 0
+    assert len(batches) == 1
+    assert [event for event in events if event[0] in {"seek", "target_commit", "ack"}] == [
+        ("seek", 5), ("target_commit", 6), ("seek", 7),
+    ]
+    delivery.close()
+
+
+@pytest.mark.parametrize("malformation", ["profile", "epoch", "certificate", "json"])
+def test_open_rejects_bad_resume_before_creating_clients(monkeypatch, malformation, resume_evidence):
+    profile = AnchoredProfile(7)
+    if malformation == "profile":
+        profile = None
+    elif malformation == "epoch":
+        resume_evidence["history_epoch"] = ""
+    elif malformation == "certificate":
+        resume_evidence["certificate"] = {"complete": True}
+    else:
+        resume_evidence["certificate"]["durable_source_checkpoint"] = {"offset": float("nan")}
+
+    def reject_client(config):
+        pytest.fail("Malformed resume must not create a Kafka client")
+
+    monkeypatch.setattr(delivery_module, "Consumer", reject_client)
+    monkeypatch.setattr(delivery_module, "AdminClient", reject_client)
+    with pytest.raises(RuntimeBlocked, match="capture_delivery_configuration_invalid"):
+        open_delivery(kafka_config={"bootstrap.servers": "broker:9093", "security.protocol": "SSL",
+                                    "ssl.ca.location": "/protected/ca"}, group_id="delivery", applier_engine=object(),
+                      binding=BINDING, decoder=decoder(), admission=admission,
+                      anchored_profile=profile, resume=resume_evidence)
 
 
 def test_boolean_schema_metadata_is_not_integer_metadata():

@@ -30,38 +30,27 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def capture_pg_client(monkeypatch):
     database = "refraq_capture_test_" + uuid.uuid4().hex[:12]
-    url = make_url(persistent.INTEGRATION_DATABASE_URL).set(
-        port=15432, database=database
-    )
-    maintenance = make_url(persistent._MAINTENANCE_DATABASE_URL).set(
-        port=15432, database="postgres"
-    )
+    url = make_url(persistent.INTEGRATION_DATABASE_URL).set(database=database)
+    maintenance = make_url(persistent._MAINTENANCE_DATABASE_URL)
     monkeypatch.setattr(
         persistent,
         "INTEGRATION_DATABASE_URL",
         url.render_as_string(hide_password=False),
     )
-    monkeypatch.setattr(
-        persistent,
-        "_MAINTENANCE_DATABASE_URL",
-        maintenance.render_as_string(hide_password=False),
-    )
-    monkeypatch.setattr(
-        persistent, "INTEGRATION_REDIS_URL", "redis://127.0.0.1:16379/14"
-    )
     monkeypatch.setenv("REFRAQ_SECRETS_MASTER_KEY", "capture-integration-test-key")
-    assert persistent._services_available(), (
-        "Real PostgreSQL and Redis are required, not skipped"
-    )
+    if not persistent._services_available():
+        pytest.skip("Refraq integration PostgreSQL and Redis are unavailable")
     try:
         yield from persistent.persistent_client.__wrapped__(monkeypatch)
     finally:
         engine = create_engine(maintenance, isolation_level="AUTOCOMMIT")
-        with engine.connect() as connection:
-            connection.execute(
-                text(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
-            )
-        engine.dispose()
+        try:
+            with engine.connect() as connection:
+                connection.execute(
+                    text(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+                )
+        finally:
+            engine.dispose()
 
 
 def test_capture_postgres_http_and_concurrent_revisions(capture_pg_client):

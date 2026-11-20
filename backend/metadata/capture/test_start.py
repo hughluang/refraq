@@ -190,8 +190,8 @@ def test_connect_create_response_loss_reconciles_without_repeating_mutation(tmp_
     http.client.close()
 
 
-@pytest.mark.parametrize("wal", ["logical", "replica"])
-def test_postgresql_profile_inspects_capture_identity_before_config(managed_command, monkeypatch, wal):
+@pytest.mark.parametrize(("wal", "transactions"), [("logical", False), ("replica", False), ("logical", True)])
+def test_postgresql_profile_inspects_capture_identity_before_config(managed_command, monkeypatch, wal, transactions):
     monkeypatch.setenv("REFRAQ_SECRETS_MASTER_KEY", "offline-test-only")
     get_settings.cache_clear()
     source = get_source_store().get_source(managed_command["source_id"])
@@ -201,6 +201,11 @@ def test_postgresql_profile_inspects_capture_identity_before_config(managed_comm
              "port": 5432, "database": "app", "tables": ["public.orders"],
              "publication": "capture_pub", "slot": "capture_slot", "topic_prefix": "cap_one",
              "server_version_num": 180000}
+    if transactions:
+        scope.update(server_version_num=180006, transaction_metadata=True, snapshot={
+            "signal_table": "public.signal", "signal_relation_identity": "15:16",
+            "notification_topic": "cap_one.notifications", "notification_partition": {"partition": 0},
+        })
 
     class Connection:
         def __enter__(self):
@@ -216,8 +221,10 @@ def test_postgresql_profile_inspects_capture_identity_before_config(managed_comm
             self.sql = sql
 
         def fetchone(self):
+            if "pg_constraint" in self.sql:
+                return ("15:16", True, True, ["id", "type", "data"], True, True)
             if "current_database" in self.sql:
-                return ("app", wal, 180000, True, False)
+                return ("app", wal, scope["server_version_num"], True, False)
             if "pg_publication WHERE" in self.sql:
                 return (False, True, True, True, True)
             if "pg_replication_slots" in self.sql:
@@ -225,7 +232,10 @@ def test_postgresql_profile_inspects_capture_identity_before_config(managed_comm
             return (True,)
 
         def fetchall(self):
-            return [("public.orders", False, ["body", "id"], ["id", "body"], False)]
+            tables = [("public.orders", False, ["body", "id"], ["id", "body"], False)]
+            if transactions:
+                tables.append(("public.signal", False, ["id", "type", "data"], ["data", "id", "type"], False))
+            return tables
 
     def connect(**kwargs):
         assert kwargs["user"] == "capture"
@@ -241,5 +251,6 @@ def test_postgresql_profile_inspects_capture_identity_before_config(managed_comm
         config = profile.configuration(managed_command, source, {"username": "user-ref", "password": "password-ref"})
         assert config["snapshot.mode"] == "no_data"
         assert config["publication.autocreate.mode"] == "disabled"
+        assert config.get("provide.transaction.metadata") == ("true" if transactions else None)
         assert "private" not in config.values()
     get_settings.cache_clear()

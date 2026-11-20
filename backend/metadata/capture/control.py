@@ -3,9 +3,11 @@
 from contextlib import contextmanager
 from datetime import datetime
 from hashlib import sha256
+import json
 import re
 from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.admin.audit import persist_audit_event
@@ -16,10 +18,14 @@ from backend.metadata.capture.store import (
     list_operations,
     load_binding,
     load_operation,
+    promote_replacement_binding,
     save_binding,
     save_operation,
 )
 from backend.metadata.errors import SourceCaptureControlConflict, SourceNotFound
+from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
+from backend.metadata.mirrors.models import MirrorRow
+from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.service import read_published_scope
 from backend.metadata.sources.store import SourceRecord, get_source_store
 
@@ -173,12 +179,15 @@ def allocate_owner(*, source_id, operation_id, signed_proof, signals):
         if existing is not None:
             command = existing["command"]
             committed = state.get("allocation", {}) if state else {}
-            if (committed.get("command") != command or committed["scope"]["profile"] != signals.scope
+            if (command["kind"] == "replace_owner" or committed.get("command") != command
+                    or committed["scope"]["profile"] != signals.scope
                     or committed.get("request_digest") != request_digest
                     or command["runtime_instance_id"] != signals.runtime_instance_id):
                 raise SourceCaptureControlConflict()
             return command
         previous, scope = _allocation_context(session, source, state, signals.scope)
+        if replacement_blocks_lifecycle(session, state):
+            raise SourceCaptureControlConflict()
         authority = {**previous, "owner_epoch": state["owner_epoch"] + 1,
                      "runtime_instance_id": signals.runtime_instance_id,
                      "control_revision": state["control_revision"] + 1}
@@ -225,6 +234,158 @@ def allocate_owner(*, source_id, operation_id, signed_proof, signals):
         return command
 
 
+def replacement_blocks_lifecycle(session, state):
+    if state.get("pending_replacement"):
+        return True
+    command = state.get("allocation", {}).get("command", {})
+    if command.get("kind") != "replace_owner":
+        return False
+    recovery = session.get(RecoveryRow, command["operation_id"])
+    if recovery is None or recovery.journal.get("state") != "applied":
+        return True
+    receipt = recovery.journal.get("publication_receipt", {})
+    submission = command["replacement"]["scope"]["submission"]
+    authority = {key: command[key] for key in AUTHORITY_KEYS if key != "binding_id"}
+    authority.update(resource_binding_id=command["binding_id"], capture_generation=submission["capture_generation"])
+    return any(receipt.get(key) != value for key, value in dict(
+        authority=authority, generation_id=submission["generation_id"], history_epoch=submission["history_epoch"]
+    ).items())
+
+
+def _replacement_scope(session, source, operation_id, previous, scope):
+    recovery = session.get(RecoveryRow, operation_id)
+    if recovery is None or recovery.source_id != source.id:
+        raise SourceCaptureControlConflict()
+    journal = recovery.journal
+    submission = journal.get("submission_command")
+    if (journal.get("state") not in {"submitting", "dispatched"} or not journal.get("replacement_epoch")
+            or not journal.get("generation_id") or not journal.get("request", {}).get("actor_user_id")
+            or submission != dict(operation_id=operation_id, kind="replacement", mirror_id=recovery.mirror_id,
+                                  source_id=source.id, history_epoch=journal["replacement_epoch"], empty=True,
+                                  origin="recovery", capture_generation=str(previous["capture_generation"] + 1),
+                                  generation_id=journal["generation_id"])
+            or journal.get("capture_generation") != submission["capture_generation"]):
+        raise SourceCaptureControlConflict()
+
+    mirror_ids = sorted(table["mirror_id"] for table in scope["published_scope"])
+    affected = sorted(table["mirror_id"] for table in included_tables(scope["published_scope"]))
+    if affected != [recovery.mirror_id]:
+        raise SourceCaptureControlConflict()
+    gates = {gate.mirror_id: gate for gate in session.scalars(
+        select(HistoryGateRow).where(HistoryGateRow.mirror_id.in_(mirror_ids))
+        .order_by(HistoryGateRow.mirror_id).with_for_update().execution_options(populate_existing=True)
+    )}
+    loss = session.get(HistoryInvalidationRow, operation_id, with_for_update=True)
+    if (loss is None or loss.reason != "history_loss" or loss.status != "applied"
+            or [change["mirror_id"] for change in loss.transitions] != affected
+            or any(gates.get(change["mirror_id"]) is None
+                   or gates[change["mirror_id"]].status != "available"
+                   or gates[change["mirror_id"]].history_epoch != change["history_epoch"] for change in loss.transitions)
+            or gates[recovery.mirror_id].history_epoch != journal["replacement_epoch"]):
+        raise SourceCaptureControlConflict()
+
+    mirrors = {mirror.id: mirror for mirror in session.scalars(select(MirrorRow).where(MirrorRow.source_id == source.id))}
+    if sorted(mirrors) != mirror_ids:
+        raise SourceCaptureControlConflict()
+    inventory = {
+        mirror_id: dict(published_generation_id=mirrors[mirror_id].state.get("published_generation_id"),
+                        capture_generation=mirrors[mirror_id].state.get("capture_generation"),
+                        history_epoch=gates[mirror_id].history_epoch if mirror_id in gates else None,
+                        history_status=gates[mirror_id].status if mirror_id in gates else None)
+        for mirror_id in mirror_ids
+    }
+    return dict(scope, recovery_request_identity=recovery.identity, submission=submission,
+                history_loss=loss.transitions, target_inventory=inventory)
+
+
+def _replacement_context(session, source, state, operation_id, profile):
+    if (session is None or state is None or source.engine != "postgresql" or state["desired"] != "configured"
+            or state["owner_epoch"] <= 0 or not state["runtime_instance_id"]
+            or type(state["capture_generation"]) is not int or state["capture_generation"] < 1):
+        raise SourceCaptureControlConflict()
+    previous, scope = _allocation_context(session, source, state, profile)
+    return previous, _replacement_scope(session, source, operation_id, previous, scope)
+
+
+def replace_owner(*, source_id, operation_id, signed_proof, signals, before_observation=None):
+    """Consume a committed whole-Source recovery intent through a separate signed protocol."""
+    if (not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", operation_id)
+            or not isinstance(signed_proof, str) or not signed_proof or not signed_proof.isascii()
+            or signals.verifier is None):
+        raise SourceCaptureControlConflict()
+    request_digest = sha256(signed_proof.encode()).hexdigest()
+    with source_control_transaction(source_id) as (session, source):
+        existing = load_operation(session, operation_id)
+        state = load_binding(session, source_id)
+        if existing is not None:
+            command = existing["command"]
+            if (command["kind"] != "replace_owner" or command["source_id"] != source_id
+                    or command["runtime_instance_id"] != signals.runtime_instance_id
+                    or command["replacement"]["request_digest"] != request_digest
+                    or command["replacement"]["scope"]["profile"] != signals.scope):
+                raise SourceCaptureControlConflict()
+            if existing["evidence"] is not None:
+                return command
+        else:
+            previous, scope = _replacement_context(session, source, state, operation_id, signals.scope)
+            if (replacement_blocks_lifecycle(session, state)
+                    or state.get("pending_allocation", {}).get("previous_authority") == previous):
+                raise SourceCaptureControlConflict()
+            authority = dict(previous, owner_epoch=previous["owner_epoch"] + 1,
+                             capture_generation=previous["capture_generation"] + 1,
+                             control_revision=previous["control_revision"] + 1,
+                             runtime_instance_id=signals.runtime_instance_id)
+            claims = signals.verifier.verify(signed_proof, purpose="replacement_owner", authority=authority,
+                                             scope=scope, operation_id=operation_id)
+            if json.dumps({key: claims.get(key) for key in ("previous_authority", "authority", "scope")}, sort_keys=True) != json.dumps(
+                dict(previous_authority=previous, authority=authority, scope=scope), sort_keys=True
+            ):
+                raise SourceCaptureControlConflict()
+            issuance = persist_audit_event(
+                actor_user_id=None, actor_token_id=None, resource_type="source", resource_id=source_id,
+                action="source.capture_replacement_reserved", result="success", session=session,
+                detail=dict(operation_id=operation_id, recovery_request_identity=scope["recovery_request_identity"],
+                            previous_authority=previous, authority=authority, request_digest=request_digest),
+            )
+            command = _command({**state, **authority}, source, operation_id)
+            command.update(kind="replace_owner", replacement=dict(previous_authority=previous, scope=scope,
+                           request_digest=request_digest, issuance_audit_id=issuance.id))
+            save_operation(session, command)
+            state["pending_replacement"] = operation_id
+            save_binding(session, state)
+
+    with source_control_transaction(source_id) as (session, source):
+        operation = load_operation(session, operation_id)
+        if operation is None or operation["command"] != command:
+            raise SourceCaptureControlConflict()
+        if operation["evidence"] is not None:
+            return command
+        state = load_binding(session, source_id)
+        previous, scope = _replacement_context(session, source, state, operation_id, signals.scope)
+        reservation = command["replacement"]
+        if (state.get("pending_replacement") != operation_id or previous != reservation["previous_authority"]
+                or scope != reservation["scope"]):
+            raise SourceCaptureControlConflict()
+        if before_observation is not None:
+            before_observation()
+        observation = signals.replacement_observation(command, signed_proof)
+        applied = persist_audit_event(
+            actor_user_id=None, actor_token_id=None, resource_type="source", resource_id=source_id,
+            action="source.capture_replacement_promoted", result="success", session=session,
+            detail=dict(operation_id=operation_id, issuance_audit_id=reservation["issuance_audit_id"],
+                        request_digest=request_digest, observation_digest=observation["observation_digest"]),
+        )
+        evidence = dict(observation, audit_id=applied.id)
+        save_operation(session, command, evidence)
+        state.pop("pending_replacement")
+        state.pop("pending_allocation", None)
+        state.update({key: command[key] for key in AUTHORITY_KEYS}, applied_revision=command["control_revision"],
+                     observed_at=evidence["observed_at"], stop_ack=None,
+                     allocation=dict(command=command, evidence=evidence))
+        promote_replacement_binding(session, state, command)
+        return command
+
+
 def capture_status(source_id: str) -> dict:
     with source_control_transaction(source_id) as (session, source):
         state = load_binding(session, source_id)
@@ -257,10 +418,10 @@ def capture_status(source_id: str) -> dict:
             "readiness": readiness,
             "availability": "disabled" if stopped else "unknown",
             "control": {key: value for key, value in state.items()
-                        if key not in {"allocation", "pending_allocation", "published_scope", "incremental_snapshots"}},
+                        if key not in {"allocation", "pending_allocation", "pending_replacement", "published_scope", "incremental_snapshots"}},
             "operations": [
                 {
-                    **{key: value for key, value in op["command"].items() if key != "published_scope"},
+                    **{key: value for key, value in op["command"].items() if key not in {"published_scope", "replacement"}},
                     "state": "applied" if op["evidence"] else (
                         "pending" if op["command"]["control_revision"] == state["control_revision"]
                         else "superseded"
@@ -295,6 +456,8 @@ def record_applied_evidence(
         if state is None or operation is None:
             raise SourceCaptureControlConflict()
         command = operation["command"]
+        if command["kind"] != "stop" and replacement_blocks_lifecycle(session, state):
+            raise SourceCaptureControlConflict()
         if (command["kind"] == "reconcile"
                 and command.get("published_scope") != read_published_scope(session, source_id)):
             raise SourceCaptureControlConflict()

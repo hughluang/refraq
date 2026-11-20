@@ -4,7 +4,7 @@ from backend.admin.role_store import get_role_store
 from backend.admin.roles import effective_permissions
 from backend.admin.user_store import get_user_store
 from backend.metadata import source_access
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.errors import MirrorError
 
 __all__ = ["authorize_source_data"]
 

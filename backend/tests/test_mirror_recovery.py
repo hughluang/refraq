@@ -1,5 +1,6 @@
 """Offline recovery contract tests; no capture process or external database."""
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -9,7 +10,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import sessionmaker
 
-from backend.metadata.models import SourceRow
+from backend.metadata.models import SourceCaptureBindingRow, SourceRow
 from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorRow
@@ -17,7 +18,8 @@ from backend.metadata.mirrors import router
 from backend.metadata.mirrors.recovery import Recovery, RuntimeDispatchAdapter, bind_recovery, schema_resume_allowed, state_only_graph
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
 from backend.metadata.mirrors.recovery_store import RecoveryRow
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.service import CommittedOpenPublication, MirrorError
+from backend.metadata.mirrors.types import Authority
 
 
 @compiles(JSONB, "sqlite")
@@ -62,7 +64,7 @@ class Target:
 @pytest.fixture
 def recovery():
     engine = create_engine("sqlite://")
-    for table in (SourceRow.__table__, MirrorRow.__table__, HistoryGateRow.__table__,
+    for table in (SourceRow.__table__, SourceCaptureBindingRow.__table__, MirrorRow.__table__, HistoryGateRow.__table__,
                   HistoryInvalidationRow.__table__, RecoveryRow.__table__):
         table.create(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
@@ -198,17 +200,35 @@ def test_publication_uses_existing_guarded_path_and_only_then_releases_busy(reco
     accepted = service.request_recovery("a", **override)
     assert accepted["operation_id"] == op
     service.dispatch(operation_id=op)
+    lineage = journal["capture_generation"]
+    authority = Authority("source", "binding", 1, "runtime", 1, 1, lineage)
+    completion = dict(operation_id=op, authority=authority, certificate=dict(
+        operation_id=op, generation_id=journal["generation_id"], table_identity="a", capture_generation=lineage,
+    ))
     with pytest.raises(MirrorError):
-        service.publish_replacement(operation_id=op, authority=None, certificate={})
+        service.publish_replacement(**completion)
 
     class Publication:
+        certificate = None
+
         def publish_generation(self, **kw):
             assert kw["operation_id"] == op
             assert kw["generation_id"] == journal["generation_id"]
+            self.certificate = kw["certificate"]
             return kw["generation_id"]
 
+        @contextmanager
+        def observe_committed(self, *, mirror_id, expected, **kwargs):
+            if self.certificate is None:
+                yield None
+            else:
+                position = dict(mirror_id=mirror_id, history_epoch=expected.history_epoch, commit_seq=0, entry_seq=0)
+                bound = dict(source_id="source", history_epoch=expected.history_epoch,
+                             lower_bound=position, upper_bound=position)
+                yield CommittedOpenPublication(expected.generation_id, {}, dict(evidence=self.certificate), 0, bound)
+
     service.publication = Publication()
-    assert service.publish_replacement(operation_id=op, authority=None, certificate={}) == journal["generation_id"]
+    assert service.publish_replacement(**completion) == journal["generation_id"]
     assert service.get_operation(op)["state"] == "applied"
     assert service.request_recovery("a", **override) == accepted
     assert len(audits) == 2
@@ -221,7 +241,7 @@ def test_publication_uses_existing_guarded_path_and_only_then_releases_busy(reco
         current_epoch = session.get(HistoryGateRow, "a").history_epoch
     with pytest.raises(MirrorError, match="MIRROR_CONTROL_CONFLICT"):
         service.request_recovery("a", **override)
-    assert service.publish_replacement(operation_id=op, authority=None, certificate={}) == journal["generation_id"]
+    assert service.publish_replacement(**completion) == journal["generation_id"]
     new_request = service.request_recovery("a", **(override | {"expected_history_epoch": current_epoch}))
     assert new_request["operation_id"] != op
 

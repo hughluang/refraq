@@ -1,24 +1,42 @@
 """Durable, fail-closed recovery without a second target effects writer."""
 
+from contextlib import ExitStack
 from copy import deepcopy
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
 import json
 from random import SystemRandom
 from uuid import uuid4
 
+from psycopg.errors import RaiseException
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
 from backend.metadata.capture.configuration import SnapshotWindow, snapshot_dispatch_allowed
+from backend.metadata.capture.store import load_binding
+from backend.metadata.mirrors.history import admit_observed_history
 from backend.metadata.mirrors.history_models import HistoryGateRow
 from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow, lock_source
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.service import (
+    MirrorError, publication_certificate_ref, record_replacement_publication, replacement_publication_allocation,
+)
+from backend.metadata.mirrors.types import Authority
 
 
 __all__ = ["Recovery", "RuntimeDispatchAdapter", "bind_recovery", "request_recovery"]
+
+
+@dataclass(frozen=True)
+class _ReplacementIdentity:
+    """The identity fields consumed by the committed target observer."""
+
+    authority: Authority
+    generation_id: str
+    history_epoch: str
 
 
 def schema_resume_allowed(evidence):
@@ -206,26 +224,71 @@ class Recovery:
             return dict(operation_id=row.operation_id, **deepcopy(row.journal))
 
     def publish_replacement(self, *, operation_id, authority, certificate):
-        with self.session_factory() as session, session.begin():
+        with ExitStack() as target_guard, self.session_factory() as session, session.begin():
             row = session.get(RecoveryRow, operation_id)
             if row is None:
                 raise MirrorError("MIRROR_NOT_FOUND", 404)
             mirror, source = self._mirror(session, row.mirror_id)
             session.refresh(row)
             journal = deepcopy(row.journal)
-            if journal["state"] == "applied":
+            applied = journal["state"] == "applied"
+            if applied and "publication_receipt" not in journal:
                 return journal["generation_id"]
-            if journal["state"] != "dispatched" or not journal.get("replacement_epoch") or self.publication is None:
+            generation_id = journal.get("generation_id")
+            epoch = journal.get("replacement_epoch")
+            if (journal["state"] not in {"dispatched", "applied"} or not generation_id or not epoch
+                    or not isinstance(authority, Authority) or authority.source_id != source.id
+                    or authority.capture_generation != journal.get("capture_generation")):
+                raise MirrorError("MIRROR_PUBLICATION_BLOCKED", 409)
+            identity = dict(operation_id=operation_id, generation_id=generation_id)
+            certificate_identity = dict(identity, table_identity=mirror.table_identity,
+                                        capture_generation=authority.capture_generation)
+            if not isinstance(certificate, dict) or any(
+                certificate.get(key) != value for key, value in certificate_identity.items()
+            ):
+                raise MirrorError("MIRROR_PUBLICATION_BLOCKED", 409)
+            try:
+                certificate_ref = publication_certificate_ref(certificate)
+            except (TypeError, ValueError):
+                raise MirrorError("MIRROR_PUBLICATION_BLOCKED", 409) from None
+            receipt = dict(authority=asdict(authority), generation_id=generation_id,
+                           history_epoch=epoch, certificate_ref=certificate_ref)
+            if applied:
+                if journal["publication_receipt"] != receipt:
+                    raise MirrorError("MIRROR_PUBLICATION_BLOCKED", 409)
+                return generation_id
+            if self.publication is None:
                 raise MirrorError("MIRROR_PUBLICATION_BLOCKED", 409)
             self.history.require_fenced_loss(session, operation_id=operation_id, mirror_id=mirror.id,
-                                             source_id=source.id, history_epoch=journal["replacement_epoch"])
-            observed = self.publication.publish_generation(operation_id=operation_id, authority=authority,
-                generation_id=journal["generation_id"], certificate=certificate)
-            if observed != journal["generation_id"]:
+                                             source_id=source.id, history_epoch=epoch)
+            allocation = replacement_publication_allocation(session, mirror=mirror, **identity, authority=authority,
+                                                            epoch=epoch, certificate_ref=certificate_ref)
+            expected = _ReplacementIdentity(authority, generation_id, epoch)
+            observation = dict(mirror_id=mirror.id, operation_id=operation_id, binding=expected, expected=expected)
+            try:
+                observed = target_guard.enter_context(self.publication.observe_committed(**observation))
+            except DBAPIError as error:
+                if not isinstance(error.orig, RaiseException) or error.orig.diag.message_primary != "MIRROR_PUBLICATION_BLOCKED":
+                    raise
+                observed = None
+            if observed is None:
+                if self.publication.publish_generation(**identity, authority=authority, certificate=certificate) != generation_id:
+                    raise MirrorError("MIRROR_PUBLICATION_BLOCKED", 409)
+                observed = target_guard.enter_context(self.publication.observe_committed(**observation))
+            if (observed is None or observed.published_generation_id != generation_id
+                    or publication_certificate_ref(observed.certificate["evidence"]) != certificate_ref):
                 raise MirrorError("MIRROR_PUBLICATION_BLOCKED", 409)
-            journal.update(state="applied", submission_uncertain=False)
+            if allocation is not None:
+                record_replacement_publication(session, allocation=allocation, observed=observed)
+            gate = session.get(HistoryGateRow, mirror.id)
+            lower, upper = admit_observed_history(session, mirror=mirror, gate=gate, history_epoch=epoch,
+                                                  bound=observed.history_bound)
+            mirror.state = dict(mirror.state, published_generation_id=generation_id,
+                                capture_generation=authority.capture_generation, history_epoch=epoch,
+                                retained_lower_bound=lower, committed_upper_bound=upper)
+            journal.update(state="applied", submission_uncertain=False, publication_receipt=receipt)
             row.journal = journal
-            return observed
+            return generation_id
 
     def _defer(self, journal, state, now, fault=None):
         journal.update(state=state, fault_code=fault)
@@ -251,6 +314,7 @@ class Recovery:
             try:
                 now = self.clock()
                 evidence = self.runtime.inspect(session=session, mirror=mirror, now=now)
+                now = self.clock()
                 command = journal["submission_command"]
                 gate = self._gate(session, mirror.id)
                 if (not mirror.enabled or gate.status != "available" or gate.history_epoch != command["history_epoch"]
@@ -300,6 +364,7 @@ class Recovery:
                     row.journal = journal
                     return request["action"]
                 evidence = self.runtime.inspect(session=session, mirror=mirror, now=now)
+                now = self.clock()
                 if not isinstance(evidence, dict) or any(evidence.get(key) != value for key, value in (
                     ("source_id", source.id), ("mirror_id", mirror.id), ("table_identity", mirror.table_identity))) or not (
                     evidence.get("observed_at") is not None and evidence.get("valid_until") is not None
@@ -321,8 +386,10 @@ class Recovery:
                     raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
                 if evidence.get("validity") == "lost" and journal["state"] != "invalidated":
                     transitions = self.history.invalidate_history(session, mirror_ids=affected, reason="history_loss", operation_id=operation_id)
+                    binding = load_binding(session, source.id) if source.engine == "postgresql" else None
+                    capture_generation = str(binding["capture_generation"] + 1) if binding else uuid4().hex
                     journal.update(state="invalidated", replacement_epoch=next(item["history_epoch"] for item in transitions if item["mirror_id"] == mirror.id),
-                                   capture_generation=uuid4().hex, generation_id=uuid4().hex, next_attempt_at=None)
+                                   capture_generation=capture_generation, generation_id=uuid4().hex, next_attempt_at=None)
                     row.journal = journal
                     return journal["state"]
                 if gate.status != "available":

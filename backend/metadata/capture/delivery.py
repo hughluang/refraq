@@ -7,6 +7,7 @@ which retains authority/exclusion locks through target commit and Kafka ack.
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import json
 import logging
 import math
 from threading import Event
@@ -16,7 +17,7 @@ from confluent_kafka import Consumer, IsolationLevel, KafkaError, TopicCollectio
 from confluent_kafka.admin import AdminClient, ConfigResource, OffsetSpec, ResourceType
 
 from backend.metadata.capture.runtime_store import RuntimeBlocked
-from backend.metadata.mirrors.application import Application
+from backend.metadata.mirrors.application import Application, encode_resume
 from backend.metadata.mirrors.types import (
     AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds, SealedScan,
 )
@@ -121,7 +122,8 @@ class KafkaIdentity:
 
 class KafkaDelivery:
     def __init__(self, *, consumer, identity, application, binding, decoder,
-                 admission, limits=DeliveryLimits(), anchored_profile: AnchoredProfile | None = None):
+                 admission, limits=DeliveryLimits(), anchored_profile: AnchoredProfile | None = None,
+                 resume: dict | None = None):
         limits.validate()
         binding.validate(decoder)
         if not callable(admission):
@@ -129,6 +131,10 @@ class KafkaDelivery:
         if anchored_profile is not None and (not isinstance(anchored_profile, AnchoredProfile)
                 or type(anchored_profile.leader_epoch) is not int or anchored_profile.leader_epoch < 0):
             raise RuntimeBlocked("delivery_anchored_profile_invalid")
+        try:
+            self._resume = None if resume is None else json.loads(encode_resume(resume, anchored_profile))
+        except ValueError:
+            raise RuntimeBlocked("delivery_resume_invalid") from None
         self.consumer = consumer
         self.identity = identity
         self.application = application
@@ -141,8 +147,15 @@ class KafkaDelivery:
         self.closed = False
 
     def _apply(self, records, scan=None):
+        """Read the authority/profile-fenced cursor or commit a batch.
+
+        The SQL resume guard requires a nonempty scan. A cursor read only
+        locates the seek position and carries no resume or readiness proof.
+        """
         b = self.binding
         evidence = {} if self.anchored_profile is None else {"anchored_profile": self.anchored_profile, "scan": scan}
+        if self._resume is not None and (records or scan is not None):
+            evidence["resume"] = self._resume
         coverage = self.application.apply_batch(
             authority=b.authority, generation_id=b.generation_id,
             partition_identity=b.partition_identity, records=records, **evidence,
@@ -172,7 +185,7 @@ class KafkaDelivery:
         context that holds current authority and producer exclusion through commit.
         """
         profile = self.anchored_profile
-        if (self.closed or self.stopping.is_set() or profile is None
+        if (self._resume is not None or self.closed or self.stopping.is_set() or profile is None
                 or partition_identity != self.binding.partition_identity
                 or not isinstance(seal, ReadCommittedBounds)
                 or any(type(value) is not int for value in (seal.low, seal.stable, seal.high, seal.leader_epoch))
@@ -283,8 +296,8 @@ class KafkaDelivery:
             error = message.error()
             offset = message.offset()
             if error:
-                if seal is not None and error.code() == KafkaError._PARTITION_EOF:
-                    return records, offset
+                if before is not None and error.code() == KafkaError._PARTITION_EOF:
+                    return records, offset if seal is not None else None
                 raise RuntimeBlocked("delivery_poll_unavailable")
             next_offset = records[-1].offset + 1 if records else start
             if offset < next_offset or (before is None and offset != next_offset):
@@ -342,18 +355,23 @@ CLIENT_KEYS = {"bootstrap.servers", "security.protocol", "ssl.ca.location",
 
 
 def open_delivery(*, kafka_config, group_id, applier_engine, binding, decoder,
-                  admission, limits=DeliveryLimits()):
+                  admission, limits=DeliveryLimits(), anchored_profile: AnchoredProfile | None = None,
+                  resume: dict | None = None):
     """Create real clients and the sole SQL Application; does not start services.
 
     Invoke ``run()`` in a dedicated process, or ``poll_once()`` from the capture
     process reconciliation loop. Secrets must come from the existing protected
     secret installation, never from row/config logs. Target engine must be the
     bounded, validated refraq_mirror_applier engine from runtime composition.
+    To resume live delivery, pass the enrolled anchored profile and a resume
+    object with the exact stored certificate evidence and current history_epoch.
     """
     consumer = None
     try:
         limits.validate()
         binding.validate(decoder)
+        if resume is not None:
+            encode_resume(resume, anchored_profile)
         if (set(kafka_config) - CLIENT_KEYS or not callable(admission)
                 or kafka_config.get("security.protocol") not in {"SSL", "SASL_SSL"}
                 or not kafka_config.get("bootstrap.servers")
@@ -373,7 +391,7 @@ def open_delivery(*, kafka_config, group_id, applier_engine, binding, decoder,
         consumer = Consumer({
             **common, "group.id": group_id, "enable.auto.commit": False,
             "enable.auto.offset.store": False, "auto.offset.reset": "error",
-            "allow.auto.create.topics": False, "enable.partition.eof": False,
+            "allow.auto.create.topics": False, "enable.partition.eof": anchored_profile is not None,
             "isolation.level": "read_committed",
             "queued.max.messages.kbytes": limits.queue_kbytes,
             "fetch.message.max.bytes": limits.max_record_bytes,
@@ -382,7 +400,8 @@ def open_delivery(*, kafka_config, group_id, applier_engine, binding, decoder,
         })
         return KafkaDelivery(consumer=consumer, identity=KafkaIdentity(admin),
                              application=Application(applier_engine), binding=binding,
-                             decoder=decoder, admission=admission, limits=limits)
+                             decoder=decoder, admission=admission, limits=limits,
+                             anchored_profile=anchored_profile, resume=resume)
     except Exception:
         if consumer is not None:
             try:

@@ -72,7 +72,7 @@ RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source
    SELECT jsonb_object_agg(a.attname, format_type(a.atttypid, a.atttypmod))
    FROM pg_attribute a WHERE a.attrelid = target.oid AND a.attnum > 0 AND NOT a.attisdropped))
  || CASE WHEN g.anchored_profile IS NOT NULL THEN jsonb_build_object(
-  'anchored_profile', g.anchored_profile, 'anchored_coverage', g.anchored_coverage,
+  'anchored_profile', g.anchored_profile, 'applied_offset', g.applied_offset, 'anchored_coverage', g.anchored_coverage,
   'anchored_seal', g.anchored_publication->'seal') ELSE '{}'::jsonb END
  FROM source_mirror_state.generations g
  JOIN source_mirror_state.mirrors m ON m.id = g.mirror_id
@@ -82,7 +82,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.apply_batch(a jsonb, gid text, p jsonb, records jsonb,
                                                          profile jsonb, scan jsonb, resume jsonb)
-RETURNS jsonb LANGUAGE plpgsql SET search_path = pg_catalog, source_mirror_state AS $$
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
 DECLARE
  m source_mirror_state.mirrors; g source_mirror_state.generations;
  certified source_mirror_state.certificates; seal_proof jsonb; sealed_end bigint;

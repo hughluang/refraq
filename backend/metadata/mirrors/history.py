@@ -7,9 +7,9 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.metadata.mirrors.authorization import authorize_source_data
+from backend.metadata.mirrors.errors import MirrorError
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorRow
-from backend.metadata.mirrors.service import MirrorError
 
 __all__ = ["History", "SqlHistoryTarget", "bind_history", "capture_bound",
            "read_incremental", "settlement_guard", "invalidate_history"]

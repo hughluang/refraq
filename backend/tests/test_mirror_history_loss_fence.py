@@ -26,7 +26,7 @@ from backend.metadata.mirrors.recovery import Recovery
 from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.service import MirrorError
 from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity, ReadCommittedBounds, Record, SealedScan
-from backend.metadata.models import SourceRow
+from backend.metadata.models import SourceCaptureBindingRow, SourceRow
 from backend.tests.test_capture_preparation import management_engine as management_engine, native_target as native_target
 from backend.tests.test_mirror_generation_allocation import target_dsn as target_dsn
 from backend.tests.test_mirror_publication_retry import FixtureVerifier, observation_request
@@ -42,7 +42,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def history_loss(native_target, management_engine):
-    for model in (SourceRow, MirrorRow, HistoryGateRow, HistoryInvalidationRow):
+    for model in (SourceRow, SourceCaptureBindingRow, MirrorRow, HistoryGateRow, HistoryInvalidationRow):
         model.__table__.create(management_engine)
     factory = sessionmaker(management_engine)
     with psycopg.connect(native_target, autocommit=True) as admin:
@@ -117,10 +117,10 @@ def history_error(code):
 
 @pytest.mark.parametrize("receipt_case", [
     "legacy", "missing", "missing-target", "missing-mirror", "mismatched", "wrong-transition", "pending",
-    "wrong-reason", "wrong-epoch", "unavailable-peer", "foreign-peer", "stale-peer", "fenced",
+    "wrong-reason", "wrong-epoch", "unavailable-peer", "foreign-peer", "stale-peer", "fenced", "commit-interrupted",
 ])
 def test_replacement_publication_requires_current_fenced_loss(history_loss, receipt_case, monkeypatch):
-    admin, factory, history, target, application, publication, _ = history_loss
+    admin, factory, history, target, application, publication, reads = history_loss
     RecoveryRow.__table__.create(factory.kw["bind"])
     operation_id = "replacement"
     original = allocation(RETAINED, "items")
@@ -132,6 +132,14 @@ def test_replacement_publication_requires_current_fenced_loss(history_loss, rece
         publication.publish_generation(**certified)
         with factory.begin() as session:
             history.initialize_gate(session, mirror_id=initial["mirror_id"], history_epoch=EPOCH)
+            session.get(MirrorRow, initial["mirror_id"]).state = dict(
+                published_generation_id=initial["generation_id"], capture_generation=AUTHORITY.capture_generation,
+                history_epoch=EPOCH, status="ready",
+            )
+
+    delivery(application, original, 1)
+    read_identity = dict(mirror_id=RETAINED, execution_user_id="reader")
+    old_pin = reads.acquire_pin(run_id="old-run", **read_identity)
 
     mirror_ids = (AFFECTED,) if receipt_case == "missing-mirror" else (RETAINED, AFFECTED)
     changes = begin_invalidation(history, factory, operation_id=operation_id, mirror_ids=mirror_ids)
@@ -181,14 +189,20 @@ def test_replacement_publication_requires_current_fenced_loss(history_loss, rece
         journal_epoch = "different-journal-epoch" if receipt_case == "wrong-epoch" else epoch
         session.add(RecoveryRow(operation_id=operation_id, source_id=AUTHORITY.source_id, mirror_id=RETAINED,
                                 identity=operation_id, journal=dict(state="dispatched", replacement_epoch=journal_epoch,
-                                generation_id=replacement["generation_id"], submission_uncertain=True)))
+                                generation_id=replacement["generation_id"], capture_generation=authority.capture_generation,
+                                submission_uncertain=True)))
 
     def published_pointer():
         return admin.execute("SELECT published_generation_id FROM source_mirror_state.mirrors WHERE id = %s",
                              (RETAINED,)).fetchone()
 
+    def mirror_state():
+        with factory() as session:
+            return session.get(MirrorRow, RETAINED).state
+
     service = Recovery(session_factory=factory, history=history, retry_delays=(1,), publication=publication)
     completion = dict(operation_id=operation_id, authority=authority, certificate=certified["certificate"])
+    old_state = mirror_state()
     assert published_pointer() == (original["generation_id"],)
     if receipt_case == "fenced":
         lock_order = [(SourceRow, AUTHORITY.source_id), (HistoryGateRow, AFFECTED), (HistoryGateRow, RETAINED),
@@ -228,7 +242,44 @@ def test_replacement_publication_requires_current_fenced_loss(history_loss, rece
             finally:
                 event.remove(engine, "before_cursor_execute", record_lock)
         assert stages == ["acknowledged", "published"]
+    elif receipt_case == "commit-interrupted":
+        original_journal = service.get_operation(operation_id)
+
+        def interrupt_commit(session):
+            session.flush()
+            with pytest.raises(psycopg.errors.LockNotAvailable), admin.transaction():
+                admin.execute("SELECT id FROM source_mirror_state.mirrors WHERE id = %s FOR UPDATE NOWAIT", (RETAINED,))
+            raise RuntimeError("Management commit interrupted")
+
+        event.listen(factory, "before_commit", interrupt_commit)
+        try:
+            with pytest.raises(RuntimeError, match="Management commit interrupted"):
+                service.publish_replacement(**completion)
+        finally:
+            event.remove(factory, "before_commit", interrupt_commit)
         assert published_pointer() == (replacement["generation_id"],)
+        assert mirror_state() == old_state
+        assert service.get_operation(operation_id) == original_journal
+        monkeypatch.setattr(publication, "publish_generation", lambda **kwargs: pytest.fail("Retry republished"))
+        contradictory_certificate = dict(certified["certificate"], empty_table_proof=0)
+        with history_error("MIRROR_PUBLICATION_BLOCKED"):
+            service.publish_replacement(**dict(completion, certificate=contradictory_certificate))
+        assert mirror_state() == old_state
+        assert service.get_operation(operation_id) == original_journal
+        assert service.publish_replacement(**completion) == replacement["generation_id"]
+
+    if receipt_case in {"fenced", "commit-interrupted"}:
+        assert published_pointer() == (replacement["generation_id"],)
+        bound = target.capture_bound(mirror_id=RETAINED)
+        assert mirror_state() == dict(old_state, published_generation_id=replacement["generation_id"],
+                                      capture_generation=authority.capture_generation, history_epoch=epoch,
+                                      retained_lower_bound=bound["lower_bound"], committed_upper_bound=bound["upper_bound"])
+        assert reads.acquire_pin(run_id="old-run", **read_identity) == old_pin
+        old_page = reads.read_page(pin=old_pin, execution_user_id="reader", after_key=None, limit=10)
+        assert (old_page["freshness"], old_page["rows"]) == ("stale", [{"id": 1}, {"id": 2}])
+        new_pin = reads.acquire_pin(run_id="new-run", **read_identity)
+        assert new_pin.generation_id == replacement["generation_id"]
+        assert reads.read_page(pin=new_pin, execution_user_id="reader", after_key=None, limit=10)["rows"] == [{"id": 1}]
         journal = service.get_operation(operation_id)
         assert journal["state"] == "applied"
         assert journal["submission_uncertain"] is False
@@ -236,6 +287,11 @@ def test_replacement_publication_requires_current_fenced_loss(history_loss, rece
         history.consume_invalidation(operation_id="later-retention")
         monkeypatch.setattr(target, "invalidate", lambda **kwargs: pytest.fail("Historical retry called the target"))
         monkeypatch.setattr(publication, "publish_generation", lambda **kwargs: pytest.fail("Historical retry republished"))
+        monkeypatch.setattr(publication, "observe_committed", lambda **kwargs: pytest.fail("Historical retry observed target"))
+        with history_error("MIRROR_PUBLICATION_BLOCKED"):
+            service.publish_replacement(**dict(completion, authority=AUTHORITY))
+        with history_error("MIRROR_PUBLICATION_BLOCKED"):
+            service.publish_replacement(**dict(completion, certificate=dict(certified["certificate"], end_offset=1)))
         assert service.publish_replacement(**completion) == replacement["generation_id"]
         assert service.get_operation(operation_id) == journal
         assert published_pointer() == (replacement["generation_id"],)

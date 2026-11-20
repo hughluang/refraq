@@ -15,12 +15,14 @@ from backend.metadata.capture.credentials import CredentialFiles
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 
 from backend.core.config import get_settings
+from backend.core.db import get_session_factory
 from backend.core.errors import PlatformCapacityExceeded, PlatformTimeout
 from backend.metadata.capture.control import (
     AUTHORITY_KEYS, allocate_owner, profile_matches_scope, reconcile_published_scope, record_applied_evidence,
-    source_control_transaction,
+    replace_owner, replacement_blocks_lifecycle, source_control_transaction,
 )
 from backend.metadata.capture.runtime_adapters import ConnectLifecycle, PrivateHTTP, ReadinessSignals, SnapshotGateway
+from backend.metadata.capture.recovery_dispatch import dispatch_recovery
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked, protected_json, protected_read
 from backend.metadata.capture.snapshot import SnapshotCoordinator
 from backend.metadata.capture.store import list_operations, load_binding
@@ -30,11 +32,12 @@ from backend.metadata.mirrors.service import (
     reconcile_open_publication,
 )
 from backend.metadata.mirrors.types import Authority
+from backend.metadata.mirrors.recovery_store import RecoveryRow
 
 
 class CaptureRuntime:
     def __init__(self, *, journal, connect, signals, profile=None, credentials=None, delivery=None,
-                 prepare_delivery=None, snapshot=None,
+                 prepare_delivery=None, resume_retained=None, snapshot=None,
                  observe_committed_publication: ObserveCommittedOpenPublication | None = None):
         self.journal = journal
         self.connect = connect
@@ -43,6 +46,7 @@ class CaptureRuntime:
         self.credentials = credentials
         self.delivery = delivery
         self.prepare_delivery = prepare_delivery
+        self.resume_retained = resume_retained
         self.snapshot = snapshot
         self.observe_committed_publication = observe_committed_publication
 
@@ -64,8 +68,19 @@ class CaptureRuntime:
             except (DBAPIError, MirrorError, PlatformCapacityExceeded, PlatformTimeout, RuntimeBlocked):
                 raise RuntimeBlocked("publication_observation_rejected") from None
 
-    def poll_once(self, source_id, *, owner_allocation_file=None):
+    def poll_once(self, source_id, *, owner_allocation_file=None, replacement_owner_file=None):
         try:
+            if replacement_owner_file is not None:
+                if owner_allocation_file is not None:
+                    raise RuntimeBlocked("conflicting_owner_request_files")
+                try:
+                    self.reconcile_replacement_owner(source_id, replacement_owner_file)
+                except (RuntimeBlocked, SourceCaptureControlConflict):
+                    self.poll_source(source_id, containment_only=True)
+                    raise RuntimeBlocked("replacement_owner_blocked") from None
+                if self.prepare_delivery is None or self.snapshot is None:
+                    self.poll_source(source_id, containment_only=True)
+                    return "applied"
             if owner_allocation_file is not None:
                 try:
                     self.reconcile_owner(source_id, owner_allocation_file)
@@ -94,6 +109,18 @@ class CaptureRuntime:
         reconcile_published_scope(source_id)
         return allocate_owner(source_id=source_id, operation_id=request["operation_id"],
                               signed_proof=signature, signals=self.signals)
+
+    def reconcile_replacement_owner(self, source_id, request_file):
+        try:
+            request = protected_json(request_file)
+        except (OSError, RecursionError, TypeError, ValueError):
+            raise RuntimeBlocked("replacement_owner_file_invalid") from None
+        if not isinstance(request, dict) or request.keys() != {"recovery_operation_id", "signature"}:
+            raise RuntimeBlocked("replacement_owner_file_invalid")
+        with self.journal.source_lock(source_id):
+            return replace_owner(source_id=source_id, operation_id=request["recovery_operation_id"],
+                                 signed_proof=request["signature"], signals=self.signals,
+                                 before_observation=self.delivery.retire if self.delivery is not None else None)
 
     def reconcile(self, command, source, phase, *, session):
         if self.profile is None or self.credentials is None or self.delivery is None:
@@ -127,7 +154,8 @@ class CaptureRuntime:
                 raise RuntimeBlocked("resume_outcome_uncertain")
         return self.signals.observation(command, "running")
 
-    def _current_command(self, session, source, *, include_applied=False):
+    def _current_command(self, session, source, *, include_applied=False, containment_only=False,
+                         allow_replacement=False):
         state = load_binding(session, source.id)
         if state is None:
             return None
@@ -135,11 +163,19 @@ class CaptureRuntime:
                    if (include_applied or op["evidence"] is None) and all(
                        op["command"].get(key) == state.get(key) for key in AUTHORITY_KEYS
                    )]
-        if not current:
-            return None
-        if len(current) != 1:
+        if len(current) > 1:
             raise RuntimeBlocked("ambiguous_current_intent")
-        command, = current
+        command = current[0] if current else None
+        replacement_build = (allow_replacement and command is not None and command["kind"] == "replace_owner"
+                             and not state.get("pending_replacement") and state["desired"] == "configured"
+                             and state.get("applied_revision") == command["control_revision"])
+        if (not replacement_build and replacement_blocks_lifecycle(session, state)
+                and (command is None or command["kind"] != "stop")):
+            if containment_only:
+                return None
+            raise RuntimeBlocked("replacement_owner_requires_recovery")
+        if command is None:
+            return None
         if (command["owner_epoch"] <= 0 or command["runtime_instance_id"] != self.signals.runtime_instance_id):
             raise RuntimeBlocked("owner_assignment_unproven")
         if source.status == "active" and source.capture_credential_ciphertext:
@@ -163,14 +199,27 @@ class CaptureRuntime:
         return result
 
     def recheck_snapshot(self, binding, *, session, source):
-        command = self.delivery.recheck_snapshot_allocation(binding, session=session)
-        if self._current_command(session, source, include_applied=True) != command:
+        checked = self.delivery.recheck_snapshot_allocation(binding, session=session)
+        if isinstance(checked, dict) and checked.get("kind") == "reconcile":
+            command, mode = checked, "window"
+        elif isinstance(checked, tuple) and len(checked) == 2 and isinstance(checked[0], dict):
+            command, mode = checked
+        else:
+            raise RuntimeBlocked("snapshot_dispatch_not_authorized")
+        if mode not in ("run_now", "window") or (mode == "run_now" and command.get("kind") != "replace_owner"):
+            raise RuntimeBlocked("snapshot_dispatch_not_authorized")
+        if self._current_command(session, source, include_applied=True, allow_replacement=True) != command:
             raise RuntimeBlocked("snapshot_preparation_superseded")
+        self._require_snapshot_connector(command, source)
+        return mode
+
+    def _require_snapshot_connector(self, command, source):
+        if self.profile is None or self.credentials is None:
+            raise RuntimeBlocked("snapshot_connector_not_current")
         refs = self.credentials.install(command, source)
         config = self.profile.configuration(command, source, refs)
         if not self.connect.configured(config) or not self.connect.running():
             raise RuntimeBlocked("snapshot_connector_not_current")
-        return "window"
 
     def _poll_lifecycle(self, source_id, *, containment_only):
         with self.journal.source_lock(source_id):
@@ -180,10 +229,19 @@ class CaptureRuntime:
             if self.prepare_delivery is not None and not containment_only:
                 try:
                     with source_control_transaction(source_id) as (session, source):
-                        candidate = self._current_command(session, source, include_applied=True)
-                    if candidate and candidate["kind"] == "reconcile":
-                        if self.prepare_delivery(candidate):
-                            raise RuntimeBlocked("retained_position_resume_driver_required")
+                        candidate = self._current_command(session, source, include_applied=True,
+                                                          allow_replacement=self.snapshot is not None)
+                    if candidate and candidate["kind"] in {"reconcile", "replace_owner"}:
+                        retained = self.prepare_delivery(candidate)
+                        if retained:
+                            if self.resume_retained is None:
+                                raise RuntimeBlocked("retained_position_resume_driver_required")
+                            with source_control_transaction(source_id) as (session, source):
+                                if (self._current_command(session, source, include_applied=True) != candidate
+                                        or self._current_command(session, source) is not None):
+                                    raise RuntimeBlocked("capture_preparation_superseded")
+                            self.resume_retained(candidate, retained)
+                            return "idle", None
                         prepared = candidate
                 except RuntimeBlocked as exc:
                     preparation_error = exc
@@ -192,7 +250,13 @@ class CaptureRuntime:
             # Retain the same management Source lock through external dispatch.
             # PATCH cannot retire authority between validation and stop submission.
             with source_control_transaction(source_id) as (session, source):
-                command = self._current_command(session, source)
+                if (prepared is not None and prepared["kind"] == "replace_owner"
+                        and source.status == "active" and source.capture_credential_ciphertext):
+                    if self._current_command(session, source, include_applied=True, allow_replacement=True) != prepared:
+                        raise RuntimeBlocked("capture_preparation_superseded")
+                    self._require_snapshot_connector(prepared, source)
+                    return "idle", prepared
+                command = self._current_command(session, source, containment_only=containment_only)
                 if command is None:
                     if preparation_error is not None:
                         raise preparation_error
@@ -244,6 +308,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config-file", required=True)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--dispatch-recovery", metavar="OPERATION_ID")
     args = parser.parse_args()
     clients = []
     runtimes = []
@@ -252,7 +317,7 @@ def main():
 
     def stop(signum, frame):
         stopping.set()
-        for _, runtime, _ in runtimes:
+        for _, runtime, _, _ in runtimes:
             if runtime.delivery is not None:
                 runtime.delivery.stop()
 
@@ -276,6 +341,23 @@ def main():
             raise RuntimeBlocked("explicit_poll_bounds_required")
         if len({entry["source_id"] for entry in sources}) != len(sources):
             raise RuntimeBlocked("duplicate_source_assignment")
+        if args.dispatch_recovery is not None:
+            session_factory = get_session_factory()
+            with session_factory() as session:
+                operation = session.get(RecoveryRow, args.dispatch_recovery)
+                entry = next((entry for entry in sources if operation is not None
+                              and operation.source_id == entry["source_id"]), None)
+            if entry is None:
+                raise RuntimeBlocked("recovery_source_not_assigned")
+            signal_http = PrivateHTTP(**entry["signals_tls"])
+            clients.append(signal_http)
+            profile = PostgreSQLCaptureProfile(**entry["postgresql_profile"])
+            signals = ReadinessSignals(signal_http, verifier=_signing_authority(entry["signing_trust"]),
+                                       scope=profile.scope, **entry["readiness_policy"])
+            state = dispatch_recovery(settings=get_settings(), session_factory=session_factory,
+                                      operation_id=args.dispatch_recovery, source_id=entry["source_id"], signals=signals)
+            print(state)
+            return 0 if state in {"invalidated", "dispatched", "applied"} else 2
         journal = CommandJournal(config["state_directory"])
         runtimes = []
         for entry in sources:
@@ -293,12 +375,17 @@ def main():
                 settings_file=entry.get("delivery_settings_file"), source_id=entry["source_id"],
                 journal=journal, signals=signals, verifier=verifier, profile=profile,
             )
+            retained_resume = entry.get("retained_position_resume", False)
+            if type(retained_resume) is not bool or (retained_resume and profile.snapshot is None):
+                raise RuntimeBlocked("retained_position_resume_configuration_invalid")
             runtime = CaptureRuntime(
                 journal=journal, connect=ConnectLifecycle(connect_http, entry["connector_name"]), signals=signals,
                 profile=profile, credentials=CredentialFiles(**entry["credential_files"]),
                 delivery=delivery, prepare_delivery=delivery.prepare,
+                resume_retained=delivery.resume_retained if retained_resume else None,
             )
-            runtimes.append((entry["source_id"], runtime, entry.get("owner_allocation_file")))
+            runtimes.append((entry["source_id"], runtime, entry.get("owner_allocation_file"),
+                             entry.get("replacement_owner_file")))
             observers = entry.get("snapshot_observers")
             if (profile.snapshot is None) != (observers is None):
                 raise RuntimeBlocked("snapshot_observer_configuration_required")
@@ -318,9 +405,10 @@ def main():
                 )
         while not stopping.is_set():
             blocked = False
-            for source_id, runtime, request_file in runtimes:
+            for source_id, runtime, request_file, replacement_file in runtimes:
                 try:
-                    runtime.poll_once(source_id, owner_allocation_file=request_file)
+                    runtime.poll_once(source_id, owner_allocation_file=request_file,
+                                      replacement_owner_file=replacement_file)
                 except RuntimeBlocked:
                     blocked = True
             if args.once:
@@ -334,7 +422,7 @@ def main():
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-        for _, runtime, _ in runtimes:
+        for _, runtime, _, _ in runtimes:
             if runtime.delivery is not None:
                 runtime.delivery.close()
         for client in clients:

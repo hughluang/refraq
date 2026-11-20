@@ -24,9 +24,10 @@ from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInval
 from backend.metadata.mirrors.models import (
     MirrorIntentReceiptRow, MirrorOperationRow, MirrorPublicationRow, MirrorReferenceRow, MirrorRow,
 )
+from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.schemas import Mirror
 from backend.metadata.mirrors.store import SqlMirrorStore
-from backend.metadata.mirrors.types import Authority, PartitionIdentity
+from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity
 
 
 @pytest.fixture(scope="module")
@@ -48,7 +49,7 @@ def opened(target_dsn, monkeypatch):
     try:
         for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, MirrorRow,
                       MirrorOperationRow, MirrorPublicationRow, MirrorReferenceRow,
-                      MirrorIntentReceiptRow, HistoryGateRow, HistoryInvalidationRow):
+                      MirrorIntentReceiptRow, HistoryGateRow, HistoryInvalidationRow, RecoveryRow):
             model.__table__.create(engine)
         store = SqlMirrorStore()
         store.transaction = sessionmaker(engine).begin
@@ -182,6 +183,31 @@ def test_native_exact_bootstrap_retry_and_conflicting_facts(target_dsn):
 
 
 @pytest.mark.integration
+def test_native_anchored_allocation_pins_the_fresh_profile_on_retry(target_dsn):
+    authority = Authority(uuid4().hex, "binding", 3, "owner", 4, 2, "capture")
+    profile = AnchoredProfile(4)
+    request = dict(target_request(authority), mirror_id="mir_" + uuid4().hex, generation_id=uuid4().hex,
+                   operation_id=uuid4().hex, anchored_profile=profile)
+    with psycopg.connect(target_dsn, autocommit=True) as connection:
+        with pytest.raises(ValueError, match="fresh log origin"):
+            create_generation(connection, **(request | {"start_offset": 0}))
+        generation_id = create_generation(connection, **request)
+        assert create_generation(connection, **request) == generation_id
+        for changed in (None, AnchoredProfile(5)):
+            with pytest.raises(ValueError, match="binding mismatch"):
+                create_generation(connection, **(request | {"anchored_profile": changed}))
+        connection.execute("SET ROLE refraq_mirror_applier")
+        metadata, = connection.execute("SELECT source_mirror_state.delivery_metadata(%s)", (generation_id,)).fetchone()
+        assert metadata["anchored_profile"] == asdict(profile)
+        assert metadata["anchored_coverage"] is metadata["anchored_seal"] is None
+        progress, = connection.execute(
+            "SELECT source_mirror_state.apply_batch(%s, %s, %s, '[]'::jsonb, %s, NULL::jsonb)",
+            (Jsonb(asdict(authority)), generation_id, Jsonb(asdict(request["partition_identity"])), Jsonb(asdict(profile))),
+        ).fetchone()
+        assert progress == {"offset": -1, "commit_seq": 0}
+
+
+@pytest.mark.integration
 def test_native_recovery_rejects_drift_matching_a_changed_request(target_dsn):
     authority = Authority(uuid4().hex, "binding", 3, "owner", 4, 2, "capture")
     request = dict(target_request(authority), mirror_id="mir_" + uuid4().hex, generation_id=uuid4().hex,
@@ -228,6 +254,48 @@ def reconcile(opened, allocate, *, verifier=lambda **_: True, **changes):
     return service.reconcile_open_generation(mirror_id=mirror_id, operation_id=operation_id,
                                              binding=service.OpenGenerationBinding(**binding),
                                              verify_binding=verifier, allocate=allocate)
+
+
+@pytest.mark.integration
+def test_replacement_only_allocates_the_audited_generation(opened):
+    store, mirror_id, initial_operation_id, authority = opened
+    recovery_id, generation_id, identity = 'mrec_fixture', uuid4().hex, uuid4().hex
+    submission = dict(operation_id=recovery_id, mirror_id=mirror_id, capture_generation=authority.capture_generation,
+                      generation_id=generation_id, history_epoch='epoch')
+    with store.transaction() as session:
+        state = load_binding(session, authority.source_id)
+        scope = state['published_scope']
+        state['allocation'] = dict(command=dict(kind='replace_owner', operation_id=recovery_id, replacement=dict(
+            scope=dict(submission=submission, recovery_request_identity=identity))))
+        save_binding(session, state)
+        session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch='epoch', status='available',
+                                   lower_commit_seq=0, lower_entry_seq=0))
+        session.add(RecoveryRow(operation_id=recovery_id, source_id=authority.source_id, mirror_id=mirror_id,
+                                identity=identity, journal=dict(state='dispatched', submission_command=submission)))
+        initial, = store.ops(session, mirror_id)
+        store.save_op(session, dict(initial, state='applied', publication_receipt={'initial': True}))
+    pending, applied = service.current_open_preparations(
+        authority=authority, published_scope=scope, observe_committed=lambda **_: pytest.fail('observed initial open'),
+    )
+    replacement, = pending
+    assert replacement['operation_id'] == recovery_id
+    assert applied == []
+
+    def allocate(**request):
+        assert request['generation_id'] == generation_id
+        assert request['operation_id'] == recovery_id
+        return generation_id
+
+    replacement_open = (store, mirror_id, recovery_id, authority)
+    assert reconcile(replacement_open, allocate) == generation_id
+    assert reconcile(replacement_open, lambda **_: pytest.fail('allocated twice')) == generation_id
+    with store.transaction() as session:
+        service.require_current_open_allocations(session, authority=authority, allocations=[(replacement, generation_id)])
+        recovery = session.get(RecoveryRow, recovery_id)
+        recovery.journal = dict(recovery.journal, submission_command=dict(submission, generation_id='superseded'))
+    with store.transaction() as session, pytest.raises(AppError, match='MIRROR_CONTROL_CONFLICT'):
+        service.require_current_open_allocations(session, authority=authority, allocations=[(replacement, generation_id)])
+    assert initial_operation_id != recovery_id
 
 
 @pytest.mark.integration
