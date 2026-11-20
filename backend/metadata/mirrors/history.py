@@ -90,10 +90,15 @@ class SqlHistoryTarget:
             "SELECT source_mirror_state.history_page(:mirror, CAST(:after AS jsonb), CAST(:through AS jsonb), :limit)",
             {"mirror": mirror_id, "after": json.dumps(after), "through": json.dumps(through), "limit": limit})
 
-    def invalidate(self, *, operation_id, transitions):
+    def invalidate(self, *, operation_id, transitions, reason=None, replay_only=False):
+        parameters = {"operation": operation_id, "transitions": json.dumps(transitions)}
+        if reason == "history_loss":
+            return self._call(
+                "SELECT source_mirror_state.invalidate_lost_history(:operation, CAST(:transitions AS jsonb), :replay_only)",
+                dict(parameters, replay_only=replay_only), mutation=True)
         return self._call(
             "SELECT source_mirror_state.invalidate_history(:operation, CAST(:transitions AS jsonb))",
-            {"operation": operation_id, "transitions": json.dumps(transitions)}, mutation=True)
+            parameters, mutation=True)
 
 
 class History:
@@ -243,13 +248,19 @@ class History:
         gates = [self._gate(session, item["mirror_id"]) for item in receipt.transitions]
         receipt = session.execute(select(HistoryInvalidationRow).where(
             HistoryInvalidationRow.operation_id == operation_id).with_for_update().execution_options(populate_existing=True)).scalar_one()
-        if receipt.status == "applied":
+        applied = receipt.status == "applied"
+        history_loss = receipt.reason == "history_loss"
+        if applied and not history_loss:
             return
-        for gate, transition in zip(gates, receipt.transitions):
-            if gate.history_epoch != transition["history_epoch"] or gate.status != "invalidating":
-                _invalid()
-        if self.target.invalidate(operation_id=operation_id, transitions=receipt.transitions) is not True:
+        if not applied:
+            for gate, transition in zip(gates, receipt.transitions):
+                if gate.history_epoch != transition["history_epoch"] or gate.status != "invalidating":
+                    _invalid()
+        options = {"reason": receipt.reason, "replay_only": applied} if history_loss else {}
+        if self.target.invalidate(operation_id=operation_id, transitions=receipt.transitions, **options) is not True:
             raise MirrorError("MIRROR_READ_UNAVAILABLE", 503)
+        if applied:
+            return
         for gate in gates:
             gate.status = "available"
         receipt.status = "applied"

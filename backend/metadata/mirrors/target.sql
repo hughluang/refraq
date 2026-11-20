@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS source_mirror_state.mirrors (
  history_epoch text NOT NULL, commit_seq bigint NOT NULL DEFAULT 0,
  UNIQUE(source_id, table_identity)
 );
+ALTER TABLE source_mirror_state.mirrors
+ ADD COLUMN IF NOT EXISTS excluded_capture_generations text[] NOT NULL DEFAULT '{}';
 CREATE TABLE IF NOT EXISTS source_mirror_state.fence_receipts (
  mirror_id text NOT NULL REFERENCES source_mirror_state.mirrors,
  operation_id text NOT NULL, request jsonb NOT NULL, receipt_ref text NOT NULL,
@@ -96,6 +98,7 @@ BEGIN
  SELECT * INTO g FROM source_mirror_state.generations WHERE id = gid FOR UPDATE;
  IF m.id IS NULL OR g.id IS NULL
  OR m.authority IS DISTINCT FROM a OR g.capture_generation IS DISTINCT FROM a->>'capture_generation'
+ OR g.capture_generation = ANY(m.excluded_capture_generations)
  OR g.partition_identity IS DISTINCT FROM p OR g.cleanup_pending
  OR g.status NOT IN ('building','catching_up','published') THEN
   RAISE EXCEPTION 'MIRROR_CONTROL_CONFLICT';
@@ -322,6 +325,8 @@ BEGIN
  SELECT * INTO c FROM source_mirror_state.certificates WHERE operation_id = op FOR UPDATE;
  IF NOT FOUND OR c.generation_id <> gid OR c.evidence IS DISTINCT FROM cert
   OR c.authority IS DISTINCT FROM a OR m.authority IS DISTINCT FROM a
+  OR g.capture_generation IS DISTINCT FROM a->>'capture_generation'
+  OR g.capture_generation = ANY(m.excluded_capture_generations)
   OR cert->>'schema_fingerprint' IS DISTINCT FROM g.schema_fingerprint
   OR cert->'partition_identity' IS DISTINCT FROM g.partition_identity
   OR cert->>'capture_generation' IS DISTINCT FROM g.capture_generation
@@ -385,19 +390,24 @@ $$;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.read_page(run text, mid text, after_key jsonb, page_limit integer)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
-DECLARE g source_mirror_state.generations; rows jsonb; cols text; key_sql text; last_key jsonb;
+DECLARE pinned_generation record; rows jsonb; cols text; key_sql text; last_key jsonb;
 BEGIN
  IF page_limit < 1 OR page_limit > 500 THEN RAISE EXCEPTION 'MIRROR_PAGE_INVALID'; END IF;
- SELECT gen.* INTO g FROM source_mirror_state.generations gen JOIN source_mirror_state.reader_pins pin ON pin.generation_id = gen.id
+ SELECT generation.id, generation.cleanup_pending, generation.key_columns, generation.table_name,
+  CASE WHEN generation.status <> 'published' OR generation.capture_generation = ANY(mirror.excluded_capture_generations)
+   THEN 'stale' ELSE 'unknown' END AS freshness
+ INTO pinned_generation FROM source_mirror_state.reader_pins pin
+ JOIN source_mirror_state.generations generation ON generation.id = pin.generation_id
+ JOIN source_mirror_state.mirrors mirror ON mirror.id = pin.mirror_id
  WHERE pin.run_id = run AND pin.mirror_id = mid;
- IF NOT FOUND OR g.cleanup_pending THEN RAISE EXCEPTION 'MIRROR_READ_UNAVAILABLE'; END IF;
- SELECT string_agg(format('t.%I', c), ', ') INTO cols FROM unnest(g.key_columns) c;
- SELECT string_agg(format('k.%I', c), ', ') INTO key_sql FROM unnest(g.key_columns) c;
- EXECUTE format('SELECT coalesce(jsonb_agg(to_jsonb(v)), ''[]''::jsonb) FROM (SELECT t.* FROM source_mirror.%1$I t, jsonb_populate_record(NULL::source_mirror.%1$I, $1) k WHERE $1 IS NULL OR ROW(%2$s) > ROW(%3$s) ORDER BY %2$s LIMIT $2) v', g.table_name, cols, key_sql)
+ IF NOT FOUND OR pinned_generation.cleanup_pending THEN RAISE EXCEPTION 'MIRROR_READ_UNAVAILABLE'; END IF;
+ SELECT string_agg(format('t.%I', c), ', ') INTO cols FROM unnest(pinned_generation.key_columns) c;
+ SELECT string_agg(format('k.%I', c), ', ') INTO key_sql FROM unnest(pinned_generation.key_columns) c;
+ EXECUTE format('SELECT coalesce(jsonb_agg(to_jsonb(v)), ''[]''::jsonb) FROM (SELECT t.* FROM source_mirror.%1$I t, jsonb_populate_record(NULL::source_mirror.%1$I, $1) k WHERE $1 IS NULL OR ROW(%2$s) > ROW(%3$s) ORDER BY %2$s LIMIT $2) v', pinned_generation.table_name, cols, key_sql)
  INTO rows USING after_key, page_limit;
- SELECT jsonb_object_agg(c, rows->(jsonb_array_length(rows)-1)->c) INTO last_key FROM unnest(g.key_columns) c;
+ SELECT jsonb_object_agg(c, rows->(jsonb_array_length(rows)-1)->c) INTO last_key FROM unnest(pinned_generation.key_columns) c;
  RETURN jsonb_build_object('rows', rows, 'next_key', CASE WHEN jsonb_array_length(rows) = page_limit THEN last_key ELSE NULL END,
- 'generation_id', g.id, 'freshness', CASE WHEN g.status = 'published' THEN 'unknown' ELSE 'stale' END);
+ 'generation_id', pinned_generation.id, 'freshness', pinned_generation.freshness);
 END $$;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.release_run_pins(run text)

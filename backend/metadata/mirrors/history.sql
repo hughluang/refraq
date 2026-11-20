@@ -4,6 +4,7 @@ ALTER TABLE source_mirror_state.mirrors ADD COLUMN IF NOT EXISTS retained_entry_
 CREATE TABLE IF NOT EXISTS source_mirror_state.history_invalidations (
  operation_id text PRIMARY KEY, transitions jsonb NOT NULL
 );
+ALTER TABLE source_mirror_state.history_invalidations ADD COLUMN IF NOT EXISTS excluded_lineages jsonb;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.history_version()
 RETURNS integer LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
@@ -43,7 +44,8 @@ BEGIN
  SELECT * INTO generation_row FROM source_mirror_state.generations
  WHERE id = requested_generation AND mirror_id = requested_mirror AND operation_id = requested_operation FOR SHARE;
  IF NOT FOUND OR generation_row.status <> 'published' OR generation_row.cleanup_pending
-  OR generation_row.capture_generation IS DISTINCT FROM expected_authority->>'capture_generation' THEN
+  OR generation_row.capture_generation IS DISTINCT FROM expected_authority->>'capture_generation'
+  OR generation_row.capture_generation = ANY(mirror_row.excluded_capture_generations) THEN
   RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
  END IF;
  SELECT * INTO certificate_row FROM source_mirror_state.certificates
@@ -118,9 +120,10 @@ BEGIN
  RETURN b || jsonb_build_object('entries', entries, 'next_position', next_position);
 END $$;
 
-CREATE OR REPLACE FUNCTION source_mirror_state.invalidate_history(op text, changes jsonb)
-RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
-DECLARE change jsonb; m source_mirror_state.mirrors; previous jsonb;
+CREATE OR REPLACE FUNCTION source_mirror_state.reset_history(op text, changes jsonb, history_loss boolean, replay_only boolean)
+RETURNS boolean LANGUAGE plpgsql SET search_path = pg_catalog, source_mirror_state AS $$
+DECLARE change jsonb; m source_mirror_state.mirrors; previous source_mirror_state.history_invalidations;
+ excluded_lineages jsonb;
 BEGIN
  IF op IS NULL OR jsonb_typeof(changes) IS DISTINCT FROM 'array' OR jsonb_array_length(changes) = 0
  THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
@@ -129,20 +132,45 @@ BEGIN
   PERFORM 1 FROM source_mirror_state.mirrors WHERE id = change->>'mirror_id' FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
  END LOOP;
- SELECT transitions INTO previous FROM source_mirror_state.history_invalidations WHERE operation_id = op;
+ SELECT * INTO previous FROM source_mirror_state.history_invalidations WHERE operation_id = op;
  IF FOUND THEN
-  IF previous IS DISTINCT FROM changes THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
+  IF previous.transitions IS DISTINCT FROM changes OR (previous.excluded_lineages IS NOT NULL) <> history_loss
+  THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
   RETURN true;
  END IF;
+ IF replay_only THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
+ IF history_loss THEN excluded_lineages := '{}'::jsonb; END IF;
  FOR change IN SELECT value FROM jsonb_array_elements(changes) ORDER BY value->>'mirror_id' LOOP
   SELECT * INTO m FROM source_mirror_state.mirrors WHERE id = change->>'mirror_id';
   IF m.history_epoch IS DISTINCT FROM change->>'old_epoch'
    OR nullif(change->>'history_epoch', '') IS NULL OR change->>'history_epoch' = m.history_epoch
   THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
+  IF history_loss THEN
+   IF nullif(m.authority->>'capture_generation', '') IS NULL THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
+   m.excluded_capture_generations := ARRAY(
+    SELECT lineage FROM (
+     SELECT m.authority->>'capture_generation' AS lineage
+     UNION SELECT unnest(m.excluded_capture_generations)
+     UNION SELECT capture_generation FROM source_mirror_state.generations WHERE mirror_id = m.id
+    ) lineages ORDER BY lineage);
+   excluded_lineages := excluded_lineages || jsonb_build_object(m.id, m.excluded_capture_generations);
+  END IF;
   UPDATE source_mirror_state.mirrors SET history_epoch = change->>'history_epoch', commit_seq = 0,
-   retained_commit_seq = 0, retained_entry_seq = 0 WHERE id = m.id;
+   retained_commit_seq = 0, retained_entry_seq = 0,
+   excluded_capture_generations = m.excluded_capture_generations WHERE id = m.id;
   DELETE FROM source_mirror_state.live_log WHERE mirror_id = m.id;
  END LOOP;
- INSERT INTO source_mirror_state.history_invalidations VALUES (op, changes);
+ INSERT INTO source_mirror_state.history_invalidations(operation_id, transitions, excluded_lineages)
+ VALUES (op, changes, excluded_lineages);
  RETURN true;
 END $$;
+
+CREATE OR REPLACE FUNCTION source_mirror_state.invalidate_history(op text, changes jsonb)
+RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+ SELECT source_mirror_state.reset_history(op, changes, false, false)
+$$;
+
+CREATE OR REPLACE FUNCTION source_mirror_state.invalidate_lost_history(op text, changes jsonb, replay_only boolean)
+RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+ SELECT source_mirror_state.reset_history(op, changes, true, coalesce(replay_only, true))
+$$;

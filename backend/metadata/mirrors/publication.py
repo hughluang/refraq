@@ -35,6 +35,15 @@ def persist_verified_certificate(connection, *, operation_id, authority, generat
         raise ValueError("Publication evidence not authenticated")
     with connection.transaction():
         connection.execute("SET LOCAL ROLE refraq_mirror_owner")
+        permitted = connection.execute(
+            "SELECT generation.capture_generation = %s "
+            "AND NOT (generation.capture_generation = ANY(mirror.excluded_capture_generations)) "
+            "FROM source_mirror_state.generations generation "
+            "JOIN source_mirror_state.mirrors mirror ON mirror.id = generation.mirror_id "
+            "WHERE generation.id = %s FOR UPDATE OF mirror",
+            (authority.capture_generation, generation_id)).fetchone()
+        if permitted != (True,):
+            raise ValueError("MIRROR_PUBLICATION_BLOCKED")
         connection.execute(
             "INSERT INTO source_mirror_state.certificates(operation_id, generation_id, authority, evidence, verified_by) "
             "VALUES (%s,%s,%s::jsonb,%s::jsonb,%s) ON CONFLICT DO NOTHING",

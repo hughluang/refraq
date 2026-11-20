@@ -30,6 +30,7 @@ FUNCTIONS = {
     "history_bound(text)": "refraq_mirror_gateway",
     "history_page(text,jsonb,jsonb,integer)": "refraq_mirror_gateway",
     "invalidate_history(text,jsonb)": "refraq_mirror_applier",
+    "invalidate_lost_history(text,jsonb,boolean)": "refraq_mirror_applier",
 }
 
 
@@ -125,7 +126,9 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
                 (mirror_id, authority.source_id, table_identity, json.dumps(authority_data), history_epoch))
         mirror = connection.execute(
             sql.SQL("SELECT source_id, table_identity, authority FROM source_mirror_state.mirrors "
-                    "WHERE id = %s AND history_epoch = {} FOR UPDATE").format(sql.Literal(history_epoch)),
+                    "WHERE id = %s AND history_epoch = {} "
+                    "AND NOT ((authority->>'capture_generation') = ANY(excluded_capture_generations)) "
+                    "FOR UPDATE").format(sql.Literal(history_epoch)),
             (mirror_id,)).fetchone()
         if mirror != (authority.source_id, table_identity, authority_data):
             raise ValueError("Mirror fence or immutable binding mismatch")
