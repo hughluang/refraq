@@ -1,0 +1,15 @@
+.advanced {
+  border: 1px solid var(--refraq-tone-neutral-border);
+  border-radius: var(--mantine-radius-md);
+}
+
+.advanced summary {
+  padding: var(--mantine-spacing-sm) var(--mantine-spacing-md);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--mantine-font-size-sm);
+}
+
+.advanced[open] summary {
+  border-bottom: 1px solid var(--refraq-tone-neutral-border);
+}
