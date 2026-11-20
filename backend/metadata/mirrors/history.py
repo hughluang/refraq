@@ -241,27 +241,53 @@ class History:
         with self.session_factory() as session, session.begin():
             self._consume_invalidation(session, operation_id=operation_id)
 
-    def _consume_invalidation(self, session, *, operation_id):
+    def require_fenced_loss(self, session, *, operation_id, mirror_id, source_id, history_epoch):
+        """Prove a completed loss under the caller's Source lock and hold its gates through publication."""
+        receipt, gates = self._lock_invalidation(session, operation_id)
+        gate = gates.get(mirror_id)
+        if (receipt is None or receipt.reason != "history_loss" or receipt.status != "applied"
+                or gate is None or gate.history_epoch != history_epoch):
+            _invalid()
+        for transition in receipt.transitions:
+            gate = gates[transition["mirror_id"]]
+            if (gate.status != "available" or gate.history_epoch != transition["history_epoch"]
+                    or session.get(MirrorRow, gate.mirror_id).source_id != source_id):
+                _invalid()
+        self._acknowledge_invalidation(receipt, replay_only=True)
+
+    def _lock_invalidation(self, session, operation_id):
         receipt = session.get(HistoryInvalidationRow, operation_id)
         if receipt is None:
-            raise ValueError("Unknown invalidation operation")
-        gates = [self._gate(session, item["mirror_id"]) for item in receipt.transitions]
+            return None, {}
+        mirror_ids = sorted({item["mirror_id"] for item in receipt.transitions})
+        gates = {mirror_id: self._gate(session, mirror_id) for mirror_id in mirror_ids}
         receipt = session.execute(select(HistoryInvalidationRow).where(
-            HistoryInvalidationRow.operation_id == operation_id).with_for_update().execution_options(populate_existing=True)).scalar_one()
+            HistoryInvalidationRow.operation_id == operation_id).with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
+        if receipt is None or {item["mirror_id"] for item in receipt.transitions} != gates.keys():
+            _invalid()
+        return receipt, gates
+
+    def _acknowledge_invalidation(self, receipt, *, replay_only):
+        options = {"reason": receipt.reason, "replay_only": replay_only} if receipt.reason == "history_loss" else {}
+        if self.target.invalidate(operation_id=receipt.operation_id, transitions=receipt.transitions, **options) is not True:
+            raise MirrorError("MIRROR_READ_UNAVAILABLE", 503)
+
+    def _consume_invalidation(self, session, *, operation_id):
+        receipt, gates = self._lock_invalidation(session, operation_id)
+        if receipt is None:
+            raise ValueError("Unknown invalidation operation")
         applied = receipt.status == "applied"
-        history_loss = receipt.reason == "history_loss"
-        if applied and not history_loss:
+        if applied and receipt.reason != "history_loss":
             return
         if not applied:
-            for gate, transition in zip(gates, receipt.transitions):
+            for transition in receipt.transitions:
+                gate = gates[transition["mirror_id"]]
                 if gate.history_epoch != transition["history_epoch"] or gate.status != "invalidating":
                     _invalid()
-        options = {"reason": receipt.reason, "replay_only": applied} if history_loss else {}
-        if self.target.invalidate(operation_id=operation_id, transitions=receipt.transitions, **options) is not True:
-            raise MirrorError("MIRROR_READ_UNAVAILABLE", 503)
+        self._acknowledge_invalidation(receipt, replay_only=applied)
         if applied:
             return
-        for gate in gates:
+        for gate in gates.values():
             gate.status = "available"
         receipt.status = "applied"
         session.flush()

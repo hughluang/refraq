@@ -217,9 +217,8 @@ class Recovery:
                 return journal["generation_id"]
             if journal["state"] != "dispatched" or not journal.get("replacement_epoch") or self.publication is None:
                 raise MirrorError("MIRROR_PUBLICATION_BLOCKED", 409)
-            gate = self._gate(session, mirror.id)
-            if gate.status != "available" or gate.history_epoch != journal["replacement_epoch"]:
-                raise MirrorError("MIRROR_HISTORY_INVALID", 409)
+            self.history.require_fenced_loss(session, operation_id=operation_id, mirror_id=mirror.id,
+                                             source_id=source.id, history_epoch=journal["replacement_epoch"])
             observed = self.publication.publish_generation(operation_id=operation_id, authority=authority,
                 generation_id=journal["generation_id"], certificate=certificate)
             if observed != journal["generation_id"]:

@@ -9,7 +9,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
@@ -22,6 +22,8 @@ from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInval
 from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors.publication import Publication, persist_verified_certificate
 from backend.metadata.mirrors.reads import Reads
+from backend.metadata.mirrors.recovery import Recovery
+from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.service import MirrorError
 from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity, ReadCommittedBounds, Record, SealedScan
 from backend.metadata.models import SourceRow
@@ -111,6 +113,145 @@ def begin_invalidation(history, factory, *, operation_id, reason="history_loss",
 
 def history_error(code):
     return pytest.raises(MirrorError, check=lambda error: error.code == code)
+
+
+@pytest.mark.parametrize("receipt_case", [
+    "legacy", "missing", "missing-target", "missing-mirror", "mismatched", "wrong-transition", "pending",
+    "wrong-reason", "wrong-epoch", "unavailable-peer", "foreign-peer", "stale-peer", "fenced",
+])
+def test_replacement_publication_requires_current_fenced_loss(history_loss, receipt_case, monkeypatch):
+    admin, factory, history, target, application, publication, _ = history_loss
+    RecoveryRow.__table__.create(factory.kw["bind"])
+    operation_id = "replacement"
+    original = allocation(RETAINED, "items")
+    for initial in (allocation(AFFECTED, "orders"), original):
+        create_generation(admin, **initial)
+        delivery(application, initial, 0, origin="baseline")
+        certified = certificate_request(initial)
+        persist_verified_certificate(admin, **certified, verifier=FixtureVerifier())
+        publication.publish_generation(**certified)
+        with factory.begin() as session:
+            history.initialize_gate(session, mirror_id=initial["mirror_id"], history_epoch=EPOCH)
+
+    mirror_ids = (AFFECTED,) if receipt_case == "missing-mirror" else (RETAINED, AFFECTED)
+    changes = begin_invalidation(history, factory, operation_id=operation_id, mirror_ids=mirror_ids)
+    epoch = EPOCH if receipt_case == "missing-mirror" else changes[1]["history_epoch"]
+    if receipt_case in {"legacy", "pending", "missing-target"}:
+        if receipt_case != "missing-target":
+            options = {"reason": "history_loss"} if receipt_case == "pending" else {}
+            assert target.invalidate(operation_id=operation_id, transitions=changes, **options) is True
+        with factory.begin() as session:
+            if receipt_case != "pending":
+                session.get(HistoryInvalidationRow, operation_id).status = "applied"
+            for mirror_id in (AFFECTED, RETAINED):
+                session.get(HistoryGateRow, mirror_id).status = "available"
+    else:
+        history.consume_invalidation(operation_id=operation_id)
+    if receipt_case == "stale-peer":
+        begin_invalidation(history, factory, operation_id="later-retention", reason="retention")
+        history.consume_invalidation(operation_id="later-retention")
+
+    authority = replace(AUTHORITY, control_revision=AUTHORITY.control_revision + 1, capture_generation="new-capture")
+    install_authority(admin, mirror_id=RETAINED, expected_authority=AUTHORITY, authority=authority,
+                      exclusion_proof="fixture", verify_exclusion=lambda *_: True)
+    target_epoch = EPOCH if receipt_case == "missing-target" else epoch
+    replacement = dict(allocation(RETAINED, "items", authority=authority, epoch=target_epoch), operation_id=operation_id)
+    create_generation(admin, **replacement)
+    delivery(application, replacement, 0, origin="baseline")
+    certified = certificate_request(replacement)
+    persist_verified_certificate(admin, **certified, verifier=FixtureVerifier())
+    with factory.begin() as session:
+        receipt = session.get(HistoryInvalidationRow, operation_id)
+        if receipt_case == "missing":
+            session.delete(receipt)
+        elif receipt_case == "mismatched":
+            receipt.transitions = changes[1:]
+        elif receipt_case == "wrong-transition":
+            receipt.transitions = [changes[0] | {"old_epoch": "different-old-epoch"}, changes[1]]
+        elif receipt_case == "wrong-reason":
+            receipt.reason = "retention"
+        elif receipt_case == "unavailable-peer":
+            session.get(HistoryGateRow, AFFECTED).status = "invalidating"
+        elif receipt_case == "foreign-peer":
+            now = utc_now()
+            session.add(SourceRow(id="other-source", key="other-source", locator_key="other-source",
+                                  name="Other Source", kind="database", created_at=now, updated_at=now))
+            session.flush()
+            session.get(MirrorRow, AFFECTED).source_id = "other-source"
+        journal_epoch = "different-journal-epoch" if receipt_case == "wrong-epoch" else epoch
+        session.add(RecoveryRow(operation_id=operation_id, source_id=AUTHORITY.source_id, mirror_id=RETAINED,
+                                identity=operation_id, journal=dict(state="dispatched", replacement_epoch=journal_epoch,
+                                generation_id=replacement["generation_id"], submission_uncertain=True)))
+
+    def published_pointer():
+        return admin.execute("SELECT published_generation_id FROM source_mirror_state.mirrors WHERE id = %s",
+                             (RETAINED,)).fetchone()
+
+    service = Recovery(session_factory=factory, history=history, retry_delays=(1,), publication=publication)
+    completion = dict(operation_id=operation_id, authority=authority, certificate=certified["certificate"])
+    assert published_pointer() == (original["generation_id"],)
+    if receipt_case == "fenced":
+        lock_order = [(SourceRow, AUTHORITY.source_id), (HistoryGateRow, AFFECTED), (HistoryGateRow, RETAINED),
+                      (HistoryInvalidationRow, operation_id)]
+        observed_locks = []
+        engine = factory.kw["bind"]
+        acknowledge = target.invalidate
+        publish = publication.publish_generation
+        stages = []
+
+        def record_lock(_connection, _cursor, statement, parameters, _context, _executemany):
+            if statement.endswith("FOR UPDATE"):
+                observed_locks.append(next(iter(parameters.values())))
+
+        def assert_locks_held():
+            assert observed_locks == [key for _, key in lock_order]
+            for model, key in lock_order:
+                with factory() as contender, pytest.raises(DBAPIError, check=lambda error: error.orig.sqlstate == "55P03"):
+                    contender.get(model, key, with_for_update={"nowait": True})
+
+        def acknowledge_while_locked(**kwargs):
+            assert_locks_held()
+            stages.append("acknowledged")
+            return acknowledge(**kwargs)
+
+        def publish_while_locked(**kwargs):
+            assert_locks_held()
+            stages.append("published")
+            return publish(**kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(target, "invalidate", acknowledge_while_locked)
+            patch.setattr(publication, "publish_generation", publish_while_locked)
+            event.listen(engine, "before_cursor_execute", record_lock)
+            try:
+                assert service.publish_replacement(**completion) == replacement["generation_id"]
+            finally:
+                event.remove(engine, "before_cursor_execute", record_lock)
+        assert stages == ["acknowledged", "published"]
+        assert published_pointer() == (replacement["generation_id"],)
+        journal = service.get_operation(operation_id)
+        assert journal["state"] == "applied"
+        assert journal["submission_uncertain"] is False
+        begin_invalidation(history, factory, operation_id="later-retention", reason="retention", mirror_ids=(RETAINED,))
+        history.consume_invalidation(operation_id="later-retention")
+        monkeypatch.setattr(target, "invalidate", lambda **kwargs: pytest.fail("Historical retry called the target"))
+        monkeypatch.setattr(publication, "publish_generation", lambda **kwargs: pytest.fail("Historical retry republished"))
+        assert service.publish_replacement(**completion) == replacement["generation_id"]
+        assert service.get_operation(operation_id) == journal
+        assert published_pointer() == (replacement["generation_id"],)
+    else:
+        journal = service.get_operation(operation_id)
+        with history_error("MIRROR_HISTORY_INVALID"):
+            service.publish_replacement(**completion)
+        assert published_pointer() == (original["generation_id"],)
+        assert service.get_operation(operation_id) == journal
+        if receipt_case == "pending":
+            with factory() as session:
+                assert session.get(HistoryInvalidationRow, operation_id).status == "pending"
+        if receipt_case == "missing-target":
+            assert admin.execute("SELECT 1 FROM source_mirror_state.history_invalidations WHERE operation_id = %s",
+                                 (operation_id,)).fetchone() is None
+            assert admin.execute("SELECT DISTINCT history_epoch FROM source_mirror_state.mirrors").fetchall() == [(EPOCH,)]
 
 
 def test_management_loss_receipt_fences_old_writes_and_preserves_pins(history_loss, monkeypatch):
@@ -311,7 +452,7 @@ def test_legacy_target_loss_requires_fenced_receipt(history_loss, legacy_receipt
             delivery(application, request)
 
 
-def test_retention_replays_legacy_target_receipt_and_keeps_same_lineage_writable(history_loss):
+def test_retention_replays_legacy_target_receipt_and_keeps_same_lineage_writable(history_loss, monkeypatch):
     admin, factory, history, target, application, publication, _ = history_loss
     request = allocation(AFFECTED, "orders")
     create_generation(admin, **request)
@@ -322,5 +463,7 @@ def test_retention_replays_legacy_target_receipt_and_keeps_same_lineage_writable
         history.initialize_gate(session, mirror_id=AFFECTED, history_epoch=EPOCH)
     changes = begin_invalidation(history, factory, operation_id="retention", reason="retention")
     assert target.invalidate(operation_id="retention", transitions=changes) is True
+    history.consume_invalidation(operation_id="retention")
+    monkeypatch.setattr(target, "invalidate", lambda **kwargs: pytest.fail("Applied retention called the target"))
     history.consume_invalidation(operation_id="retention")
     assert delivery(application, request, 1) == {"offset": 1, "commit_seq": 1}
