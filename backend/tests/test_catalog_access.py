@@ -95,6 +95,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
             "channel:read",
             "channel:write",
             "mirror:read",
+            "mirror:write",
             "metadata:read",
             "metadata:write",
             "catalog:sample",
@@ -745,3 +746,40 @@ def test_catalog_source_discovery_without_sources_administration(world: _World) 
     assert world.client.get("/catalog/sources", params={"source_id": world.source_b}).json()["total"] == 0
     world.login("hidden")
     assert world.client.get("/catalog/sources").json()["total"] == 0
+
+
+def test_catalog_enable_mirror_is_scoped_and_idempotent(world):
+    path = f"/objects/{world.object_a}"
+    world.login("hidden")
+    assert_problem(world.client.post(f"{path}/mirror"), status=404, code="CATALOG_OBJECT_NOT_FOUND")
+    world.login("reader")
+    assert_problem(world.client.post(f"{path}/mirror"), status=403, code="AUTH_FORBIDDEN")
+
+    world.login("viewer")
+    assert world.client.get(path).json()["object"]["mirror"] == {"can_enable": True, "mirror_id": None}
+    unsupported = f"/objects/{world.procedure_a}"
+    assert world.client.get(unsupported).json()["object"]["mirror"] is None
+    assert_problem(world.client.post(f"{unsupported}/mirror"), status=404, code="MIRROR_NOT_FOUND")
+    assert_problem(world.client.post("/objects/obj_missing/mirror"), status=404, code="CATALOG_OBJECT_NOT_FOUND")
+    opened = world.client.post(f"{path}/mirror")
+    assert opened.status_code == 202, opened.text
+    accepted = opened.json()
+    assert world.client.post(f"{path}/mirror").json() == accepted
+    mirror = accepted["mirror"]
+    assert mirror["operations"][0]["id"] == accepted["operation_id"]
+    assert mirror["operations"][0]["state"] == "pending"
+    assert mirror["published_generation_id"] is None
+    assert world.client.get(path).json()["object"]["mirror"] == {"can_enable": False, "mirror_id": mirror["id"]}
+
+    world.login("reader")
+    assert world.client.get(path).json()["object"]["mirror"]["mirror_id"] is None
+
+    world.login("viewer")
+    source = require_source(world.source_a)
+    catalog = get_catalog_store()
+    surviving = [catalog.get_object(object_id) for object_id in (world.object_a2, world.procedure_a)]
+    apply_structure_snapshot(
+        source=source, job_id="job_after_drop", collected=surviving, schema_scope=None,
+    )
+    assert world.client.get(path).json()["object"]["mirror"] == {"can_enable": False, "mirror_id": mirror["id"]}
+    assert_problem(world.client.post(f"{path}/mirror"), status=404, code="MIRROR_NOT_FOUND")

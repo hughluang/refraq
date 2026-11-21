@@ -1,4 +1,4 @@
-"""Management invalidation authority; these records are not consumer cursors."""
+"""Management authorization for committed history and its invalidation."""
 
 from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column

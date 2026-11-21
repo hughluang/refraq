@@ -593,3 +593,56 @@ def test_sql_refresh_keeps_patched_semantics(persistent_client: TestClient) -> N
     assert obj.columns[0].data_type == "bigint"
     assert obj.columns[0].business_name == "Order id"
     assert obj.columns[0].column_semantics == {"role": "pk"}
+
+
+def test_concurrent_catalog_mirror_posts_share_one_durable_open(
+    persistent_client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from backend.core.db import session_scope
+    from backend.core.time import utc_now
+    from backend.metadata.mirrors import service
+    from backend.metadata.models import CatalogObjectRow, SourceRow
+
+    monkeypatch.setattr(service, "_store", None)
+
+    login = persistent_client.post("/auth/login", json={"account": "root", "password": "s3cret"})
+    assert login.status_code == 200
+    now = utc_now()
+    with session_scope() as session:
+        session.add(SourceRow(
+            id="src_mirror", key="mirror-source", locator_key="src/postgresql/mirror-source",
+            name="Mirror Source", kind="database", engine="postgresql", status="active",
+            created_at=now, updated_at=now,
+        ))
+        session.flush()
+        session.add(CatalogObjectRow(
+            id="obj_orders", source_id="src_mirror", object_type="table",
+            schema_name="public", name="orders", locator_key="orders",
+            created_at=now, updated_at=now,
+        ))
+
+    start = Barrier(4)
+
+    def enable():
+        start.wait(timeout=10)
+        return persistent_client.post("/objects/obj_orders/mirror")
+
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        futures = [workers.submit(enable) for _ in range(4)]
+        responses = [future.result(timeout=15) for future in futures]
+
+    assert [response.status_code for response in responses] == [202] * 4, [response.text for response in responses]
+    accepted = [response.json() for response in responses]
+    mirror_ids = {item["mirror"]["id"] for item in accepted}
+    operation_ids = {item["operation_id"] for item in accepted}
+    mirror_id, = mirror_ids
+    operation_id, = operation_ids
+    listing = persistent_client.get("/mirrors", params={"source_id": "src_mirror"})
+    assert listing.status_code == 200
+    mirror, = listing.json()["items"]
+    assert mirror["id"] == mirror_id
+    operation, = mirror["operations"]
+    assert (operation["id"], operation["state"], operation["kind"]) == (operation_id, "pending", "open")

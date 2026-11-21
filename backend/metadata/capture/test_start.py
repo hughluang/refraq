@@ -134,9 +134,8 @@ def test_connect_create_response_loss_reconciles_without_repeating_mutation(tmp_
         qualified_table="public.orders", table_identity="orders",
     )
     monkeypatch.setattr(mirrors, "_store", mirror_store)
-    with mirror_store.transaction() as session:
-        mirrors.ensure_open_intent(session, operation_id="open", channel_id="workflow",
-                                   channel_version=1, object_ids=["orders"])
+    monkeypatch.setattr(mirrors, "persist_audit_event", lambda **kwargs: None)
+    mirrors.enable_for_object("orders", actor_user_id="operator")
     scope = mirrors.read_published_scope(None, source.id)
     cmd["published_scope"] = scope
     store.capture_operations[cmd["operation_id"]]["command"] = cmd

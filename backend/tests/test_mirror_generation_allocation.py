@@ -21,9 +21,7 @@ from backend.metadata.mirrors import service
 from backend.metadata.mirrors.bootstrap import create_generation, install
 from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
-from backend.metadata.mirrors.models import (
-    MirrorIntentReceiptRow, MirrorOperationRow, MirrorPublicationRow, MirrorReferenceRow, MirrorRow,
-)
+from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.schemas import Mirror
 from backend.metadata.mirrors.store import SqlMirrorStore
@@ -48,12 +46,12 @@ def opened(target_dsn, monkeypatch):
     engine = create_engine("postgresql+psycopg://", creator=lambda: psycopg.connect(target_dsn, dbname=database))
     try:
         for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, MirrorRow,
-                      MirrorOperationRow, MirrorPublicationRow, MirrorReferenceRow,
-                      MirrorIntentReceiptRow, HistoryGateRow, HistoryInvalidationRow, RecoveryRow):
+                      MirrorOperationRow, HistoryGateRow, HistoryInvalidationRow, RecoveryRow):
             model.__table__.create(engine)
         store = SqlMirrorStore()
         store.transaction = sessionmaker(engine).begin
         monkeypatch.setattr(service, "_store", store)
+        monkeypatch.setattr(service, "persist_audit_event", lambda **kwargs: None)
         source_id = uuid4().hex
         authority = Authority(source_id, "binding_" + source_id, 3, "owner", 4, 2, "1")
         instant = utc_now()
@@ -64,20 +62,15 @@ def opened(target_dsn, monkeypatch):
             session.add(CatalogObjectRow(id="orders", source_id=source_id, locator_key="orders",
                                          object_type="table", schema_name="sales", name="orders",
                                          created_at=instant, updated_at=instant))
-        with store.transaction() as session:
-            preview, = service.resolve_object_bindings(object_ids=["orders"], session=session)
-            confirmed = {key: preview[key] for key in ("source_id", "object_id", "mirror_id")}
-            service.ensure_open_intent(session, operation_id="publish", channel_id="channel", channel_version=1,
-                                       object_ids=["orders"], confirmed_mirrors_to_open=[confirmed])
-            mirror_id = confirmed["mirror_id"]
-            operation, = store.ops(session, mirror_id)
+        opened = service.enable_for_object("orders", actor_user_id="operator")
+        mirror_id = opened["mirror"]["id"]
         prepare_fence(target_dsn, mirror_id, authority)
         with store.transaction() as session:
             state = asdict(authority)
             state["binding_id"] = state.pop("resource_binding_id")
             save_binding(session, dict(state, capture_generation=1, desired="configured",
                                        published_scope=service.read_published_scope(session, source_id)))
-        yield store, mirror_id, operation["id"], authority
+        yield store, mirror_id, opened["operation_id"], authority
     finally:
         engine.dispose()
         with psycopg.connect(target_dsn, autocommit=True) as connection:
@@ -347,9 +340,9 @@ def test_native_concurrent_claims_and_lost_allocation_response(opened, target_ds
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("change", ["withdrawn", "disabled", "revision", "retired", "missing_receipt", "catalog", "history"])
+@pytest.mark.parametrize("change", ["disabled", "revision", "retired", "missing_receipt", "catalog", "history"])
 def test_native_rechecks_the_current_open_claim_after_dispatch(opened, target_dsn, change):
-    store, mirror_id, _, authority = opened
+    store, mirror_id, operation_id, authority = opened
     if change == "history":
         with store.transaction() as session:
             session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch="epoch", status="available",
@@ -358,13 +351,12 @@ def test_native_rechecks_the_current_open_claim_after_dispatch(opened, target_ds
     def dispatch(**request):
         with psycopg.connect(target_dsn, autocommit=True) as connection:
             generation_id = create_generation(connection, **request)
+        if change == "disabled":
+            service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")
         with store.transaction() as session:
-            if change == "withdrawn":
-                service.reconcile_references(session, channel_id="channel", channel_version=2, object_ids=[])
-            elif change in {"revision", "disabled"}:
-                row, = store.list(session)
-                row["enabled"] = change != "disabled"
-                row["control"]["control_revision"] += (change == "revision")
+            if change == "revision":
+                row = store.get(session, mirror_id)
+                row["control"]["control_revision"] += 1
                 store.save(session, row)
             elif change == "retired":
                 state = load_binding(session, authority.source_id)
@@ -381,7 +373,7 @@ def test_native_rechecks_the_current_open_claim_after_dispatch(opened, target_ds
         reconcile(opened, dispatch)
     assert failure.value.code == "MIRROR_CONTROL_CONFLICT"
     with store.transaction() as session:
-        claimed, = store.ops(session, mirror_id)
+        claimed, = (op for op in store.ops(session, mirror_id) if op["id"] == operation_id)
         assert claimed["allocation"]["observed"] is False
     assert_unavailable(target_dsn, mirror_id)
     if change != "missing_receipt":

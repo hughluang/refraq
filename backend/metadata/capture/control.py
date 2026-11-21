@@ -26,7 +26,11 @@ from backend.metadata.errors import SourceCaptureControlConflict, SourceNotFound
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow
-from backend.metadata.mirrors.service import read_published_scope
+from backend.metadata.mirrors.service import (
+    clear_mirror_stop_evidence,
+    read_published_scope,
+    record_mirror_stop_evidence,
+)
 from backend.metadata.sources.store import SourceRecord, get_source_store
 
 
@@ -90,6 +94,7 @@ def _command(state, source, operation_id):
 
 
 def _advance_intent(session, state, source, published_scope):
+    _retire_stop_evidence(session, state)
     state.update(control_revision=state["control_revision"] + 1,
                  credential_revision=source.capture_revision, stop_ack=None,
                  applied_revision=None, observed_at=None, published_scope=published_scope,
@@ -98,6 +103,11 @@ def _advance_intent(session, state, source, published_scope):
     save_binding(session, state)
     save_operation(session, command)
     return command
+
+
+def _retire_stop_evidence(session, state):
+    if state.get("stop_ack") is not None:
+        clear_mirror_stop_evidence(session, state["published_scope"], state["stop_ack"]["operation_id"])
 
 
 def reconcile_published_scope(source_id):
@@ -228,6 +238,7 @@ def allocate_owner(*, source_id, operation_id, signed_proof, signals):
         )
         save_operation(session, command)
         state.pop("pending_allocation")
+        _retire_stop_evidence(session, state)
         state.update(authority, applied_revision=None, observed_at=None, stop_ack=None,
                      allocation={**pending, "evidence": evidence})
         save_binding(session, state)
@@ -493,4 +504,8 @@ def record_applied_evidence(
         state["observed_at"] = evidence["observed_at"]
         state["stop_ack"] = evidence if command["kind"] == "stop" else None
         save_binding(session, state)
+        if (command["kind"] == "stop" and state["desired"] == "stopped"
+                and state["runtime_instance_id"] and state["owner_epoch"] > 0
+                and command["published_scope"] == read_published_scope(session, source_id)):
+            record_mirror_stop_evidence(session, command, evidence)
         return evidence

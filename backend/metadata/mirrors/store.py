@@ -9,10 +9,7 @@ from sqlalchemy import func, or_, select, text
 from backend.core.db import session_scope
 from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.models import CatalogObjectRow, SourceRow
-from backend.metadata.mirrors.models import (
-    MirrorIntentReceiptRow, MirrorOperationRow, MirrorPublicationRow,
-    MirrorReferenceRow, MirrorRow,
-)
+from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
 from backend.metadata.sources.store import get_source_store
 
 
@@ -20,33 +17,28 @@ class MemoryMirrorStore:
     def __init__(self):
         self.mirrors = {}
         self.operations = {}
-        self.references = {}
-        self.publications = {}
-        self.receipts = {}
         self.bindings = {}
         self.lock = RLock()
 
     @contextmanager
     def transaction(self):
         with get_source_store().capture_lock, self.lock:
-            before = deepcopy((self.mirrors, self.operations, self.references, self.publications, self.receipts))
+            before = deepcopy((self.mirrors, self.operations))
             try:
                 yield self
             except BaseException:
-                (self.mirrors, self.operations, self.references, self.publications, self.receipts) = before
+                (self.mirrors, self.operations) = before
                 raise
 
-    def lock_channel(self, session, channel_id):
+    def lock_registry(self, session):
         if session is not self:
             raise ValueError("Memory mirror calls require the caller's memory transaction")
 
     def lock_sources(self, session, source_ids):
-        self.lock_channel(session, None)
+        self.lock_registry(session)
 
     def scope_rows(self, session, source_id):
-        referenced = {mirror_id for _, mirror_id in self.references}
-        return [(row, row["id"] in referenced) for row in self.mirrors.values()
-                if row["source_id"] == source_id]
+        return [row for row in self.mirrors.values() if row["source_id"] == source_id]
 
     def binding(self, session, object_id):
         if object_id in self.bindings:
@@ -58,14 +50,12 @@ class MemoryMirrorStore:
     def preview_binding(self, session, object_id):
         return self.binding(session, object_id)
 
-    def preview_mirrors(self, session):
-        return self.list(session)
-
-    def list(self, session):
-        return deepcopy(list(self.mirrors.values()))
-
     def get(self, session, mirror_id):
         return deepcopy(self.mirrors.get(mirror_id))
+
+    def get_by_object(self, session, source_id, object_id):
+        return next((deepcopy(row) for row in self.mirrors.values()
+                     if row["source_id"] == source_id and row["table_identity"] == object_id), None)
 
     def page(self, session, *, source_id, status, q, limit, offset):
         needle = (q or "").casefold()
@@ -77,40 +67,11 @@ class MemoryMirrorStore:
         ), key=lambda row: (row["source_key"], row["qualified_table"], row["id"]))
         return deepcopy(rows[offset:offset + limit]), len(rows)
 
-    def reference_counts(self, session, mirror_ids):
-        counts = dict.fromkeys(mirror_ids, 0)
-        for _, mid in self.references:
-            if mid in counts:
-                counts[mid] += 1
-        return counts
-
     def save(self, session, state):
         old = self.mirrors.get(state["id"])
         if old and any(old[key] != state[key] for key in ("source_id", "table_identity", "object_id", "qualified_table")):
             raise ValueError("Immutable mirror binding")
         self.mirrors[state["id"]] = deepcopy(state)
-
-    def refs(self, session):
-        return deepcopy(self.references)
-
-    def version_mirrors(self, session, channel_id, version):
-        return {mid for (cid, mid), number in self.references.items() if cid == channel_id and version == number}
-
-    def replace_refs(self, session, channel_id, version, mirror_ids):
-        self.references = {key: value for key, value in self.references.items() if key[0] != channel_id}
-        self.references.update({(channel_id, mid): version for mid in mirror_ids})
-
-    def publication(self, session, channel_id):
-        return deepcopy(self.publications.get(channel_id))
-
-    def save_publication(self, session, channel_id, version, object_ids):
-        self.publications[channel_id] = {"channel_version": version, "object_ids": list(object_ids)}
-
-    def receipt(self, session, operation_id):
-        return deepcopy(self.receipts.get(operation_id))
-
-    def save_receipt(self, session, operation_id, request, result):
-        self.receipts[operation_id] = deepcopy({"request": request, "result": result})
 
     def ops(self, session, mirror_id):
         return deepcopy([op for op in self.operations.values() if op["mirror_id"] == mirror_id])
@@ -126,10 +87,7 @@ class MemoryMirrorStore:
 class SqlMirrorStore:
     transaction = staticmethod(session_scope)
 
-    def lock_channel(self, session, channel_id):
-        self._lock_registry(session)
-
-    def _lock_registry(self, session):
+    def lock_registry(self, session):
         if session.bind.dialect.name == "postgresql":
             session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": "mirror-management-registry"})
 
@@ -139,14 +97,9 @@ class SqlMirrorStore:
                             .order_by(SourceRow.id).with_for_update()).all()
 
     def scope_rows(self, session, source_id):
-        referenced = select(MirrorReferenceRow.mirror_id).where(
-            MirrorReferenceRow.mirror_id == MirrorRow.id
-        ).exists()
-        return session.execute(select(MirrorRow.state, referenced)
-                               .where(MirrorRow.source_id == source_id)).all()
+        return session.scalars(select(MirrorRow.state).where(MirrorRow.source_id == source_id)).all()
 
     def binding(self, session, object_id):
-        self._lock_registry(session)
         obj = session.get(CatalogObjectRow, object_id)
         if obj is None:
             return None
@@ -160,18 +113,13 @@ class SqlMirrorStore:
             source = session.get(SourceRow, obj.source_id, populate_existing=True) if obj else None
             return _binding(obj, source)
 
-    def preview_mirrors(self, session):
-        with session.no_autoflush:
-            return [deepcopy(row.state) for row in session.scalars(
-                select(MirrorRow).order_by(MirrorRow.id).execution_options(populate_existing=True)
-            )]
-
-    def list(self, session):
-        self._lock_registry(session)
-        return [deepcopy(row.state) for row in session.scalars(select(MirrorRow).order_by(MirrorRow.id).with_for_update().execution_options(populate_existing=True))]
-
     def get(self, session, mirror_id):
         return session.scalar(select(MirrorRow.state).where(MirrorRow.id == mirror_id))
+
+    def get_by_object(self, session, source_id, object_id):
+        return session.scalar(select(MirrorRow.state).where(
+            MirrorRow.source_id == source_id, MirrorRow.table_identity == object_id
+        ))
 
     def page(self, session, *, source_id, status, q, limit, offset):
         criteria = []
@@ -197,10 +145,6 @@ class SqlMirrorStore:
                                .limit(limit).offset(offset)).all()
         return rows, total
 
-    def reference_counts(self, session, mirror_ids):
-        mid = MirrorReferenceRow.mirror_id
-        return dict(session.execute(select(mid, func.count()).where(mid.in_(mirror_ids)).group_by(mid)).all())
-
     def save(self, session, state):
         row = session.get(MirrorRow, state["id"])
         if row is None:
@@ -210,36 +154,6 @@ class SqlMirrorStore:
                 raise ValueError("Immutable mirror binding")
             row.enabled = state["enabled"]
             row.state = deepcopy(state)
-        session.flush()
-
-    def refs(self, session):
-        return {(row.channel_id, row.mirror_id): row.channel_version for row in session.scalars(select(MirrorReferenceRow))}
-
-    def version_mirrors(self, session, channel_id, version):
-        return set(session.scalars(select(MirrorReferenceRow.mirror_id).where(
-            MirrorReferenceRow.channel_id == channel_id, MirrorReferenceRow.channel_version == version)))
-
-    def replace_refs(self, session, channel_id, version, mirror_ids):
-        for row in session.scalars(select(MirrorReferenceRow).where(MirrorReferenceRow.channel_id == channel_id)):
-            session.delete(row)
-        session.flush()
-        session.add_all([MirrorReferenceRow(channel_id=channel_id, mirror_id=mid, channel_version=version) for mid in mirror_ids])
-        session.flush()
-
-    def publication(self, session, channel_id):
-        row = session.get(MirrorPublicationRow, channel_id)
-        return {"channel_version": row.channel_version, "object_ids": row.object_ids} if row else None
-
-    def save_publication(self, session, channel_id, version, object_ids):
-        session.merge(MirrorPublicationRow(channel_id=channel_id, channel_version=version, object_ids=list(object_ids)))
-        session.flush()
-
-    def receipt(self, session, operation_id):
-        row = session.get(MirrorIntentReceiptRow, operation_id)
-        return {"request": row.request, "result": row.result} if row else None
-
-    def save_receipt(self, session, operation_id, request, result):
-        session.add(MirrorIntentReceiptRow(operation_id=operation_id, request=deepcopy(request), result=deepcopy(result)))
         session.flush()
 
     def ops(self, session, mirror_id):

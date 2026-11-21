@@ -83,8 +83,6 @@ from backend.metadata.mirrors.composition import compose_mirrors
 from backend.metadata.mirrors.history import History, bind_history
 from backend.metadata.mirrors.recovery import Recovery, bind_recovery
 from backend.core.db import get_session_factory
-from backend.metadata.mirrors.service import bind_source_read_authorizer
-from backend.metadata.mirrors.authorization import authorize_source_data
 from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
@@ -187,7 +185,6 @@ def _bootstrap_site(target_settings: Settings) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     bind_history(None)
     bind_recovery(None)
-    bind_source_read_authorizer(authorize_source_data)
     adapters = None
     try:
         adapters = compose_mirrors(settings)
@@ -211,7 +208,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         bind_history(None)
-        bind_source_read_authorizer(None)
         bind_recovery(None)
         if adapters is not None:
             adapters.close()

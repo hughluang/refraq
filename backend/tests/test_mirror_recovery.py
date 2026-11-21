@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.dialects.postgresql import JSONB
@@ -15,7 +16,7 @@ from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors import router
-from backend.metadata.mirrors.recovery import Recovery, RuntimeDispatchAdapter, bind_recovery, schema_resume_allowed, state_only_graph
+from backend.metadata.mirrors.recovery import Recovery, RuntimeDispatchAdapter, bind_recovery, schema_resume_allowed
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
 from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.service import CommittedOpenPublication, MirrorError
@@ -251,13 +252,10 @@ def test_unsafe_schema_is_blocked(change):
     assert schema_resume_allowed(dict(change=change, fingerprint_verified=True)) is False
 
 
-def test_closed_graph_classifier_rejects_mixed_and_unknown_nodes():
-    graph = dict(nodes=[dict(id="read", type="read.mirror"), dict(id="write", type="write.entity")],
-                 edges=[dict(source="read", target="write")])
-    assert state_only_graph(graph, qualify_node=lambda node: True) is True
-    assert state_only_graph(graph, qualify_node=lambda node: None) is False
-    graph["nodes"].append(dict(id="effect", type="action.http"))
-    assert state_only_graph(graph, qualify_node=lambda node: True) is False
+def test_recovery_request_rejects_withdrawn_channel_action():
+    with pytest.raises(ValidationError):
+        RecoveryRequest(action="reconcile_state", expected_history_epoch="epoch",
+                        channel_id="channel", channel_version=1, reason="Approved intervention")
 
 
 def test_router_calls_recovery_service_and_accepts_authoritative_epoch(recovery, monkeypatch):

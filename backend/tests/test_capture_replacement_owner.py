@@ -25,11 +25,12 @@ from backend.metadata.capture.runtime_adapters import ReadinessSignals
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked
 from backend.metadata.capture.store import load_binding, load_operation, save_binding
 from backend.metadata.capture.test_delivery import FakeConsumer, KEY, Message, SCHEMA, envelope
-from backend.metadata.capture.test_published_scope import SOURCE, management as management, publish
+from backend.metadata.capture.test_published_scope import SOURCE, management as management
 from backend.metadata.capture.test_runtime import CHECKS
 from backend.metadata.capture.test_start import token, verifier
 from backend.metadata.errors import SourceCaptureControlConflict
 from backend.metadata.mirrors import bootstrap
+from backend.metadata.mirrors import service
 from backend.metadata.mirrors.application import Application
 from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
@@ -165,17 +166,16 @@ def test_runtime_replacement_owner_consumes_committed_recovery(
         model.__table__.create(management_engine)
     monkeypatch.setattr(control, "persist_audit_event", persist_audit_event)
     multi_table = case in {"partial_loss", "multi_mirror_loss"}
+    order_id = service.enable_for_object("orders", actor_user_id="operator")["mirror"]["id"]
+    retained_id = service.enable_for_object("items", actor_user_id="operator")["mirror"]["id"]
+    if not multi_table:
+        service.set_enabled(retained_id, enabled=False, actor_user_id="operator")
     with transaction() as session:
-        opened = {entry["object_id"]: entry for entry in publish(session, "workflow", 1, ["orders", "items"])}
-        orders, items = opened["orders"], opened["items"]
-        publish(session, "workflow", 2, ["orders", "items"] if multi_table else ["orders"])
-        for entry in (orders, items):
-            mirror_id = entry["mirror_id"]
+        for mirror_id in (order_id, retained_id):
             row = session.get(MirrorRow, mirror_id)
             row.state = dict(row.state, published_generation_id=mirror_id + "-published", capture_generation="1")
             session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch="epoch", status="available",
                                        lower_commit_seq=0, lower_entry_seq=0))
-    order_id, retained_id = orders["mirror_id"], items["mirror_id"]
     profile = dict(database="db", topic_prefix="cap", tables=["public.orders", "public.items"] if multi_table else ["public.orders"])
     control.reconcile_published_scope(SOURCE)
     with transaction() as session:

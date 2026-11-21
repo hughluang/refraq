@@ -27,7 +27,7 @@ def test_alembic_discovers_every_mirror_owner_model():
     tree = ast.parse((ROOT / "backend/alembic/env.py").read_text())
     modules = {alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names}
     expected = {
-        "backend.metadata.mirrors.models": {"source_mirrors", "source_mirror_references", "source_mirror_operations", "source_mirror_publications", "source_mirror_intent_receipts"},
+        "backend.metadata.mirrors.models": {"source_mirrors", "source_mirror_operations"},
         "backend.metadata.mirrors.history_models": {"source_mirror_history_gates", "source_mirror_history_invalidations"},
         "backend.metadata.mirrors.recovery_store": {"source_mirror_recoveries"},
         "backend.admin.notifications.models": {"notification_channel", "notification_events"},
@@ -44,9 +44,10 @@ def test_migration_chain_and_checkpoint_legacy_backfill(monkeypatch):
     config = Config()
     config.set_main_option("script_location", str(ROOT / "backend/alembic"))
     script = ScriptDirectory.from_config(config)
-    assert len(script.get_heads()) == 1
-    revisions = list(script.walk_revisions("0092_job_delayed_recovery", "0100_mirror_references"))
+    assert script.get_heads() == ["0102_standalone_source_mirrors"]
+    revisions = list(script.walk_revisions("0092_job_delayed_recovery"))
     assert [revision.revision for revision in revisions] == [
+        "0102_standalone_source_mirrors", "0101_channel_pin_retention",
         "0100_mirror_references", "0099_channel_mirror_runs", "0098_mirror_checkpoints", "0097_mirror_recovery", "0096_mirror_history",
         "0095_mirror_management", "0094_foundation_notifications", "0093_source_capture_control",
         "0092_job_delayed_recovery",

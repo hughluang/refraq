@@ -93,13 +93,13 @@ class CatalogIndexOut(BaseModel):
     is_present: bool = True
 
 
-class CatalogSyncTable(BaseModel):
-    source_name: str
-    qualified_table: str
+class CatalogMirrorOut(BaseModel):
+    can_enable: bool
+    mirror_id: str | None
 
 
 class CatalogObjectOut(BaseModel):
-    sync_table: CatalogSyncTable | None = None
+    mirror: CatalogMirrorOut | None = None
     id: str
     locator_key: str
     source_id: str

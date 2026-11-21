@@ -19,88 +19,8 @@ def opened():
         qualified_table="public.orders",
         table_identity="o1",
     )
-    with store.transaction() as session:
-        result = service.ensure_open_intent(
-            session,
-            operation_id="op1",
-            channel_id="c1",
-            channel_version=1,
-            object_ids=["o1", "o1"],
-        )
-    yield store, result[0]["mirror_id"]
-    service.bind_management()
-
-
-def test_shared_open_is_transactional_and_reused(opened):
-    store, mid = opened
-    with store.transaction() as session:
-        second = service.ensure_open_intent(
-            session,
-            operation_id="op2",
-            channel_id="c2",
-            channel_version=1,
-            object_ids=["o1"],
-        )
-    assert second == [dict(source_id="s1", object_id="o1", mirror_id=mid)]
-    assert len(store.operations) == 1
-    assert store.receipts["op1"]["result"][0]["effect"] == "first_open"
-    assert store.receipts["op2"]["result"][0]["effect"] == "shared"
-    assert service.current_version_mirrors(channel_id="c2", version=1) == {mid}
-    assert service.current_version_mirrors(channel_id="c1", version=2) == set()
-    assert service.get_mirror(mid)["published_reference_count"] == 2
-    with pytest.raises(RuntimeError):
-        with store.transaction() as session:
-            service.reconcile_references(
-                session, channel_id="c1", channel_version=2, object_ids=[]
-            )
-            raise RuntimeError("caller rollback")
-    assert service.get_mirror(mid)["published_reference_count"] == 2
-    with store.transaction() as session:
-        service.reconcile_references(
-            session, channel_id="c1", channel_version=2, object_ids=[]
-        )
-    assert service.get_mirror(mid)["published_reference_count"] == 1
-
-
-def test_reopen_receipt_keeps_effect_on_replay(opened):
-    store, mid = opened
-    service.set_enabled(mid, enabled=False, actor_user_id="operator")
-    binding = service.resolve_object_binding("o1")
-    assert binding["effect"] == "reopen"
-    identity = dict(source_id="s1", object_id="o1", mirror_id=mid)
-    args = dict(operation_id="channel:c1:2", channel_id="c1", channel_version=2,
-                object_ids=["o1"], confirmed_mirrors_to_open=[identity])
-    with store.transaction() as session:
-        assert service.ensure_open_intent(session, **args) == [identity]
-    assert service.resolve_object_binding("o1")["effect"] == "shared"
-    with store.transaction() as session:
-        assert service.ensure_open_intent(session, **args) == [identity]
-    assert service.publication_effects(channel_id="c1", version=2) == {"o1": "reopen"}
-
-
-def test_legacy_publication_only_proves_confirmed_requests(opened):
-    store, mid = opened
-    identity = dict(source_id="s1", object_id="o1", mirror_id=mid)
-    shared = dict(source_id="s1", object_id="o2", mirror_id="m2")
-    with store.transaction() as session:
-        store.save_receipt(session, "channel:c1:1", {"confirmed_mirrors_to_open": [identity]}, [identity, shared])
-    assert service.publication_effects(channel_id="c1", version=1) == {"o1": "request"}
-
-
-def test_invalid_binding_does_not_partially_open():
-    store = MemoryMirrorStore()
-    service.bind_management(store=store)
-    with pytest.raises(AppError) as error:
-        with store.transaction() as session:
-            service.ensure_open_intent(
-                session,
-                operation_id="op",
-                channel_id="c",
-                channel_version=1,
-                object_ids=["missing"],
-            )
-    assert error.value.code == "MIRROR_NOT_FOUND"
-    assert not store.mirrors
+    result = service.enable_for_object("o1", actor_user_id="u")
+    yield store, result["mirror"]["id"]
     service.bind_management()
 
 
@@ -114,12 +34,6 @@ def test_control_and_deletion_are_fail_closed(opened):
         "open": "superseded",
         "disable": "pending",
     }
-    with pytest.raises(AppError, match="MIRROR_REFERENCED"):
-        service.delete_mirror(mid, actor_user_id="u")
-    with store.transaction() as session:
-        service.reconcile_references(
-            session, channel_id="c1", channel_version=2, object_ids=[]
-        )
     with pytest.raises(AppError, match="MIRROR_READ_UNAVAILABLE"):
         service.delete_mirror(mid, actor_user_id="u")
 
@@ -159,118 +73,6 @@ def test_recovery_requires_authoritative_binding(opened, monkeypatch):
         )
     assert service.get_mirror(mid)["history_epoch"] is None
     assert len(store.operations) == 1
-
-
-def test_stale_versions_and_changed_binding_reject(opened):
-    store, mid = opened
-    with store.transaction() as session:
-        service.reconcile_references(
-            session, channel_id="c1", channel_version=3, object_ids=[]
-        )
-    with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
-        with store.transaction() as session:
-            service.ensure_open_intent(
-                session,
-                operation_id="late",
-                channel_id="c1",
-                channel_version=2,
-                object_ids=["o1"],
-            )
-    store.bindings["o1"]["qualified_table"] = "other.orders"
-    with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
-        with store.transaction() as session:
-            service.ensure_open_intent(
-                session,
-                operation_id="changed",
-                channel_id="c2",
-                channel_version=1,
-                object_ids=["o1"],
-            )
-
-
-def test_sql_caller_transaction_rollback_without_service_connections():
-    from contextlib import contextmanager
-    from sqlalchemy import create_engine, Column, MetaData, String, Table
-    from sqlalchemy.orm import Session
-    from backend.metadata.mirrors.models import (
-        MirrorRow,
-        MirrorReferenceRow,
-        MirrorOperationRow,
-        MirrorPublicationRow,
-        MirrorIntentReceiptRow,
-    )
-    from backend.metadata.mirrors.store import SqlMirrorStore
-
-    engine = create_engine("sqlite://")
-    metadata = MetaData()
-    Table("sources", metadata, Column("id", String(64), primary_key=True))
-    metadata.create_all(engine)
-    tables = [
-        MirrorRow.__table__,
-        MirrorReferenceRow.__table__,
-        MirrorOperationRow.__table__,
-        MirrorPublicationRow.__table__,
-        MirrorIntentReceiptRow.__table__,
-        service.HistoryGateRow.__table__,
-    ]
-    for table in tables:
-        table.create(engine)
-
-    class Store(SqlMirrorStore):
-        @contextmanager
-        def transaction(self):
-            with Session(engine) as session, session.begin():
-                yield session
-
-        def binding(self, session, object_id):
-            return dict(
-                source_id="s1",
-                object_id="o1",
-                source_key="sales",
-                source_name="Sales",
-                qualified_table="public.orders",
-                table_identity="o1",
-            )
-
-    store = Store()
-    service.bind_management(store=store)
-    try:
-        with pytest.raises(RuntimeError):
-            with store.transaction() as session:
-                service.ensure_open_intent(
-                    session,
-                    operation_id="rollback",
-                    channel_id="c1",
-                    channel_version=1,
-                    object_ids=["o1"],
-                )
-                raise RuntimeError("caller rollback")
-        assert service.list_mirrors()["total"] == 0
-        with store.transaction() as session:
-            result = service.ensure_open_intent(
-                session,
-                operation_id="commit",
-                channel_id="c1",
-                channel_version=1,
-                object_ids=["o1"],
-            )
-        assert (
-            service.get_mirror(result[0]["mirror_id"])["published_reference_count"] == 1
-        )
-        with store.transaction() as session:
-            assert (
-                service.ensure_open_intent(
-                    session,
-                    operation_id="commit",
-                    channel_id="c1",
-                    channel_version=1,
-                    object_ids=["o1"],
-                )
-                == result
-            )
-    finally:
-        service.bind_management()
-        engine.dispose()
 
 
 def test_http_strict_management_projection(opened, monkeypatch):
@@ -450,26 +252,29 @@ def test_same_intent_keeps_revision_and_real_enable_creates_a_consumable_open(op
 
     disabled = service.set_enabled(mid, enabled=False, actor_user_id="u")
     assert service.set_enabled(mid, enabled=False, actor_user_id="u") == disabled
-    reopened = service.set_enabled(mid, enabled=True, actor_user_id="u")
-    assert service.set_enabled(mid, enabled=True, actor_user_id="u") == reopened
+    reopened = service.enable_for_object("o1", actor_user_id="u")
+    assert reopened["mirror"]["id"] == mid
+    assert service.enable_for_object("o1", actor_user_id="u") == reopened
     assert store.operations[original]["state"] == "superseded"
     assert store.operations[disabled["operation_id"]]["state"] == "superseded"
     pending = store.operations[reopened["operation_id"]]
     assert (pending["kind"], pending["state"], pending["control_revision"]) == ("open", "pending", 3)
 
 
-def test_history_only_publication_preserves_disabled_intent_and_refcounts(opened):
+
+def test_catalog_enable_reuses_operator_request_after_runtime_reallocates(opened):
+    from datetime import timedelta
+
     store, mid = opened
-    service.set_enabled(mid, enabled=False, actor_user_id="u")
+    original, = store.operations.values()
+    original["state"] = "superseded"
+    replacement = dict(original, id="runtime-open", state="pending",
+                       requested_at=(service.utc_now() + timedelta(seconds=1)).isoformat())
+    del replacement["operator_intent"]
     with store.transaction() as session:
-        result = service.ensure_open_intent(
-            session, operation_id="history", channel_id="c2", channel_version=1,
-            object_ids=[], existing_mirror_ids=[mid, mid], confirmed_mirrors_to_open=[])
-    assert result == []
-    assert service.get_mirror(mid)["enabled"] is False
-    assert service.get_mirror(mid)["published_reference_count"] == 2
-    assert {op["kind"] for op in store.operations.values()} == {"open", "disable"}
-    with pytest.raises(service.MirrorError, match="MIRROR_CONTROL_CONFLICT"):
-        with store.transaction() as session:
-            service.ensure_open_intent(session, operation_id="history", channel_id="c2", channel_version=1,
-                                       object_ids=[], confirmed_mirrors_to_open=[])
+        store.save_op(session, replacement)
+
+    repeated = service.enable_for_object("o1", actor_user_id="u")
+    assert repeated["operation_id"] == original["id"]
+    assert repeated["mirror"]["id"] == mid
+    assert len(repeated["mirror"]["operations"]) == 2

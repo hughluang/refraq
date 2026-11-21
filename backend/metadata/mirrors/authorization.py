@@ -5,14 +5,13 @@ from backend.admin.roles import effective_permissions
 from backend.admin.user_store import get_user_store
 from backend.metadata import source_access
 from backend.metadata.errors import SourceNotFound
-from backend.metadata.mirrors.store import MemoryMirrorStore
 from backend.metadata.mirrors.errors import MirrorError
 
 __all__ = ["authorize_source_data"]
 
 
 def authorize_source_data(*, execution_user_id: str, source_id: str | None, session=None) -> None:
-    if session is not None and not isinstance(session, MemoryMirrorStore):
+    if session is not None:
         try:
             source_access.authorize_source_read_on(
                 session=session, execution_user_id=execution_user_id, source_id=source_id,

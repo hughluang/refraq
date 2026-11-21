@@ -41,7 +41,7 @@ class Reads:
         return value
 
     def release_run_pins(self, *, run_id, terminal_proof):
-        # Trusted Channel adapter must prove terminal AND non-resumable, never TTL.
+        # Release requires proof that the reader is terminal and cannot resume.
         result = self.verify_terminal_proof(run_id=run_id, terminal_proof=terminal_proof)
         if result is not None:
             raise MirrorError("MIRROR_READ_UNAVAILABLE", 503)

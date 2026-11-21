@@ -48,44 +48,6 @@ def schema_resume_allowed(evidence):
         evidence.get(key) is True for key in ("mapping_qualified", "detection_verified", "backfill_verified"))
 
 
-def state_only_graph(graph, *, qualify_node):
-    """A closed structural allowlist plus current per-node semantic authorization."""
-    if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list) or not graph["nodes"]:
-        return False
-    nodes = graph["nodes"]
-    ids = [node.get("id") for node in nodes if isinstance(node, dict)]
-    if len(ids) != len(nodes) or any(not isinstance(key, str) or not key for key in ids) or len(set(ids)) != len(ids):
-        return False
-    writes = 0
-    for node in nodes:
-        kind = node.get("type")
-        if kind not in {"trigger.manual", "read.mirror", "write.entity"} or node.get("parent_id") is not None:
-            return False
-        if qualify_node(node) is not True:
-            return False
-        writes += kind == "write.entity"
-    edges = graph.get("edges")
-    if not isinstance(edges, list) or not writes:
-        return False
-    incoming = {key: 0 for key in ids}
-    outgoing = {key: [] for key in ids}
-    for edge in edges:
-        if not isinstance(edge, dict) or edge.get("source") not in incoming or edge.get("target") not in incoming:
-            return False
-        outgoing[edge["source"]].append(edge["target"])
-        incoming[edge["target"]] += 1
-    ready = [key for key, count in incoming.items() if count == 0]
-    visited = 0
-    while ready:
-        key = ready.pop()
-        visited += 1
-        for target in outgoing[key]:
-            incoming[target] -= 1
-            if incoming[target] == 0:
-                ready.append(target)
-    return visited == len(nodes)
-
-
 class RuntimeDispatchAdapter:
     """Bridge to a trusted runtime journal; acceptance is never completion evidence.
 
@@ -113,7 +75,7 @@ class RuntimeDispatchAdapter:
 
 class Recovery:
     def __init__(self, *, session_factory, history, runtime=None, clock=utc_now,
-                 retry_delays, audit=persist_audit_event, classifier=None, jitter=None, publication=None):
+                 retry_delays, audit=persist_audit_event, jitter=None, publication=None):
         if not retry_delays or any(type(delay) is not int or delay <= 0 for delay in retry_delays):
             raise ValueError("An approved bounded retry budget is required")
         self.session_factory = session_factory
@@ -122,7 +84,6 @@ class Recovery:
         self.clock = clock
         self.retry_delays = tuple(retry_delays)
         self.audit = audit
-        self.classifier = classifier
         self.publication = publication
         self.jitter = jitter or SystemRandom().uniform
 
@@ -142,18 +103,14 @@ class Recovery:
         return gate
 
     def request_recovery(self, mirror_id, *, action, expected_history_epoch, actor_user_id,
-                         actor_token_id=None, reason=None, channel_id=None, channel_version=None):
-        if action not in {"retry", "run_now", "postpone", "manual", "reconcile_state"} or not actor_user_id:
+                         actor_token_id=None, reason=None):
+        if action not in {"retry", "run_now", "postpone", "manual"} or not actor_user_id:
             raise MirrorError("REQUEST_INVALID", 422)
         if reason is not None and (not isinstance(reason, str) or len(reason) > 1000):
             raise MirrorError("REQUEST_INVALID", 422)
-        if action in {"run_now", "postpone", "manual", "reconcile_state"} and not (reason or "").strip():
-            raise MirrorError("REQUEST_INVALID", 422)
-        if (action == "reconcile_state" and (not channel_id or type(channel_version) is not int or channel_version < 1)) or (
-            action != "reconcile_state" and (channel_id is not None or channel_version is not None)):
+        if action in {"run_now", "postpone", "manual"} and not (reason or "").strip():
             raise MirrorError("REQUEST_INVALID", 422)
         request = dict(action=action, expected_history_epoch=str(expected_history_epoch), reason=reason,
-                       channel_id=channel_id, channel_version=channel_version,
                        actor_user_id=actor_user_id, actor_token_id=actor_token_id)
         identity = sha256(json.dumps(dict(request, mirror_id=mirror_id), sort_keys=True).encode()).hexdigest()
         with self.session_factory() as session, session.begin():
@@ -173,9 +130,6 @@ class Recovery:
                 if replacement_epoch and replacement_epoch != gate.history_epoch:
                     raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
                 return dict(operation_id=previous.operation_id, state="pending")
-            if action == "reconcile_state":
-                self._classify(session, mirror_id, request)
-
             operation_id = None
             active_rows = [row for row in rows if row.journal["state"] not in {"applied", "superseded"}]
             if active_rows:
@@ -185,7 +139,7 @@ class Recovery:
                 if journal.get("submission_uncertain") or state == "dispatched":
                     raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
                 replacement_epoch = journal.get("replacement_epoch")
-                if replacement_epoch and action != "reconcile_state":
+                if replacement_epoch:
                     if replacement_epoch != gate.history_epoch:
                         raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
                     identities = list(dict.fromkeys([*journal.get("request_identities", []), active.identity, identity]))
@@ -206,15 +160,6 @@ class Recovery:
                        resource_type="mirror", resource_id=mirror_id, action="mirror.recovery_request", result="success",
                        detail=dict(operation_id=operation_id, source_id=source.id, **request))
             return dict(operation_id=operation_id, state="pending")
-
-    def _classify(self, session, mirror_id, request):
-        if self.classifier is None:
-            raise MirrorError("MIRROR_RECOVERY_AUTHORIZATION_REQUIRED", 409)
-        scope = dict(mirror_id=mirror_id, channel_id=request["channel_id"], channel_version=request["channel_version"],
-                     history_epoch=request["expected_history_epoch"], actor_user_id=request["actor_user_id"])
-        graph = self.classifier.load_graph(session=session, **scope)
-        if not state_only_graph(graph, qualify_node=lambda node: self.classifier.qualify_node(session=session, node=node, **scope)):
-            raise MirrorError("MIRROR_RECOVERY_AUTHORIZATION_REQUIRED", 409)
 
     def get_operation(self, operation_id):
         with self.session_factory() as session:
@@ -399,10 +344,6 @@ class Recovery:
                 if not schema_resume_allowed(evidence.get("schema")):
                     journal.update(state="invalidated" if journal.get("replacement_epoch") else "blocked",
                                    fault_code="MIRROR_RECOVERY_AUTHORIZATION_REQUIRED")
-                elif request["action"] == "reconcile_state":
-                    self._classify(session, mirror.id, request)
-                    # Classification authorizes intent only. No workflow replay adapter is bound here.
-                    journal.update(state="blocked", fault_code="MIRROR_RECOVERY_AUTHORIZATION_REQUIRED")
                 elif journal["state"] == "invalidated":
                     # Only committed invalidation may reach replacement dispatch.
                     busy = any(other.operation_id != operation_id and (other.journal["state"] == "dispatched" or other.journal.get("submission_uncertain") is True)

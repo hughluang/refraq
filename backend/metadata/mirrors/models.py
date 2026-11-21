@@ -1,6 +1,6 @@
-"""Management-only mirror registry, references and durable command intent."""
+"""Management-only mirror registry and durable command intent."""
 
-from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.core.db import Base
@@ -17,33 +17,9 @@ class MirrorRow(Base):
     state: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
-class MirrorReferenceRow(Base):
-    __tablename__ = "source_mirror_references"
-
-    channel_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    mirror_id: Mapped[str] = mapped_column(String(64), ForeignKey("source_mirrors.id", ondelete="RESTRICT"), primary_key=True)
-    channel_version: Mapped[int] = mapped_column(Integer, nullable=False)
-
-
 class MirrorOperationRow(Base):
     __tablename__ = "source_mirror_operations"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     mirror_id: Mapped[str] = mapped_column(String(64), ForeignKey("source_mirrors.id", ondelete="CASCADE"), nullable=False, index=True)
     command: Mapped[dict] = mapped_column(JSON, nullable=False)
-
-
-class MirrorPublicationRow(Base):
-    __tablename__ = "source_mirror_publications"
-
-    channel_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    channel_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    object_ids: Mapped[list] = mapped_column(JSON, nullable=False)
-
-
-class MirrorIntentReceiptRow(Base):
-    __tablename__ = "source_mirror_intent_receipts"
-
-    operation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    request: Mapped[dict] = mapped_column(JSON, nullable=False)
-    result: Mapped[list] = mapped_column(JSON, nullable=False)

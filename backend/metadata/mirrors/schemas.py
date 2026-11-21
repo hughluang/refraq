@@ -13,6 +13,12 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class StopAcknowledgment(StrictModel):
+    operation_id: str
+    source_operation_id: str
+    observed_at: Instant
+
+
 class Control(StrictModel):
     control_revision: int
     credential_revision: int | None
@@ -20,7 +26,7 @@ class Control(StrictModel):
     runtime_instance_id: str | None
     applied_revision: int | None
     observed_at: Instant | None
-    stop_ack: None = None
+    stop_ack: StopAcknowledgment | None = None
 
 
 class Readiness(StrictModel):
@@ -82,7 +88,6 @@ class Mirror(StrictModel):
     profile: Profile
     readiness: list[Readiness]
     fault: None = None
-    published_reference_count: int
     operations: list[Operation]
 
 

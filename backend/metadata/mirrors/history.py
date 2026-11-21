@@ -1,4 +1,4 @@
-"""Authorized committed history and management-transaction settlement gates."""
+"""Authorized committed history and management invalidation gates."""
 
 import json
 from uuid import uuid4

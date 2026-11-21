@@ -6,8 +6,11 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
-from backend.metadata.mirrors.service import catalog_sync_table
-from backend.admin.deps import get_actor_token_id, require_permission
+from backend.metadata.mirrors.service import catalog_mirror, enable_for_object
+from backend.metadata.mirrors.schemas import PatchMirrorResponse
+from backend.admin.deps import get_actor_token_id, require_permission, resolve_user_permissions
+from backend.admin.role_store import get_role_store
+from backend.admin.permissions import permissions_include
 from backend.admin.errors import AuthForbidden
 from backend.admin.user_store import UserRecord
 from backend.core.admission import await_admitted
@@ -25,7 +28,7 @@ from backend.metadata.catalog import semantics as catalog_semantics
 from backend.metadata.catalog import service as catalog_reads
 from backend.metadata.catalog import views as catalog_views
 from backend.metadata.catalog.refs import require_column, require_join, resolve_object_ref
-from backend.metadata.catalog.store import require_object
+from backend.metadata.catalog.store import CatalogObjectRecord, require_object
 from backend.metadata.errors import (
     CatalogColumnNotFound,
     CatalogJoinNotFound,
@@ -84,10 +87,13 @@ def _require_listed_source(user_id: str, source_id: str, permission: str) -> Non
         raise SourceNotFound()
 
 
-def _require_object_permission(user_id: str, object_ref: str, permission: str) -> None:
+def _require_object_permission(
+    user_id: str, object_ref: str, permission: str,
+) -> CatalogObjectRecord:
     record = resolve_object_ref(object_ref)
     if not allows(user_id, record.source_id, permission):
         raise CatalogObjectNotFound()
+    return record
 
 
 def _column_source_id(column_id: str) -> str:
@@ -124,16 +130,22 @@ def _column_out(view: catalog_views.ColumnView) -> CatalogColumnOut:
 
 
 def _object_out(
-    view: catalog_views.ObjectView, *, detail_for: str | None = None
+    view: catalog_views.ObjectView, *, detail_for: UserRecord | None = None
 ) -> CatalogObjectOut:
     if detail_for is None:
         return CatalogObjectOut.model_validate(present_object(view, profile=ObjectPresentProfile.HTTP_SUMMARY))
     payload = present_object(view, profile=ObjectPresentProfile.HTTP_DETAIL)
     try:
-        payload["sync_table"] = catalog_sync_table(view.id, user_id=detail_for)
+        can_read_catalog = allows(detail_for.id, view.source_id, "metadata:read")
     except AuthForbidden:
-        # A semantics writer can save without a catalog read grant.
-        payload["sync_table"] = None
+        can_read_catalog = False
+    if can_read_catalog:
+        permissions = resolve_user_permissions(detail_for, get_role_store())
+        payload["mirror"] = catalog_mirror(
+            view.id, source_id=view.source_id,
+            can_read=permissions_include(permissions, "mirror:read"),
+            can_write=permissions_include(permissions, "mirror:write"),
+        )
     return CatalogObjectOut.model_validate(payload)
 
 
@@ -197,7 +209,6 @@ async def search_objects(
     q: str | None = None,
     source_id: str | None = None,
     object_type: str | None = None,
-    mirror_eligible: bool = False,
     page: PageParams = Depends(page_params(CATALOG_SEARCH)),
     user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectSearchResponse:
@@ -207,13 +218,12 @@ async def search_objects(
             visible_source_ids=catalog_reads.search_visible_source_ids(user.id),
             source_id=source_id,
             object_type=object_type,
-            mirror_eligible=mirror_eligible,
             limit=page.limit,
             offset=page.offset,
         )
 
     found = (
-        await await_admitted(user.id, _run) if embedding_configured() and not mirror_eligible else _run()
+        await await_admitted(user.id, _run) if embedding_configured() else _run()
     )
     return CatalogObjectSearchResponse(
         items=[_object_out(o) for o in found.items],
@@ -257,8 +267,25 @@ def get_object(
     object_id: str,
     user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectResponse:
-    _require_object_permission(user.id, object_id, "metadata:read")
-    return CatalogObjectResponse(object=_object_out(catalog_reads.get_object(object_id), detail_for=user.id))
+    record = _require_object_permission(user.id, object_id, "metadata:read")
+    return CatalogObjectResponse(object=_object_out(catalog_reads.get_object(record.id), detail_for=user))
+
+
+@router.post(
+    "/objects/{object_id}/mirror",
+    response_model=PatchMirrorResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def enable_object_mirror(
+    object_id: str,
+    request: Request,
+    user: UserRecord = Depends(require_permission("mirror:write")),
+):
+    record = _require_object_permission(user.id, object_id, "metadata:read")
+    return enable_for_object(
+        record.id, actor_user_id=user.id, actor_token_id=get_actor_token_id(request),
+    )
+
 
 @router.get("/objects/{object_id}/ddl", response_model=CatalogDdlResponse)
 def get_object_ddl(
@@ -362,7 +389,7 @@ def patch_object_semantics(
     return CatalogObjectResponse(
         object=_object_out(
             catalog_views.object_view(record, include_columns=True),
-            detail_for=user.id,
+            detail_for=user,
         )
     )
 
@@ -403,7 +430,7 @@ def patch_columns_semantics_batch(
         semantic_source="user_input",
     )
     return CatalogColumnsSemanticsBatchResponse(
-        object=_object_out(catalog_reads.get_object(object_id), detail_for=user.id),
+        object=_object_out(catalog_reads.get_object(object_id), detail_for=user),
         updated_count=result["updated_count"],
         requested_count=result["requested_count"],
         skipped_columns=result["skipped_columns"],

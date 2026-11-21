@@ -24,16 +24,8 @@ from backend.metadata.mirrors.types import Authority, PartitionIdentity
 from backend.metadata.models import SourceRow
 
 __all__ = [
-    "catalog_sync_table",
-    "resolve_object_binding",
-    "resolve_existing_mirror_binding",
-    "resolve_object_bindings",
-    "authorize_object_reads",
-    "bind_source_read_authorizer",
-    "ensure_open_intent",
-    "publication_effects",
-    "current_version_mirrors",
-    "reconcile_references",
+    "catalog_mirror",
+    "enable_for_object",
     "OpenGenerationBinding",
     "reconcile_open_generation",
     "OpenPublicationIdentity",
@@ -65,104 +57,20 @@ class TargetLifecycle(Protocol):
 
 _store = None
 _target = None
-_source_read_authorizer = None
 
 
-def bind_source_read_authorizer(authorizer=None):
-    """Bind current-grant validation accepting the caller's management session."""
-    global _source_read_authorizer
-    if authorizer is not None and not callable(authorizer):
-        raise TypeError("Source read authorizer must be callable")
-    _source_read_authorizer = authorizer
-
-
-def catalog_sync_table(object_id, *, user_id):
-    """Present a supported table under the current catalog Source grant."""
-    from backend.metadata.source_access import allows
-
+def catalog_mirror(object_id, *, source_id, can_read, can_write):
+    """Project the eligible Catalog action and the caller-visible registry link."""
     store = _storage()
     with store.transaction() as session:
         binding = store.preview_binding(session, object_id)
-    if binding is None or not allows(user_id, binding["source_id"], "metadata:read"):
-        return None
-    return {"source_name": binding["source_name"], "qualified_table": binding["qualified_table"]}
-
-
-def _open_effect(mirror):
-    if mirror is None:
-        return "first_open"
-    return "shared" if mirror["enabled"] else "reopen"
-
-
-def resolve_object_bindings(*, object_ids, session=None):
-    """Preview supported bindings without reservations, locks or capture intent."""
-    store = _storage()
-    if session is None:
-        with store.transaction() as owned:
-            return resolve_object_bindings(object_ids=object_ids, session=owned)
-    mirrors = store.preview_mirrors(session)
-    result = []
-    for object_id in sorted(set(object_ids)):
-        binding = store.preview_binding(session, object_id)
-        if binding is None:
-            _error("MIRROR_NOT_FOUND", 404)
-        mirror = next((row for row in mirrors if
-                       (row["source_id"], row["table_identity"]) ==
-                       (binding["source_id"], binding["table_identity"])), None)
-        if mirror is not None and any(mirror[key] != binding[key] for key in
-                                     ("source_id", "object_id", "qualified_table", "table_identity")):
-            _error("MIRROR_CONTROL_CONFLICT")
-        mid = mirror["id"] if mirror is not None else _mirror_id(binding)
-        effect = _open_effect(mirror)
-        result.append(dict(binding, id=mid, mirror_id=mid, enabled=effect == "shared",
-                           needs_open=effect != "shared",
-                           copy_published=bool(mirror and mirror.get("published_generation_id")),
-                           effect=effect,
-                           status=mirror["status"] if mirror is not None else "waiting"))
-    return deepcopy(result)
-
-
-def resolve_object_binding(object_id, *, session=None):
-    return resolve_object_bindings(object_ids=[object_id], session=session)[0]
-
-
-def resolve_existing_mirror_binding(mirror_id):
-    """Verify the registry identity against the current catalog binding."""
-    with _storage().transaction() as session:
-        mirror = _find(session, mirror_id)
-        binding = resolve_object_binding(mirror["object_id"], session=session)
-        if binding["mirror_id"] != mirror_id:
-            _error("MIRROR_CONTROL_CONFLICT")
-        return binding
-
-
-def authorize_object_reads(*, object_ids, execution_user_id, mirror_ids=(), session=None):
-    """Resolve and authorize using one caller session; never open a nested session."""
-    if _source_read_authorizer is None:
-        _error("MIRROR_READ_UNAVAILABLE", 503)
-    if session is None:
-        with _storage().transaction() as owned:
-            return authorize_object_reads(
-                object_ids=object_ids, mirror_ids=mirror_ids,
-                execution_user_id=execution_user_id, session=owned,
-            )
-    try:
-        bindings = resolve_object_bindings(object_ids=object_ids, session=session)
-        for mirror_id in sorted(set(mirror_ids)):
-            mirror = _find(session, mirror_id)
-            bindings.append({key: mirror[key] for key in
-                             ("id", "source_id", "object_id", "table_identity", "qualified_table")})
-    except MirrorError as exc:
-        if exc.code == "MIRROR_NOT_FOUND":
-            _source_read_authorizer(session=session, execution_user_id=execution_user_id, source_id=None)
-        raise
-    for source_id in sorted({binding["source_id"] for binding in bindings}):
-        outcome = _source_read_authorizer(
-            session=session, execution_user_id=execution_user_id, source_id=source_id,
-        )
-        if outcome is not None:
-            _error("AUTH_FORBIDDEN", 403)
-    return bindings
+        mirror = store.get_by_object(session, source_id, object_id)
+        eligible = binding is not None and binding["source_id"] == source_id
+        mirror_id = mirror["id"] if mirror and can_read else None
+        if not eligible and mirror_id is None:
+            return None
+        can_enable = bool(can_write and eligible and (mirror is None or not mirror["enabled"]))
+        return dict(can_enable=can_enable, mirror_id=mirror_id)
 
 
 def bind_management(*, store=None, target=None):
@@ -199,7 +107,7 @@ def _find(session, mirror_id):
 
 def _lock_mirror_source(session, mirror_id):
     store = _storage()
-    store.lock_channel(session, None)
+    store.lock_registry(session)
     mirror = _find(session, mirror_id)
     store.lock_sources(session, {mirror["source_id"]})
     return _find(session, mirror_id)
@@ -211,8 +119,8 @@ def read_published_scope(session, source_id):
         dict(mirror_id=mirror["id"], qualified_table=mirror["qualified_table"],
              table_identity=mirror["table_identity"],
              mirror_revision=mirror["control"]["control_revision"],
-             included=mirror["enabled"] and referenced)
-        for mirror, referenced in _storage().scope_rows(session, source_id)
+             included=mirror["enabled"])
+        for mirror in _storage().scope_rows(session, source_id)
     ), key=lambda table: (table["qualified_table"], table["mirror_id"]))
 
 
@@ -283,165 +191,28 @@ def _operation(session, mirror, kind, operation_id, **extra):
     store.save_op(session, op)
 
 
-def _resolve(session, object_ids):
+def enable_for_object(object_id, *, actor_user_id, actor_token_id=None):
+    """Persist the explicit intent for a caller-authorized, canonical Catalog object."""
     store = _storage()
-    bindings = []
-    for object_id in sorted(set(object_ids)):
+    with store.transaction() as session:
+        store.lock_registry(session)
         binding = store.binding(session, object_id)
         if binding is None:
             _error("MIRROR_NOT_FOUND", 404)
-        bindings.append(binding)
-    return bindings
+        mirror = store.get_by_object(session, binding["source_id"], binding["object_id"])
+        if mirror is not None:
+            if any(mirror[key] != binding[key] for key in (
+                "source_id", "object_id", "qualified_table", "table_identity",
+            )):
+                _error("MIRROR_CONTROL_CONFLICT")
+            return _apply_enabled(session, mirror, True, actor_user_id, actor_token_id)
 
-
-def _check_version(session, channel_id, version, object_ids):
-    old = _storage().publication(session, channel_id)
-    if old and (
-        old["channel_version"] > version
-        or (old["channel_version"] == version and old["object_ids"] != list(object_ids))
-    ):
-        _error("MIRROR_CONTROL_CONFLICT")
-
-
-def _lock_withdrawn_sources(session, channel_id):
-    store = _storage()
-    previous_ids = {mirror_id for cid, mirror_id in store.refs(session) if cid == channel_id}
-    if previous_ids:
-        store.lock_sources(session, {
-            mirror["source_id"] for mirror in store.preview_mirrors(session)
-            if mirror["id"] in previous_ids
-        })
-
-
-def current_version_mirrors(*, channel_id, version):
-    """Return only current references owned by the specified Channel version."""
-    with _storage().transaction() as session:
-        return _storage().version_mirrors(session, channel_id, version)
-
-
-def publication_effects(*, channel_id, version):
-    """Read effects recorded with publication. Legacy open tuples only prove a request."""
-    with _storage().transaction() as session:
-        receipt = _storage().receipt(session, f"channel:{channel_id}:{version}")
-        if receipt is None:
-            return {}
-        requested = {item["object_id"] for item in receipt["request"].get("confirmed_mirrors_to_open", [])}
-        effects = {}
-        for item in receipt["result"]:
-            if "effect" in item:
-                effects[item["object_id"]] = item["effect"]
-            elif item["object_id"] in requested:
-                effects[item["object_id"]] = "request"
-        return effects
-
-
-def _open_tuples(items):
-    return [{key: item[key] for key in ("source_id", "object_id", "mirror_id")} for item in items]
-
-
-def ensure_open_intent(
-    session, *, operation_id, channel_id, channel_version, object_ids,
-    confirmed_mirrors_to_open=None, existing_mirror_ids=(),
-):
-    store = _storage()
-    store.lock_channel(session, channel_id)
-    ids = sorted(set(object_ids))
-    request = dict(
-        channel_id=channel_id, channel_version=channel_version, object_ids=ids
-    )
-    existing_ids = sorted(set(existing_mirror_ids))
-    if existing_ids:
-        request["existing_mirror_ids"] = existing_ids
-    if confirmed_mirrors_to_open is not None:
-        request["confirmed_mirrors_to_open"] = sorted(
-            confirmed_mirrors_to_open, key=lambda item: item["object_id"],
-        )
-    receipt = store.receipt(session, operation_id)
-    if receipt:
-        if receipt["request"] != request:
-            _error("MIRROR_CONTROL_CONFLICT")
-        return _open_tuples(receipt["result"])
-    existing = [_find(session, mid) for mid in existing_ids]
-    referenced_objects = sorted(set(ids) | {row["object_id"] for row in existing})
-    _check_version(session, channel_id, channel_version, referenced_objects)
-    _lock_withdrawn_sources(session, channel_id)
-    store.lock_sources(session, {row["source_id"] for row in existing})
-    bindings = _resolve(session, ids)
-    mirrors = store.list(session)
-    if confirmed_mirrors_to_open is not None:
-        expected = [
-            {key: binding[key] for key in ("source_id", "object_id", "mirror_id")}
-            for binding in resolve_object_bindings(object_ids=ids, session=session)
-            if binding["needs_open"]
-        ]
-        if request["confirmed_mirrors_to_open"] != expected:
-            _error("MIRROR_CONTROL_CONFLICT")
-    result = []
-    selected = []
-    for binding in bindings:
-        mirror = next(
-            (
-                m
-                for m in mirrors
-                if (m["source_id"], m["table_identity"])
-                == (binding["source_id"], binding["table_identity"])
-            ),
-            None,
-        )
-        effect = _open_effect(mirror)
-        if mirror is None:
-            mirror = _new(binding)
-            store.save(session, mirror)
-            _operation(session, mirror, "open", _id())
-        elif any(
-            mirror[key] != binding[key]
-            for key in ("source_id", "object_id", "qualified_table", "table_identity")
-        ):
-            _error("MIRROR_CONTROL_CONFLICT")
-        elif not mirror["enabled"]:
-            _change_enabled(session, mirror, True)
-        selected.append(mirror["id"])
-        result.append(
-            dict(
-                source_id=mirror["source_id"],
-                object_id=binding["object_id"],
-                mirror_id=mirror["id"],
-                effect=effect,
-            )
-        )
-    store.replace_refs(session, channel_id, channel_version, sorted(set(selected) | set(existing_ids)))
-    store.save_publication(session, channel_id, channel_version, referenced_objects)
-    store.save_receipt(session, operation_id, request, result)
-    return _open_tuples(result)
-
-
-def reconcile_references(session, *, channel_id, channel_version, object_ids):
-    store = _storage()
-    store.lock_channel(session, channel_id)
-    ids = sorted(set(object_ids))
-    _check_version(session, channel_id, channel_version, ids)
-    _lock_withdrawn_sources(session, channel_id)
-    bindings = _resolve(session, ids)
-    mirrors = store.list(session)
-    selected = []
-    for binding in bindings:
-        mirror = next(
-            (
-                m
-                for m in mirrors
-                if m["source_id"] == binding["source_id"]
-                and m["table_identity"] == binding["table_identity"]
-            ),
-            None,
-        )
-        if mirror is None or any(
-            mirror[key] != binding[key]
-            for key in ("source_id", "object_id", "qualified_table", "table_identity")
-        ):
-            _error("MIRROR_CONTROL_CONFLICT")
-        selected.append(mirror["id"])
-    store.replace_refs(session, channel_id, channel_version, selected)
-    store.save_publication(session, channel_id, channel_version, ids)
+        mirror = _new(binding)
+        store.save(session, mirror)
+        operation_id = _id()
+        _operation(session, mirror, "open", operation_id, operator_intent=True)
+        _audit(session, mirror, "enable", operation_id, actor_user_id, actor_token_id, enabled=True)
+        return dict(mirror=_present(session, mirror), operation_id=operation_id)
 
 
 @dataclass(frozen=True)
@@ -487,7 +258,7 @@ def current_open_preparations(*, authority: Authority, published_scope, observe_
     store = _storage()
     source_id = authority.source_id
     with store.transaction() as session:
-        store.lock_channel(session, None)
+        store.lock_registry(session)
         store.lock_sources(session, {source_id})
         state = load_binding(None if isinstance(store, MemoryMirrorStore) else session, source_id)
         scope = read_published_scope(session, source_id)
@@ -1013,6 +784,68 @@ def reconcile_open_publication(
         return "applied"
 
 
+def record_mirror_stop_evidence(session, command, evidence):
+    """Project an accepted Source stop onto its exact excluded Mirror revisions."""
+    store = _storage()
+    if session is None:
+        with store.transaction() as memory_session:
+            record_mirror_stop_evidence(memory_session, command, evidence)
+        return
+    for entry in command["published_scope"]:
+        if entry["included"]:
+            continue
+        mirror = store.get(session, entry["mirror_id"])
+        if (mirror is None or mirror["enabled"] or mirror["status"] != "disable_pending"
+                or mirror["source_id"] != command["source_id"]
+                or mirror["control"]["control_revision"] != entry["mirror_revision"]
+                or any(mirror[key] != entry[key] for key in ("table_identity", "qualified_table"))):
+            continue
+        for operation in store.ops(session, mirror["id"]):
+            if (operation["kind"] != "disable" or operation["state"] != "pending"
+                    or operation["control_revision"] != entry["mirror_revision"]
+                    or datetime.fromisoformat(operation["requested_at"]) > datetime.fromisoformat(command["requested_at"])):
+                continue
+            mirror["control"].update(
+                credential_revision=command["credential_revision"],
+                owner_epoch=command["owner_epoch"],
+                runtime_instance_id=command["runtime_instance_id"],
+                applied_revision=entry["mirror_revision"],
+                observed_at=evidence["observed_at"],
+                stop_ack=dict(operation_id=operation["id"], source_operation_id=command["operation_id"],
+                              observed_at=evidence["observed_at"]),
+            )
+            mirror["status"] = "disabled"
+            store.save(session, mirror)
+            store.save_op(session, dict(operation, state="applied", observed_evidence_refs=[command["operation_id"]]))
+
+
+def clear_mirror_stop_evidence(session, published_scope, source_operation_id):
+    """Retire projections when the acknowledged Source authority is superseded."""
+    store = _storage()
+    if session is None:
+        with store.transaction() as memory_session:
+            clear_mirror_stop_evidence(memory_session, published_scope, source_operation_id)
+        return
+    for entry in published_scope:
+        mirror = store.get(session, entry["mirror_id"])
+        if mirror is None:
+            continue
+        acknowledgment = mirror["control"].get("stop_ack")
+        if acknowledgment is None or acknowledgment["source_operation_id"] != source_operation_id:
+            continue
+        _clear_stop_control(mirror["control"])
+        mirror["status"] = "disable_pending"
+        store.save(session, mirror)
+        for operation in store.ops(session, mirror["id"]):
+            if operation["id"] == acknowledgment["operation_id"]:
+                store.save_op(session, dict(operation, state="pending", observed_evidence_refs=[]))
+
+
+def _clear_stop_control(control):
+    control.update(credential_revision=None, owner_epoch=None, runtime_instance_id=None,
+                   applied_revision=None, observed_at=None, stop_ack=None)
+
+
 def _snapshot_progress(session, mirror, operations):
     revision = mirror["control"]["control_revision"]
     for op in operations:
@@ -1052,15 +885,12 @@ def _snapshot_progress(session, mirror, operations):
     return None
 
 
-def _present(session, mirror, reference_count=None):
+def _present(session, mirror):
     result = deepcopy(mirror)
     gate = None if isinstance(session, MemoryMirrorStore) else session.get(HistoryGateRow, mirror["id"])
     result["history_epoch"] = gate.history_epoch if gate is not None else None
     if gate is None or gate.status != "available" or gate.history_epoch != mirror.get("history_epoch"):
         result["retained_lower_bound"] = result["committed_upper_bound"] = None
-    if reference_count is None:
-        reference_count = _storage().reference_counts(session, [mirror["id"]]).get(mirror["id"], 0)
-    result["published_reference_count"] = reference_count
     operations = _storage().ops(session, mirror["id"])
     result["progress"] = _snapshot_progress(session, mirror, operations)
     result["operations"] = sorted(
@@ -1079,8 +909,7 @@ def list_mirrors(*, limit=100, offset=0, source_id=None, status=None, q=None):
     store = _storage()
     with store.transaction() as session:
         rows, total = store.page(session, source_id=source_id, status=status, q=q, limit=limit, offset=offset)
-        counts = store.reference_counts(session, [row["id"] for row in rows]) if rows else {}
-        return dict(items=[_present(session, row, counts.get(row["id"], 0)) for row in rows],
+        return dict(items=[_present(session, row) for row in rows],
                     total=total, limit=limit, offset=offset)
 
 
@@ -1101,11 +930,12 @@ def _audit(
 
 def _change_enabled(session, mirror, enabled):
     mirror["enabled"] = enabled
+    _clear_stop_control(mirror["control"])
     mirror["control"]["control_revision"] += 1
     mirror["status"] = "unknown" if enabled else "disable_pending"
     _storage().save(session, mirror)
     operation_id = _id()
-    _operation(session, mirror, "open" if enabled else "disable", operation_id)
+    _operation(session, mirror, "open" if enabled else "disable", operation_id, operator_intent=True)
     return operation_id
 
 
@@ -1113,34 +943,38 @@ def set_enabled(mirror_id, *, enabled, actor_user_id, actor_token_id=None):
     store = _storage()
     with store.transaction() as session:
         mirror = _lock_mirror_source(session, mirror_id)
-        if mirror["enabled"] == enabled:
-            kinds = {"open", "enable"} if enabled else {"disable"}
-            current = [op for op in store.ops(session, mirror_id) if op["kind"] in kinds
-                       and op["control_revision"] == mirror["control"]["control_revision"]
-                       and op["state"] in {"pending", "applied"}]
-            if not current:
-                _error("MIRROR_CONTROL_CONFLICT")
-            operation = max(current, key=lambda op: (op["requested_at"], op["id"]))
-            return dict(mirror=_present(session, mirror), operation_id=operation["id"])
-        operation_id = _change_enabled(session, mirror, enabled)
-        _audit(
-            session,
-            mirror,
-            "enable" if enabled else "disable",
-            operation_id,
-            actor_user_id,
-            actor_token_id,
-            enabled=enabled,
-        )
-        return dict(mirror=_present(session, mirror), operation_id=operation_id)
+        return _apply_enabled(session, mirror, enabled, actor_user_id, actor_token_id)
+
+
+def _apply_enabled(session, mirror, enabled, actor_user_id, actor_token_id):
+    store = _storage()
+    mirror_id = mirror["id"]
+    if mirror["enabled"] == enabled:
+        kinds = {"open", "enable"} if enabled else {"disable"}
+        current = [op for op in store.ops(session, mirror_id) if op["kind"] in kinds
+                   and op["control_revision"] == mirror["control"]["control_revision"]
+                   and (op.get("operator_intent") or op["state"] in {"pending", "applied"})]
+        if not current:
+            _error("MIRROR_CONTROL_CONFLICT")
+        operation = max(current, key=lambda op: (bool(op.get("operator_intent")), op["requested_at"], op["id"]))
+        return dict(mirror=_present(session, mirror), operation_id=operation["id"])
+    operation_id = _change_enabled(session, mirror, enabled)
+    _audit(
+        session,
+        mirror,
+        "enable" if enabled else "disable",
+        operation_id,
+        actor_user_id,
+        actor_token_id,
+        enabled=enabled,
+    )
+    return dict(mirror=_present(session, mirror), operation_id=operation_id)
 
 
 def delete_mirror(mirror_id, *, actor_user_id, actor_token_id=None):
     store = _storage()
     with store.transaction() as session:
         mirror = _lock_mirror_source(session, mirror_id)
-        if any(mid == mirror_id for _, mid in store.refs(session)):
-            _error("MIRROR_REFERENCED")
         if mirror["enabled"]:
             _error("MIRROR_IN_USE")
         if _target is None:

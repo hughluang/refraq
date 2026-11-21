@@ -65,8 +65,6 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "metadata.errors",
             "metadata.source_access",
             "metadata.mirrors.service",
-            "metadata.mirrors.reads",
-            "metadata.mirrors.authorization",
             "metadata.mirrors.history",
             "metadata.source_jobs",
             "metadata.catalog_embed_jobs",

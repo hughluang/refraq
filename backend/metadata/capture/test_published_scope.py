@@ -23,9 +23,7 @@ from backend.metadata.capture.store import save_binding
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
 from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, allocation_observation, observation
 from backend.metadata.mirrors import service
-from backend.metadata.mirrors.models import (
-    MirrorIntentReceiptRow, MirrorOperationRow, MirrorPublicationRow, MirrorReferenceRow, MirrorRow,
-)
+from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
 from backend.metadata.mirrors.store import SqlMirrorStore
 from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, SourceRow
 from backend.metadata.sources.store import SourceRecord, get_source_store, reset_source_store
@@ -63,8 +61,7 @@ def management(monkeypatch, request, management_engine):
     request.addfinalizer(reset_source_store)
     engine = management_engine
     for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, MirrorRow,
-                  MirrorReferenceRow, MirrorOperationRow, MirrorPublicationRow, MirrorIntentReceiptRow,
-                  service.HistoryGateRow):
+                  MirrorOperationRow, service.HistoryGateRow):
         model.__table__.create(engine)
     factory = sessionmaker(engine)
 
@@ -103,23 +100,8 @@ def management(monkeypatch, request, management_engine):
     yield transaction, source
 
 
-def publish(session, channel, version, objects, *, confirmed=None):
-    if confirmed is None:
-        confirmed = [
-            {key: binding[key] for key in ("source_id", "object_id", "mirror_id")}
-            for binding in service.resolve_object_bindings(object_ids=objects, session=session)
-            if binding["needs_open"]
-        ]
-    return service.ensure_open_intent(
-        session, operation_id=f"{channel}:{version}", channel_id=channel,
-        channel_version=version, object_ids=objects, confirmed_mirrors_to_open=confirmed,
-    )
-
-
-def test_committed_confirmed_open_becomes_current_capture_command(management, tmp_path):
-    transaction, _ = management
-    with transaction() as session:
-        orders, = publish(session, "workflow", 1, ["orders"])
+def test_explicit_open_becomes_current_capture_command(management, tmp_path):
+    orders = service.enable_for_object("orders", actor_user_id="operator")["mirror"]
     journal = CommandJournal(tmp_path)
     runtime = CaptureRuntime(journal=journal, connect=None, signals=None)
     try:
@@ -129,10 +111,10 @@ def test_committed_confirmed_open_becomes_current_capture_command(management, tm
         assert command["kind"] == "reconcile"
         assert command["control_revision"] == 2
         assert command["published_scope"] == [{
-            "mirror_id": orders["mirror_id"], "table_identity": "orders",
+            "mirror_id": orders["id"], "table_identity": "orders",
             "qualified_table": "public.orders", "mirror_revision": 1, "included": True,
         }]
-        mirror = service.get_mirror(orders["mirror_id"])
+        mirror = service.get_mirror(orders["id"])
         assert mirror["operations"][0]["state"] == "pending"
         assert mirror["published_generation_id"] is None
     finally:
@@ -142,17 +124,16 @@ def test_committed_confirmed_open_becomes_current_capture_command(management, tm
 @pytest.mark.parametrize("case", ["partial_scope", "superseded_revision"])
 def test_applied_open_preparation_requires_current_complete_scope(management, monkeypatch, case):
     transaction, _ = management
-    objects = ["items", "orders"] if case == "partial_scope" else ["items"]
+    mirror_id = service.enable_for_object("items", actor_user_id="operator")["mirror"]["id"]
+    if case == "partial_scope":
+        service.enable_for_object("orders", actor_user_id="operator")
     with transaction() as session:
-        items, *_ = publish(session, "workflow", 1, objects)
-        mirror_id = items["mirror_id"]
         store = service._storage()
         operation, = store.ops(session, mirror_id)
         store.save_op(session, dict(operation, state="applied", publication_receipt={"recorded": True}))
     if case == "superseded_revision":
         service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")
-        with transaction() as session:
-            publish(session, "workflow", 2, objects)
+        service.enable_for_object("items", actor_user_id="operator")
     control.reconcile_published_scope(SOURCE)
     with transaction() as session:
         state = control.load_binding(session, SOURCE)
@@ -171,9 +152,7 @@ def test_applied_open_preparation_requires_current_complete_scope(management, mo
 
 @pytest.mark.parametrize("management", ["without_credentials"], indirect=True)
 def test_published_intent_does_not_reserve_capture_before_credentials(management, tmp_path):
-    transaction, _ = management
-    with transaction() as session:
-        publish(session, "workflow", 1, ["items"])
+    service.enable_for_object("items", actor_user_id="operator")
     journal = CommandJournal(tmp_path)
     try:
         runtime = CaptureRuntime(journal=journal, connect=None, signals=None)
@@ -195,8 +174,7 @@ def test_published_intent_does_not_reserve_capture_before_credentials(management
         journal.close()
 
 
-def test_shared_references_disable_supersession_and_global_stop(management, tmp_path):
-    transaction, _ = management
+def test_independent_mirrors_disable_supersession_and_global_stop(management, tmp_path):
     journal = CommandJournal(tmp_path)
     runtime = CaptureRuntime(journal=journal, connect=None, signals=None)
 
@@ -207,19 +185,14 @@ def test_shared_references_disable_supersession_and_global_stop(management, tmp_
         return command
 
     try:
-        with transaction() as session:
-            publish(session, "first", 1, ["orders", "items"])
-            duplicate, = publish(session, "second", 1, ["items"])
+        orders = service.enable_for_object("orders", actor_user_id="operator")["mirror"]
+        opened = service.enable_for_object("items", actor_user_id="operator")
         initial = pending()
         assert [table["qualified_table"] for table in initial["published_scope"]] == ["public.items", "public.orders"]
-        with transaction() as session:
-            publish(session, "first", 2, ["orders"])
-        assert pending() == initial
-        with transaction() as session:
-            assert publish(session, "second", 1, ["items"]) == [duplicate]
+        assert service.enable_for_object("items", actor_user_id="operator") == opened
         assert pending() == initial
 
-        mirror_id = duplicate["mirror_id"]
+        mirror_id = opened["mirror"]["id"]
         service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")
         disabled = pending()
         assert disabled["control_revision"] == initial["control_revision"] + 1
@@ -228,10 +201,6 @@ def test_shared_references_disable_supersession_and_global_stop(management, tmp_
         mirror = service.get_mirror(mirror_id)
         assert {op["kind"]: op["state"] for op in mirror["operations"]} == {"open": "superseded", "disable": "pending"}
         assert mirror["control"]["stop_ack"] is None
-        with transaction() as session:
-            assert publish(session, "second", 1, ["items"], confirmed=[]) == [duplicate]
-        assert pending() == disabled
-
         with control.source_control_transaction(SOURCE) as (session, source):
             stopped = replace(source, status="disabled")
             get_source_store().save_source_on(session, stopped)
@@ -243,8 +212,7 @@ def test_shared_references_disable_supersession_and_global_stop(management, tmp_
         assert [op["state"] for op in control.capture_status(SOURCE)["operations"]] == [
             "superseded", "superseded", "superseded", "pending",
         ]
-        with transaction() as session:
-            service.reconcile_references(session, channel_id="first", channel_version=3, object_ids=[])
+        service.set_enabled(orders["id"], enabled=False, actor_user_id="operator")
         withdrawn = pending()
         assert withdrawn["kind"] == "stop"
         assert withdrawn["control_revision"] == command["control_revision"] + 1
@@ -254,17 +222,21 @@ def test_shared_references_disable_supersession_and_global_stop(management, tmp_
 
 
 def test_rollbacks_leave_older_scope_and_command_current(management, tmp_path):
-    transaction, _ = management
     old, = pending_capture_commands()
-    with pytest.raises(RuntimeError, match="publish rollback"), transaction() as session:
-        publish(session, "workflow", 1, ["items"])
-        raise RuntimeError("publish rollback")
+
+    def fail_open(mapper, connection, operation):
+        raise RuntimeError("open rollback")
+
+    event.listen(MirrorOperationRow, "after_insert", fail_open)
+    try:
+        with pytest.raises(RuntimeError, match="open rollback"):
+            service.enable_for_object("items", actor_user_id="operator")
+    finally:
+        event.remove(MirrorOperationRow, "after_insert", fail_open)
     control.reconcile_published_scope(SOURCE)
     assert pending_capture_commands() == (old,)
     assert service.list_mirrors()["total"] == 0
-
-    with transaction() as session:
-        publish(session, "workflow", 1, ["items"])
+    service.enable_for_object("items", actor_user_id="operator")
 
     def fail_after_insert(mapper, connection, command):
         raise RuntimeError("failed before capture commit")
@@ -305,9 +277,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
     clock = get_clock()
     set_clock(FixedClock(utc_now() - timedelta(seconds=1)))
     request.addfinalizer(lambda: set_clock(clock))
-    transaction, _ = management
-    with transaction() as session:
-        opened, = publish(session, "workflow", 1, ["items"])
+    opened = service.enable_for_object("items", actor_user_id="operator")["mirror"]
     control.reconcile_published_scope(SOURCE)
     if stopping:
         with control.source_control_transaction(SOURCE) as (session, source):
@@ -424,7 +394,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
                                             authority=current, observation=result)}
             if path == "/v1/capture/observations":
                 command = payload["command"]
-                assert command["published_scope"][0]["mirror_id"] == opened["mirror_id"]
+                assert command["published_scope"][0]["mirror_id"] == opened["id"]
                 phase = payload["phase"]
                 if containment["withhold_stop"]:
                     raise RuntimeBlocked("private_http_unconfirmed")
@@ -471,8 +441,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
         record_evidence = entrypoint.record_applied_evidence
 
         def withdraw_before_acceptance(**kwargs):
-            with transaction() as session:
-                service.reconcile_references(session, channel_id="workflow", channel_version=2, object_ids=[])
+            service.set_enabled(opened["id"], enabled=False, actor_user_id="operator")
             return record_evidence(**kwargs)
 
         monkeypatch.setattr(entrypoint, "record_applied_evidence", withdraw_before_acceptance)
@@ -518,8 +487,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             assert mutations == ["/connectors/cap_one/config", "/connectors/cap_one/resume"]
             return
         if mismatch == "superseded_pending":
-            with transaction() as session:
-                service.reconcile_references(session, channel_id="workflow", channel_version=2, object_ids=[])
+            service.set_enabled(opened["id"], enabled=False, actor_user_id="operator")
             assert entrypoint.main() == 2
             assert len(allocation_calls) == 1
             assert mutations == []
@@ -539,8 +507,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
         return
     if mismatch == "revision_restart":
         assert entrypoint.main() == 0
-        with transaction() as session:
-            service.reconcile_references(session, channel_id="workflow", channel_version=2, object_ids=[])
+        service.set_enabled(opened["id"], enabled=False, actor_user_id="operator")
         assert entrypoint.main() == 0
         assert len(allocation_calls) == 1
         assert mutations == ["/connectors/cap_one/config", "/connectors/cap_one/stop"]
@@ -605,4 +572,4 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
         assert mutations == ["/connectors/cap_one/config", "/connectors/cap_one/resume"]
         assert installed[mutations[0]]["table.include.list"] == r"public\.items"
         assert control.capture_status(SOURCE)["control"]["applied_revision"] == 3
-        assert service.get_mirror(opened["mirror_id"])["published_generation_id"] is None
+        assert service.get_mirror(opened["id"])["published_generation_id"] is None

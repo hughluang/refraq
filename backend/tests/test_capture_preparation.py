@@ -27,7 +27,6 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
-from backend.admin.errors import AuthForbidden
 from backend.admin.models import RoleRow, UserGroupMemberRow, UserGroupRow, UserRow
 from backend.core.time import utc_now
 from backend.core.secrets import encrypt_secret
@@ -36,10 +35,11 @@ from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 from backend.metadata.models import SourceMembershipRow, SourceRow
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
-from backend.metadata.capture.test_published_scope import SOURCE, management as management, publish
+from backend.metadata.capture.test_published_scope import SOURCE, management as management
 from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, TRUST, allocation_observation, observation
 from backend.metadata.mirrors import bootstrap, service
 from backend.metadata.mirrors.application import Application
+from backend.metadata.mirrors.errors import MirrorError
 from backend.metadata.mirrors.history import History, SqlHistoryTarget
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.publication import Publication, persist_verified_certificate
@@ -397,7 +397,8 @@ def reconcile_open_publication_observation(transaction, target_dsn, restricted, 
     assert after["history_epoch"] == binding["history_epoch"]
     assert after["operations"] == [dict(before["operations"][0], state="applied")]
     assert after["status"] == before["status"]
-    assert after["readiness"] == before["readiness"] and after["progress"] == before["progress"]
+    assert after["readiness"] == before["readiness"]
+    assert after["progress"] is None
     lower = dict(mirror_id=mirror_id, history_epoch=expected.history_epoch, commit_seq=1, entry_seq=0)
     upper = dict(lower, entry_seq=1)
     mirror_out = MirrorResponse.model_validate({"mirror": after}).model_dump()["mirror"]
@@ -435,7 +436,7 @@ def reconcile_open_publication_observation(transaction, target_dsn, restricted, 
                                                      lower_bound=lower, upper_bound=upper)
         with transaction() as session:
             session.delete(session.get(SourceMembershipRow, "reader-membership"))
-        with pytest.raises(AuthForbidden):
+        with pytest.raises(MirrorError, match="MIRROR_NOT_FOUND"):
             history.capture_bound(**query)
         with transaction() as session:
             transition, = history.invalidate_history(session, mirror_ids=[mirror_id], reason="retention_loss",
@@ -551,10 +552,9 @@ def reject_damaged_coverage(target_dsn, generation_id, coverage, prepare):
 def test_protected_executable_prepares_current_open(case, native_target, management, monkeypatch, tmp_path, request):
     target_dsn = native_target
     transaction, _ = management
-    with transaction() as session:
-        opened, = publish(session, "native-workflow", 1, ["items"])
+    opened = service.enable_for_object("items", actor_user_id="operator")
     control.reconcile_published_scope(SOURCE)
-    mirror_id = opened["mirror_id"]
+    mirror_id = opened["mirror"]["id"]
     history_epoch = service.initial_history_epoch(mirror_id)
     if case == "snapshot_replacement_epoch":
         history_epoch = uuid4().hex
@@ -658,8 +658,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
     running = False
 
     def withdraw():
-        with transaction() as session:
-            service.reconcile_references(session, channel_id="native-workflow", channel_version=2, object_ids=[])
+        service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")
         control.reconcile_published_scope(SOURCE)
 
     if case == "withdraw_with_management_timeout":
