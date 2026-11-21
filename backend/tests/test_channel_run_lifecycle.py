@@ -626,6 +626,8 @@ def test_on_demand_run_persists_draft_and_published_records_and_dispatches_once(
     assert draft_body["stop_at_node_id"] is None
     assert draft_body["created_at"] == "2026-08-15T02:00:05Z"
     assert published_body["status"] == "queued"
+    assert "mirror_execution_user_id" not in published_body
+    assert "mirror_state" not in published_body
     assert published_body["target"] == "published"
     assert published_body["version"] == 1
     assert published_body["draft_revision"] is None
@@ -655,7 +657,6 @@ def test_on_demand_run_persists_draft_and_published_records_and_dispatches_once(
             "run_timeout_sec": None,
             "run_retry_limit": None,
             "error_channel_id": None,
-            "mirror_execution_user_id": None,
             "keep_succeeded_runs": True,
             "keep_failed_runs": True,
             "keep_test_runs": True,

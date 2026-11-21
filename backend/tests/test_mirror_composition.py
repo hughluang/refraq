@@ -1,21 +1,16 @@
-"""Offline restricted-engine assembly, catalog and run-migration contracts."""
+"""Offline restricted-engine assembly and catalog contracts."""
 
-import importlib
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from alembic.migration import MigrationContext
-from alembic.operations import Operations
 from pydantic import ValidationError
-from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
 
 from backend.admin.console_modules import build_module_identities, build_navigation
 from backend.core.config import MirrorTargetSettings, Settings
 from backend.metadata.mirrors import composition
-from backend.metadata.mirrors.reads import Reads
 from backend.metadata.mirrors.service import MirrorError
 
 
@@ -73,7 +68,7 @@ class Engine:
         self.disposed = True
 
 
-def test_validated_real_reads_and_history_only(monkeypatch):
+def test_validated_history_target(monkeypatch):
     engines, roles, options = [], [], []
 
     def create(url, **kwargs):
@@ -86,14 +81,11 @@ def test_validated_real_reads_and_history_only(monkeypatch):
     monkeypatch.setattr(composition, "validate_target", lambda connection, *, expected_role: roles.append(expected_role))
     monkeypatch.setattr(composition.SqlHistoryTarget, "validate", lambda self: None)
     adapters = composition.compose_mirrors(settings(policy()))
-    assert type(adapters.reads) is Reads
-    assert adapters.reads.authorize_source_read is composition.authorize_source_data
+    assert isinstance(adapters.history_target, composition.SqlHistoryTarget)
     assert roles == ["refraq_mirror_gateway", "refraq_mirror_applier"]
     assert all(item["hide_parameters"] and not item["echo"] for item in options)
     assert all(item["connect_args"]["connect_timeout"] == 2 for item in options)
     assert "statement_timeout=1200" in options[0]["connect_args"]["options"]
-    with pytest.raises(MirrorError):
-        adapters.reads.release_run_pins(run_id="run", terminal_proof={"done": True})
     adapters.close()
     assert all(engine.disposed for engine in engines)
     with pytest.raises(MirrorError):
@@ -193,20 +185,3 @@ def test_catalog_matches_frontend_and_permission_filtered_navigation():
     generated = (Path(__file__).resolve().parents[2] / "frontend/src/features/console/module-identity/generated-catalog.ts").read_text()
     assert 'id: "mirrors"' in generated
     assert 'show: "/console/mirrors/:id"' in generated
-
-
-def test_run_migration_preserves_legacy_without_identity_backfill(monkeypatch):
-    migration = importlib.import_module("backend.alembic.versions.0099_channel_mirror_runs")
-    engine = create_engine("sqlite://")
-    with engine.begin() as connection:
-        connection.execute(text("CREATE TABLE channel_runs (job_id TEXT PRIMARY KEY)"))
-        connection.execute(text("INSERT INTO channel_runs VALUES ('old')"))
-        monkeypatch.setattr(migration, "op", Operations(MigrationContext.configure(connection)))
-        migration.upgrade()
-        assert connection.execute(text("SELECT job_id, mirror_execution_user_id, mirror_state FROM channel_runs")).one() == ("old", None, None)
-        columns = {column["name"]: column for column in inspect(connection).get_columns("channel_runs")}
-        assert columns["mirror_execution_user_id"]["nullable"]
-        assert columns["mirror_state"]["nullable"]
-        migration.downgrade()
-        assert connection.execute(text("SELECT * FROM channel_runs")).one() == ("old",)
-    engine.dispose()

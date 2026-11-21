@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from backend.jobs.job_child import main
 from backend.jobs.store import (
     CLAIMED_ENV,
@@ -107,3 +109,17 @@ def test_running_timeout_does_not_kill_the_child() -> None:
     assert stored is not None
     assert stored.status == "failed"
     assert stored.error_code == "JOB_RUNNING_TIMEOUT"
+
+
+@pytest.mark.parametrize("module", [
+    "backend.channel.channel_run", "backend.channel.tasks", "backend.channel.runner",
+    "backend.channel.recovery", "backend.channel.nodes",
+    "backend.worker.tasks", "backend.worker.app",
+])
+def test_worker_modules_import_in_fresh_interpreter(module):
+    env = {**os.environ, "REFRAQ_STORE_BACKEND": "memory", "CELERY_BROKER_URL": "memory://"}
+    result = subprocess.run(
+        [sys.executable, "-c", f"import {module}"],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr

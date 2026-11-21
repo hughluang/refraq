@@ -9,7 +9,6 @@ a complete success.
 
 from __future__ import annotations
 
-import json
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -20,18 +19,14 @@ from backend.channel.models import ChannelCheckpointRow
 from backend.channel.run_store import get_run_store
 from backend.core.config import get_settings
 from backend.core.db import session_scope
-from backend.core.errors import AppError
 from backend.core.time import utc_now
 from backend.entity.changes import capture_bound, commit_seq_ready, legacy_commit_position
-from backend.metadata.mirrors.history import settlement_guard
 
 __all__ = [
     "CheckpointPosition",
-    "MirrorCheckpointPosition",
     "LocalCheckpoints",
     "RunCheckpoints",
     "advance_from_run",
-    "advance_from_run_in_session",
     "get_checkpoint_store",
     "reset_checkpoint_store",
 ]
@@ -45,55 +40,12 @@ class CheckpointPosition:
     seq: int
 
 
-@dataclass(frozen=True, slots=True)
-class MirrorCheckpointPosition:
-    """Mirror lineage is separate from the legacy Entity transaction cursor."""
-
-    history_epoch: str
-    commit_seq: int
-    entry_seq: int
-    source_ids: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        if (
-            not isinstance(self.history_epoch, str)
-            or not self.history_epoch
-            or len(self.history_epoch) > 64
-            or self.commit_seq < 0
-            or self.entry_seq < 0
-        ):
-            raise ValueError("Invalid mirror checkpoint position")
-        if not self.source_ids or any(not value for value in self.source_ids):
-            raise ValueError("Mirror checkpoint requires Source provenance")
+def _later(left: CheckpointPosition, right: CheckpointPosition) -> CheckpointPosition:
+    return left if (left.xact, left.seq) >= (right.xact, right.seq) else right
 
 
-Position = CheckpointPosition | MirrorCheckpointPosition
-
-
-def _position_key(position: Position) -> tuple[int, int]:
-    if isinstance(position, MirrorCheckpointPosition):
-        return position.commit_seq, position.entry_seq
-    return position.xact, position.seq
-
-
-def _compatible(left: Position, right: Position) -> None:
-    if type(left) is not type(right):
-        raise ValueError("Checkpoint stream kind mismatch")
-    if isinstance(left, MirrorCheckpointPosition) and (
-        left.history_epoch != right.history_epoch
-        or set(left.source_ids) != set(right.source_ids)
-    ):
-        raise ValueError("Mirror checkpoint epoch or Source provenance mismatch")
-
-
-def _later(left: Position, right: Position) -> Position:
-    _compatible(left, right)
-    return left if _position_key(left) >= _position_key(right) else right
-
-
-def _ahead(left: Position, right: Position) -> bool:
-    _compatible(left, right)
-    return _position_key(left) > _position_key(right)
+def _ahead(left: CheckpointPosition, right: CheckpointPosition) -> bool:
+    return (left.xact, left.seq) > (right.xact, right.seq)
 
 
 class MemoryCheckpointStore:
@@ -114,8 +66,6 @@ class MemoryCheckpointStore:
         stream: str,
         position: CheckpointPosition,
     ) -> None:
-        if isinstance(position, MirrorCheckpointPosition):
-            raise ValueError("Mirror settlement requires a management transaction")
         key = (channel_id, node_id, stream)
         with self._lock:
             current = self._rows.get(key)
@@ -144,13 +94,6 @@ class SqlCheckpointStore:
             )
             if row is None:
                 return None
-            if row.stream_kind == "mirror":
-                return MirrorCheckpointPosition(
-                    history_epoch=row.history_epoch,
-                    commit_seq=int(row.position_xact),
-                    entry_seq=int(row.position_seq),
-                    source_ids=tuple(row.source_ids or ()),
-                )
             return CheckpointPosition(
                 xact=int(row.position_xact), seq=int(row.position_seq)
             )
@@ -162,8 +105,6 @@ class SqlCheckpointStore:
         stream: str,
         position: CheckpointPosition,
     ) -> None:
-        if isinstance(position, MirrorCheckpointPosition):
-            raise ValueError("Mirror settlement requires a management transaction")
         adopt_commit_order()
         with session_scope() as session:
             session.execute(
@@ -205,7 +146,6 @@ _ADVANCE = text(
     "WHEN (EXCLUDED.position_xact, EXCLUDED.position_seq) > "
     "(channel_checkpoints.position_xact, channel_checkpoints.position_seq) "
     "THEN EXCLUDED.updated_at ELSE channel_checkpoints.updated_at END "
-    "WHERE channel_checkpoints.stream_kind = 'entity'"
 )
 
 
@@ -297,121 +237,9 @@ def advance_from_run(run: Any) -> None:
         return
     adopt_commit_order()
     proposals = _load_proposals(_proposal_blob(run))
-    if any(isinstance(p, MirrorCheckpointPosition) for p in proposals.values()):
-        if get_settings().store_backend != "persistent":
-            raise ValueError("Mirror settlement requires a management transaction")
-        run.checkpoint_proposals = _dump_proposals(proposals)
-        with session_scope() as session:
-            advance_from_run_in_session(session, run)
-        return
     store = get_checkpoint_store()
     for (node_id, stream), position in proposals.items():
         store.advance(run.channel_id, node_id, stream, position)
-
-
-class MirrorCheckpointInvalid(AppError):
-    code = "CHANNEL_CHECKPOINT_INVALID"
-    http_status = 409
-
-
-def advance_from_run_in_session(session: Any, run: Any) -> None:
-    """Validate all Mirror gates before updating cursors; never commit the session."""
-    if getattr(run, "outcome", None) != "completed" or getattr(
-        run, "stop_at_node_id", None
-    ):
-        return
-    proposals = _load_proposals(getattr(run, "checkpoint_proposals", None))
-    mirrors = [
-        dict(
-            mirror_id=stream,
-            history_epoch=p.history_epoch,
-            position=dict(
-                mirror_id=stream,
-                history_epoch=p.history_epoch,
-                commit_seq=p.commit_seq,
-                entry_seq=p.entry_seq,
-            ),
-            source_ids=list(p.source_ids),
-        )
-        for (_, stream), p in sorted(proposals.items())
-        if isinstance(p, MirrorCheckpointPosition)
-    ]
-    mirrors.sort(key=lambda proposal: proposal["mirror_id"])
-    if mirrors:
-        execution_user_id = getattr(run, "mirror_execution_user_id", None)
-        if not execution_user_id:
-            raise ValueError(
-                "Mirror settlement requires an explicit execution identity"
-            )
-        if not session.in_transaction():
-            session.begin()
-        settlement_guard(
-            session, proposals=mirrors, execution_user_id=execution_user_id
-        )
-    for (node_id, stream), position in sorted(proposals.items()):
-        if isinstance(position, MirrorCheckpointPosition):
-            current = (
-                session.execute(
-                    text(
-                        "SELECT stream_kind, history_epoch, source_ids FROM channel_checkpoints "
-                        "WHERE channel_id=:channel_id AND node_id=:node_id AND stream=:stream FOR UPDATE"
-                    ),
-                    dict(channel_id=run.channel_id, node_id=node_id, stream=stream),
-                )
-                .mappings()
-                .first()
-            )
-            if current is not None:
-                source_ids = current["source_ids"]
-                if isinstance(source_ids, str):
-                    source_ids = json.loads(source_ids)
-                if (
-                    current["stream_kind"] != "mirror"
-                    or current["history_epoch"] != position.history_epoch
-                    or set(source_ids or ()) != set(position.source_ids)
-                ):
-                    raise MirrorCheckpointInvalid()
-            session.execute(
-                _ADVANCE_MIRROR,
-                dict(
-                    channel_id=run.channel_id,
-                    node_id=node_id,
-                    stream=stream,
-                    history_epoch=position.history_epoch,
-                    commit_seq=position.commit_seq,
-                    entry_seq=position.entry_seq,
-                    source_ids=json.dumps(list(position.source_ids)),
-                    updated_at=utc_now(),
-                ),
-            )
-        else:
-            session.execute(
-                _ADVANCE,
-                dict(
-                    channel_id=run.channel_id,
-                    node_id=node_id,
-                    stream=stream,
-                    position_xact=position.xact,
-                    position_seq=position.seq,
-                    updated_at=utc_now(),
-                ),
-            )
-
-
-_ADVANCE_MIRROR = text(
-    "INSERT INTO channel_checkpoints "
-    "(channel_id, node_id, stream, stream_kind, history_epoch, source_ids, "
-    "position_xact, position_seq, updated_at) VALUES "
-    "(:channel_id, :node_id, :stream, 'mirror', :history_epoch, CAST(:source_ids AS jsonb), "
-    ":commit_seq, :entry_seq, :updated_at) "
-    "ON CONFLICT (channel_id, node_id, stream) DO UPDATE SET "
-    "position_xact=EXCLUDED.position_xact, position_seq=EXCLUDED.position_seq, "
-    "updated_at=EXCLUDED.updated_at "
-    "WHERE channel_checkpoints.stream_kind='mirror' "
-    "AND channel_checkpoints.history_epoch=EXCLUDED.history_epoch "
-    "AND (EXCLUDED.position_xact, EXCLUDED.position_seq) > "
-    "(channel_checkpoints.position_xact, channel_checkpoints.position_seq)"
-)
 
 
 def _max_position(
@@ -473,7 +301,7 @@ def _adopt_once() -> bool:
         rows = session.execute(
             text(
                 "SELECT channel_id, node_id, stream, position_xact, position_seq "
-                "FROM channel_checkpoints WHERE stream_kind = 'entity'"
+                "FROM channel_checkpoints"
             )
         ).all()
         mapped: list[tuple[Any, CheckpointPosition]] = []
@@ -525,42 +353,20 @@ def _load_proposals(blob: Any) -> dict[tuple[str, str], CheckpointPosition]:
     """Read proposals written by ``_dump_proposals``. ``None`` is an empty set."""
     if blob is None:
         return {}
-    loaded: dict[tuple[str, str], Position] = {}
+    loaded: dict[tuple[str, str], CheckpointPosition] = {}
     for node_id, streams in blob.items():
         for stream, raw in streams.items():
-            kind = raw.get("stream_kind", "entity")
-            if kind == "mirror":
-                position = MirrorCheckpointPosition(
-                    history_epoch=raw["history_epoch"],
-                    commit_seq=int(raw["commit_seq"]),
-                    entry_seq=int(raw["entry_seq"]),
-                    source_ids=tuple(raw["source_ids"]),
-                )
-            elif kind == "entity":
-                position = CheckpointPosition(
-                    xact=int(raw["xact"]), seq=int(raw["seq"])
-                )
-            else:
-                raise ValueError("Unknown checkpoint stream kind")
+            position = CheckpointPosition(xact=int(raw["xact"]), seq=int(raw["seq"]))
             loaded[(str(node_id), str(stream))] = position
     return loaded
 
 
 def _dump_proposals(
-    proposals: dict[tuple[str, str], Position],
+    proposals: dict[tuple[str, str], CheckpointPosition],
 ) -> dict[str, dict[str, dict[str, Any]]]:
     blob: dict[str, dict[str, dict[str, Any]]] = {}
     for (node_id, stream), position in proposals.items():
-        if isinstance(position, MirrorCheckpointPosition):
-            raw = {
-                "stream_kind": "mirror",
-                "history_epoch": position.history_epoch,
-                "commit_seq": position.commit_seq,
-                "entry_seq": position.entry_seq,
-                "source_ids": list(position.source_ids),
-            }
-        else:
-            raw = {"xact": position.xact, "seq": position.seq}
+        raw = {"xact": position.xact, "seq": position.seq}
         blob.setdefault(node_id, {})[stream] = raw
     return blob
 

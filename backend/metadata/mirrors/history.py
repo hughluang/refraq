@@ -12,7 +12,7 @@ from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInval
 from backend.metadata.mirrors.models import MirrorRow
 
 __all__ = ["History", "SqlHistoryTarget", "bind_history", "capture_bound",
-           "read_incremental", "settlement_guard", "invalidate_history"]
+           "read_incremental", "invalidate_history"]
 
 
 def _invalid():
@@ -191,26 +191,6 @@ class History:
                 projected.append({**entry, "operation": operation})
             return {**result, "entries": projected, "source_ids": [source]}
 
-    def settlement_guard(self, session, *, proposals, execution_user_id):
-        """Validate without commit; caller must update checkpoints in THIS transaction."""
-        if not session.in_transaction():
-            raise ValueError("Settlement requires an active caller management transaction")
-        proposals = list(proposals)
-        ids = sorted({proposal["mirror_id"] for proposal in proposals})
-        sources = {mid: self._authorize(session, mid, execution_user_id) for mid in ids}
-        gates = {mirror_id: self._gate(session, mirror_id) for mirror_id in ids}
-        for mirror_id in ids:
-            gate = gates[mirror_id]
-            source = sources[mirror_id]
-            bound = self.target.capture_bound(mirror_id=mirror_id)
-            lower, upper = self._bounds(gate, bound, source)
-            for proposal in proposals:
-                if proposal["mirror_id"] != mirror_id:
-                    continue
-                position = _position(proposal["position"], mirror_id, gate.history_epoch)
-                if proposal.get("history_epoch") != gate.history_epoch or proposal.get("source_ids") != [source] or not lower <= position <= upper:
-                    _invalid()
-
     def invalidate_history(self, session, *, mirror_ids, reason, operation_id):
         if not session.in_transaction():
             raise ValueError("Invalidation requires an active caller transaction")
@@ -314,10 +294,6 @@ def capture_bound(*, mirror_id, execution_user_id):
 
 def read_incremental(*, mirror_id, execution_user_id, after, through, limit):
     return _service().read_incremental(mirror_id=mirror_id, execution_user_id=execution_user_id, after=after, through=through, limit=limit)
-
-
-def settlement_guard(session, *, proposals, execution_user_id):
-    return _service().settlement_guard(session, proposals=proposals, execution_user_id=execution_user_id)
 
 
 def invalidate_history(session, *, mirror_ids, reason, operation_id):

@@ -20,7 +20,6 @@ from backend.core.config import get_settings
 from backend.jobs.api import (
     get_schedule_name_store,
     present_jobs,
-    project_job,
     revoke_queued_delivery,
     stamp_predicate,
 )
@@ -54,7 +53,7 @@ def list_jobs(
         access_stamps=stamp_predicate(user.id, "jobs:run"),
     )
     return JobListResponse(
-        items=present_jobs(items, users=users, schedules=get_schedule_name_store(), viewer_id=user.id),
+        items=present_jobs(items, users=users, schedules=get_schedule_name_store()),
         total=total,
         limit=page.limit,
         offset=page.offset,
@@ -69,7 +68,7 @@ def get_job(
 ) -> JobResponse:
     record = _require_visible_job(job_id, user.id)
     return JobResponse(
-        job=present_jobs([record], users=users, schedules=get_schedule_name_store(), viewer_id=user.id)[0]
+        job=present_jobs([record], users=users, schedules=get_schedule_name_store())[0]
     )
 
 
@@ -78,7 +77,7 @@ def get_job_logs(
     job_id: str,
     user: UserRecord = Depends(require_permission("jobs:run")),
 ) -> JobLogsResponse:
-    record = project_job(_require_visible_job(job_id, user.id), user.id)
+    record = _require_visible_job(job_id, user.id)
     return JobLogsResponse(
         job_id=record.id,
         body=record.log_body,
@@ -118,7 +117,7 @@ def cancel_job(
         detail={},
     )
     return JobResponse(
-        job=present_jobs([logged], users=users, schedules=get_schedule_name_store(), viewer_id=user.id)[0]
+        job=present_jobs([logged], users=users, schedules=get_schedule_name_store())[0]
     )
 
 

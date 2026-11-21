@@ -51,14 +51,6 @@ class ChannelRunRecord:
     context: dict[str, Any] | None = None
     # node id -> stream -> {"xact", "seq"}. None until a node proposes a position.
     checkpoint_proposals: dict[str, Any] | None = None
-    mirror_execution_user_id: str | None = None
-    mirror_state: dict[str, Any] | None = None
-    mirror_pin_state: str | None = "unused"
-    pending_pin_mirror_id: str | None = None
-
-    @property
-    def can_discard(self) -> bool:
-        return self.mirror_pin_state in {"unused", "released"}
 
 
 @dataclass
@@ -173,7 +165,7 @@ def _summaries_from_groups(
 def _run_is_due(record: ChannelRunRecord, cutoff: datetime, jobs: Any) -> bool:
     """A memory run created before ``cutoff`` whose Job is terminal."""
     job = jobs.get(record.job_id)
-    return record.can_discard and record.created_at < cutoff and job is not None and job.status in TERMINAL
+    return record.created_at < cutoff and job is not None and job.status in TERMINAL
 
 
 def _due_runs_clause(cutoff: datetime) -> tuple[str, dict[str, Any]]:
@@ -188,7 +180,7 @@ def _due_runs_clause(cutoff: datetime) -> tuple[str, dict[str, Any]]:
     }
     params["cutoff"] = cutoff
     clause = (
-        "created_at < :cutoff AND mirror_pin_state IN ('unused', 'released') "
+        "created_at < :cutoff "
         f"AND job_id IN (SELECT id FROM jobs WHERE status IN ({holders}))"
     )
     return clause, params
@@ -208,25 +200,6 @@ class MemoryRunStore:
     def update_run(self, record: ChannelRunRecord) -> None:
         with self._lock:
             self._runs[record.job_id] = record
-
-    def mark_pins_released(self, job_id: str) -> None:
-        with self._lock:
-            run = self._runs.get(job_id)
-            if run is not None and run.mirror_pin_state == "held":
-                run.mirror_pin_state = "released"
-
-    def terminal_runs_with_pins(self) -> list[str]:
-        jobs = get_job_store()
-        with self._lock:
-            candidates = [run for run in self._runs.values() if run.mirror_pin_state == "held"]
-        result = []
-        for run in candidates:
-            job = jobs.get(run.job_id)
-            if job is None or job.status not in TERMINAL:
-                continue
-            if job.status == "succeeded" or (run.mirror_state or {}).get("terminal_seal"):
-                result.append(run.job_id)
-        return result
 
     def set_checkpoint_proposals(self, job_id: str, proposals: dict[str, Any]) -> None:
         with self._lock:
@@ -484,26 +457,6 @@ class SqlRunStore:
             row.skipped_node_ids = list(record.skipped_node_ids)
             row.context = record.context
             row.checkpoint_proposals = record.checkpoint_proposals
-            row.mirror_execution_user_id = record.mirror_execution_user_id
-            row.mirror_state = record.mirror_state
-            row.mirror_pin_state = record.mirror_pin_state
-            row.pending_pin_mirror_id = record.pending_pin_mirror_id
-
-    def mark_pins_released(self, job_id: str) -> None:
-        with session_scope() as session:
-            session.execute(text(
-                "UPDATE channel_runs SET mirror_pin_state='released' "
-                "WHERE job_id=:job_id AND mirror_pin_state='held'"
-            ), {"job_id": job_id})
-
-    def terminal_runs_with_pins(self) -> list[str]:
-        with session_scope() as session:
-            rows = session.scalars(text(
-                "SELECT r.job_id FROM channel_runs r JOIN jobs j ON j.id=r.job_id "
-                "WHERE r.mirror_pin_state='held' AND (j.status='succeeded' OR "
-                "(j.status IN ('failed','cancelled') AND r.mirror_state->>'terminal_seal' IS NOT NULL))"
-            ))
-            return list(rows)
 
     def set_checkpoint_proposals(self, job_id: str, proposals: dict[str, Any]) -> None:
         with session_scope() as session:
@@ -852,10 +805,6 @@ def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
         skipped_node_ids=list(record.skipped_node_ids),
         context=record.context,
         checkpoint_proposals=record.checkpoint_proposals,
-        mirror_execution_user_id=record.mirror_execution_user_id,
-        mirror_state=record.mirror_state,
-        mirror_pin_state=record.mirror_pin_state,
-        pending_pin_mirror_id=record.pending_pin_mirror_id,
         created_at=record.created_at,
     )
 
@@ -878,10 +827,6 @@ def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
         stop_at_node_id=row.stop_at_node_id,
         context=row.context,
         checkpoint_proposals=row.checkpoint_proposals,
-        mirror_execution_user_id=row.mirror_execution_user_id,
-        mirror_state=row.mirror_state,
-        mirror_pin_state=row.mirror_pin_state,
-        pending_pin_mirror_id=row.pending_pin_mirror_id,
     )
 
 

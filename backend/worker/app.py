@@ -13,9 +13,6 @@ from celery.signals import (
     celeryd_after_setup,
     celeryd_init,
     worker_process_init,
-    worker_process_shutdown,
-    worker_init,
-    worker_shutdown,
 )
 
 from backend.core.celery_broker import celery_broker_url
@@ -26,7 +23,6 @@ from backend.jobs.api import bind_stamp_allowance
 from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
 from backend.entity.embed_jobs.schedule import ensure_entity_embed_schedule
 from backend.metadata.source_access import source_ids_for
-from backend.mirror_runtime import channel_mirror_runtime
 from backend.worker.api import ensure_system_schedules
 from backend.worker.parameters import BEAT_MAX_INTERVAL_SEC, assemble_system_parameters
 
@@ -107,33 +103,3 @@ worker_process_init.connect(mark_worker_process, weak=False)
 
 # Occupancy renew / startup local reap (Job primitive; shares Beat with schedules).
 import backend.worker.occupancy  # noqa: E402,F401
-
-_mirror_runtime = None
-
-
-def init_mirror_runtime(**_kwargs: object) -> None:
-    global _mirror_runtime
-    close_mirror_runtime()
-    runtime = channel_mirror_runtime()
-    try:
-        runtime.__enter__()
-    except Exception:
-        raise SystemExit("Mirror worker assembly failed") from None
-    _mirror_runtime = runtime
-
-
-def close_mirror_runtime(**_kwargs: object) -> None:
-    global _mirror_runtime
-    if _mirror_runtime is not None:
-        _mirror_runtime.__exit__(None, None, None)
-        _mirror_runtime = None
-
-
-worker_init.connect(init_mirror_runtime, weak=False)
-worker_process_init.connect(init_mirror_runtime, weak=False)
-worker_process_shutdown.connect(close_mirror_runtime, weak=False)
-worker_shutdown.connect(close_mirror_runtime, weak=False)
-
-
-# Alias for `celery -A backend.worker.app`
-app = celery_app

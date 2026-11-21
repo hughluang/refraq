@@ -2,25 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any
 
 from backend.admin.user_store import get_user_store
 from backend.channel import channel_run
 from backend.channel.dataset_registry import seal_dataset_expiry
-from backend.channel.checkpoints import advance_from_run_in_session
-from backend.channel.diagnostics import (
-    DIAGNOSTICS_VERSION,
-    error_lineage_verified,
-    job_diagnostics_protected,
-    protected_run,
-    public_error,
-    safe_diagnostics_stored,
-)
-from backend.channel.mirror_reads import MirrorDataForbidden, mirror_graph, require_run_data_access, authorize_graph
-from backend.core.db import session_scope
-from backend.core.errors import AppError
 from backend.channel import recovery
 from backend.channel.run_store import get_run_store, note_killed_run
 from backend.channel.sandbox import SandboxFailed
@@ -37,47 +24,7 @@ from backend.jobs.store import (
 )
 
 __all__ = ["note_killed_run", "run_channel_job"]
-logger = logging.getLogger(__name__)
-
-
-def complete_mirror_success(run: Any, result: dict) -> Any:
-    with session_scope() as session:
-        require_run_data_access(run, getattr(run, "mirror_execution_user_id", None), session=session)
-        if mirror_graph(getattr(run, "graph", None)):
-            authorize_graph(run.graph, run.mirror_execution_user_id, session=session)
-        done = mark_succeeded(run.job_id, result=result, session=session)
-        if done is not None and done.status == "succeeded":
-            advance_from_run_in_session(session, run)
-        return done
-
-
 def run_channel_job(job_id: str) -> dict[str, str]:
-    try:
-        return _run_channel_job(job_id)
-    except Exception as exc:
-        if not protect_job_diagnostics(job_id):
-            raise
-        logger.error("Protected Channel execution failed")
-        code, message = public_error(exc.code if isinstance(exc, AppError) else None,
-                                     fallback="JOB_EXECUTION_FAILED")
-        try:
-            current = mark_failed(job_id, error_code=code, error_summary=message)
-            seal_dataset_expiry(job_id)
-        except Exception:
-            logger.error("Protected Channel failure could not be recorded")
-            return {"status": "failed"}
-        return {"status": current.status if current is not None else "missing"}
-
-
-def protect_job_diagnostics(job_id: str) -> bool:
-    try:
-        job = get_job_store().get(job_id)
-        return job is None or job_diagnostics_protected(job, get_run_store().get_run(job_id))
-    except Exception:
-        return True
-
-
-def _run_channel_job(job_id: str) -> dict[str, str]:
     claimed = claim_for_execution(job_id, claimed_by=current_worker_id())
     if claimed is None:
         record = get_job_store().get(job_id)
@@ -118,11 +65,7 @@ def _run_channel_job(job_id: str) -> dict[str, str]:
     started = utc_now()
     actor = _actor(claimed)
     context = channel_run.expression_context(channel, run, started, actor, claimed.trigger_kind)
-    protects_diagnostics = job_diagnostics_protected(claimed, run)
-    if protects_diagnostics and (safe_diagnostics_stored(run) or store.get_execution(job_id, 1) is None):
-        run.context = {**context, "diagnostics_version": DIAGNOSTICS_VERSION}
-    else:
-        run.context = context
+    run.context = context
     store.update_run(run)
     elapsed = 0.0
     if claimed.started_at is not None:
@@ -132,8 +75,6 @@ def _run_channel_job(job_id: str) -> dict[str, str]:
         )
     timeout = (graph.get("settings") or {}).get("run_timeout_sec")
     try:
-        if not error_lineage_verified(claimed, run):
-            raise MirrorDataForbidden()
         outcome = channel_run.execute_channel_run(
             graph=graph,
             trigger_node_id=trigger,
@@ -147,14 +88,8 @@ def _run_channel_job(job_id: str) -> dict[str, str]:
             started=time.monotonic() - elapsed,
             pinned=bool((claimed.input or {}).get("pin_version")),
         )
-    except (SandboxFailed, AppError) as exc:
-        if not protects_diagnostics and not isinstance(exc, SandboxFailed):
-            raise
-        code = exc.code if isinstance(exc, AppError) else "CHANNEL_SANDBOX_FAILED"
-        if protects_diagnostics:
-            code, message = public_error(code)
-        else:
-            message = str(exc)
+    except SandboxFailed as exc:
+        code, message = "CHANNEL_SANDBOX_FAILED", str(exc)
         failed = mark_failed(job_id, error_code=code, error_summary=message)
         if failed is not None and failed.status == "failed":
             recovery.settle_failure(
@@ -182,22 +117,9 @@ def _run_channel_job(job_id: str) -> dict[str, str]:
             "schema": "channel_run.v1", "channel_id": run.channel_id,
             "version": run.version, "outcome": outcome.outcome,
         }
-        is_mirror = mirror_graph(run.graph) or run.mirror_state is not None
-        if is_mirror:
-            try:
-                done = complete_mirror_success(run, result)
-            except Exception as exc:
-                code, message = public_error(
-                    exc.code if isinstance(exc, AppError) else None,
-                    fallback="MIRROR_SETTLEMENT_FAILED",
-                )
-                mark_failed(job_id, error_code=code, error_summary=message)
-                seal_dataset_expiry(job_id)
-                return {"status": "failed"}
-        else:
-            done = mark_succeeded(job_id, result=result)
+        done = mark_succeeded(job_id, result=result)
         if done is not None and done.status == "succeeded":
-            recovery.settle_success(run, checkpoints_settled=is_mirror)
+            recovery.settle_success(run)
         seal_dataset_expiry(job_id)
         return {"status": done.status if done is not None else "missing"}
     if outcome.status == "cancelled":
@@ -206,8 +128,6 @@ def _run_channel_job(job_id: str) -> dict[str, str]:
         return {"status": "cancelled"}
     code = outcome.error_code or "CHANNEL_NODE_FAILED"
     message = outcome.error_message or "Channel run failed"
-    if protects_diagnostics or protected_run(run):
-        code, message = public_error(code)
     failed = mark_failed(job_id, error_code=code, error_summary=message)
     if failed is not None and failed.status == "failed":
         recovery.settle_failure(

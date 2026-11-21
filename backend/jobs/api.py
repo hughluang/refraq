@@ -25,11 +25,9 @@ __all__ = [
     "StampAllowance",
     "bind_schedule_name_store",
     "bind_stamp_allowance",
-    "bind_job_projection",
     "get_schedule_name_store",
     "predicate_for",
     "present_jobs",
-    "project_job",
     "revoke_queued_delivery",
     "stamp_predicate",
 ]
@@ -90,30 +88,17 @@ def stamp_predicate(user_id: str, permission: str) -> frozenset[str] | None:
     return predicate_for(_stamp_allowance(user_id, permission))
 
 
-_job_projections: dict[str, Callable[[JobRecord, str | None], JobRecord]] = {}
-
-
-def bind_job_projection(kind: str, projection: Callable[[JobRecord, str | None], JobRecord]) -> None:
-    _job_projections[kind] = projection
-
-
-def project_job(record: JobRecord, viewer_id: str | None) -> JobRecord:
-    projection = _job_projections.get(record.kind)
-    return projection(record, viewer_id) if projection is not None else record
-
-
 def present_jobs(
     records: Sequence[JobRecord],
     *,
     users: UserStore,
     schedules: ScheduleNameStore,
-    viewer_id: str | None = None,
 ) -> list[JobOut]:
     """Map mechanism Job records to the shared HTTP/MCP response shape."""
     actor_names = _actor_names_for_jobs(records, users)
     schedule_names = _schedule_names_for_jobs(records, schedules)
     return [
-        _job_out(project_job(record, viewer_id), actor_names=actor_names, schedule_names=schedule_names)
+        _job_out(record, actor_names=actor_names, schedule_names=schedule_names)
         for record in records
     ]
 

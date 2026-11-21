@@ -551,7 +551,6 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         },
         "trigger.manual": {},
         "trigger.scheduled": {},
-        "read.mirror": {"object_id": "obj_1", "freshness_policy": "fail"},
         "read.changes": {"entity_id": "ent_1"},
         "volume.changes_dataset": {"entity_id": "ent_1"},
         "read.sql": {"source": {"kind": "entity"}, "sql": "{{ sql }}"},
@@ -617,7 +616,6 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "trigger.inbound": set(),
         "trigger.manual": set(),
         "trigger.scheduled": set(),
-        "read.mirror": set(),
         "read.changes": set(),
         "volume.changes_dataset": set(),
         "read.sql": {"sql"},
@@ -675,10 +673,6 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
     types = list_node_types()
     assert {item.type_id for item in types} == set(samples)
     hooks = FakeHooks(evaluate=evaluate, run_code=lambda source, timeout: 1)
-    hooks.read_mirror_page = lambda **kwargs: {
-        "rows": [], "next_key": None, "generation_id": "g",
-        "source_ids": ["s"], "freshness": {"status": "ready"},
-    }
     for spec in types:
         config = samples[spec.type_id]
         capture = InputCapture()

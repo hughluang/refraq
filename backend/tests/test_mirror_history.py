@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.metadata.mirrors import history as history_api
@@ -84,10 +84,6 @@ def setup_history():
     return history, factory, target, auth
 
 
-def proposal(mid="a", epoch="epoch"):
-    return dict(mirror_id=mid, history_epoch=epoch, position=point(mid, epoch, 2, 1), source_ids=["source"])
-
-
 @pytest.mark.parametrize("metadata_epoch", ["epoch", None, "different"])
 def test_bound_api_admits_missing_gate_only_with_metadata_target_agreement(setup_history, monkeypatch, metadata_epoch):
     history, factory, target, auth = setup_history
@@ -109,7 +105,7 @@ def test_bound_api_admits_missing_gate_only_with_metadata_target_agreement(setup
             assert session.get(HistoryGateRow, "a").history_epoch == "epoch"
 
 
-def test_pages_and_final_settlement_reauthorize(setup_history):
+def test_pages_reauthorize(setup_history):
     history, factory, target, auth = setup_history
     bound = history.capture_bound(mirror_id="a", execution_user_id="user")
     page = history.read_incremental(mirror_id="a", execution_user_id="user", after=bound["lower_bound"], through=bound["upper_bound"], limit=10)
@@ -118,11 +114,9 @@ def test_pages_and_final_settlement_reauthorize(setup_history):
     assert page["source_ids"] == ["source"]
     assert page["entries"][0]["after"] == {"secret": "image"}
     auth["allowed"] = False
-    with factory.begin() as session, pytest.raises(MirrorError) as error:
-        history.settlement_guard(session, proposals=[proposal()], execution_user_id="user")
-    assert error.value.code == "AUTH_FORBIDDEN"
-    with pytest.raises(MirrorError):
+    with pytest.raises(MirrorError) as error:
         history.read_incremental(mirror_id="a", execution_user_id="user", after=bound["lower_bound"], through=bound["upper_bound"], limit=10)
+    assert error.value.code == "AUTH_FORBIDDEN"
 
 
 @pytest.mark.parametrize("writer_verb,before,after,operation", [
@@ -156,38 +150,6 @@ def test_authorized_history_rejects_entry_with_no_images(setup_history):
     assert error.value.code == "MIRROR_HISTORY_INVALID"
 
 
-def test_sorted_locks_same_transaction_and_no_commit(setup_history):
-    history, factory, target, auth = setup_history
-    locked = []
-    with factory() as session:
-        @event.listens_for(session, "do_orm_execute")
-        def record(state):
-            statement = state.statement
-            if getattr(statement, "_for_update_arg", None) is not None and "source_mirror_history_gates" in str(statement):
-                locked.extend(statement.compile().params.values())
-        with session.begin():
-            history.settlement_guard(session, proposals=[proposal("b"), proposal("a")], execution_user_id="user")
-            assert session.in_transaction()
-    assert locked == ["a", "b"]
-    assert target.calls == ["a", "b"]
-
-
-@pytest.mark.parametrize("failure", ["epoch", "lower", "unavailable", "provenance"])
-def test_settlement_fails_closed(setup_history, failure):
-    history, factory, target, auth = setup_history
-    p = proposal()
-    if failure == "epoch":
-        target.bounds["a"]["history_epoch"] = "other"
-    elif failure == "lower":
-        target.bounds["a"]["lower_bound"] = point(seq=1, entry=1)
-    elif failure == "unavailable":
-        target.fail = True
-    else:
-        p["source_ids"] = []
-    with pytest.raises(MirrorError), factory.begin() as session:
-        history.settlement_guard(session, proposals=[p], execution_user_id="user")
-
-
 def test_invalidation_rollback_never_touches_target(setup_history):
     history, factory, target, auth = setup_history
     with pytest.raises(RuntimeError), factory.begin() as session:
@@ -218,8 +180,12 @@ def test_outbox_failure_closed_and_replay_after_target_commit(setup_history):
         assert session.get(HistoryInvalidationRow, "operation").status == "applied"
         assert session.get(HistoryGateRow, "a").status == "available"
         assert history.invalidate_history(session, mirror_ids=["a", "b"], reason="retention", operation_id="operation") == changes
-    with pytest.raises(MirrorError), factory.begin() as session:
-        history.settlement_guard(session, proposals=[proposal()], execution_user_id="user")
+    with pytest.raises(MirrorError) as error:
+        history.read_incremental(
+            mirror_id="a", execution_user_id="user",
+            after=point(), through=point(seq=3, entry=1), limit=10,
+        )
+    assert error.value.code == "MIRROR_HISTORY_INVALID"
 
 
 def test_target_sql_uses_live_prefix_and_restricted_bootstrap():

@@ -6,12 +6,8 @@ from typing import Any
 
 from backend.admin.user_store import get_user_store
 from backend.channel import channel_run
-from backend.channel.models import ChannelRunRow
-from backend.core.db import session_scope
 from backend.channel.checkpoints import advance_from_run
 from backend.channel.dataset_registry import drop_datasets_for_jobs
-from backend.channel.diagnostics import job_diagnostics_protected
-from backend.channel.mirror_reads import require_run_data_access, release_completed_run
 from backend.channel.run_store import get_run_store
 from backend.channel.store import get_channel_store
 from backend.core.time import format_instant, utc_now
@@ -27,36 +23,7 @@ PERSISTENT_FAILURE_STREAK = 3
 _SYSTEM = {"id": "usr_system", "name": "System"}
 
 
-def seal_supervised_run(job_id: str) -> None:
-    """Called only after supervise has waited for the execution process to exit."""
-    job_before = get_job_store().get(job_id)
-    run_before = get_run_store().get_run(job_id)
-    if job_before is None or run_before is None:
-        return
-    if job_before.status == "succeeded":
-        release_completed_run(run_before)
-        discard_unkept_run(job_id)
-        return
-    if (job_before.status == "failed" and job_before.trigger_kind != "error"
-            and run_before.target == "published" and run_before.version is not None
-            and _ancestors(job_before) < _limit(run_before)):
-        return
-    with session_scope() as session:
-        run = session.get(ChannelRunRow, job_id, with_for_update=True)
-        job = get_job_store().get(job_id, session=session)
-        if run is None or job is None or not run.mirror_state:
-            return
-        if job.status not in {"failed", "cancelled"} or job.finished_at is None:
-            return
-        run.mirror_state = {**run.mirror_state, "terminal_seal": {
-            "status": job.status, "nonresumable": True,
-        }}
-    record = get_run_store().get_run(job_id)
-    release_completed_run(record)
-    discard_unkept_run(job_id)
-
-
-def settle_success(run: Any, *, checkpoints_settled: bool = False) -> None:
+def settle_success(run: Any) -> None:
     """A completed run advances checkpoints. A published success ends the failure episode.
 
     Advance runs for a draft too: the run's writes and deliveries already happened.
@@ -64,12 +31,9 @@ def settle_success(run: Any, *, checkpoints_settled: bool = False) -> None:
     that rule. Discarding, when a keeping setting asks for it, happens only after
     that advance has returned.
     """
-    if not checkpoints_settled:
-        advance_from_run(run)
+    advance_from_run(run)
     if run.target == "published":
         _write_streak(run.channel_id, 0)
-    if checkpoints_settled:
-        release_completed_run(run)
     discard_unkept_run(getattr(run, "job_id", None))
 
 
@@ -142,9 +106,6 @@ def _discard_jobs(job_ids: list[str]) -> None:
     runs = get_run_store()
     jobs = get_job_store()
     for job_id in job_ids:
-        run = runs.get_run(job_id)
-        if run is not None and not run.can_discard:
-            continue
         drop_datasets_for_jobs([job_id])
         runs.delete_run(job_id)
         jobs.delete(job_id)
@@ -175,8 +136,7 @@ def _discards(job: JobRecord) -> bool:
 def _is_on_demand_test(job: JobRecord) -> bool:
     if job.trigger_kind != "user":
         return False
-    payload = job.input or {}
-    return payload.get("on_demand_test") is True or payload.get("pin_version") is not True
+    return job.input.get("pin_version") is not True
 
 
 def _keep(settings: Any, key: str) -> bool:
@@ -213,7 +173,6 @@ def _queue_retry(job: JobRecord, run: Any) -> None:
     channel = get_channel_store().get(run.channel_id)
     name = channel.name if channel is not None else run.channel_id
     try:
-        require_run_data_access(run, getattr(run, "mirror_execution_user_id", None))
         queued, _record = channel_run.mint_followup_run(
             channel_id=run.channel_id,
             channel_name=name,
@@ -232,9 +191,7 @@ def _queue_retry(job: JobRecord, run: Any) -> None:
         )
         channel_run.dispatch(queued.id)
     except Exception as exc:
-        message = "Retry run was not queued"
-        if not job_diagnostics_protected(job, run):
-            message = f"{message}: {exc}"
+        message = f"Retry run was not queued: {exc}"
         append_job_log(
             job.id,
             level="error",
@@ -294,9 +251,7 @@ def _start_error_workflow(
         )
         channel_run.dispatch(queued.id)
     except Exception as exc:
-        message = "Error workflow was not queued"
-        if not job_diagnostics_protected(job, run):
-            message = f"{message}: {exc}"
+        message = f"Error workflow was not queued: {exc}"
         append_job_log(
             job.id,
             level="error",

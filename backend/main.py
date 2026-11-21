@@ -64,7 +64,7 @@ from backend.admin.subjects.router import (
     bind_user_source_access,
     router as subjects_router,
 )
-from backend.jobs.api import bind_job_projection, bind_schedule_name_store
+from backend.jobs.api import bind_schedule_name_store
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
 from backend.metadata.catalog_embed_jobs import CatalogEmbedJobs
 from backend.entity.embed_jobs import EntityEmbedJobs
@@ -83,8 +83,6 @@ from backend.metadata.mirrors.composition import compose_mirrors
 from backend.metadata.mirrors.history import History, bind_history
 from backend.metadata.mirrors.recovery import Recovery, bind_recovery
 from backend.core.db import get_session_factory
-from backend.channel.mirror_reads import bind_reads, validate_terminal_proof
-from backend.channel.diagnostics import project_job as project_channel_job
 from backend.metadata.mirrors.service import bind_source_read_authorizer
 from backend.metadata.mirrors.authorization import authorize_source_data
 from backend.metadata.routers.sources import router as sources_router
@@ -124,7 +122,6 @@ from backend.worker.parameters import assemble_system_parameters
 
 # Composition injects the Scheduled Task name adapter so jobs never imports worker.
 bind_schedule_name_store(get_schedule_store)
-bind_job_projection("channel_run", project_channel_job)
 bind_catalog_embed_jobs(CatalogEmbedJobs())
 bind_entity_embed_jobs(EntityEmbedJobs())
 # Composition injects Dictionary codes so admin never imports entity.
@@ -189,17 +186,15 @@ def _bootstrap_site(target_settings: Settings) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     bind_history(None)
-    bind_reads(None)
     bind_recovery(None)
     bind_source_read_authorizer(authorize_source_data)
     adapters = None
     try:
-        adapters = compose_mirrors(settings, verify_terminal_proof=validate_terminal_proof)
+        adapters = compose_mirrors(settings)
         if adapters is not None:
             session_factory = get_session_factory()
             history = History(session_factory=session_factory, target=adapters.history_target)
             bind_history(history)
-            bind_reads(adapters.reads)
             if settings.mirror_recovery_retry_delays_seconds is not None:
                 bind_recovery(Recovery(
                     session_factory=session_factory,
@@ -217,7 +212,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         bind_history(None)
         bind_source_read_authorizer(None)
-        bind_reads(None)
         bind_recovery(None)
         if adapters is not None:
             adapters.close()

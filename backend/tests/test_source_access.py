@@ -10,6 +10,10 @@ import re
 from typing import Any
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+
+from backend.core.errors import AppError
 
 from backend.admin.federation.config import validate_default_role
 from backend.admin.federation.errors import ProviderDefaultRoleForbidden
@@ -31,6 +35,7 @@ from backend.core.time import utc_now
 from backend.metadata.connectors.specs import get_connector_spec
 from backend.metadata.errors import SourceAccessInvalid
 from backend.metadata.source_access import (
+    authorize_source_read_on,
     EVERY_SOURCE_TARGET,
     SourceIdSet,
     SourceMembershipDuplicate,
@@ -774,3 +779,50 @@ def test_sources_access_manage_is_a_granting_catalog_key() -> None:
     seeded = get_role_store().get_by_key("operator")
     assert seeded is not None
     assert seeded.permissions == ["console:access", "dashboard:read"]
+
+
+@pytest.fixture
+def source_authorization_session():
+    engine = create_engine("sqlite://")
+    with Session(engine) as session:
+        for statement in (
+            "CREATE TABLE users (id TEXT, status TEXT, identity_source TEXT, role_id TEXT)",
+            "CREATE TABLE roles (id TEXT, key TEXT, permissions TEXT)",
+            "CREATE TABLE source_memberships (subject_type TEXT, subject_id TEXT, target TEXT, level TEXT)",
+            "CREATE TABLE user_groups (id TEXT)",
+            "CREATE TABLE user_group_members (group_id TEXT, user_id TEXT)",
+            "INSERT INTO users VALUES ('u', 'active', 'local', 'r')",
+            "INSERT INTO roles VALUES ('r', 'reader', '[\"sources:data_read\"]')",
+            "INSERT INTO source_memberships VALUES ('user', 'u', 's', 'viewer')",
+        ):
+            session.execute(text(statement))
+        yield session
+    engine.dispose()
+
+
+def test_same_session_revocation_and_role_identity_changes(source_authorization_session):
+    session = source_authorization_session
+    def check():
+        return authorize_source_read_on(session=session, execution_user_id="u", source_id="s")
+
+    assert check() is None
+    session.execute(text("DELETE FROM source_memberships"))
+    with pytest.raises(AppError):
+        check()
+    session.execute(text("INSERT INTO source_memberships VALUES ('role', 'r', '*', 'maintainer')"))
+    assert check() is None
+    session.execute(text("UPDATE users SET identity_source = 'system'"))
+    with pytest.raises(AppError):
+        check()
+
+
+def test_group_and_role_permission_intersection(source_authorization_session):
+    session = source_authorization_session
+    session.execute(text("DELETE FROM source_memberships"))
+    session.execute(text("INSERT INTO source_memberships VALUES ('group', 'g', 's', 'viewer')"))
+    session.execute(text("INSERT INTO user_groups VALUES ('g')"))
+    session.execute(text("INSERT INTO user_group_members VALUES ('g', 'u')"))
+    assert authorize_source_read_on(session=session, execution_user_id="u", source_id="s") is None
+    session.execute(text("UPDATE roles SET permissions = '[]'"))
+    with pytest.raises(AppError):
+        authorize_source_read_on(session=session, execution_user_id="u", source_id="s")

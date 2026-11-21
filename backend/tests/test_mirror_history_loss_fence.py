@@ -2,7 +2,6 @@
 
 from dataclasses import asdict, replace
 from secrets import token_urlsafe
-from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg
@@ -13,7 +12,6 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
-from backend.channel.nodes.read.mirror import NODE_TYPE
 from backend.core.time import utc_now
 from backend.metadata.mirrors.application import Application
 from backend.metadata.mirrors.bootstrap import create_generation, install, install_authority
@@ -376,15 +374,6 @@ def test_management_loss_receipt_fences_old_writes_and_preserves_pins(history_lo
     retained_page = reads.read_page(pin=retained_pin, execution_user_id="reader", after_key=None, limit=10)
     assert retained_page["freshness"] == "unknown"
 
-    def read_mirror_page(*, object_id, after_key, limit):
-        assert object_id == "orders"
-        return reads.read_page(pin=pinned, execution_user_id="reader", after_key=after_key, limit=limit)
-
-    result = NODE_TYPE.execute({"config": {"object_id": "orders", "freshness_policy": "skip"}},
-                               SimpleNamespace(read_mirror_page=read_mirror_page))
-    assert result.status == "succeeded"
-    assert result.output == dict(rows=[], freshness="stale", source_ids=[AUTHORITY.source_id],
-                                 generation_id=pinned.generation_id)
     assert delivery(application, retained, 2) == {"offset": 2, "commit_seq": 2}
     retained_bound = history.capture_bound(mirror_id=RETAINED, execution_user_id="reader")
     assert retained_bound["history_epoch"] == EPOCH

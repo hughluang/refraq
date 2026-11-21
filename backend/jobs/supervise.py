@@ -23,7 +23,7 @@ POLL_SEC = 0.2
 RunFn = Callable[[str], dict[str, str]]
 
 
-def supervise(job_id: str, target: str, *, after_exit: Callable[[str], None] | None = None) -> dict[str, str]:
+def supervise(job_id: str, target: str) -> dict[str, str]:
     """Run `module:function` for this Job.
 
     Memory stores stay in-process so tests share the parent store. A SQL store
@@ -37,10 +37,7 @@ def supervise(job_id: str, target: str, *, after_exit: Callable[[str], None] | N
         return {"status": record.status if record else "missing"}
     proc = _spawn(job_id, target)
     watch_process(job_id, proc)
-    result = _finish(job_id)
-    if after_exit is not None:
-        after_exit(job_id)
-    return result
+    return _finish(job_id)
 
 
 def watch_process(

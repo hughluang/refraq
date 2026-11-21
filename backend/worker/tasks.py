@@ -12,8 +12,7 @@ from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.time import utc_now
 
-from backend.channel.tasks import execute_run, seal_dataset_expiry
-from backend.mirror_runtime import channel_mirror_runtime
+from backend.channel.tasks import seal_dataset_expiry
 from backend.entity.tasks import (
     ACCESS_LOG_SCHEDULE_KEY,
     CHANGE_LOG_SCHEDULE_KEY,
@@ -28,12 +27,6 @@ from backend.worker.parameters import NOTIFICATION_SCHEDULE_KEY, NOTIFICATION_TA
 from backend.worker.schedules import get_schedule_store
 
 logger = logging.getLogger(__name__)
-
-
-def execute_channel_run(job_id: str) -> dict[str, str]:
-    with channel_mirror_runtime():
-        return execute_run(job_id)
-
 
 
 @shared_task(name=NOTIFICATION_TASK_NAME)
