@@ -83,6 +83,8 @@ def setup_delivery(monkeypatch, tmp_path):
     owner.engine = SimpleNamespace(dispose=lambda: None)
     owner.limits = DeliveryLimits()
     owner.resume_operation_id = None
+    owner.retained = {}
+    owner.client_generations = {table["generation_id"]}
     owner.stamp = deepcopy(state)
     owner.stamp.pop("desired")
     owner.stamp.pop("published_scope")

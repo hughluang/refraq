@@ -6,8 +6,8 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
-from backend.metadata.mirrors.service import catalog_mirror, enable_for_object
-from backend.metadata.mirrors.schemas import PatchMirrorResponse
+from backend.metadata.mirrors.service import catalog_mirror, enable_for_object, set_enabled_for_object
+from backend.metadata.mirrors.schemas import PatchMirrorRequest, PatchMirrorResponse
 from backend.admin.deps import get_actor_token_id, require_permission, resolve_user_permissions
 from backend.admin.role_store import get_role_store
 from backend.admin.permissions import permissions_include
@@ -56,6 +56,7 @@ from backend.metadata.schemas.catalog import (
     CatalogColumnsSemanticsBatchRequest,
     CatalogColumnsSemanticsBatchResponse,
     CatalogDdlResponse,
+    CatalogMirrorSettingResponse,
     CatalogObjectListResponse,
     CatalogObjectOut,
     CatalogObjectResponse,
@@ -284,6 +285,22 @@ def enable_object_mirror(
     record = _require_object_permission(user.id, object_id, "metadata:read")
     return enable_for_object(
         record.id, actor_user_id=user.id, actor_token_id=get_actor_token_id(request),
+    )
+
+
+@router.put("/objects/{object_id}/mirror", response_model=CatalogMirrorSettingResponse)
+def set_object_mirror(
+    object_id: str,
+    payload: PatchMirrorRequest,
+    request: Request,
+    user: UserRecord = Depends(require_permission("mirror:write")),
+):
+    record = _require_object_permission(user.id, object_id, "metadata:read")
+    permissions = resolve_user_permissions(user, get_role_store())
+    return set_enabled_for_object(
+        record.id, source_id=record.source_id, enabled=payload.enabled,
+        can_read=permissions_include(permissions, "mirror:read"),
+        actor_user_id=user.id, actor_token_id=get_actor_token_id(request),
     )
 
 

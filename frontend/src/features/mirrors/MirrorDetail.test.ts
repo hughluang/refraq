@@ -19,6 +19,7 @@ vi.mock("@/components/feedback/ConfirmActionModal", () => ({ ConfirmActionModal:
 vi.mock("@/components/feedback/useConsoleMutation", () => ({ useConsoleMutation: () => ({ submitting: false, run: vi.fn(), dialog: null }) }));
 vi.mock("@/components/feedback/presentProblemNotification", () => ({ presentProblemNotification: vi.fn() }));
 vi.mock("@mantine/core", () => ({
+  Switch: ({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled: boolean; onChange: () => void }) => createElement("input", { type: "checkbox", role: "switch", "aria-label": label, checked, disabled, onChange }),
   Stack: ({ children }: { children: ReactNode }) => createElement("div", null, children),
   Text: ({ children }: { children: ReactNode }) => createElement("span", null, children),
   Button: ({ children, onClick, disabled }: { children: ReactNode; onClick: () => void; disabled: boolean }) => createElement("button", { onClick, disabled }, children),
@@ -27,12 +28,12 @@ vi.mock("@mantine/core", () => ({
 const mirror = { id: "m1", source_id: "source-1", qualified_table: "public.orders", enabled: false, status: "disable_pending", published_generation_id: null, capture_generation: "capture-1", history_epoch: 7, readiness: [{ key: "ownership", result: "unknown", expected: "exclusion proof", observed: null, observed_at: null, owner: "deployer", action: "Confirm fence" }], control: { stop_ack: null }, progress: null, profile: { state: "unverified" }, fault: null, operations: [] };
 afterEach(() => { cleanup(); state.write = true; vi.clearAllMocks(); });
 it("keeps unknown readiness and unconfirmed disable visible without fabricated progress", async () => {
-  state.get.mockResolvedValue({ mirror });
+  state.get.mockResolvedValue({ mirror, can_enable: true });
   render(createElement(MirrorDetail, { id: "m1" }));
   expect(await screen.findByText("mirrors.status.disable_pending")).toBeTruthy();
   expect(screen.getByText("mirrors.result.unknown")).toBeTruthy();
   expect(screen.getAllByText("mirrors.unknownEvidence").length).toBeGreaterThan(0);
-  expect(screen.getByRole("button", { name: "mirrors.enable" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("switch", { name: "mirrors.synchronization" }).hasAttribute("disabled")).toBe(false);
 });
 it("confirms a stop only when refreshed evidence matches the current disable operation", async () => {
   const observedAt = "2026-01-02T03:04:05Z";
@@ -51,22 +52,23 @@ it("confirms a stop only when refreshed evidence matches the current disable ope
       observed_evidence_refs: ["source-stop"], requested_at: "2026-01-02T03:00:00Z",
     }],
   };
-  state.get.mockResolvedValueOnce({ mirror: stopped }).mockResolvedValueOnce({
+  state.get.mockResolvedValueOnce({ mirror: stopped, can_enable: true }).mockResolvedValueOnce({
+    can_enable: true,
     mirror: { ...stopped, control: { ...stopped.control, stop_ack: { ...stopped.control.stop_ack, operation_id: "current-disable" } } },
   });
   render(createElement(MirrorDetail, { id: "m1" }));
   await screen.findByText("mirrors.event.published");
   expect(screen.getByText("mirrors.event.disableRequested")).toBeTruthy();
   expect(screen.queryByText("mirrors.event.stopConfirmed")).toBeNull();
-  expect(screen.getByRole("button", { name: "mirrors.enable" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("switch", { name: "mirrors.synchronization" }).hasAttribute("disabled")).toBe(false);
 
   fireEvent.click(screen.getByRole("button", { name: "common.refresh" }));
   expect(await screen.findByText("mirrors.event.stopConfirmed", { exact: false })).toBeTruthy();
   expect(screen.queryByText("mirrors.event.disableRequested")).toBeNull();
-  expect(screen.getByRole("button", { name: "mirrors.enable" }).hasAttribute("disabled")).toBe(false);
+  expect(screen.getByRole("switch", { name: "mirrors.synchronization" }).hasAttribute("disabled")).toBe(false);
 });
 it("sends the epoch captured when recovery opened and a required reason, then shows pending", async () => {
-  state.get.mockResolvedValue({ mirror });
+  state.get.mockResolvedValue({ mirror, can_enable: true });
   state.recover.mockResolvedValue({ operation_id: "op-7", state: "pending" });
   render(createElement(MirrorDetail, { id: "m1" }));
   fireEvent.click(await screen.findByRole("button", { name: "mirrors.recovery.run_now" }));
@@ -78,11 +80,11 @@ it("sends the epoch captured when recovery opened and a required reason, then sh
 });
 it("hides all lifecycle writes from read-only operators", async () => {
   state.write = false;
-  state.get.mockResolvedValue({ mirror });
+  state.get.mockResolvedValue({ mirror, can_enable: true });
   render(createElement(MirrorDetail, { id: "m1" }));
   await screen.findByText("public.orders");
   expect(screen.queryByRole("button", { name: "mirrors.recovery.retry" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "mirrors.enable" })).toBeNull();
+  expect(screen.getByRole("switch", { name: "mirrors.synchronization" }).hasAttribute("disabled")).toBe(true);
 });
 
 it("leads a waiting mirror with its published copy and unknown freshness", async () => {

@@ -15,8 +15,8 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.core.errors import AppError
 from backend.core.time import utc_now
-from backend.metadata.capture.store import load_binding, save_binding
-from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceRow
+from backend.metadata.capture.store import load_binding, save_binding, save_operation
+from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, SourceRow
 from backend.metadata.mirrors import service
 from backend.metadata.mirrors.bootstrap import create_generation, install
 from backend.metadata.mirrors.history import History
@@ -45,7 +45,7 @@ def opened(target_dsn, monkeypatch):
         connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
     engine = create_engine("postgresql+psycopg://", creator=lambda: psycopg.connect(target_dsn, dbname=database))
     try:
-        for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, MirrorRow,
+        for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, MirrorRow,
                       MirrorOperationRow, HistoryGateRow, HistoryInvalidationRow, RecoveryRow):
             model.__table__.create(engine)
         store = SqlMirrorStore()
@@ -410,3 +410,148 @@ def test_native_prepared_fence_cannot_substitute_for_accepted_owner(opened):
     with store.transaction() as session:
         pending, = store.ops(session, mirror_id)
         assert "allocation" not in pending
+
+
+@pytest.mark.integration
+def test_reopen_after_verified_table_gap_recovers_interrupted_invalidation(opened):
+    store, mirror_id, original_operation, authority = opened
+    previous_generation = uuid4().hex
+    partition = asdict(PartitionIdentity("cluster", "orders", 0))
+    epoch = "published-epoch"
+    with store.transaction() as session:
+        previous, = store.ops(session, mirror_id)
+        store.save_op(session, dict(previous, state="applied", allocation=dict(binding=dict(partition_identity=partition)),
+                                    publication_receipt=dict(generation_id=previous_generation, history_epoch=epoch,
+                                                             authority=asdict(authority))))
+        row = session.get(MirrorRow, mirror_id)
+        row.state = dict(row.state, published_generation_id=previous_generation, history_epoch=epoch)
+        session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch=epoch, status="available",
+                                   lower_commit_seq=0, lower_entry_seq=0))
+        session_factory = sessionmaker(session.get_bind())
+    service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")
+    reopen = service.set_enabled(mirror_id, enabled=True, actor_user_id="operator")
+    with store.transaction() as session:
+        scope = service.read_published_scope(session, authority.source_id)
+        state = load_binding(session, authority.source_id)
+        save_binding(session, dict(state, published_scope=scope))
+
+    boundaries = {reopen["operation_id"]: 8}
+
+    class Target:
+        attempts = 0
+
+        def invalidate(self, *, operation_id, transitions, reason, replay_only):
+            assert reason == "table_gap" and operation_id in boundaries
+            assert transitions[0]["start_offset"] == boundaries[operation_id]
+            assert transitions[0]["partition_identity"] == partition
+            self.attempts += 1
+            if self.attempts == 1:
+                raise TimeoutError("target acknowledgment lost")
+            return True
+
+    history = History(session_factory=session_factory, target=Target())
+    request = dict(authority=authority, published_scope=scope, mirror_id=mirror_id,
+                   mirror_revision=reopen["mirror"]["control"]["control_revision"], operation_id=original_operation,
+                   evidence_ref="sha256:" + "a" * 64, start_offset=8, partition_identity=partition, history=history)
+    with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
+        service.request_reopen_baseline(**dict(request, partition_identity=dict(partition, topic_incarnation_id="other")))
+    with pytest.raises(TimeoutError, match="acknowledgment lost"):
+        service.request_reopen_baseline(**request)
+    with store.transaction() as session:
+        assert session.get(HistoryGateRow, mirror_id).status == "invalidating"
+    pending, retained = service.current_open_preparations(
+        authority=authority, published_scope=scope, observe_committed=pytest.fail, history=history)
+    assert not retained
+    baseline, = pending
+    assert baseline["operation_id"] == reopen["operation_id"]
+    assert baseline["reopen_baseline"] and baseline["start_offset"] == 8 and baseline["partition_identity"] == partition
+    assert baseline["history_epoch"] != epoch
+    assert service.get_mirror(mirror_id)["published_generation_id"] == previous_generation
+    with store.transaction() as session:
+        assert session.get(HistoryGateRow, mirror_id).status == "available"
+    service.request_reopen_baseline(**request)
+    replay, _ = service.current_open_preparations(
+        authority=authority, published_scope=scope, observe_committed=pytest.fail, history=history)
+    assert replay == pending
+
+    # Interrupt this replacement, skip additional records, then request another open.
+    service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")
+    latest = service.set_enabled(mirror_id, enabled=True, actor_user_id="operator")
+    boundaries[latest["operation_id"]] = 12
+    current = replace(authority, control_revision=authority.control_revision+2)
+    with store.transaction() as session:
+        scope = service.read_published_scope(session, authority.source_id)
+        state = load_binding(session, authority.source_id)
+        state.update(control_revision=current.control_revision, published_scope=scope)
+        save_binding(session, state)
+    with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
+        service.current_open_preparations(authority=current, published_scope=scope, observe_committed=pytest.fail,
+                                          history=history)
+    with store.transaction() as session:
+        stamp = {k: state[k] for k in ("source_id", "binding_id", "owner_epoch", "runtime_instance_id",
+                                       "credential_revision", "control_revision", "capture_generation")}
+        command = dict(stamp, kind="reconcile", operation_id="latest-scope", published_scope=scope)
+        save_operation(session, command)
+        fresh = dict(start_offset=12, partition_identity=partition, mirror_revision=scope[0]["mirror_revision"],
+                     evidence_ref="sha256:"+"b"*64)
+        state["scope_fence"] = dict(authority=stamp, operation_id=command["operation_id"], mirror_receipts={mirror_id: "fence"},
+                                    table_boundaries={mirror_id: fresh})
+        save_binding(session, state)
+    pending, _ = service.current_open_preparations(authority=current, published_scope=scope,
+                                                  observe_committed=pytest.fail, history=history)
+    new, = pending
+    assert new["operation_id"] == latest["operation_id"] and new["start_offset"] == 12
+    assert new["history_epoch"] not in {epoch, baseline["history_epoch"]}
+    assert service.get_mirror(mirror_id)["published_generation_id"] == previous_generation
+
+
+@pytest.mark.integration
+def test_pending_allocation_recovers_after_a_sibling_switch(opened):
+    store, mirror_id, original_operation, authority = opened
+    epoch = service.initial_history_epoch(mirror_id)
+    reconcile(opened, lambda **request: request["generation_id"], history_epoch=epoch)
+    with store.transaction() as session:
+        original, = store.ops(session, mirror_id)
+        partition = original["allocation"]["binding"]["partition_identity"]
+        created = utc_now()
+        session.add(CatalogObjectRow(id="items", source_id=authority.source_id, locator_key="items",
+                                     object_type="table", schema_name="sales", name="items",
+                                     created_at=created, updated_at=created))
+        sessions = sessionmaker(session.get_bind())
+    sibling = service.enable_for_object("items", actor_user_id="operator")
+    current = replace(authority, control_revision=authority.control_revision + 1)
+    with store.transaction() as session:
+        scope = service.read_published_scope(session, authority.source_id)
+        state = load_binding(session, authority.source_id)
+        state.update(published_scope=scope, control_revision=current.control_revision)
+        stamp = {key: state[key] for key in ("source_id", "binding_id", "runtime_instance_id", "owner_epoch",
+                                              "control_revision", "credential_revision", "capture_generation")}
+        command = dict(stamp, kind="reconcile", operation_id="expanded-scope", published_scope=scope)
+        save_operation(session, command)
+        fence = dict(authority=stamp, operation_id=command["operation_id"],
+                     mirror_receipts={entry["mirror_id"]: "sha256:" + "a" * 64 for entry in scope})
+        save_binding(session, dict(state, scope_fence=fence))
+
+    class Target:
+        def invalidate(self, *, operation_id, transitions, reason, replay_only):
+            assert operation_id != original_operation and reason == "table_gap" and not replay_only
+            change, = transitions
+            assert change["mirror_id"] == mirror_id and change["old_epoch"] == epoch
+            assert change["start_offset"] == 9 and change["partition_identity"] == partition
+            return True
+
+    history = History(session_factory=sessions, target=Target())
+    prepare = dict(authority=current, published_scope=scope, observe_committed=pytest.fail, history=history)
+    with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
+        service.current_open_preparations(**prepare, selected_table_ids={"orders"})
+    boundary = dict(start_offset=9, partition_identity=partition, mirror_revision=1, evidence_ref="sha256:" + "c" * 64)
+    with store.transaction() as session:
+        save_binding(session, dict(state, scope_fence=dict(fence, table_boundaries={mirror_id: boundary})))
+    pending, retained = service.current_open_preparations(**prepare)
+    assert not retained
+    orders, = [entry for entry in pending if entry["mirror_id"] == mirror_id]
+    assert orders["start_offset"] == 9 and orders["operation_id"] != original_operation and orders["history_epoch"] != epoch
+    items, = [entry for entry in pending if entry["mirror_id"] == sibling["mirror"]["id"]]
+    assert items["operation_id"] == sibling["operation_id"] and not items.get("reopen_baseline")
+    assert service.current_open_preparations(**prepare) == (pending, retained)
+    assert service.set_enabled(mirror_id, enabled=True, actor_user_id="operator")["operation_id"] == original_operation

@@ -133,7 +133,7 @@ def test_bootstrap_and_history_version_checks_are_actually_executed(monkeypatch)
                 return Cursor((self.role,))
             if "FROM pg_roles" in sql:
                 return Cursor((False,) * 5)
-            return Cursor((2 if "target_version()" in sql else 1,))
+            return Cursor((3 if "target_version()" in sql else 1,))
 
     class ValidEngine(Engine):
         def __init__(self, role):

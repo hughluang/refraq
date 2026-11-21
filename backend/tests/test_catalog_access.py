@@ -756,7 +756,7 @@ def test_catalog_enable_mirror_is_scoped_and_idempotent(world):
     assert_problem(world.client.post(f"{path}/mirror"), status=403, code="AUTH_FORBIDDEN")
 
     world.login("viewer")
-    assert world.client.get(path).json()["object"]["mirror"] == {"can_enable": True, "mirror_id": None}
+    assert world.client.get(path).json()["object"]["mirror"] == {"enabled": False, "can_enable": True, "can_disable": False, "mirror_id": None}
     unsupported = f"/objects/{world.procedure_a}"
     assert world.client.get(unsupported).json()["object"]["mirror"] is None
     assert_problem(world.client.post(f"{unsupported}/mirror"), status=404, code="MIRROR_NOT_FOUND")
@@ -769,10 +769,10 @@ def test_catalog_enable_mirror_is_scoped_and_idempotent(world):
     assert mirror["operations"][0]["id"] == accepted["operation_id"]
     assert mirror["operations"][0]["state"] == "pending"
     assert mirror["published_generation_id"] is None
-    assert world.client.get(path).json()["object"]["mirror"] == {"can_enable": False, "mirror_id": mirror["id"]}
+    assert world.client.get(path).json()["object"]["mirror"] == {"enabled": True, "can_enable": False, "can_disable": True, "mirror_id": mirror["id"]}
 
     world.login("reader")
-    assert world.client.get(path).json()["object"]["mirror"]["mirror_id"] is None
+    assert world.client.get(path).json()["object"]["mirror"] is None
 
     world.login("viewer")
     source = require_source(world.source_a)
@@ -781,5 +781,74 @@ def test_catalog_enable_mirror_is_scoped_and_idempotent(world):
     apply_structure_snapshot(
         source=source, job_id="job_after_drop", collected=surviving, schema_scope=None,
     )
-    assert world.client.get(path).json()["object"]["mirror"] == {"can_enable": False, "mirror_id": mirror["id"]}
+    assert world.client.get(path).json()["object"]["mirror"] == {"enabled": True, "can_enable": False, "can_disable": True, "mirror_id": mirror["id"]}
     assert_problem(world.client.post(f"{path}/mirror"), status=404, code="MIRROR_NOT_FOUND")
+
+    off = world.client.put(f"{path}/mirror", json={"enabled": False})
+    assert off.status_code == 200
+    assert off.json()["mirror"] == {"enabled": False, "can_enable": False, "can_disable": False, "mirror_id": mirror["id"]}
+    assert world.client.put(f"{path}/mirror", json={"enabled": False}).json() == off.json()
+    assert world.client.get(f"/mirrors/{mirror['id']}").json()["can_enable"] is False
+    assert_problem(world.client.put(f"{path}/mirror", json={"enabled": True}), status=404, code="MIRROR_NOT_FOUND")
+    assert_problem(world.client.patch(f"/mirrors/{mirror['id']}", json={"enabled": True}), status=404, code="MIRROR_NOT_FOUND")
+
+
+def test_catalog_mirror_setting_permissions_and_idempotency(world):
+    path = f"/objects/{world.object_a2}/mirror"
+    world.login("hidden")
+    assert_problem(world.client.put(path, json={"enabled": False}), status=404, code="CATALOG_OBJECT_NOT_FOUND")
+    world.login("reader")
+    assert_problem(world.client.put(path, json={"enabled": False}), status=403, code="AUTH_FORBIDDEN")
+    for name, permission in (("mirror_writer", "mirror:write"), ("mirror_reader", "mirror:read")):
+        role = create_role(get_role_store(), key=name, name=name, permissions=["console:access", "metadata:read", permission])
+        user = _user(name, role.id)
+        create_membership(subject_type="user", subject_id=user, target=world.source_a, level="viewer")
+    world.login("mirror_writer")
+    off = world.client.put(path, json={"enabled": False})
+    assert off.status_code == 200
+    assert off.json() == {"mirror": {"enabled": False, "can_enable": True, "can_disable": False, "mirror_id": None}, "operation_id": None}
+    first = world.client.put(path, json={"enabled": True}).json()
+    assert first["mirror"] == {"enabled": True, "can_enable": False, "can_disable": True, "mirror_id": None}
+    assert first["operation_id"]
+    assert world.client.put(path, json={"enabled": True}).json() == first
+    off = world.client.put(path, json={"enabled": False}).json()
+    assert off["operation_id"] != first["operation_id"]
+    assert world.client.put(path, json={"enabled": False}).json() == off
+    world.login("mirror_reader")
+    saved = world.client.get(f"/objects/{world.object_a2}").json()["object"]["mirror"]
+    assert not saved["enabled"] and not saved["can_enable"] and not saved["can_disable"] and saved["mirror_id"]
+    world.login("viewer")
+    reopened = world.client.put(path, json={"enabled": True}).json()
+    assert reopened["mirror"]["mirror_id"] == saved["mirror_id"]
+    assert reopened["operation_id"] not in {first["operation_id"], off["operation_id"]}
+    assert world.client.post(path).json()["operation_id"] == reopened["operation_id"]
+
+
+def test_mirror_reports_current_wait_reason_without_changing_its_setting(world, monkeypatch):
+    from dataclasses import replace
+    from datetime import UTC, datetime
+    from backend.metadata.capture import configuration
+    from backend.metadata.mirrors import service
+
+    world.login("viewer")
+    setting = world.client.put(f"/objects/{world.object_a}/mirror", json={"enabled": True}).json()["mirror"]
+    source = require_source(world.source_a)
+    store = get_source_store()
+
+    def reasons():
+        mirror = world.client.get(f"/mirrors/{setting['mirror_id']}").json()["mirror"]
+        assert mirror["enabled"] is True
+        return [row["key"] for row in mirror["readiness"]]
+
+    assert reasons() == ["capture_credential_missing"]
+    store.save_source(replace(source, status="disabled"))
+    assert reasons() == ["source_disabled"]
+    store.save_source(replace(source, capture_credential_ciphertext="sealed", snapshot_window={"start": "01:00", "end": "02:00"}))
+    monkeypatch.setattr(configuration, "current_schedule_timezone", lambda: "UTC")
+    monkeypatch.setattr(service, "utc_now", lambda: datetime(2026, 1, 1, 7, tzinfo=UTC))
+    assert reasons() == ["snapshot_window_closed"]
+    owner = dict(source_id=source.id, owner_epoch=1, runtime_instance_id="owner", capture_generation=1)
+    monkeypatch.setitem(store.capture_bindings, source.id, dict(
+        owner, allocation={"command": owner, "scope": {"profile": {"tables": ["public.other_table"]}}},
+    ))
+    assert reasons() == ["table_unqualified"]

@@ -4,10 +4,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 import json
+import re
 
 from sqlalchemy import text
 
-from backend.metadata.mirrors.service import CommittedOpenPublication, OpenGenerationBinding, OpenPublicationIdentity
+from backend.metadata.mirrors.service import CommittedOpenPublication, OpenGenerationBinding, OpenPublicationIdentity, publication_certificate_ref
 from backend.metadata.mirrors.types import Authority
 
 
@@ -37,7 +38,7 @@ def persist_verified_certificate(connection, *, operation_id, authority, generat
         connection.execute("SET LOCAL ROLE refraq_mirror_owner")
         permitted = connection.execute(
             "SELECT generation.capture_generation = %s "
-            "AND NOT (generation.capture_generation = ANY(mirror.excluded_capture_generations)) "
+            "AND NOT generation.write_closed AND NOT (generation.capture_generation = ANY(mirror.excluded_capture_generations)) "
             "FROM source_mirror_state.generations generation "
             "JOIN source_mirror_state.mirrors mirror ON mirror.id = generation.mirror_id "
             "WHERE generation.id = %s FOR UPDATE OF mirror",
@@ -55,12 +56,45 @@ def persist_verified_certificate(connection, *, operation_id, authority, generat
             raise ValueError("Contradictory persisted publication certificate")
 
 
+def authorize_retained_delivery(connection, *, mirror_id, generation_id, operation_id, authority,
+                               history_epoch, certificate_ref, evidence_ref):
+    """Record the privileged observer's table-continuity decision under the current target fence."""
+    if not isinstance(evidence_ref, str) or not re.fullmatch(r"sha256:[a-f0-9]{64}", evidence_ref):
+        raise ValueError("MIRROR_RESUME_BLOCKED")
+    current = json.dumps(asdict(authority))
+    with connection.transaction():
+        connection.execute("SET LOCAL ROLE refraq_mirror_owner")
+        published = connection.execute(
+            "SELECT authority FROM source_mirror_state.certificates WHERE operation_id = %s AND generation_id = %s",
+            (operation_id, generation_id)).fetchone()
+        if not published:
+            raise ValueError("MIRROR_RESUME_BLOCKED")
+        observed = connection.execute(
+            "SELECT source_mirror_state.observe_committed_publication(%s,%s,%s,%s::jsonb,%s,%s::jsonb,"
+            "(SELECT source_mirror_state.delivery_metadata(%s)->>'fence_receipt'))",
+            (mirror_id, operation_id, generation_id, json.dumps(published[0]), history_epoch, current, generation_id),
+        ).fetchone()[0]
+        if publication_certificate_ref(observed["certificate"]["evidence"]) != certificate_ref:
+            raise ValueError("MIRROR_RESUME_BLOCKED")
+        connection.execute(
+            "INSERT INTO source_mirror_state.retained_deliveries(generation_id,authority,history_epoch,certificate_ref,evidence_ref) "
+            "VALUES (%s,%s::jsonb,%s,%s,%s) ON CONFLICT DO NOTHING",
+            (generation_id, current, history_epoch, certificate_ref, evidence_ref))
+
+
 class Publication:
     def __init__(self, engine, *, timeout_ms: int = 5000):
         if type(timeout_ms) is not int or timeout_ms <= 0:
             raise ValueError("A positive bounded target timeout is required")
         self.engine = engine
         self.timeout_ms = timeout_ms
+
+    def verified_certificate(self, *, operation_id: str, authority: Authority, generation_id: str):
+        with self.engine.connect() as connection:
+            return connection.execute(text(
+                "SELECT source_mirror_state.verified_certificate(:operation, CAST(:authority AS jsonb), :generation)"
+            ), {"operation": operation_id, "authority": json.dumps(asdict(authority)),
+                "generation": generation_id}).scalar_one()
 
     def publish_generation(self, *, operation_id: str, authority: Authority,
                            generation_id: str, certificate: dict):
@@ -75,7 +109,7 @@ class Publication:
     @contextmanager
     def observe_committed(
         self, *, mirror_id: str, operation_id: str, binding: OpenGenerationBinding,
-        expected: OpenPublicationIdentity,
+        expected: OpenPublicationIdentity, current_authority: Authority | None = None, fence_receipt: str | None = None,
     ) -> Iterator[CommittedOpenPublication]:
         """Hold target publication locks through the caller's Management transaction."""
         if binding.authority != expected.authority or binding.history_epoch != expected.history_epoch:
@@ -83,9 +117,14 @@ class Publication:
         with self.engine.connect().execution_options(isolation_level="READ COMMITTED") as connection, connection.begin():
             connection.execute(text("SELECT set_config('statement_timeout', :timeout, true), "
                                     "set_config('lock_timeout', :timeout, true)"), {"timeout": str(self.timeout_ms)})
+            parameters = {"mirror": mirror_id, "operation": operation_id, "generation": expected.generation_id,
+                          "authority": json.dumps(asdict(expected.authority)), "epoch": expected.history_epoch}
+            fence_args = ""
+            if current_authority is not None:
+                parameters.update(current_authority=json.dumps(asdict(current_authority)), receipt=fence_receipt)
+                fence_args = ", CAST(:current_authority AS jsonb), :receipt"
             observed = connection.execute(text(
                 "SELECT source_mirror_state.observe_committed_publication(:mirror, :operation, :generation, "
-                "CAST(:authority AS jsonb), :epoch)"
-            ), {"mirror": mirror_id, "operation": operation_id, "generation": expected.generation_id,
-                "authority": json.dumps(asdict(expected.authority)), "epoch": expected.history_epoch}).scalar_one()
+                f"CAST(:authority AS jsonb), :epoch{fence_args})"
+            ), parameters).scalar_one()
             yield CommittedOpenPublication(**observed)

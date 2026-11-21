@@ -49,16 +49,42 @@ def included_tables(published_scope):
     return [table for table in published_scope if table["included"]]
 
 
+def selected_tables(profile_scope, published_scope):
+    qualified = set(profile_scope.get("tables", []))
+    return [entry for entry in included_tables(published_scope) if entry["qualified_table"] in qualified]
+
+
 def profile_matches_scope(profile_scope, published_scope):
-    desired = included_tables(published_scope)
-    configured = profile_scope.get("tables", [])
-    return bool(desired) and len(configured) == len(desired) and sorted(configured) == sorted(
-        table["qualified_table"] for table in desired
-    )
+    return bool(selected_tables(profile_scope, published_scope))
 
 
-def _desired(source, published_scope):
-    if source.status == "active" and source.capture_credential_ciphertext and included_tables(published_scope):
+def table_exclusion_refs(scope, exclusions):
+    """Check exact excluded registry revisions and independently observed receipt digests."""
+    excluded = {row["mirror_id"]: row for row in scope if not row["included"]}
+    proof_keys = ("connector_excluded_ref", "inflight_drained_ref", "target_fence_ref")
+    refs = {}
+    if not isinstance(exclusions, list):
+        raise SourceCaptureControlConflict()
+    for item in exclusions:
+        if not isinstance(item, dict) or set(item) != {"scope_entry", *proof_keys}:
+            raise SourceCaptureControlConflict()
+        entry = item["scope_entry"]
+        if not isinstance(entry, dict) or not isinstance(entry.get("mirror_id"), str):
+            raise SourceCaptureControlConflict()
+        mirror_id = entry["mirror_id"]
+        if (entry != excluded.get(mirror_id) or entry["included"] is not False
+                or type(entry["mirror_revision"]) is not int or mirror_id in refs
+                or any(not isinstance(item[key], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", item[key])
+                       for key in proof_keys)):
+            raise SourceCaptureControlConflict()
+        refs[mirror_id] = [item[key] for key in proof_keys]
+    return refs
+
+
+def _desired(source, published_scope, state):
+    profile = state.get("allocation", {}).get("scope", {}).get("profile")
+    wanted = selected_tables(profile, published_scope) if profile else included_tables(published_scope)
+    if source.status == "active" and source.capture_credential_ciphertext and wanted:
         return "configured"
     return "stopped"
 
@@ -98,7 +124,7 @@ def _advance_intent(session, state, source, published_scope):
     state.update(control_revision=state["control_revision"] + 1,
                  credential_revision=source.capture_revision, stop_ack=None,
                  applied_revision=None, observed_at=None, published_scope=published_scope,
-                 desired=_desired(source, published_scope))
+                 desired=_desired(source, published_scope, state))
     command = _command(state, source, f"cop_{uuid4().hex}")
     save_binding(session, state)
     save_operation(session, command)
@@ -109,6 +135,9 @@ def _retire_stop_evidence(session, state):
     scope = state.get("published_scope")
     if scope and state.get("stop_ack") is not None:
         clear_mirror_stop_evidence(session, scope, state["stop_ack"]["operation_id"])
+    partial = state.pop("table_stops", None)
+    if partial is not None:
+        clear_mirror_stop_evidence(session, scope, partial["operation_id"])
 
 
 def reconcile_published_scope(source_id):
@@ -118,7 +147,7 @@ def reconcile_published_scope(source_id):
         if state is None:
             return
         scope = read_published_scope(session, source_id)
-        if scope == state.get("published_scope", []) and state["desired"] == _desired(source, scope):
+        if scope == state.get("published_scope", []) and state["desired"] == _desired(source, scope, state):
             return
         _advance_intent(session, state, source, scope)
 
@@ -169,7 +198,7 @@ def record_source_intent(
 
 def _allocation_context(session, source, state, profile_scope):
     published_scope = read_published_scope(session, source.id)
-    desired = _desired(source, published_scope)
+    desired = _desired(source, published_scope, state or {})
     if (state is None or state["credential_revision"] != source.capture_revision
             or state["desired"] != desired or state.get("published_scope", []) != published_scope
             or (desired == "configured" and not profile_matches_scope(profile_scope, published_scope))):
@@ -430,7 +459,8 @@ def capture_status(source_id: str) -> dict:
             "readiness": readiness,
             "availability": "disabled" if stopped else "unknown",
             "control": {key: value for key, value in state.items()
-                        if key not in {"allocation", "pending_allocation", "pending_replacement", "published_scope", "incremental_snapshots"}},
+                        if key not in {"allocation", "pending_allocation", "pending_replacement", "published_scope",
+                                       "incremental_snapshots", "table_stops", "scope_fence"}},
             "operations": [
                 {
                     **{key: value for key, value in op["command"].items() if key not in {"published_scope", "replacement"}},
@@ -445,7 +475,7 @@ def capture_status(source_id: str) -> dict:
 
 
 def record_applied_evidence(
-    *, source_id: str, operation_id: str, evidence: dict
+    *, source_id: str, operation_id: str, evidence: dict, refresh_table_exclusions=False
 ) -> dict:
     """Accept only exact-authority independent stop/installation observations."""
     with source_control_transaction(source_id) as (session, source):
@@ -477,6 +507,9 @@ def record_applied_evidence(
         else:
             required |= {"credential_installed_ref", "credential_revoked_ref"}
         allowed = set(AUTHORITY_KEYS) | required | {"operation_id"}
+        exclusions = table_exclusion_refs(command.get("published_scope", []), evidence.get("table_exclusions", []))
+        if "table_exclusions" in evidence and command["kind"] == "reconcile":
+            allowed.add("table_exclusions")
         if set(evidence) != allowed or any(
             not isinstance(evidence.get(key), str) or not evidence[key].strip()
             for key in required
@@ -493,6 +526,11 @@ def record_applied_evidence(
         ):
             raise SourceCaptureControlConflict()
         if operation["evidence"] is not None:
+            if refresh_table_exclusions and command["kind"] == "reconcile" and exclusions:
+                if state["applied_revision"] != state["control_revision"]:
+                    raise SourceCaptureControlConflict()
+                _record_table_stops(session, state, command, evidence, exclusions)
+                return evidence
             if operation["evidence"] != evidence:
                 raise SourceCaptureControlConflict()
             return operation["evidence"]
@@ -510,4 +548,15 @@ def record_applied_evidence(
                 and state["runtime_instance_id"] and state["owner_epoch"] > 0
                 and projected_scope and projected_scope == read_published_scope(session, source_id)):
             record_mirror_stop_evidence(session, command, evidence)
+        elif exclusions:
+            _record_table_stops(session, state, command, evidence, exclusions)
         return evidence
+
+
+def _record_table_stops(session, state, command, evidence, exclusions):
+    stops = state.setdefault("table_stops", {"operation_id": command["operation_id"], "confirmed": []})
+    if stops["operation_id"] != command["operation_id"]:
+        raise SourceCaptureControlConflict()
+    record_mirror_stop_evidence(session, command, evidence, exclusions=exclusions)
+    stops["confirmed"] = sorted(set(stops["confirmed"]).union(exclusions))
+    save_binding(session, state)

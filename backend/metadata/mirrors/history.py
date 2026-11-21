@@ -92,6 +92,10 @@ class SqlHistoryTarget:
 
     def invalidate(self, *, operation_id, transitions, reason=None, replay_only=False):
         parameters = {"operation": operation_id, "transitions": json.dumps(transitions)}
+        if reason == "table_gap":
+            return self._call(
+                "SELECT source_mirror_state.invalidate_table_gap(:operation, CAST(:transitions AS jsonb), :replay_only)",
+                dict(parameters, replay_only=replay_only), mutation=True)
         if reason == "history_loss":
             return self._call(
                 "SELECT source_mirror_state.invalidate_lost_history(:operation, CAST(:transitions AS jsonb), :replay_only)",
@@ -191,16 +195,24 @@ class History:
                 projected.append({**entry, "operation": operation})
             return {**result, "entries": projected, "source_ids": [source]}
 
-    def invalidate_history(self, session, *, mirror_ids, reason, operation_id):
+    def invalidate_history(self, session, *, mirror_ids, reason, operation_id, table_boundary=None):
         if not session.in_transaction():
             raise ValueError("Invalidation requires an active caller transaction")
         ids = sorted(set(mirror_ids))
         if not ids or not reason or len(reason) > 64 or not operation_id or len(operation_id) > 64:
             raise ValueError("Bounded invalidation identity and reason are required")
+        if reason == "table_gap":
+            if (len(ids) != 1 or not isinstance(table_boundary, dict)
+                    or table_boundary.keys() != {"start_offset", "partition_identity"}):
+                _invalid()
+        elif table_boundary is not None:
+            _invalid()
         gates = [self._gate(session, mirror_id) for mirror_id in ids]
         receipt = session.get(HistoryInvalidationRow, operation_id)
         if receipt is not None:
-            if [item["mirror_id"] for item in receipt.transitions] != ids or receipt.reason != reason:
+            if ([item["mirror_id"] for item in receipt.transitions] != ids or receipt.reason != reason
+                    or (table_boundary and any(receipt.transitions[0].get(key) != value
+                                               for key, value in table_boundary.items()))):
                 _invalid()
             return receipt.transitions
         if any(gate.status != "available" for gate in gates):
@@ -211,7 +223,8 @@ class History:
             gate.history_epoch = uuid4().hex
             gate.lower_commit_seq = gate.lower_entry_seq = 0
             gate.status = "invalidating"
-            transitions.append(dict(mirror_id=gate.mirror_id, old_epoch=old_epoch, history_epoch=gate.history_epoch))
+            transitions.append(dict(mirror_id=gate.mirror_id, old_epoch=old_epoch, history_epoch=gate.history_epoch,
+                                    **(table_boundary or {})))
         session.add(HistoryInvalidationRow(operation_id=operation_id, reason=reason,
                                           transitions=transitions, status="pending"))
         session.flush()
@@ -249,7 +262,7 @@ class History:
         return receipt, gates
 
     def _acknowledge_invalidation(self, receipt, *, replay_only):
-        options = {"reason": receipt.reason, "replay_only": replay_only} if receipt.reason == "history_loss" else {}
+        options = {"reason": receipt.reason, "replay_only": replay_only} if receipt.reason in {"history_loss", "table_gap"} else {}
         if self.target.invalidate(operation_id=receipt.operation_id, transitions=receipt.transitions, **options) is not True:
             raise MirrorError("MIRROR_READ_UNAVAILABLE", 503)
 
@@ -258,7 +271,7 @@ class History:
         if receipt is None:
             raise ValueError("Unknown invalidation operation")
         applied = receipt.status == "applied"
-        if applied and receipt.reason != "history_loss":
+        if applied and receipt.reason not in {"history_loss", "table_gap"}:
             return
         if not applied:
             for transition in receipt.transitions:

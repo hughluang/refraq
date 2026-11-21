@@ -8,7 +8,7 @@ from backend.metadata.mirrors import recovery, service
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
 from backend.metadata.mirrors.schemas import (
     MirrorListResponse,
-    MirrorResponse,
+    MirrorDetailResponse,
     MirrorStatus,
     PatchMirrorRequest,
     PatchMirrorResponse,
@@ -32,11 +32,11 @@ def list_mirrors(
     )
 
 
-@router.get("/mirrors/{mirror_id}", response_model=MirrorResponse)
+@router.get("/mirrors/{mirror_id}", response_model=MirrorDetailResponse)
 def get_mirror(
     mirror_id: str, _: UserRecord = Depends(require_permission("mirror:read"))
 ):
-    return {"mirror": service.get_mirror(mirror_id)}
+    return service.get_mirror_detail(mirror_id)
 
 
 @router.patch("/mirrors/{mirror_id}", response_model=PatchMirrorResponse)

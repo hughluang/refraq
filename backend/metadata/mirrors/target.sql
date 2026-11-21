@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS source_mirror_state.version (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL);
-INSERT INTO source_mirror_state.version VALUES (true, 2) ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version;
+INSERT INTO source_mirror_state.version VALUES (true, 3) ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version;
 CREATE TABLE IF NOT EXISTS source_mirror_state.mirrors (
  id text PRIMARY KEY, source_id text NOT NULL, table_identity text NOT NULL,
  authority jsonb NOT NULL, published_generation_id text,
@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS source_mirror_state.mirrors (
  UNIQUE(source_id, table_identity)
 );
 ALTER TABLE source_mirror_state.mirrors
- ADD COLUMN IF NOT EXISTS excluded_capture_generations text[] NOT NULL DEFAULT '{}';
+ ADD COLUMN IF NOT EXISTS excluded_capture_generations text[] NOT NULL DEFAULT '{}',
+ ADD COLUMN IF NOT EXISTS gap_fence jsonb;
 CREATE TABLE IF NOT EXISTS source_mirror_state.fence_receipts (
  mirror_id text NOT NULL REFERENCES source_mirror_state.mirrors,
  operation_id text NOT NULL, request jsonb NOT NULL, receipt_ref text NOT NULL,
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS source_mirror_state.generations (
  cleanup_pending boolean NOT NULL DEFAULT false
 );
 ALTER TABLE source_mirror_state.generations
+ ADD COLUMN IF NOT EXISTS write_closed boolean NOT NULL DEFAULT false,
  ADD COLUMN IF NOT EXISTS anchored_profile jsonb,
  ADD COLUMN IF NOT EXISTS anchored_coverage jsonb,
  ADD COLUMN IF NOT EXISTS anchored_publication jsonb;
@@ -42,6 +44,12 @@ CREATE TABLE IF NOT EXISTS source_mirror_state.certificates (
  authority jsonb NOT NULL, evidence jsonb NOT NULL, verified_by text NOT NULL,
  published boolean NOT NULL DEFAULT false
 );
+CREATE TABLE IF NOT EXISTS source_mirror_state.retained_deliveries (
+ generation_id text NOT NULL REFERENCES source_mirror_state.generations,
+ authority jsonb NOT NULL,
+ history_epoch text NOT NULL, certificate_ref text NOT NULL, evidence_ref text NOT NULL,
+ PRIMARY KEY(generation_id, history_epoch, authority)
+);
 CREATE TABLE IF NOT EXISTS source_mirror_state.reader_pins (
  run_id text NOT NULL, mirror_id text NOT NULL REFERENCES source_mirror_state.mirrors,
  generation_id text NOT NULL REFERENCES source_mirror_state.generations,
@@ -58,10 +66,12 @@ RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source
  SELECT jsonb_build_object(
   'generation_id', g.id, 'authority', m.authority, 'table_identity', m.table_identity,
   'mirror_id', m.id, 'operation_id', g.operation_id, 'history_epoch', m.history_epoch,
-  'fence_receipt', (
+  'fence_receipt', coalesce((
    SELECT r.receipt_ref FROM source_mirror_state.fence_receipts r
    WHERE r.mirror_id = m.id AND r.request->'authority' = m.authority
-     AND r.request->>'history_epoch' = m.history_epoch),
+     AND r.request->>'history_epoch' = m.history_epoch), CASE
+   WHEN m.gap_fence->'authority' = m.authority AND m.gap_fence->>'history_epoch' = m.history_epoch
+   THEN m.gap_fence->>'receipt_ref' END),
   'start_offset', obj_description(target.oid, 'pg_class')::jsonb->'start_offset',
   'capture_generation', g.capture_generation, 'schema_fingerprint', g.schema_fingerprint,
   'key_columns', CASE WHEN g.key_columns = (
@@ -76,6 +86,10 @@ RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source
    FROM pg_attribute a WHERE a.attrelid = target.oid AND a.attnum > 0 AND NOT a.attisdropped))
  || CASE WHEN g.anchored_profile IS NOT NULL THEN jsonb_build_object(
   'anchored_profile', g.anchored_profile, 'applied_offset', g.applied_offset, 'anchored_coverage', g.anchored_coverage,
+  'anchored_coverage_authorized', EXISTS (
+   SELECT 1 FROM source_mirror_state.retained_deliveries d
+   WHERE d.generation_id = g.id AND d.history_epoch = m.history_epoch
+     AND d.authority = g.anchored_coverage->'authority'),
   'anchored_seal', g.anchored_publication->'seal') ELSE '{}'::jsonb END
  FROM source_mirror_state.generations g
  JOIN source_mirror_state.mirrors m ON m.id = g.mirror_id
@@ -104,7 +118,7 @@ BEGIN
  IF m.id IS NULL OR g.id IS NULL
  OR m.authority IS DISTINCT FROM a OR g.capture_generation IS DISTINCT FROM a->>'capture_generation'
  OR g.capture_generation = ANY(m.excluded_capture_generations)
- OR g.partition_identity IS DISTINCT FROM p OR g.cleanup_pending
+ OR g.partition_identity IS DISTINCT FROM p OR g.cleanup_pending OR g.write_closed
  OR g.status NOT IN ('building','catching_up','published') THEN
   RAISE EXCEPTION 'MIRROR_CONTROL_CONFLICT';
  END IF;
@@ -118,10 +132,9 @@ BEGIN
   IF profile->>'kind' IS DISTINCT FROM 'disposable_read_committed_v1'
    OR jsonb_typeof(profile->'leader_epoch') IS DISTINCT FROM 'number'
    OR profile->>'leader_epoch' !~ '^[0-9]+$'
-   OR (g.applied_offset = -1 AND g.anchored_coverage IS NOT NULL
-    AND g.anchored_coverage->'eof' IS DISTINCT FROM '0'::jsonb)
-   OR ((g.applied_offset <> -1 OR g.anchored_coverage IS NOT NULL)
-    AND g.anchored_coverage->'end' IS DISTINCT FROM to_jsonb(g.applied_offset + 1)) THEN
+   OR (g.anchored_coverage IS NULL AND g.applied_offset IS DISTINCT FROM
+    (obj_description(format('source_mirror.%I', g.table_name)::regclass, 'pg_class')::jsonb->>'start_offset')::bigint)
+   OR (g.anchored_coverage IS NOT NULL AND g.anchored_coverage->'end' IS DISTINCT FROM to_jsonb(g.applied_offset + 1)) THEN
    RAISE EXCEPTION 'MIRROR_COVERAGE_PROFILE_MISMATCH';
   END IF;
   IF records = '[]'::jsonb AND scan IS NULL THEN
@@ -133,7 +146,10 @@ BEGIN
    seal_proof := g.anchored_publication->'seal';
    IF NOT FOUND OR NOT certified.published OR certified.verified_by = ''
     OR certified.evidence IS DISTINCT FROM resume->'certificate'
-    OR certified.authority IS DISTINCT FROM a OR m.source_id IS DISTINCT FROM a->>'source_id'
+    OR (certified.authority IS DISTINCT FROM a AND NOT EXISTS (
+     SELECT 1 FROM source_mirror_state.retained_deliveries d WHERE d.generation_id = gid
+      AND d.authority = a AND d.history_epoch = m.history_epoch))
+    OR m.source_id IS DISTINCT FROM a->>'source_id'
     OR certified.evidence->>'operation_id' IS DISTINCT FROM g.operation_id
     OR certified.evidence->>'generation_id' IS DISTINCT FROM gid
     OR certified.evidence->>'table_identity' IS DISTINCT FROM m.table_identity
@@ -145,7 +161,7 @@ BEGIN
     OR g.anchored_publication->>'history_epoch' IS DISTINCT FROM m.history_epoch
     OR resume->>'history_epoch' IS DISTINCT FROM m.history_epoch
     OR seal_proof IS NULL OR seal_proof IS DISTINCT FROM certified.evidence->'ordered_delivery_proof'
-    OR seal_proof->'authority' IS DISTINCT FROM a
+    OR seal_proof->'authority' IS DISTINCT FROM certified.authority
     OR seal_proof->'eof' IS DISTINCT FROM seal_proof->'end'
     OR seal_proof->'before'->'leader_epoch' IS DISTINCT FROM profile->'leader_epoch'
     OR seal_proof->'after'->'leader_epoch' IS DISTINCT FROM profile->'leader_epoch'
@@ -157,7 +173,9 @@ BEGIN
    bounds := g.anchored_coverage->'after';
    IF certified.evidence->'end_offset' IS DISTINCT FROM to_jsonb(sealed_end - 1)
     OR g.applied_offset < sealed_end - 1
-    OR g.anchored_coverage->'authority' IS DISTINCT FROM a
+    OR (g.anchored_coverage->'authority' IS DISTINCT FROM certified.authority
+     AND NOT EXISTS (SELECT 1 FROM source_mirror_state.retained_deliveries d WHERE d.generation_id = gid
+      AND d.history_epoch = m.history_epoch AND d.authority = g.anchored_coverage->'authority'))
     OR (g.applied_offset = sealed_end - 1 AND g.anchored_coverage IS DISTINCT FROM seal_proof)
     OR (g.applied_offset >= sealed_end AND (g.anchored_coverage ? 'eof'
      OR ((g.anchored_coverage->>'start')::bigint >= sealed_end) IS NOT TRUE
@@ -344,6 +362,17 @@ RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source
  SELECT source_mirror_state.apply_batch(a, gid, p, records, NULL::jsonb, NULL::jsonb)
 $$;
 
+CREATE OR REPLACE FUNCTION source_mirror_state.verified_certificate(op text, a jsonb, gid text)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+ SELECT c.evidence FROM source_mirror_state.certificates c
+ JOIN source_mirror_state.generations g ON g.id = c.generation_id AND g.operation_id = c.operation_id
+ JOIN source_mirror_state.mirrors m ON m.id = g.mirror_id
+ WHERE c.operation_id = op AND g.id = gid AND c.authority = a AND m.authority = a
+ AND c.verified_by <> '' AND NOT g.cleanup_pending
+ AND g.capture_generation = a->>'capture_generation'
+ AND NOT (g.capture_generation = ANY(m.excluded_capture_generations))
+$$;
+
 CREATE OR REPLACE FUNCTION source_mirror_state.publish_generation(op text, a jsonb, gid text, cert jsonb)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
 DECLARE m source_mirror_state.mirrors; g source_mirror_state.generations; c source_mirror_state.certificates;
@@ -364,7 +393,7 @@ BEGIN
   OR cert->>'operation_id' IS DISTINCT FROM g.operation_id
   OR cert->>'generation_id' IS DISTINCT FROM gid
   OR cert->>'end_offset' IS NULL
-  OR g.cleanup_pending THEN
+  OR g.cleanup_pending OR g.write_closed THEN
   RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
  END IF;
  IF c.published THEN

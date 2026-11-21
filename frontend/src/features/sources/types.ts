@@ -77,7 +77,7 @@ export type ColumnSemanticsPatch = {
 };
 
 export type CatalogObject = {
-  mirror?: { can_enable: boolean; mirror_id: string | null } | null;
+  mirror?: { enabled: boolean; can_enable: boolean; can_disable: boolean; mirror_id: string | null } | null;
   id: string;
   locator_key: string;
   source_id: string;

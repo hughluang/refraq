@@ -6,6 +6,9 @@ CREATE TABLE IF NOT EXISTS source_mirror_state.history_invalidations (
 );
 ALTER TABLE source_mirror_state.history_invalidations ADD COLUMN IF NOT EXISTS excluded_lineages jsonb;
 
+ALTER TABLE source_mirror_state.history_invalidations
+ ADD COLUMN IF NOT EXISTS table_gap boolean NOT NULL DEFAULT false;
+
 CREATE OR REPLACE FUNCTION source_mirror_state.history_version()
 RETURNS integer LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
  SELECT 1
@@ -28,7 +31,8 @@ BEGIN
 END $$;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.observe_committed_publication(
- requested_mirror text, requested_operation text, requested_generation text, expected_authority jsonb, expected_epoch text)
+ requested_mirror text, requested_operation text, requested_generation text, expected_authority jsonb, expected_epoch text,
+ current_authority jsonb, current_receipt text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
 DECLARE mirror_row source_mirror_state.mirrors; generation_row source_mirror_state.generations;
  certificate_row source_mirror_state.certificates;
@@ -36,14 +40,21 @@ DECLARE mirror_row source_mirror_state.mirrors; generation_row source_mirror_sta
 BEGIN
  SELECT * INTO mirror_row FROM source_mirror_state.mirrors WHERE id = requested_mirror FOR SHARE;
  IF NOT FOUND OR mirror_row.published_generation_id IS DISTINCT FROM requested_generation
-  OR mirror_row.authority IS DISTINCT FROM expected_authority
+  OR mirror_row.authority IS DISTINCT FROM current_authority
+  OR current_authority->'source_id' IS DISTINCT FROM expected_authority->'source_id'
+  OR current_authority->'resource_binding_id' IS DISTINCT FROM expected_authority->'resource_binding_id'
+  OR current_authority->'capture_generation' IS DISTINCT FROM expected_authority->'capture_generation'
+  OR (current_authority IS DISTINCT FROM expected_authority AND NOT EXISTS (
+   SELECT 1 FROM source_mirror_state.fence_receipts r WHERE r.mirror_id = requested_mirror
+    AND r.request->'authority' = current_authority AND r.request->>'history_epoch' = expected_epoch
+    AND r.receipt_ref = current_receipt))
   OR mirror_row.source_id IS DISTINCT FROM expected_authority->>'source_id'
   OR mirror_row.history_epoch IS DISTINCT FROM expected_epoch THEN
   RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
  END IF;
  SELECT * INTO generation_row FROM source_mirror_state.generations
  WHERE id = requested_generation AND mirror_id = requested_mirror AND operation_id = requested_operation FOR SHARE;
- IF NOT FOUND OR generation_row.status <> 'published' OR generation_row.cleanup_pending
+ IF NOT FOUND OR generation_row.status <> 'published' OR generation_row.cleanup_pending OR generation_row.write_closed
   OR generation_row.capture_generation IS DISTINCT FROM expected_authority->>'capture_generation'
   OR generation_row.capture_generation = ANY(mirror_row.excluded_capture_generations) THEN
   RAISE EXCEPTION 'MIRROR_PUBLICATION_BLOCKED';
@@ -83,6 +94,13 @@ BEGIN
    'evidence', certificate_row.evidence, 'verified_by', certificate_row.verified_by, 'published', certificate_row.published),
   'applied_offset', generation_row.applied_offset, 'history_bound', bound);
 END $$;
+
+CREATE OR REPLACE FUNCTION source_mirror_state.observe_committed_publication(
+ requested_mirror text, requested_operation text, requested_generation text, expected_authority jsonb, expected_epoch text)
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+ SELECT source_mirror_state.observe_committed_publication(
+  requested_mirror, requested_operation, requested_generation, expected_authority, expected_epoch, expected_authority, NULL)
+$$;
 
 CREATE OR REPLACE FUNCTION source_mirror_state.history_page(mid text, after_position jsonb, through_position jsonb, page_limit integer)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
@@ -134,7 +152,7 @@ BEGIN
  END LOOP;
  SELECT * INTO previous FROM source_mirror_state.history_invalidations WHERE operation_id = op;
  IF FOUND THEN
-  IF previous.transitions IS DISTINCT FROM changes OR (previous.excluded_lineages IS NOT NULL) <> history_loss
+  IF previous.table_gap OR previous.transitions IS DISTINCT FROM changes OR (previous.excluded_lineages IS NOT NULL) <> history_loss
   THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
   RETURN true;
  END IF;
@@ -174,3 +192,47 @@ CREATE OR REPLACE FUNCTION source_mirror_state.invalidate_lost_history(op text, 
 RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
  SELECT source_mirror_state.reset_history(op, changes, true, coalesce(replay_only, true))
 $$;
+
+CREATE OR REPLACE FUNCTION source_mirror_state.invalidate_table_gap(op text, changes jsonb, replay_only boolean)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, source_mirror_state AS $$
+DECLARE mid text; previous source_mirror_state.history_invalidations; old_fence jsonb;
+BEGIN
+ IF jsonb_typeof(changes) IS DISTINCT FROM 'array' OR jsonb_array_length(changes) <> 1 THEN
+  RAISE EXCEPTION 'MIRROR_HISTORY_INVALID';
+ END IF;
+ IF jsonb_typeof(changes->0->'start_offset') IS DISTINCT FROM 'number'
+  OR changes->0->>'start_offset' !~ '^(-1|[0-9]+)$'
+  OR jsonb_typeof(changes->0->'partition_identity') IS DISTINCT FROM 'object' THEN
+  RAISE EXCEPTION 'MIRROR_HISTORY_INVALID';
+ END IF;
+ mid := changes->0->>'mirror_id';
+ PERFORM 1 FROM source_mirror_state.mirrors WHERE id = mid FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
+ SELECT * INTO previous FROM source_mirror_state.history_invalidations WHERE operation_id = op;
+ IF FOUND THEN
+  IF previous.transitions IS DISTINCT FROM changes OR NOT previous.table_gap THEN
+   RAISE EXCEPTION 'MIRROR_HISTORY_INVALID';
+  END IF;
+  RETURN true;
+ END IF;
+ IF replay_only IS DISTINCT FROM false OR EXISTS (
+  SELECT 1 FROM source_mirror_state.generations g WHERE g.mirror_id = mid AND NOT g.write_closed
+   AND (g.partition_identity <> changes->0->'partition_identity'
+    OR g.applied_offset > (changes->0->>'start_offset')::bigint)
+ ) OR EXISTS (
+  SELECT 1 FROM source_mirror_state.generations g JOIN source_mirror_state.mirrors m ON m.published_generation_id=g.id
+   WHERE m.id=mid AND (g.partition_identity <> changes->0->'partition_identity'
+    OR g.applied_offset > (changes->0->>'start_offset')::bigint)
+ ) THEN RAISE EXCEPTION 'MIRROR_HISTORY_INVALID'; END IF;
+ SELECT jsonb_build_object('receipt_ref', r.receipt_ref, 'authority', m.authority,
+                           'history_epoch', changes->0->>'history_epoch') INTO old_fence
+ FROM source_mirror_state.mirrors m JOIN source_mirror_state.fence_receipts r ON r.mirror_id=m.id
+ WHERE m.id = mid AND r.request->'authority'=m.authority AND (
+   r.request->>'history_epoch'=m.history_epoch OR (m.gap_fence->>'receipt_ref'=r.receipt_ref
+    AND m.gap_fence->'authority'=m.authority AND m.gap_fence->>'history_epoch'=m.history_epoch));
+ PERFORM source_mirror_state.reset_history(op, changes, false, false);
+ UPDATE source_mirror_state.mirrors SET gap_fence = old_fence WHERE id = mid;
+ UPDATE source_mirror_state.generations SET write_closed = true WHERE mirror_id = mid;
+ UPDATE source_mirror_state.history_invalidations SET table_gap = true WHERE operation_id = op;
+ RETURN true;
+END $$;

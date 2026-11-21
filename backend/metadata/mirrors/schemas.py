@@ -95,6 +95,10 @@ class MirrorResponse(StrictModel):
     mirror: Mirror
 
 
+class MirrorDetailResponse(MirrorResponse):
+    can_enable: bool
+
+
 class MirrorListResponse(StrictModel):
     items: list[Mirror]
     total: int

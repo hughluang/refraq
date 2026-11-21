@@ -196,8 +196,13 @@ def test_postgresql_profile_inspects_capture_identity_before_config(managed_comm
     source = get_source_store().get_source(managed_command["source_id"])
     source.access_ciphertext = encrypt_secret(json.dumps({"host": "pg.internal", "port": 5432, "database": "app", "schema": "public"}))
     source.capture_credential_ciphertext = encrypt_secret(json.dumps({"username": "capture", "password": "private"}))
+    managed_command["published_scope"] = [
+        {"qualified_table": "public.orders", "included": True},
+        {"qualified_table": "public.items", "included": False},
+        {"qualified_table": "public.unqualified", "included": True},
+    ]
     scope = {"source_id": source.id, "connector_name": "cap_one", "host": "pg.internal",
-             "port": 5432, "database": "app", "tables": ["public.orders"],
+             "port": 5432, "database": "app", "tables": ["public.orders", "public.items"],
              "publication": "capture_pub", "slot": "capture_slot", "topic_prefix": "cap_one",
              "server_version_num": 180000}
     if transactions:
@@ -231,7 +236,7 @@ def test_postgresql_profile_inspects_capture_identity_before_config(managed_comm
             return (True,)
 
         def fetchall(self):
-            tables = [("public.orders", False, ["body", "id"], ["id", "body"], False)]
+            tables = [(name, False, ["body", "id"], ["id", "body"], False) for name in scope["tables"]]
             if transactions:
                 tables.append(("public.signal", False, ["id", "type", "data"], ["data", "id", "type"], False))
             return tables
@@ -249,6 +254,8 @@ def test_postgresql_profile_inspects_capture_identity_before_config(managed_comm
     else:
         config = profile.configuration(managed_command, source, {"username": "user-ref", "password": "password-ref"})
         assert config["snapshot.mode"] == "no_data"
+        expected = r"public\.orders,public\.signal" if transactions else r"public\.orders"
+        assert config["table.include.list"] == expected
         assert config["publication.autocreate.mode"] == "disabled"
         assert config.get("provide.transaction.metadata") == ("true" if transactions else None)
         assert "private" not in config.values()

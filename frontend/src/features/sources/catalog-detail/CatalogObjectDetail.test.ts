@@ -10,6 +10,8 @@ import { ApiError } from "@/lib/api";
 import en from "@/locales/en-US/common.json";
 import { ConsoleNotifications } from "@/providers/notification-provider";
 
+import { CatalogObjectDetail } from "./CatalogObjectDetail";
+
 const getCatalogObject = vi.hoisted(() => vi.fn());
 const openNotification = vi.hoisted(() => vi.fn());
 const mirrorGrants = vi.hoisted(() => new Set<string>());
@@ -97,17 +99,17 @@ function shell(node: ReactNode) {
 const orders = {
   id: "obj_1", source_id: "source", schema_name: "public", name: "orders",
   object_type: "table", locator_key: "obj/postgresql/demo/public/table/orders",
-  columns: [], is_present: true, mirror: { can_enable: true, mirror_id: null },
+  columns: [], is_present: true, mirror: { enabled: false, can_enable: true, can_disable: false, mirror_id: null },
 };
 
 function acceptedMirror() {
-  return new Response(JSON.stringify({ mirror: { id: "mirror_1" }, operation_id: "op_1" }), { status: 202 });
+  return new Response(JSON.stringify({ mirror: { enabled: true, can_enable: false, can_disable: true, mirror_id: "mirror_1" }, operation_id: "op_1" }), { status: 200 });
 }
 
-function stubMirrorPost(post: (request: RequestInit) => Promise<Response>) {
+function stubMirrorPut(post: (request: RequestInit) => Promise<Response>) {
   const submit = vi.fn(post);
   vi.stubGlobal("fetch", (path: string, request: RequestInit) =>
-    path === "/api/objects/obj_1/mirror" && request.method === "POST"
+    path === "/api/objects/obj_1/mirror" && request.method === "PUT"
       ? submit(request)
       : Promise.resolve(new Response('{"items":[]}')),
   );
@@ -132,81 +134,99 @@ describe("CatalogObjectDetail load", () => {
   it("submits the resolved object id once and follows the accepted Mirror with read access", async () => {
     mirrorGrants.add("edit").add("show");
     getCatalogObject.mockResolvedValueOnce({ object: orders }).mockResolvedValue({
-      object: { ...orders, mirror: { can_enable: false, mirror_id: "mirror_1" } },
+      object: { ...orders, mirror: { enabled: true, can_enable: false, can_disable: true, mirror_id: "mirror_1" } },
     });
     let finish!: (response: Response) => void;
-    const submit = stubMirrorPost(() => new Promise<Response>((resolve) => { finish = resolve; }));
-    const { CatalogObjectDetail } = await import("./CatalogObjectDetail");
+    const submit = stubMirrorPut(() => new Promise<Response>((resolve) => { finish = resolve; }));
     render(shell(createElement(CatalogObjectDetail, { objectId: orders.locator_key })));
 
-    const enable = await screen.findByRole("button", { name: "Enable mirror" });
+    const enable = await screen.findByRole("switch", { name: "Mirror synchronization" });
     act(() => {
       fireEvent.click(enable);
       fireEvent.click(enable);
     });
     expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0][0].body).toBe('{"enabled":true}');
     await act(async () => finish(acceptedMirror()));
 
     expect(openNotification).toHaveBeenCalledWith(expect.objectContaining({
-      type: "success", message: "Mirror enable request accepted",
+      type: "success", message: "Mirror setting saved",
     }));
     const link = await screen.findByRole("link", { name: "View mirror" });
     expect(link.getAttribute("href")).toBe("/console/mirrors/mirror_1");
-    expect(screen.queryByRole("button", { name: "Enable mirror" })).toBeNull();
+    expect(screen.getByRole("switch", { name: "Mirror synchronization", checked: true })).toBeTruthy();
   });
 
   it("uses independent read and write permissions for the Mirror controls", async () => {
     mirrorGrants.add("show");
     getCatalogObject.mockResolvedValue({
-      object: { ...orders, mirror: { can_enable: true, mirror_id: "mirror_1" } },
+      object: { ...orders, mirror: { enabled: false, can_enable: true, can_disable: false, mirror_id: "mirror_1" } },
     });
-    const { CatalogObjectDetail } = await import("./CatalogObjectDetail");
     const record = () => shell(createElement(CatalogObjectDetail, { objectId: orders.id }));
     const view = render(record());
     expect(await screen.findByRole("link", { name: "View mirror" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Enable mirror" })).toBeNull();
+    expect(screen.getByRole("switch", { name: "Mirror synchronization" }).hasAttribute("disabled")).toBe(true);
 
     mirrorGrants.clear();
     view.rerender(record());
     expect(screen.queryByRole("link", { name: "View mirror" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Enable mirror" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Mirror synchronization" })).toBeNull();
 
     mirrorGrants.add("edit");
     view.rerender(record());
     expect(screen.queryByRole("link", { name: "View mirror" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Enable mirror" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Mirror synchronization" })).toBeTruthy();
   });
 
   it("withdraws the stale enable action and reports the problem when the server denies it", async () => {
     mirrorGrants.add("edit");
     getCatalogObject.mockResolvedValueOnce({ object: orders }).mockResolvedValue({
-      object: { ...orders, mirror: { can_enable: false, mirror_id: null } },
+      object: { ...orders, mirror: null },
     });
-    const submit = stubMirrorPost(async () => new Response(
+    const submit = stubMirrorPut(async () => new Response(
       JSON.stringify({ code: "AUTH_FORBIDDEN", detail: "Forbidden" }),
       { status: 403 },
     ));
-    const { CatalogObjectDetail } = await import("./CatalogObjectDetail");
     render(shell(createElement(CatalogObjectDetail, { objectId: orders.id })));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Enable mirror" }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Mirror synchronization" }));
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(getCatalogObject).toHaveBeenCalledTimes(2);
     expect(submit).toHaveBeenCalledTimes(1);
     expect(openNotification).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Enable mirror" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Mirror synchronization" })).toBeNull();
+  });
+
+  it("confirms turning off, then recovers the saved setting after a lost reply", async () => {
+    mirrorGrants.add("edit");
+    getCatalogObject.mockResolvedValueOnce({
+      object: { ...orders, mirror: { enabled: true, can_enable: false, can_disable: true, mirror_id: null } },
+    }).mockResolvedValue({ object: orders });
+    const submit = stubMirrorPut(async () => { throw new TypeError("Connection closed"); });
+    render(shell(createElement(CatalogObjectDetail, { objectId: orders.id })));
+    const control = await screen.findByRole("switch", { checked: true });
+    fireEvent.click(control);
+    expect(submit).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(submit).not.toHaveBeenCalled();
+    fireEvent.click(control);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+    await screen.findByRole("switch", { checked: false });
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0][0].body).toBe('{"enabled":false}');
+    expect(screen.queryByRole("link", { name: "View mirror" })).toBeNull();
+    expect(await screen.findByRole("alert")).toBeTruthy();
   });
 
   it("keeps the pending enable request when the user tries to refresh", async () => {
     mirrorGrants.add("edit").add("show");
     getCatalogObject.mockResolvedValueOnce({ object: orders }).mockResolvedValue({
-      object: { ...orders, mirror: { can_enable: false, mirror_id: "mirror_1" } },
+      object: { ...orders, mirror: { enabled: true, can_enable: false, can_disable: true, mirror_id: "mirror_1" } },
     });
     let finish!: (response: Response) => void;
-    const submit = stubMirrorPost(() => new Promise<Response>((resolve) => { finish = resolve; }));
-    const { CatalogObjectDetail } = await import("./CatalogObjectDetail");
+    const submit = stubMirrorPut(() => new Promise<Response>((resolve) => { finish = resolve; }));
     render(shell(createElement(CatalogObjectDetail, { objectId: orders.id })));
-    fireEvent.click(await screen.findByRole("button", { name: "Enable mirror" }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Mirror synchronization" }));
     const refresh = screen.getByRole("button", { name: "Refresh" });
     fireEvent.click(refresh);
 
@@ -216,7 +236,7 @@ describe("CatalogObjectDetail load", () => {
     await act(async () => finish(acceptedMirror()));
 
     expect(await screen.findByRole("link", { name: "View mirror" })).toBeTruthy();
-    expect(getCatalogObject).toHaveBeenCalledTimes(2);
+    expect(getCatalogObject).toHaveBeenCalledTimes(1);
   });
 
   it("ignores late Mirror acceptance after navigation", async () => {
@@ -225,10 +245,9 @@ describe("CatalogObjectDetail load", () => {
       object: { ...orders, mirror: null },
     });
     let finish!: (response: Response) => void;
-    const submit = stubMirrorPost(() => new Promise<Response>((resolve) => { finish = resolve; }));
-    const { CatalogObjectDetail } = await import("./CatalogObjectDetail");
+    const submit = stubMirrorPut(() => new Promise<Response>((resolve) => { finish = resolve; }));
     const view = render(shell(createElement(CatalogObjectDetail, { objectId: orders.id })));
-    fireEvent.click(await screen.findByRole("button", { name: "Enable mirror" }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Mirror synchronization" }));
     view.rerender(shell(createElement(CatalogObjectDetail, { objectId: "other_object" })));
     expect(submit.mock.calls[0][0].signal?.aborted).toBe(true);
     await act(async () => finish(acceptedMirror()));
@@ -240,9 +259,6 @@ describe("CatalogObjectDetail load", () => {
   it("shows unloaded and one notice with the request id when the object fails to load", async () => {
     getCatalogObject.mockRejectedValue(
       new ApiError(500, "NO_SUCH_CODE", "database offline", "req-18"),
-    );
-    const { CatalogObjectDetail } = await import(
-      "@/features/sources/catalog-detail/CatalogObjectDetail"
     );
     render(shell(createElement(CatalogObjectDetail, { objectId: "obj_1" })));
 
@@ -267,7 +283,6 @@ describe("CatalogObjectDetail load", () => {
       object_type: "table", locator_key: "obj/postgresql/demo/public/table/orders",
       columns: [], is_present: true, business_semantics_ready: false,
     } });
-    const { CatalogObjectDetail } = await import("@/features/sources/catalog-detail/CatalogObjectDetail");
     render(shell(createElement(CatalogObjectDetail, { objectId: "obj_1" })));
     await screen.findByRole("heading", { name: "public.orders" });
     const locator = screen.getByText("obj/postgresql/demo/public/table/orders");
@@ -288,7 +303,6 @@ describe("CatalogObjectDetail load", () => {
       object_type: "table", locator_key: "obj/postgresql/demo/public/table/new",
       columns: [], is_present: true,
     } });
-    const { CatalogObjectDetail } = await import("@/features/sources/catalog-detail/CatalogObjectDetail");
     const view = render(shell(createElement(CatalogObjectDetail, { objectId: "old" })));
     view.rerender(shell(createElement(CatalogObjectDetail, { objectId: "new" })));
     await screen.findByRole("heading", { name: "public.new" });
@@ -300,9 +314,6 @@ describe("CatalogObjectDetail load", () => {
 
   it("keeps a missing object on not-found", async () => {
     getCatalogObject.mockResolvedValue({ object: null });
-    const { CatalogObjectDetail } = await import(
-      "@/features/sources/catalog-detail/CatalogObjectDetail"
-    );
     render(shell(createElement(CatalogObjectDetail, { objectId: "obj_missing" })));
 
     expect(await screen.findByRole("heading", { name: "Page not found" })).toBeTruthy();
@@ -317,7 +328,6 @@ describe("CatalogObjectDetail load", () => {
       object_type: "table", locator_key: "obj/postgresql/demo/public/table/orders",
       columns: [], is_present: true,
     } }).mockRejectedValueOnce(new ApiError(404, "CATALOG_OBJECT_NOT_FOUND", ""));
-    const { CatalogObjectDetail } = await import("./CatalogObjectDetail");
     render(shell(createElement(CatalogObjectDetail, { objectId: "obj_1" })));
     await screen.findByRole("heading", { name: "public.orders" });
     fireEvent.click(screen.getByRole("button", { name: copy["catalog.refresh"] }));

@@ -1,5 +1,4 @@
 import { apiClient } from "@/lib/api";
-import type { Mirror } from "@/features/mirrors/types";
 import type { CatalogObject, SemanticsChange } from "@/features/sources/types";
 import type { OffsetPage } from "@/lib/pagination";
 
@@ -52,10 +51,10 @@ export function getCatalogObject(objectId: string, signal?: AbortSignal) {
   return apiClient<{ object: CatalogObject }>(`/objects/${encodeURIComponent(objectId)}`, { signal });
 }
 
-export function enableCatalogMirror(objectId: string, signal: AbortSignal) {
-  return apiClient<{ mirror: Mirror; operation_id: string }>(
+export function setCatalogMirrorEnabled(objectId: string, enabled: boolean, signal: AbortSignal) {
+  return apiClient<{ mirror: NonNullable<CatalogObject["mirror"]>; operation_id: string | null }>(
     `/objects/${encodeURIComponent(objectId)}/mirror`,
-    { method: "POST", signal },
+    { method: "PUT", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) },
   );
 }
 

@@ -11,8 +11,9 @@ from urllib.parse import urlsplit
 import httpx
 
 from backend.core.time import utc_now
-from backend.metadata.capture.control import AUTHORITY_KEYS
+from backend.metadata.capture.control import AUTHORITY_KEYS, table_exclusion_refs
 from backend.metadata.capture.runtime_store import RuntimeBlocked, protected_read
+from backend.metadata.errors import SourceCaptureControlConflict
 
 
 class PrivateHTTP:
@@ -214,6 +215,41 @@ class ReadinessSignals:
                                                     "observation:open_generation_binding", command)
         return request, proof, fence
 
+    def scope_fence(self, command):
+        authority = {key: command[key] for key in AUTHORITY_KEYS}
+        scope = dict(profile=self.scope, published_scope=command["published_scope"])
+        request = dict(authority=authority, operation_id=command["operation_id"], scope=scope)
+        result = self.http.request("POST", "/v1/capture/scope-fences", request)
+        if not isinstance(result, dict) or self.verifier is None:
+            raise RuntimeBlocked("scope_fence_unconfirmed")
+        proof = self.verifier.verify(result.get("signature"), purpose="observation:scope_fence", **request)
+        self._require_fresh(proof, command)
+        receipts = proof.get("mirror_receipts")
+        required = {row["mirror_id"] for row in command["published_scope"] if row["qualified_table"] in self.scope["tables"]}
+        if (proof.get("verified") is not True or not isinstance(receipts, dict)
+                or receipts.keys() != required or not all(_digest_ref(ref) for ref in receipts.values())):
+            raise RuntimeBlocked("scope_fence_unconfirmed")
+        result = dict(authority=authority, operation_id=command["operation_id"], mirror_receipts=receipts)
+        if boundaries := proof.get("table_boundaries"):
+            included = {entry["mirror_id"]: entry["mirror_revision"] for entry in command["published_scope"]
+                        if entry["included"] and entry["mirror_id"] in required}
+            if not isinstance(boundaries, dict) or not boundaries.keys() <= included.keys():
+                raise RuntimeBlocked("scope_fence_unconfirmed")
+            for mirror_id, boundary in boundaries.items():
+                if (not isinstance(boundary, dict)
+                        or boundary.keys() != {"mirror_revision", "partition_identity", "start_offset", "evidence_ref"}
+                        or type(boundary["mirror_revision"]) is not int or boundary["mirror_revision"] != included[mirror_id]
+                        or type(boundary["start_offset"]) is not int or boundary["start_offset"] < -1
+                        or not _digest_ref(boundary["evidence_ref"])):
+                    raise RuntimeBlocked("scope_fence_unconfirmed")
+                part = boundary["partition_identity"]
+                if (not isinstance(part, dict) or part.keys() != {"runtime_cluster_id", "topic_incarnation_id", "partition"}
+                        or type(part["partition"]) is not int or part["partition"] != 0 or
+                        any(not isinstance(part[k], str) or not part[k] for k in ("runtime_cluster_id","topic_incarnation_id"))):
+                    raise RuntimeBlocked("scope_fence_unconfirmed")
+            result["table_boundaries"] = boundaries
+        return result
+
     def replacement_observation(self, command, authorization):
         reservation = command["replacement"]
         scope = reservation["scope"]
@@ -274,6 +310,23 @@ class ReadinessSignals:
         self._require_fresh(proof, command)
         if proof.get("verified") is not True:
             raise RuntimeBlocked("retained_position_resume_unconfirmed")
+        decisions = proof.get("table_continuity")
+        if decisions is not None:
+            candidates = {candidate["mirror_id"]: candidate for candidate in request["scope"]["candidates"]}
+            if not isinstance(decisions, dict) or decisions.keys() != candidates.keys():
+                raise RuntimeBlocked("retained_position_resume_unconfirmed")
+            for mid, value in decisions.items():
+                if not isinstance(value, dict) or not _digest_ref(value.get("evidence_ref")):
+                    raise RuntimeBlocked("retained_position_resume_unconfirmed")
+                if value.get("result") == "gap":
+                    if (set(value) != {"result", "evidence_ref", "start_offset", "partition_identity"}
+                            or type(value["start_offset"]) is not int
+                            or value["start_offset"] < candidates[mid]["target_seek_offset"] - 1
+                            or value["partition_identity"] != candidates[mid]["binding"]["partition_identity"]):
+                        raise RuntimeBlocked("retained_position_resume_unconfirmed")
+                elif value.get("result") not in {"continuous", "unknown"} or set(value) != {"result", "evidence_ref"}:
+                    raise RuntimeBlocked("retained_position_resume_unconfirmed")
+        return decisions
 
     def allocate_generation(self, command, request, proof, fence, generation_id):
         request = {**request, "scope": {**request["scope"], "generation_id": generation_id}}
@@ -368,5 +421,11 @@ class ReadinessSignals:
                 raise RuntimeBlocked("proof_fact_missing")
             if key not in {"owner_assignment_ref", "task_running_ref"}:
                 refs[key] = proof["ref"]
+        if phase == "running" and "table_exclusions" in result:
+            try:
+                table_exclusion_refs(command["published_scope"], result["table_exclusions"])
+            except SourceCaptureControlConflict:
+                raise RuntimeBlocked("table_exclusion_unconfirmed") from None
+            refs["table_exclusions"] = result["table_exclusions"]
         return {**result["authority"], "operation_id": command["operation_id"],
                 "observed_at": result["observed_at"], **refs}

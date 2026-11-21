@@ -14,13 +14,15 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.pool import NullPool
 
 from backend.metadata.mirrors.application import Application
-from backend.metadata.mirrors.bootstrap import create_generation, install, install_authority
-from backend.metadata.mirrors.publication import Publication, persist_verified_certificate
+from backend.metadata.mirrors.bootstrap import create_generation, install, install_authority, prepare_authority
+from backend.metadata.mirrors.publication import Publication, authorize_retained_delivery, persist_verified_certificate
 from backend.metadata.mirrors.reads import Reads
 from backend.metadata.mirrors.service import (
     CommittedOpenPublication, OpenGenerationBinding, OpenPublicationIdentity, publication_certificate_ref,
 )
-from backend.metadata.mirrors.types import Authority, PartitionIdentity, Record
+from backend.metadata.mirrors.types import (
+    AnchoredProfile, AnchoredScan, Authority, PartitionIdentity, ReadCommittedBounds, Record, SealedScan,
+)
 
 
 AUTHORITY = Authority("source", "binding", 3, "runtime", 4, 2, "capture")
@@ -85,6 +87,17 @@ def deliver(application, request, *records):
 def order_record(offset, origin):
     values = {"id": offset + 1}
     return Record(offset, "orders", AUTHORITY.capture_generation, "upsert", origin, values, values)
+
+
+def test_runtime_only_reads_the_current_verified_seal(publication_target):
+    admin, _, publication = publication_target
+    opened = prepare_generation(admin, 1)
+    lookup = {key: opened[key] for key in ("operation_id", "generation_id", "authority")}
+    assert publication.verified_certificate(**lookup) == opened["certificate"]
+    assert publication.verified_certificate(**dict(lookup, operation_id="unsealed")) is None
+    stale = replace(AUTHORITY, control_revision=AUTHORITY.control_revision - 1)
+    assert publication.verified_certificate(**dict(lookup, authority=stale)) is None
+    assert admin.execute("SELECT published_generation_id FROM source_mirror_state.mirrors").fetchone() == (None,)
 
 
 @pytest.mark.parametrize("superseded", [False, True], ids=["current", "superseded"])
@@ -240,6 +253,112 @@ def publish_in_transaction(admin, request):
         request["operation_id"], Jsonb(asdict(request["authority"])), request["generation_id"],
         Jsonb(request["certificate"]),
     )).fetchone()[0]
+
+
+def test_retained_observation_requires_current_fence_and_original_publication(publication_target):
+    admin, application, publication = publication_target
+    request = prepare_generation(admin, 1)
+    deliver(application, request, order_record(0, "baseline"))
+    publication.publish_generation(**request)
+    current = replace(AUTHORITY, control_revision=AUTHORITY.control_revision + 2)
+    receipt = prepare_authority(
+        admin, mirror_id=MIRROR_ID, table_identity="orders", history_epoch="epoch", operation_id="reopen",
+        expected_authority=AUTHORITY, authority=current, exclusion_proof=True,
+        verify_exclusion=lambda old, new, proof: proof and old == AUTHORITY and new == current,
+    )
+    observation = observation_request(request)
+    with publication.observe_committed(**observation, current_authority=current, fence_receipt=receipt) as observed:
+        assert observed.allocation["authority"] == asdict(current)
+        assert observed.certificate["authority"] == asdict(AUTHORITY)
+    for authority, expected_receipt in [(current, receipt + "0"), (replace(current, control_revision=99), receipt)]:
+        with pytest.raises(DBAPIError, match="MIRROR_PUBLICATION_BLOCKED"):
+            with publication.observe_committed(**observation, current_authority=authority, fence_receipt=expected_receipt):
+                pytest.fail("Accepted a different target fence")
+    with pytest.raises(DBAPIError, match="MIRROR_PUBLICATION_BLOCKED"):
+        with publication.observe_committed(**observation):
+            pytest.fail("The historical owner could still reconcile its publication")
+
+
+def test_cross_revision_anchored_delivery_requires_table_continuity_authorization(publication_target):
+    admin, application, publication = publication_target
+    generation = "3" * 32
+    partition = PartitionIdentity("cluster", "topic", 0)
+    anchor = AnchoredProfile(3)
+    operation = "open-retained"
+    create_generation(admin, mirror_id=MIRROR_ID, generation_id=generation, authority=AUTHORITY,
+                      table_identity="orders", operation_id=operation, history_epoch="epoch", schema_fingerprint="schema",
+                      columns={"id": "bigint"}, key_columns=("id",), partition_identity=partition, start_offset=-1,
+                      anchored_profile=anchor)
+    bounds = ReadCommittedBounds(0, 1, 1, 3)
+    scan = SealedScan(0, 1, bounds, bounds, (0,), 1)
+    application.apply_batch(authority=AUTHORITY, generation_id=generation, partition_identity=partition,
+                            anchored_profile=anchor, scan=scan, records=[order_record(0, "baseline")])
+    coverage = admin.execute("SELECT source_mirror_state.delivery_metadata(%s)->'anchored_coverage'",
+                             (generation,)).fetchone()[0]
+    certificate = dict(operation_id=operation, generation_id=generation, table_identity="orders",
+                       capture_generation=AUTHORITY.capture_generation, schema_fingerprint="schema",
+                       partition_identity=asdict(partition), end_offset=0, source_completion="snapshot",
+                       producer_exclusion="exclusion", durable_source_checkpoint="checkpoint",
+                       ordered_delivery_proof=coverage, key_fingerprint="key", empty_table_proof=False)
+    request = dict(operation_id=operation, authority=AUTHORITY, generation_id=generation, certificate=certificate)
+    persist_verified_certificate(admin, **request, verifier=FixtureVerifier())
+    publication.publish_generation(**request)
+    current = replace(AUTHORITY, control_revision=AUTHORITY.control_revision + 2)
+    prepare_authority(admin, mirror_id=MIRROR_ID, table_identity="orders", history_epoch="epoch",
+                      operation_id="new-fence", expected_authority=AUTHORITY, authority=current, exclusion_proof=True,
+                      verify_exclusion=lambda old, new, proof: old == AUTHORITY and new == current and proof)
+    live_bounds = ReadCommittedBounds(0, 2, 2, 3)
+    batch = dict(authority=current, generation_id=generation, partition_identity=partition, anchored_profile=anchor,
+                 scan=AnchoredScan(1, 2, live_bounds, live_bounds, (1,)), records=[order_record(1, "live")],
+                 resume=dict(certificate=certificate, history_epoch="epoch"))
+    with pytest.raises(DBAPIError, match="MIRROR_RESUME_BLOCKED"):
+        application.apply_batch(**batch)
+    authorization = dict(mirror_id=MIRROR_ID, generation_id=generation, operation_id=operation, authority=current,
+                         history_epoch="epoch", certificate_ref=publication_certificate_ref(certificate),
+                         evidence_ref="sha256:" + "a" * 64)
+    with pytest.raises(ValueError, match="MIRROR_RESUME_BLOCKED"):
+        authorize_retained_delivery(admin, **dict(authorization, certificate_ref="sha256:" + "f" * 64))
+    authorize_retained_delivery(admin, **authorization)
+    assert application.apply_batch(**batch) == {"offset": 1, "commit_seq": 1}
+    with pytest.raises(DBAPIError, match="MIRROR_CONTROL_CONFLICT"):
+        application.apply_batch(**dict(batch, authority=AUTHORITY))
+
+
+def test_table_gap_fences_old_generation_but_keeps_pin_and_capture_lineage(publication_target):
+    admin, application, publication = publication_target
+    previous = prepare_generation(admin, 1)
+    deliver(application, previous, order_record(0, "baseline"))
+    publication.publish_generation(**previous)
+    admin.execute("SELECT source_mirror_state.acquire_pin('reader', %s)", (MIRROR_ID,))
+    partition = PartitionIdentity("cluster", "topic-1", 0)
+    transitions = Jsonb([dict(mirror_id=MIRROR_ID, old_epoch="epoch", history_epoch="reopened",
+                             start_offset=4, partition_identity=asdict(partition))])
+
+    def invalidate(replay_only):
+        return admin.execute("SELECT source_mirror_state.invalidate_table_gap('gap', %s, %s)",
+                             (transitions, replay_only)).fetchone()
+
+    assert invalidate(False) == (True,)
+    assert invalidate(True) == (True,)
+    with pytest.raises(DBAPIError, match="MIRROR_CONTROL_CONFLICT"):
+        deliver(application, previous, order_record(1, "live"))
+    page = admin.execute("SELECT source_mirror_state.read_page('reader', %s, NULL, 2)", (MIRROR_ID,)).fetchone()[0]
+    assert page["rows"] == [{"id": 1}]
+    create = dict(mirror_id=MIRROR_ID, generation_id="2" * 32, authority=AUTHORITY,
+                  operation_id="reopen-2", table_identity="orders", history_epoch="reopened", schema_fingerprint="schema",
+                  columns={"id": "bigint"}, key_columns=("id",), partition_identity=partition)
+    with pytest.raises(ValueError, match="boundary"):
+        create_generation(admin, **create, start_offset=-1)
+    assert create_generation(admin, **create, start_offset=4) == "2" * 32
+    assert invalidate(False) == (True,)
+    baseline = application.apply_batch(authority=AUTHORITY, generation_id="2" * 32, partition_identity=partition,
+                                       records=[order_record(0, "baseline")])
+    assert baseline == {"offset": 4, "commit_seq": 0}
+    batch = application.apply_batch(authority=AUTHORITY, generation_id="2" * 32, partition_identity=partition,
+                                    records=[order_record(5, "baseline")])
+    assert batch == {"offset": 5, "commit_seq": 0}
+    table, = admin.execute("SELECT table_name FROM source_mirror_state.generations WHERE id = %s", ("2" * 32,)).fetchone()
+    assert admin.execute(sql.SQL("SELECT id FROM source_mirror.{}").format(sql.Identifier(table))).fetchall() == [(6,)]
 
 
 def test_observer_requires_committed_publication_and_returns_current_target_view(publication_target):
@@ -414,7 +533,7 @@ def test_legacy_target_marker_upgrade_retains_history(publication_target):
         admin.execute("UPDATE source_mirror_state.version SET version = 1")
     install(admin)
     install(admin)
-    assert admin.execute("SELECT source_mirror_state.target_version()").fetchone() == (2,)
+    assert admin.execute("SELECT source_mirror_state.target_version()").fetchone() == (3,)
     assert admin.execute("SELECT after_image, after_json_null_columns FROM source_mirror_state.live_log").fetchone() == ({"id": 1}, None)
     assert deliver(application, request, row) == {"offset": 0, "commit_seq": 1}
 

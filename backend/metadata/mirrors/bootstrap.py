@@ -14,7 +14,7 @@ from backend.metadata.mirrors.types import AnchoredProfile, Authority, Partition
 from dataclasses import asdict
 
 
-VERSION = 2
+VERSION = 3
 ROLES = ("refraq_mirror_owner", "refraq_mirror_applier", "refraq_mirror_gateway")
 TYPES = {"bigint", "integer", "smallint", "boolean", "text", "uuid", "date", "bytea", "jsonb", "timestamp", "timestamptz"}
 FUNCTIONS = {
@@ -22,7 +22,9 @@ FUNCTIONS = {
     "apply_batch(jsonb,text,jsonb,jsonb,jsonb,jsonb)": "refraq_mirror_applier",
     "apply_batch(jsonb,text,jsonb,jsonb,jsonb,jsonb,jsonb)": "refraq_mirror_applier",
     "delivery_metadata(text)": "refraq_mirror_applier",
+    "verified_certificate(text,jsonb,text)": "refraq_mirror_applier",
     "publish_generation(text,jsonb,text,jsonb)": "refraq_mirror_applier",
+    "observe_committed_publication(text,text,text,jsonb,text,jsonb,text)": "refraq_mirror_applier",
     "observe_committed_publication(text,text,text,jsonb,text)": "refraq_mirror_applier",
     "acquire_pin(text,text)": "refraq_mirror_gateway",
     "resolve_source(text)": "refraq_mirror_gateway",
@@ -31,6 +33,7 @@ FUNCTIONS = {
     "history_version()": "refraq_mirror_gateway",
     "history_bound(text)": "refraq_mirror_gateway",
     "history_page(text,jsonb,jsonb,integer)": "refraq_mirror_gateway",
+    "invalidate_table_gap(text,jsonb,boolean)": "refraq_mirror_applier",
     "invalidate_history(text,jsonb)": "refraq_mirror_applier",
     "invalidate_lost_history(text,jsonb,boolean)": "refraq_mirror_applier",
 }
@@ -61,7 +64,7 @@ def install(connection):
             connection.execute(sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC, refraq_mirror_applier, refraq_mirror_gateway").format(sql.Identifier(schema)))
         connection.execute("SET LOCAL ROLE refraq_mirror_owner")
         marker = connection.execute("SELECT to_regclass('source_mirror_state.version')").fetchone()[0]
-        if marker and connection.execute("SELECT version FROM source_mirror_state.version").fetchone() not in {(1,), (VERSION,)}:
+        if marker and connection.execute("SELECT version FROM source_mirror_state.version").fetchone() not in {(1,), (2,), (VERSION,)}:
             raise ValueError("Mirror target version mismatch")
         connection.execute(Path(__file__).with_name("target.sql").read_text())
         connection.execute(Path(__file__).with_name("history.sql").read_text())
@@ -96,7 +99,7 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
     if anchored_profile is not None and (not isinstance(anchored_profile, AnchoredProfile)
             or anchored_profile.kind != "disposable_read_committed_v1"
             or type(anchored_profile.leader_epoch) is not int or anchored_profile.leader_epoch < 0
-            or type(start_offset) is not int or start_offset != -1):
+            or type(start_offset) is not int):
         raise ValueError("Anchored allocation requires a fresh log origin and a fixed leader epoch")
     if not key_columns or len(set(key_columns)) != len(key_columns) or not set(key_columns) <= columns.keys():
         raise ValueError("Admitted key columns required")
@@ -140,9 +143,18 @@ def create_generation(connection, *, mirror_id: str, generation_id: str, authori
             (mirror_id,)).fetchone()
         if mirror != (authority.source_id, table_identity, authority_data):
             raise ValueError("Mirror fence or immutable binding mismatch")
+        gap = connection.execute(
+            "SELECT transitions->0 FROM source_mirror_state.history_invalidations WHERE table_gap "
+            "AND transitions->0->>'mirror_id' = %s AND transitions->0->>'history_epoch' = %s",
+            (mirror_id, history_epoch)).fetchone()
+        if gap is not None:
+            if gap[0].get("start_offset") != start_offset or gap[0].get("partition_identity") != partition_data:
+                raise ValueError("Generation differs from the observed table-gap boundary")
+        elif anchored_profile is not None and start_offset != -1:
+            raise ValueError("Anchored allocation requires a fresh log origin or a proven table-gap boundary")
         existing = connection.execute(
             "SELECT id, mirror_id, capture_generation, operation_id, table_name, schema_fingerprint, "
-            "key_columns, column_names, partition_identity, anchored_profile, status, cleanup_pending "
+            "key_columns, column_names, partition_identity, anchored_profile, status, (cleanup_pending OR write_closed) "
             "FROM source_mirror_state.generations "
             "WHERE id = %s OR operation_id = %s", (generation_id, operation_id)).fetchone()
         if existing is not None:

@@ -13,12 +13,12 @@ export function listMirrors(params: { source_id?: string; status?: string; q?: s
 }
 
 export function getMirror(id: string, signal?: AbortSignal) {
-  return apiClient<{ mirror: Mirror }>(`/mirrors/${encodeURIComponent(id)}`, { signal });
+  return apiClient<{ mirror: Mirror; can_enable: boolean }>(`/mirrors/${encodeURIComponent(id)}`, { signal });
 }
 
-export function setMirrorEnabled(id: string, enabled: boolean) {
+export function setMirrorEnabled(id: string, enabled: boolean, signal?: AbortSignal) {
   return apiClient<{ mirror: Mirror; operation_id: string }>(`/mirrors/${encodeURIComponent(id)}`, {
-    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }),
+    method: "PATCH", signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }),
   });
 }
 

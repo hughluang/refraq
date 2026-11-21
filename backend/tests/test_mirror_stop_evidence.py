@@ -110,6 +110,31 @@ def test_reconcile_of_other_mirrors_does_not_confirm_per_table_stop(management):
     assert service.list_mirrors(status="disabled")["total"] == 0
     assert service.list_mirrors(status="disable_pending")["total"] == 1
 
+    excluded, = [entry for entry in command["published_scope"] if not entry["included"]]
+    refs = dict(connector_excluded_ref="sha256:" + "1" * 64, inflight_drained_ref="sha256:" + "2" * 64,
+                target_fence_ref="sha256:" + "3" * 64)
+    proof = dict(scope_entry=excluded, **refs)
+    with transaction() as session:
+        original = control.load_operation(session, command["operation_id"])["evidence"]
+    observed = dict(original, observed_at=utc_now().isoformat(), table_exclusions=[proof])
+    args = dict(source_id=SOURCE, operation_id=command["operation_id"], refresh_table_exclusions=True)
+    for malformed in (dict(proof, scope_entry=dict(excluded, mirror_revision=1)),
+                      dict(proof, scope_entry=next(entry for entry in command["published_scope"] if entry["included"])),
+                      dict(proof, target_fence_ref="not-a-receipt")):
+        with pytest.raises(SourceCaptureControlConflict):
+            control.record_applied_evidence(**args, evidence=dict(observed, table_exclusions=[malformed]))
+    assert service.get_mirror(mirror_id)["status"] == "disable_pending"
+    control.record_applied_evidence(**args, evidence=observed)
+    control.record_applied_evidence(**args, evidence=observed)
+    disabled = service.get_mirror(mirror_id)
+    assert disabled["status"] == "disabled"
+    assert disabled["control"]["stop_ack"]["source_operation_id"] == command["operation_id"]
+    assert set(disabled["operations"][-1]["observed_evidence_refs"]) == {command["operation_id"], *refs.values()}
+    assert control.capture_status(SOURCE)["control"]["stop_ack"] is None
+    service.set_enabled(mirror_id, enabled=True, actor_user_id="operator")
+    with pytest.raises(SourceCaptureControlConflict):
+        control.record_applied_evidence(**args, evidence=observed)
+
 
 def test_stop_cannot_confirm_a_later_disable_before_the_scope_is_reconciled(management):
     transaction, _ = management

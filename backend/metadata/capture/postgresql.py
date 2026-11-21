@@ -6,6 +6,7 @@ import re
 import psycopg
 
 from backend.core.secrets import decrypt_secret
+from backend.metadata.capture.control import selected_tables
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 
 
@@ -19,6 +20,7 @@ class PostgreSQLCaptureProfile:
         if (set(scope) - {"snapshot", "transaction_metadata"} != required or set(tls) != {"sslmode", "sslrootcert"}
                 or tls.get("sslmode") != "verify-full"
                 or not tls.get("sslrootcert") or not scope["tables"]
+                or len(set(scope["tables"])) != len(scope["tables"])
                 or any(not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", scope[k])
                        for k in ("publication", "slot"))
                 or any(not re.fullmatch(r"[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*", t)
@@ -137,6 +139,11 @@ class PostgreSQLCaptureProfile:
     def configuration(self, command, source, refs):
         self.validate_source(source)
         p = self.scope
+        tables = [entry["qualified_table"] for entry in selected_tables(p, command["published_scope"])]
+        if not tables:
+            raise RuntimeBlocked("connector_published_scope_mismatch")
+        if self.snapshot:
+            tables.append(self.snapshot["signal_table"])
         config = {
             "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
             "tasks.max": "1", "database.hostname": p["host"], "database.port": str(p["port"]),
@@ -146,7 +153,7 @@ class PostgreSQLCaptureProfile:
             "slot.name": p["slot"], "slot.drop.on.stop": "false",
             "publication.name": p["publication"], "publication.autocreate.mode": "disabled",
             "topic.prefix": p["topic_prefix"], "table.include.list": ",".join(
-                re.escape(table) for table in self.included_tables),
+                re.escape(table) for table in tables),
             "snapshot.mode": "no_data", "tombstones.on.delete": "false",
             "decimal.handling.mode": "precise",
         }

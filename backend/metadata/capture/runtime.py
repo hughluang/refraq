@@ -26,7 +26,7 @@ from backend.metadata.capture.runtime_adapters import ConnectLifecycle, PrivateH
 from backend.metadata.capture.recovery_dispatch import dispatch_recovery
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked, protected_json, protected_read
 from backend.metadata.capture.snapshot import SnapshotCoordinator
-from backend.metadata.capture.store import list_operations, load_binding
+from backend.metadata.capture.store import list_operations, load_binding, save_binding
 from backend.metadata.errors import SourceCaptureControlConflict
 from backend.metadata.mirrors.service import (
     MirrorError, ObserveCommittedOpenPublication, OpenPublicationIdentity, read_published_scope,
@@ -38,7 +38,7 @@ from backend.metadata.mirrors.recovery_store import RecoveryRow
 
 class CaptureRuntime:
     def __init__(self, *, journal, connect, signals, profile=None, credentials=None, delivery=None,
-                 prepare_delivery=None, resume_retained=None, snapshot=None,
+                 prepare_delivery=None, resume_retained=None, snapshot=None, publish_completed=None,
                  observe_committed_publication: ObserveCommittedOpenPublication | None = None):
         self.journal = journal
         self.connect = connect
@@ -49,6 +49,8 @@ class CaptureRuntime:
         self.prepare_delivery = prepare_delivery
         self.resume_retained = resume_retained
         self.snapshot = snapshot
+        self.publish_completed = publish_completed
+        self.publication_changed = False
         self.observe_committed_publication = observe_committed_publication
 
     def reconcile_open_publication(self, *, mirror_id, operation_id, expected: OpenPublicationIdentity):
@@ -94,8 +96,9 @@ class CaptureRuntime:
             if self.delivery is not None:
                 self.delivery.retire()
             raise
-        if self.delivery is not None:
+        if self.delivery is not None and not self.publication_changed:
             self.delivery.poll_once()
+        self.publication_changed = False
         return result
 
     def reconcile_owner(self, source_id, request_file):
@@ -188,10 +191,16 @@ class CaptureRuntime:
 
     def poll_source(self, source_id, *, containment_only=False):
         result, prepared = self._poll_lifecycle(source_id, containment_only=containment_only)
+        if result == "idle" and prepared is not None and prepared["kind"] == "reconcile":
+            self._refresh_table_stops(prepared)
         if self.snapshot is not None and prepared is not None:
             for binding in self.delivery.snapshot_bindings(prepared):
                 try:
-                    state = self.snapshot.reconcile(binding).state
+                    snapshot = self.snapshot.reconcile(binding)
+                    state = snapshot.state
+                    if state == "catching_up" and self.publish_completed is not None:
+                        if self.publish_completed(binding=binding, command=prepared, delivery=self.delivery, result=snapshot):
+                            self.publication_changed = True
                 except DBAPIError:
                     raise RuntimeBlocked("capture_snapshot_management_unconfirmed") from None
                 if state == "blocked":
@@ -199,6 +208,25 @@ class CaptureRuntime:
                 if state in {"submission_uncertain", "snapshotting"}:
                     break
         return result
+
+    def _refresh_table_stops(self, command):
+        excluded = {entry["mirror_id"] for entry in command["published_scope"] if not entry["included"]}
+        if not excluded:
+            return
+        source_id = command["source_id"]
+        with source_control_transaction(source_id) as (session, source):
+            state = load_binding(session, source_id)
+            if (self._current_command(session, source, include_applied=True) != command or
+                    excluded.issubset(state.get("table_stops", {}).get("confirmed", []))):
+                return
+        # A late table observation is independent of the already proven running command.
+        try:
+            evidence = self.signals.observation(command, "running")
+            if evidence.get("table_exclusions"):
+                record_applied_evidence(source_id=source_id, operation_id=command["operation_id"],
+                                        evidence=evidence, refresh_table_exclusions=True)
+        except (RuntimeBlocked, SourceCaptureControlConflict):
+            return
 
     def recheck_snapshot(self, binding, *, session, source):
         checked = self.delivery.recheck_snapshot_allocation(binding, session=session)
@@ -227,6 +255,7 @@ class CaptureRuntime:
         with self.journal.source_lock(source_id):
             reconcile_published_scope(source_id)
             prepared = None
+            retained = ()
             preparation_error = None
             if self.prepare_delivery is not None and not containment_only:
                 try:
@@ -234,16 +263,18 @@ class CaptureRuntime:
                         candidate = self._current_command(session, source, include_applied=True,
                                                           allow_replacement=self.snapshot is not None)
                     if candidate and candidate["kind"] in {"reconcile", "replace_owner"}:
+                        if self.profile is not None and candidate["kind"] == "reconcile":
+                            self._ensure_scope_fence(candidate)
                         retained = self.prepare_delivery(candidate)
                         if retained:
                             if self.resume_retained is None:
                                 raise RuntimeBlocked("retained_position_resume_driver_required")
                             with source_control_transaction(source_id) as (session, source):
-                                if (self._current_command(session, source, include_applied=True) != candidate
-                                        or self._current_command(session, source) is not None):
+                                if self._current_command(session, source, include_applied=True) != candidate:
                                     raise RuntimeBlocked("capture_preparation_superseded")
-                            self.resume_retained(candidate, retained)
-                            return "idle", None
+                                already_applied = self._current_command(session, source) is None
+                            if already_applied:
+                                self.resume_retained(candidate, retained)
                         prepared = candidate
                 except RuntimeBlocked as exc:
                     preparation_error = exc
@@ -296,7 +327,24 @@ class CaptureRuntime:
             except SourceCaptureControlConflict:
                 raise RuntimeBlocked("capture_evidence_rejected") from None
             self.journal.mark(command, "applied")
+            if retained and prepared == command:
+                self.resume_retained(command, retained)
             return "applied", prepared if command["kind"] == "reconcile" else None
+
+    def _ensure_scope_fence(self, command):
+        source_id = command["source_id"]
+        with source_control_transaction(source_id) as (session, _):
+            state = load_binding(session, source_id)
+            allocation = state.get("allocation", {})
+            if allocation.get("command") == command or state.get("scope_fence", {}).get("operation_id") == command["operation_id"]:
+                return
+        fence = self.signals.scope_fence(command)
+        with source_control_transaction(source_id) as (session, source):
+            if self._current_command(session, source, include_applied=True) != command:
+                raise RuntimeBlocked("capture_preparation_superseded")
+            state = load_binding(session, source_id)
+            state["scope_fence"] = fence
+            save_binding(session, state)
 
 
 # Only these operator-actionable codes may cross the process diagnostics boundary.
@@ -422,6 +470,8 @@ def main():
             if (profile.snapshot is None) != (observers is None):
                 raise RuntimeBlocked("snapshot_observer_configuration_required")
             if observers is not None:
+                from backend.metadata.capture.completed_publication import publish_completed
+
                 if set(observers) != {"receipt", "notification", "max_age_seconds"}:
                     raise RuntimeBlocked("snapshot_observer_configuration_invalid")
                 observation_clients = {}
@@ -435,6 +485,7 @@ def main():
                     notification_trust=_signing_authority(observers["notification"]["signing_trust"]),
                     max_observation_age_seconds=observers["max_age_seconds"], recheck=runtime.recheck_snapshot,
                 )
+                runtime.publish_completed = publish_completed
         previous_faults = {}
         while not stopping.is_set():
             blocked = poll_sources(runtimes, previous_faults)

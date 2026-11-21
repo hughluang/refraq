@@ -49,8 +49,8 @@ for (const [locale, t] of [["en-US", en], ["zh-CN", zh]] as const) {
 
     async function openCatalog(page: Page) {
       if (locale === "zh-CN") {
-        await page.getByRole("button", { name: "Language", exact: true }).click();
-        await page.getByRole("menuitem", { name: "\u4e2d\u6587", exact: true }).click();
+        const profile = await page.request.patch("/api/account/profile", { data: { locale } });
+        expect(profile.ok(), await profile.text()).toBeTruthy();
       }
       await page.goto(catalogUrl);
       await expect(page.getByRole("heading", { name: "public.orders", exact: true })).toBeVisible();
@@ -63,42 +63,44 @@ for (const [locale, t] of [["en-US", en], ["zh-CN", zh]] as const) {
       const reader = await readerContext.newPage();
       await signIn(reader, catalogReader, password);
       await openCatalog(reader);
-      await expect(reader.getByRole("button", { name: t["catalog.mirror.enable"], exact: true })).toHaveCount(0);
-      expect((await reader.request.post(enableUrl)).status()).toBe(403);
+      await expect(reader.getByRole("switch", { name: t["mirrors.synchronization"], exact: true })).toHaveCount(0);
+      expect((await reader.request.put(enableUrl, { data: { enabled: true } })).status()).toBe(403);
 
       await page.context().clearCookies();
       await signIn(page, operator, password);
       await openCatalog(page);
 
-      const enable = page.getByRole("button", { name: t["catalog.mirror.enable"], exact: true });
+      const enable = page.getByRole("switch", { name: t["mirrors.synchronization"], exact: true });
       await expect(enable).toBeVisible();
       const acceptance = page.waitForResponse(response =>
-        new URL(response.url()).pathname === enableUrl && response.request().method() === "POST",
+        new URL(response.url()).pathname === enableUrl && response.request().method() === "PUT",
       );
       await enable.click();
       const accepted = await acceptance;
-      expect(accepted.status(), await accepted.text()).toBe(202);
-      const { mirror, operation_id } = await accepted.json();
+      expect(accepted.status(), await accepted.text()).toBe(200);
+      const { mirror: { mirror_id: mirrorId }, operation_id } = await accepted.json();
+      expect(mirrorId).toBeTruthy();
+      await expect(enable).toBeChecked();
       await expect(page.getByText(t["catalog.mirror.accepted"], { exact: true })).toBeVisible();
-      const repeated = await page.request.post(enableUrl);
-      expect(repeated.status(), await repeated.text()).toBe(202);
-      expect(await repeated.json()).toMatchObject({ mirror: { id: mirror.id }, operation_id });
+      const repeated = await page.request.put(enableUrl, { data: { enabled: true } });
+      expect(repeated.status(), await repeated.text()).toBe(200);
+      expect(await repeated.json()).toMatchObject({ mirror: { mirror_id: mirrorId }, operation_id });
 
       const follow = page.getByRole("link", { name: t["catalog.mirror.view"], exact: true });
       await page.reload();
-      await expect(follow).toHaveAttribute("href", `/console/mirrors/${mirror.id}`);
+      await expect(follow).toHaveAttribute("href", `/console/mirrors/${mirrorId}`);
       await reader.reload();
       await expect(reader.getByRole("heading", { name: "public.orders", exact: true })).toBeVisible();
       await expect(reader.getByRole("link", { name: t["catalog.mirror.view"], exact: true })).toHaveCount(0);
-      expect((await reader.request.get(`/api/mirrors/${mirror.id}`)).status()).toBe(403);
+      expect((await reader.request.get(`/api/mirrors/${mirrorId}`)).status()).toBe(403);
 
       await follow.click();
       await expect(page.getByText(t["mirrors.event.first"])).toBeVisible();
       const published = page.getByText(t["mirrors.event.published"], { exact: true });
       await expect(published).toHaveCount(0);
-      await expect(page.getByText(t["mirrors.confirmCapture"], { exact: true })).toBeVisible();
+      await expect(page.getByText(t["mirrors.action.capture_credential_missing"], { exact: true }).first()).toBeVisible();
 
-      const detailUrl = `**/api/mirrors/${mirror.id}`;
+      const detailUrl = `**/api/mirrors/${mirrorId}`;
       const refresh = page.getByRole("button", { name: t["common.refresh"], exact: true });
       // Stand in for a published pointer delivered by the deployment. The real API supplies intent.
       await page.route(detailUrl, async route => {
@@ -113,14 +115,18 @@ for (const [locale, t] of [["en-US", en], ["zh-CN", zh]] as const) {
       await expect(page.getByText(t["mirrors.freshnessUnknown"], { exact: true })).toBeVisible();
       await page.unroute(detailUrl);
 
-      await page.getByRole("button", { name: t["mirrors.disable"], exact: true }).click();
+      await page.getByRole("switch", { name: t["mirrors.synchronization"], exact: true }).click();
       await page.getByRole("dialog").getByRole("button", { name: t["common.confirm"], exact: true }).click();
       await expect(page.getByText(t["mirrors.status.disable_pending"], { exact: true })).toBeVisible();
       await page.reload();
       await expect(page.getByText(t["mirrors.status.disable_pending"], { exact: true })).toBeVisible();
       await expect(page.getByText(t["mirrors.event.disableRequested"], { exact: true })).toBeVisible();
       await expect(page.getByText(t["mirrors.event.stopConfirmed"])).toHaveCount(0);
-      await expect(page.getByRole("button", { name: t["mirrors.enable"], exact: true })).toBeDisabled();
+      await page.goto(catalogUrl);
+      await expect(enable).not.toBeChecked();
+      await enable.click();
+      await expect(enable).toBeChecked();
+      await expect(follow).toHaveAttribute("href", `/console/mirrors/${mirrorId}`);
     } finally {
       await readerContext.close();
     }

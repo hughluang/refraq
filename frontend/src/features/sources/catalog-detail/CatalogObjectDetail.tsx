@@ -29,7 +29,8 @@ import {
   ModuleAction,
   ModuleId,
 } from "@/features/console/module-identity";
-import { enableCatalogMirror, resolveCatalogObject } from "@/features/sources/api/catalog";
+import { MirrorSwitch } from "@/features/mirrors/MirrorSwitch";
+import { resolveCatalogObject, setCatalogMirrorEnabled } from "@/features/sources/api/catalog";
 import { ColumnsTab } from "@/features/sources/catalog-detail/ColumnsTab";
 import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
 import { HistoryTab } from "@/features/sources/catalog-detail/HistoryTab";
@@ -79,7 +80,7 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
   const [mirror, setMirror] = useState<CatalogObject["mirror"]>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [enablingMirror, setEnablingMirror] = useState(false);
+  const [savingMirror, setSavingMirror] = useState(false);
   const [failed, setFailed] = useState(false);
   const [reloadEpoch, setReloadEpoch] = useState(0);
   const [joinsVisited, setJoinsVisited] = useState(false);
@@ -103,7 +104,7 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
     async (opts?: { refresh?: boolean }) => {
       request.current?.abort();
       mirrorRequest.current = null;
-      setEnablingMirror(false);
+      setSavingMirror(false);
       const controller = new AbortController();
       request.current = controller;
       const refresh = Boolean(opts?.refresh);
@@ -180,29 +181,27 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
     }
   };
 
-  const enableMirror = async () => {
+  const saveMirror = async (enabled: boolean) => {
     const signal = request.current?.signal;
     if (
-      !object || !mirror?.can_enable || !canWriteMirror?.can || refreshing ||
+      !object || !mirror || !(enabled ? mirror.can_enable : mirror.can_disable) || !canWriteMirror?.can || refreshing ||
       !signal || signal.aborted || mirrorRequest.current
     ) return;
     mirrorRequest.current = signal;
-    setEnablingMirror(true);
+    setSavingMirror(true);
     try {
-      await enableCatalogMirror(object.id, signal);
+      const accepted = await setCatalogMirrorEnabled(object.id, enabled, signal);
       if (signal.aborted) return;
+      setMirror(accepted.mirror);
       open?.({ type: "success", message: t("catalog.mirror.accepted") });
-      void load({ refresh: true });
     } catch (err) {
       if (signal.aborted) return;
       presentProblemNotification(t, err);
-      if (err instanceof ApiError && [401, 403, 404].includes(err.status)) {
-        void load({ refresh: true });
-      }
+      void load({ refresh: true });
     } finally {
       if (mirrorRequest.current === signal) {
         mirrorRequest.current = null;
-        setEnablingMirror(false);
+        setSavingMirror(false);
       }
     }
   };
@@ -286,10 +285,13 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
           tabs={list}
           actions={
             <Group gap="xs">
-              {!refreshing && canWriteMirror?.can && mirror?.can_enable ? (
-                <Button size="sm" onClick={() => void enableMirror()} loading={enablingMirror}>
-                  {t("catalog.mirror.enable")}
-                </Button>
+              {mirror && (canReadMirror?.can || canWriteMirror?.can) ? (
+                <MirrorSwitch
+                  enabled={mirror.enabled}
+                  disabled={savingMirror || refreshing || !canWriteMirror?.can || !(mirror.enabled ? mirror.can_disable : mirror.can_enable)}
+                  table={title}
+                  onChange={enabled => void saveMirror(enabled)}
+                />
               ) : null}
               {!refreshing && canReadMirror?.can && mirror?.mirror_id ? (
                 <Button
@@ -314,7 +316,7 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
               <Button
                 size="sm"
                 variant="light"
-                disabled={enablingMirror}
+                disabled={savingMirror}
                 onClick={() => {
                   if (!mirrorRequest.current) void load({ refresh: true });
                 }}

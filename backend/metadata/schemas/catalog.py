@@ -19,6 +19,7 @@ __all__ = [
     "CatalogDdlResponse",
     "CatalogForeignKeyOut",
     "CatalogIndexOut",
+    "CatalogMirrorSettingResponse",
     "CatalogObjectListResponse",
     "CatalogObjectOut",
     "CatalogObjectResponse",
@@ -94,8 +95,15 @@ class CatalogIndexOut(BaseModel):
 
 
 class CatalogMirrorOut(BaseModel):
+    enabled: bool
     can_enable: bool
+    can_disable: bool
     mirror_id: str | None
+
+
+class CatalogMirrorSettingResponse(BaseModel):
+    mirror: CatalogMirrorOut
+    operation_id: str | None
 
 
 class CatalogObjectOut(BaseModel):
