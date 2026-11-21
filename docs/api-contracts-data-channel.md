@@ -4,7 +4,7 @@
 
 This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, container rounds of a container execution, a **Node Sample** of one node against a run, **Template Preview**, dataset-row reads, the **Channel Variable** list and manual delete, the public **Inbound Trigger** hook, and the **Inbound Rejection** list. Paths address a channel by opaque `id`.
 
-**Source Mirror** extensions (explicit execution identity, `read.mirror`, mirror change-stream discrimination, real `mirrors_to_open`, pins, provenance and atomic history-gated checkpoint settlement) are defined in `docs/api-contracts-source-mirrors.md`; its targeted mirror rules override empty-open and unfiltered-output defaults here, without changing Entity/SQL semantics. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. **HTTP Account** HTTP is `docs/api-contracts-http-accounts.md`. **Inbound Credential** HTTP is `docs/api-contracts-inbound-credentials.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
+**Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. **HTTP Account** HTTP is `docs/api-contracts-http-accounts.md`. **Inbound Credential** HTTP is `docs/api-contracts-inbound-credentials.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
 Related boundaries:
 
@@ -441,9 +441,6 @@ A configuration schema failure uses one entry per failing property:
 ```json
 {
   "draft_revision": 12,
-  "mirrors_to_open": [
-    { "source_id": "src_01HZX", "object_id": "obj_01HZX", "mirror_id": "mir_01HZX" }
-  ],
   "runs_to_cancel": [
     { "job_id": "job_01HZX", "version": 2, "started_at": "2026-10-09T07:58:00Z" }
   ],
@@ -628,13 +625,11 @@ On `succeeded` only:
 { "name": "Material master", "description": null, "tags": { "tag_ids": [], "names": [] } }
 ```
 
-`name` is required. `description`, `tags` and `table_setup` are optional. `tag_ids` and `names` both default to empty. Any other field is `422 REQUEST_INVALID`.
+`name` is required. `description` and `tags` are optional. `tag_ids` and `names` both default to empty. Any other field is `422 REQUEST_INVALID`.
 
 An omitted `tags`, or both arrays empty, leaves the new channel with no Tags and `tag_revision` 1. `tag_ids` names existing Tags. `names` creates Tags in the same request. A rejected name or a set of more than ten leaves neither the channel nor a new Tag. A name that folds onto an existing Tag attaches it and does not return `TAG_NAME_CONFLICT`.
 
-For catalog table setup, send `table_setup` with a Catalog Object `object_id` and a UUID `request_id`. Optional `manual_name` and `read_name` supply the initial editable node names in the author’s locale. Each must contain 1 to 128 characters after trimming whitespace. The service checks current catalog access and table eligibility. It creates a manual trigger connected to one `read.mirror` node with `freshness_policy: fail`. Retrying with the same actor, object and request ID returns the current Channel, including subsequent edits, Tags and the latest published version. Capture starts through confirmed publication.
-
-`201` `{ "channel": { … } }`. Without `table_setup` the draft starts as `{ "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } }` with `draft_revision` 1. `active` is `false`.
+`201` `{ "channel": { … } }`. The draft starts as `{ "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null, "keep_succeeded_runs": true, "keep_failed_runs": true, "keep_test_runs": true } }` with `draft_revision` 1. `active` is `false`.
 
 ### 5.3 `GET /channels`
 
@@ -761,8 +756,6 @@ Publish body:
 - The caller must hold every Permission declared by node types present in the draft, including nodes that did not change. Missing one is `403 AUTH_FORBIDDEN`; `detail` names the node.
 - `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` lists the running published runs the new version will stop between nodes. Publish stores the version, reconciles the schedule row, and reconciles the inbound path. It does not change `active` and it does not cancel Jobs itself.
 - A published **Inbound Trigger** whose path another channel holds is `409` `CHANNEL_INBOUND_PATH_TAKEN`. One whose **Inbound Credential** does not exist is `422` `CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND`. Both are refused before the version is stored. Saving the draft does not change the path row. A later publish whose trigger is not inbound withdraws the row. Deactivation does not.
-
-Draft, preview and version detail expose `mirror_bindings` for tables visible under current Source grants. Each binding identifies the Source and qualified table, object and mirror IDs, and all referring node IDs. The preview names the effect of confirming (`first_open`, `reopen` or `shared`). The version detail distinguishes the recorded `publication_effect` from the current binding, published copy and attention state. For legacy receipts, `publication_effect` is `request` for an explicitly confirmed open and null when the effect is unknown. Clients confirm the previewed revision and exact `mirrors_to_open` tuples.
 
 ### 5.9 `GET /channels/{id}/versions` and `GET /channels/{id}/versions/{number}`
 
@@ -1172,6 +1165,7 @@ The read does not create, drop, or change a dataset, and it does not raise `CHAN
 | `CHANNEL_LOOP_BODY_INVALID` | A node's `parent` names a missing node or a node that is not a container, a parent chain contains a cycle, or an edge crosses a container frame. A container is a node type whose catalog entry declares `container`. An edge from S to T crosses when the two `parent` values differ and S is not T's parent. The only entry is that container's `each` connected to a node whose `parent` is that container, and `each` connects only to such a node. `done` connects only outside that frame |
 | `CHANNEL_GRAPH_EDGE_INVALID` | An edge names an unknown node or port |
 | `CHANNEL_NODE_TYPE_UNKNOWN` | A node names an unknown node type |
+| `CHANNEL_NODE_INPUT_WITHDRAWN` | Draft contains `read.mirror` or a `config.source` field on `read.changes` or `volume.changes_dataset`. Entity change inputs use `entity_id` |
 | `CHANNEL_NODE_CONFIG_INVALID` | A node configuration does not satisfy its `config_schema`. Also a **Respond** node when the trigger is not an **Inbound Trigger** in `respond_node` mode, `respond_node` mode with no Respond node reachable from the trigger, and response fields that belong to the other mode |
 | `CHANNEL_CODE_INVALID` | A Code node's source does not compile. `path` is `["code"]`. `detail` includes the line number in the author's code |
 | `CHANNEL_NODE_NAME_DUP` | Two nodes share a name |

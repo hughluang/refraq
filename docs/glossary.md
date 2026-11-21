@@ -726,12 +726,12 @@ Avoid an expiry, a stored row, a **Checkpoint**, and a value in `self`.
 
 ### Source Mirror
 
-A platform-managed, shared, full-column copy of one **Catalog Object** in a dedicated schema of the entity database, kept current by change data capture from its **Source**. One mirror per source table serves every Data Channel. It opens automatically when a published **Channel Version** reads it, heals itself by resnapshot, and is managed from one global list under Operations. Mirrors are not under **Entity Access Control**.
+A platform-managed full-column copy of one **Catalog Object** in a dedicated schema of the entity database. An operator enables it in Catalog. The **Source** supplies capture credentials and snapshot timing. Operations shows desired state and observed evidence for the single Mirror per source table.
 Avoid replica, staging table, ODS, snapshot, a per-channel copy, **Catalog Object**, **Entity Table**, **Catalog Sample**, and a write target.
 
 ### Change Log
 
-An append-only record of row changes. A **Source Mirror** has one log: the mirror applier writes the mirror row, the entry, and the consumer offset in one transaction, and only when values changed. Mirror cleanup follows the retention contract of checkpoint-owning business nodes and is bounded by a maximum-retention **System Parameter**.
+An append-only record of row changes. For a **Source Mirror**, the applier commits each effective live change with its row mutation and transport delivery progress. Deployment verification can inspect the committed changes.
 
 A **Business Entity** has a separate log. The unpublished **Entity Version** holds the draft switch `change_log_enabled` and the draft retention `change_log_retention_days`. The effective record in the entity database decides recording and retention. Retention there is never-expire or a whole number of days of at least 1, and is not a site-wide maximum-retention **System Parameter**. While recording is on, a trigger appends one entry in the same transaction as the row write. An entry stores the operation, a sequence number, the writing transaction id, the transaction time, the physical table, a before image and an after image, and a source of `user`, `channel_run`, or unattributed. A delete records the greatest deleted position as that entity's purge mark. An insert has no before image. A delete has no after image. An update's before image is the after image with the previous value of each changed column restored. An equal update does not write. The stored row is not tagged with the source.
 Avoid **Structure Diff**, **Semantics Change**, **Join Change**, **Management Audit Event**, the Entity Access Log, a Kafka topic, the source database's own CDC log, and a site-wide maximum-retention bound on an entity log.

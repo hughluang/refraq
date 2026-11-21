@@ -2,23 +2,22 @@
 
 ## 1. Scope
 
-This document defines Metadata-owned Source capture, shared full-column mirrors, transactional application, publication, authorized consumption, recovery and operational notification. The architecture is an approved design contract, not evidence that a runtime, engine version or deployment profile has passed qualification. Unknown mandatory evidence blocks admission, not implementation of these contracts.
+This document defines Metadata-owned Source capture, shared full-column mirrors, transactional application, publication, authorized deployment verification, recovery and operational notification. The architecture is an approved design contract, not evidence that a runtime, engine version or deployment profile has passed qualification. Unknown mandatory evidence blocks admission, not implementation of these contracts.
 
 Related boundaries:
 
 - Source configuration and access: `docs/business-metadata.md`, `docs/api-contracts-sources.md`
-- Mirror and integration interfaces: `docs/api-contracts-source-mirrors.md`
-- Workflow runs and consumer checkpoints: `docs/business-data-channel.md`
+- Mirror management and target interfaces: `docs/api-contracts-source-mirrors.md`
 - Package boundaries: `docs/backend-layout.md`, `docs/modules.md`
 - Deployment configuration: `docs/env.md`
 
 ## 2. Ownership And Deployment
 
-Metadata owns capture admission/control in `backend/metadata/capture/` and mirror registry, application, publication, reads, history and recovery in `backend/metadata/mirrors/`. Mirrors are not Business Entities. Metadata must not import Entity or Channel internals, even when both use the entity database. Composition binds external adapters and workflow-reference ports.
+Metadata owns capture admission/control in `backend/metadata/capture/` and mirror registry, application, publication, reads, history and recovery in `backend/metadata/mirrors/`. Mirrors are not Business Entities. Metadata must not import Entity or Channel internals, even when both use the entity database. Composition binds external adapters.
 
 The deployer installs, upgrades and supervises the optional independent Connect/Kafka infrastructure and product-owned applier/control-agent process. API and Beat dispatch durable management intent; neither transports events nor spawns/supervises these processes. The PostgreSQL Connect + Kafka reference design uses one keyed topic and one partition per table, ordered per table, with no partition-count change within a capture generation. It makes no cross-table source-transaction atomicity promise. A standard sink is a bounded comparison candidate, not a second production backend.
 
-The management database owns Source configuration, resource bindings, control commands, reference intents, recovery requests and history invalidation gates. Dedicated `source_mirror` and `source_mirror_state` schemas in the separate entity database own rows, fences, generations, delivery progress, log counters and reader pins. A Metadata bootstrap entry owns those schemas and guarded functions; it must not call unpublished Entity bootstrap helpers. A dedicated non-superuser owner owns the objects. Restricted applier and read-gateway logins have no unguarded DML or raw row-table grants; ordinary Entity/query roles have no mirror grants. Bootstrap administrative credentials are never used by serving processes.
+The management database owns Source configuration, resource bindings, control commands, Mirror operations, recovery requests and history invalidation gates. Dedicated `source_mirror` and `source_mirror_state` schemas in the separate entity database own rows, fences, generations, delivery progress, log counters and reader pins. A Metadata bootstrap entry owns those schemas and guarded functions; it must not call unpublished Entity bootstrap helpers. A dedicated non-superuser owner owns the objects. Restricted applier and read-gateway logins have no unguarded DML or raw row-table grants; ordinary Entity/query roles have no mirror grants. Bootstrap administrative credentials are never used by serving processes.
 
 ## 3. Durable Control And Source Safety
 
@@ -68,33 +67,27 @@ Publication requires a quiesced, fenced handoff certificate: correlated successf
 
 Paused REST status, a Kafka high-water mark, an out-of-band notification, a saved source offset or zero lag alone is insufficient. The profile must prove their ordering relation, including late data after a notification. Missing certificate capability keeps publication blocked; no timer or zero-lag fallback is allowed. Persist the certificate so takeover finishes or abandons the same operation idempotently.
 
-Target `reader_pins` are unique by `(run_id, mirror_id)`. Lock pointer and generation, acquire/return the pin atomically, reject cleanup-pending generations, and reuse it for every page/node/restart-resume of that run. Channel stores pin references, not a second authority; recover by run id after response loss. A new rerun has a new run id and acquires its own pin. Release requires explicit terminal/non-resumable proof, not TTL or guessed liveness. Cleanup closes an unpinned retired generation to new pins under the same locks before recoverable drop. Uncertain readers retain pins.
+Target `reader_pins` bind a reader id to a Mirror's published generation under the pointer and generation locks. An exact retry reuses the pin and cleanup closes an unpinned retired generation to new pins before dropping it. Release requires explicit terminal proof. Pins freeze generation identity. Live application can still change row contents between keyset pages. A reachable complete generation can serve stale rows during replacement.
 
-Pins freeze generation identity, not mutable row contents or an MVCC snapshot. Use stable keyset paging; do not promise repeatable row values while live application continues. Reachable old complete generations may serve explicitly stale reads during replacement. Unreachable target or no complete generation fails retryably, never skips as success or advances a checkpoint. Continue/skip/fail freshness policy applies only to reachable complete data and annotates the run.
+## 6. Enablement And Operations
 
-## 6. Data Authorization And Workflow Integration
+From a supported table in Catalog, a User with `metadata:read` on the table's Source and global `mirror:write` can choose **Enable mirror**. Metadata resolves the Source and stable table identity, then commits one logical Mirror, a durable Open operation and redacted audit in the management transaction. Repeat or concurrent requests for the same enabled table return the same Mirror and accepted Open operation. Re-enabling a disabled Mirror retains its identity and requests a new Open.
 
-`sources:data_read` grants every column of every admitted table in a Source only when the active User's Role contains it and Source Membership resolves to `viewer` or higher. Catalog visibility, query permissions, mirror management and publishing are not row grants. No per-table ACL is implied. Do not add new grants to existing custom Roles or `operator`; Super Admin follows the existing identity rule. `mirror:read` grants global Operations metadata; `mirror:write` grants lifecycle management, not data.
+The Source owns capture credentials and the snapshot window. Explicitly enabled Mirrors define the desired table scope independently of Data Channels. Source enablement, credentials, profile readiness and proof of runtime authority still gate capture. Catalog refresh records discovery. A supported table can be eligible to request enablement while capture is still blocked.
 
-Manual run mint persists the current actor as mirror execution User. Unattended published settings require explicit `mirror_execution_user_id`, validated on publish/mint. Retry/resume retains that selected identity and revalidates current permissions. Never substitute System Identity, publisher, owner or capture credentials. Existing Entity/SQL execution identity rules remain unchanged.
+Global `mirror:read` authorizes Operations metadata and a Catalog link for callers who can see the table. Operations shows desired state, the durable operation journal, a published generation when available and correlated snapshot progress when observed. Freshness stays unknown without an end-to-end measurement. The Mirror fault field remains null until there is durable evidence bound to the Mirror. Deployment verification uses restricted target access to check rows in the published generation and the corresponding committed live entry in `source_mirror_state.live_log`. User-authorized internal row and History reads check the active User's `sources:data_read` Role capability and viewer-or-higher Source Membership against the immutable Mirror binding.
 
-Every row/log page and final checkpoint settlement rechecks active identity and current `sources:data_read` on the Source resolved from the immutable mirror binding. Disabled/deleted/missing identity or revoked grants returns no rows/images/progress. Caller-supplied Source ids are not authority.
+Disable excludes the Mirror from desired scope and records a pending disable operation. A published copy can remain visible. The current Source stop must acknowledge the exact excluded Mirror revision under its assigned owner before Operations confirms stop. Reconciliation that keeps capture running for other Mirrors leaves this stop pending when it lacks exclusion evidence for the disabled table. Superseding Source authority retires the confirmation.
 
-Mirror-derived stored output, dataset, samples and retry caches carry Source provenance. Every response/reuse path requires current grants on all contributing Sources in addition to its ordinary Channel permission. Conservatively taint the entire mixed output with the union of input Sources; deny if provenance is unknown. Logs/errors contain no row values. Non-mirror output rules are unchanged. No mirror node may be exposed without this protection.
+## 7. History Gates
 
-The minimum graph surface is `read.mirror` and `source.kind=mirror` on `read.changes`/`volume.changes_dataset`, with explicit stream kind. Publish confirmation returns actual `mirrors_to_open`. Commit published references and a deduplicated open outbox durably before asynchronous inclusion can succeed; reconcile the live published reference set. Draft preview/sample never starts capture. Refuse deletion with published references. Global Operations list/detail at `/console/mirrors` and `/console/mirrors/:id` presents Source/object first and runtime/profile/health/progress as evidence. Do not add mirror tabs to Source detail or a separate vendor configuration editor.
-
-## 7. History Gates And Checkpoint Settlement
-
-Mirror position is `(mirror_id, history_epoch, commit_seq, entry_seq)` with retained lower and committed upper bounds. Capture lineage and reader target generation are separate metadata. Channel extends its existing checkpoint/proposal records with stream kind, epoch and provenance; it does not create another CDC consumer cursor store. Entity positions remain backward compatible.
+Mirror position is `(mirror_id, history_epoch, commit_seq, entry_seq)` with retained lower and committed upper bounds. Capture lineage and reader target generation are separate metadata.
 
 The management database owns a per-stream history gate containing epoch, retained lower bound and `available|invalidating` status. This is invalidation authority, not a cursor store. Every gap, destructive history break or purge locks the affected gates in sorted order and commits invalidating/new epoch/bounds before touching target history. A durable outbox idempotently completes target invalidation/cleanup; uncertainty leaves the gate closed. Multi-table loss closes every affected gate before replacements become eligible. Physical cleanup cannot bypass this protocol; retention can conservatively invalidate an epoch rather than silently accept a lost cursor.
 
 For confirmed capture history loss, the target records the excluded capture lineages for each affected Mirror in the transaction that resets its history epoch. The fence covers the installed lineage and all generations allocated before the reset. Authority revision changes and later retention resets preserve the exclusion. Existing complete pointers and pins still serve stale rows. Unaffected Mirrors can continue writing, and a distinct capture lineage can write after normal admission and allocation.
 
-Every page checks gate and target epoch/bounds; disagreement fails closed. Final successful Channel settlement locks all referenced management gates in the same management transaction as all checkpoint updates, rechecks epoch/bounds and authorization, and performs required bounded target validation while holding those locks. Invalidation uses the same locks: settlement linearizes before invalidation or rejects it, even after the last page. A check-then-call outside the checkpoint transaction is insufficient across two databases. Unavailable validation cannot commit. The validation linearization point is the successful bounded check under the gate locks; it cannot predict a later network outage.
-
-Changes-arrived dispatch is explicit Channel opt-in and consumes only committed live entries. Baselines, recovery and publication do not dispatch. Reuse Channel's trigger mechanism, never a CDC-only trigger executor or an applier calling external actions. Gaps never reset cursors silently or replace history with a snapshot.
+Every incremental page checks the management gate and target epoch and bounds. Disagreement denies the read. Only effective live changes are returned. A gap requires explicit recovery.
 
 ## 8. Conservative Recovery
 
@@ -104,7 +97,7 @@ Actual snapshot starts use the live Schedule Timezone/window, one table per Sour
 
 Automatically resume verified unchanged schemas. Automatic add/widen requires explicitly qualified mapping, schema detection and backfill evidence. Unknown DDL, key changes, rename, drop/narrow and TRUNCATE block readiness pending authorization. No text fallback. PostgreSQL row events do not prove schema-only observation: require a DBA-approved fingerprint path with fresh evidence or block.
 
-Automatic state-only workflow reconciliation requires a proven closed node allowlist limited to deterministic, authorized, idempotent key-based Entity state writes. Code, arbitrary SQL, opaque transforms, HTTP/email/Webhook and mixed graphs are excluded. Without a proven classifier there is no automatic post-gap workflow replay. Explicit reconciliation is an audited request bound to scope, epoch and Channel version, not historical events. The conservative default does not waive implementation/verification of classifier and reconciliation obligations. Mixed/external recovery needs an explicit authorized decision and is never replayed automatically.
+Recovery requests are audited against the current Mirror History epoch. The supported actions are retry, run now, postpone and manual.
 
 ## 9. Foundation Notifications
 
@@ -112,7 +105,7 @@ Foundation owns `backend/admin/notifications/`: one site Notification Channel wi
 
 Metadata emits typed redacted events after committed state transitions: `cdc.prerequisite_blocked`, `cdc.source_pressure`, `cdc.buffer_blocked`, `cdc.read_unavailable`, `cdc.disable_unconfirmed`, `cdc.history_gap`, `cdc.recovery_blocked`, `cdc.generation_published`. Include event id, scope/profile ids, owner/control/generation/epoch, observation Instant, expected/observed safe evidence, severity, pending/blocked state, responder and immediate action. Exclude rows, keys, source SQL, connection strings, secrets and raw connector exceptions. Publication means observed committed target pointer. Deduplicate by fault episode/type/scope and notify material transitions, not polling ticks.
 
-Metadata owns `mirror_lag_alert_minutes`; it measures timestamped source/delivery/target progress with an approved observation-staleness cutoff. Unknown is not zero lag. Numeric capacity/lag configuration must be explicitly approved; this contract invents no seed or safe production threshold. Hidden locked undeletable `store_only` Scheduled Tasks evaluate evidence and deliver outboxes; they never supervise capture infrastructure. Failure escalates through the independent fallback, not recursively through the failed route. The management-independent safety alarm remains a separate deployment obligation.
+A freshness measurement requires timestamped Source, delivery and target observations within the approved staleness limit. The management-independent safety alarm remains a separate deployment obligation.
 
 ## 10. MySQL Boundary
 
@@ -122,4 +115,4 @@ Metadata MySQL registration, Connector Spec/driver, introspection, type seeds, A
 
 - Every intermediate source event, cross-table source transaction preservation, universal freshness/throughput/outage guarantees or automatic history sacrifice.
 - Parallel production sink backends, per-table/row/column ACL machinery, mirror MCP tools or vendor configuration authoring.
-- Automatic mixed/external-effect replay, Source-detail mirror tabs, notification provider ecosystems or runtime supervision by Beat.
+- Data Channel consumption and workflow replay, Source-detail mirror tabs, notification provider ecosystems or runtime supervision by Beat.

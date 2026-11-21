@@ -82,7 +82,7 @@ Capture writes require the same `sources:write` Role and instance checks as ordi
 
 The first capture credential configuration reserves a durable binding in the Source transaction, before any external allocation. The reservation is conservative even if no connector, slot or topic exists. While a credential or retained binding exists, a patch changing `engine` or any `access` property except ordinary access `username` and Connector Spec `x-secret` properties returns `409 SOURCE_CAPTURE_SCOPE_LOCKED`. Compare validated documents, not ciphertext; unchanged resubmission is permitted. This includes host, port, TLS, database/schema, service/owner, and `extra`. Credential replacement, clear (in the same or a separate request), disable and confirmed stop do not release the binding or permit retargeting. There is no automatic release or ordinary Source release endpoint. Safe explicit resource reconciliation/release requires a separately authorized protocol; never silently rebind a stable capture identity.
 
-Replacement preserves stable Source-id-derived capture identity, topics, slots, and offsets. Clear records disabled desired capture while preserving continuity and any mirror data; a manager must reconcile that revision before any restart and must not apply a stale replacement after a clear. Saving configuration makes no claim that a manager has run. Disable, delete, and last-mirror-close must not silently discard continuity or drop replication slots (`docs/business-metadata.md` §4.1.1).
+Replacement preserves stable Source-id-derived capture identity, topics, slots, and offsets. Clear records disabled desired capture while preserving continuity and any mirror data; a manager must reconcile that revision before any restart and must not apply a stale replacement after a clear. Saving configuration makes no claim that a manager has run. Disable, delete, and last Mirror disable must not silently discard continuity or drop replication slots (`docs/business-metadata.md` §4.1.1).
 
 Malformed capture credentials or windows return `422 REQUEST_INVALID` with secret-free details. Capture/window-only mutations participate in the same missing-default-schedule ensure as other mutating Source updates. Capture changes are audited through Source create/update using field names and retain/replace/clear intent only, never either credential member or ciphertext.
 
@@ -285,7 +285,7 @@ Duplicate, unknown subject, and unknown level write no audit event. A successful
 - Non-database Source kinds (CSV/file) and their attachment APIs
 - A separate Connection resource or credential reuse across Sources
 - Soft delete and versioned credential history (capture replacements still use secret-free Source audit; see §2 and `DELETE /sources/{id}`)
-- Mirror lists/read nodes, applier/recovery and capture-status shapes are defined separately in `docs/api-contracts-source-mirrors.md`; no CDC version or deployment support matrix is inferred
+- Mirror lifecycle, applier, recovery and capture-status shapes are defined separately in `docs/api-contracts-source-mirrors.md`; no CDC version or deployment support matrix is inferred
 - Source test that returns query row data (reachability-only responses only)
 - Persisting probe results (last-tested timestamp, auto status flip, or blocking save until tested)
 - Free-form YAML authoring; hand-written per-engine forms (use SpecTree)

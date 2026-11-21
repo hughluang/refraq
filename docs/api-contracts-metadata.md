@@ -112,7 +112,7 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 
 `GET /sources/{id}/objects`: no level, or an unknown Source, is `404` `SOURCE_NOT_FOUND`. A level without `metadata:read` is `403` `AUTH_FORBIDDEN`. `GET /objects/{id}`, DDL, semantics-changes, object semantics write, and batch column semantics (`PATCH /objects/{id}/columns/semantics`) use `404` `CATALOG_OBJECT_NOT_FOUND` when the caller has no level on the object's Source. `PATCH /columns/{id}/semantics` uses `404` `CATALOG_COLUMN_NOT_FOUND` when that column's Source is hidden. Join read uses the object's not-found code. `POST /joins` and `POST /joins:batch` use `404` `CATALOG_COLUMN_NOT_FOUND` when an endpoint Source is hidden. `PATCH`, reject, restore, and delete of a join use `404` `CATALOG_JOIN_NOT_FOUND` when an endpoint Source is hidden. A level without `metadata:write` on a write is `403` `AUTH_FORBIDDEN`.
 
-Object detail, object semantics saves and batch column semantics saves include `object.sync_table`. It contains `source_name` and `qualified_table` for a supported, present table when the caller has `metadata:read` on the Source. Otherwise the field is null.
+Object detail (`GET /objects/{object_id}`) includes `object.mirror` as `{can_enable: boolean, mirror_id: string | null}` or null. Catalog access to the Source gates the object. For a present table in a PostgreSQL database Source, `can_enable` is true when the caller has global `mirror:write` and the table has no enabled Mirror. `mirror_id` is populated for a registered Mirror only with global `mirror:read`, including a registered table that is no longer present. The projection is null when the object is ineligible and no readable Mirror link exists. The client refreshes object detail after enablement. The object-bound POST is specified in `docs/api-contracts-source-mirrors.md` §2.
 
 List `q` is optional. When set, it matches a literal case-insensitive substring of `schema_name`, `name`, or `business_name` (not `locator_key`, not `business_description`). `include_absent` defaults true (tombstones stay in **Current catalog**). `business_semantics_ready` is optional `true` | `false`; omit means no readiness filter.
 
@@ -248,8 +248,6 @@ Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Self-loop → `JO
 | `GET` | `/catalog/columns/search` | `metadata:read` | Cross-Source column search |
 
 Query params: `q` (**required**, non-empty after strip for both objects and columns), `source_id`, `object_type`, `limit` (default 20, max 100), `offset`. Missing, empty, or whitespace-only `q` is `400 CATALOG_SEARCH_QUERY_REQUIRED` (domain-owned; HTTP does not emit `422 REQUEST_INVALID` for emptiness). MCP `search_objects` / `search_columns` use the same code in the tool-error envelope.
-
-The HTTP object search accepts `mirror_eligible=true` for the Channel table picker. This mode ranks present tables of visible PostgreSQL database Sources lexically and applies pagination after filtering. It fixes the object type to `table`. Eligibility does not establish capture readiness.
 
 Both ranking paths receive only Sources on which the caller holds `metadata:read`. An empty set is an empty page and is not treated as every Source. A `source_id` the caller cannot read is `200` with empty `items` and the page's `rank_mode`. It is not a not-found error. An MCP search that passes a `source_locator_key` the caller cannot open is `SOURCE_NOT_FOUND` in the tool-error envelope before the page is built.
 
