@@ -937,7 +937,7 @@ function CaptureSettings({ form, source, editable }: {
         </Group>
         {source?.kind === "database" && catalog.data?.can && (
           <Button component={ConsoleLink} href={`/console/catalog?source=${encodeURIComponent(source.id)}`} variant="light" size="sm" w="fit-content">
-            {t("catalog.chooseSyncTable")}
+            {t("catalog.title")}
           </Button>
         )}
         <Stack id="source-capture-settings" gap="lg" hidden={!expanded} style={!expanded ? { display: "none" } : undefined}>

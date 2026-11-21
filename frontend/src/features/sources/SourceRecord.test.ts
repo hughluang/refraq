@@ -8,12 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
 import en from "@/locales/en-US/common.json";
+import zh from "@/locales/zh-CN/common.json";
 import { ConsoleNotifications } from "@/providers/notification-provider";
 
 const copy = en as Record<string, string>;
+const locale = vi.hoisted(() => ({ current: "en-US" as "en-US" | "zh-CN" }));
 const search = vi.hoisted(() => ({ value: "" }));
 const replace = vi.hoisted(() => vi.fn());
-const gate = vi.hoisted(() => ({ canEdit: true, canDelete: true }));
+const gate = vi.hoisted(() => ({ canEdit: true, canDelete: true, canBrowseCatalog: true }));
 const permissions = vi.hoisted(() => ({
   data: ["sources:read", "sources:write"] as string[],
 }));
@@ -96,14 +98,18 @@ vi.mock("next/link", () => ({
 vi.mock("@refinedev/core", () => ({
   matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => (key: string, options?: Record<string, unknown>) => {
-    const template = copy[key] ?? key;
+    const messages: Record<string, string> = locale.current === "zh-CN" ? zh : en;
+    const template = messages[key] ?? key;
     if (!options) return template;
     return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
   },
   useNotification: () => ({ open: notify }),
-  useCan: ({ action }: { action?: string }) => ({
-    data: { can: action === "list" || (action === "delete" ? gate.canDelete : gate.canEdit) },
-  }),
+  useCan: ({ resource, action }: { resource?: string; action?: string }) => {
+    if (action === "list") {
+      return { data: { can: resource !== "catalog" || gate.canBrowseCatalog } };
+    }
+    return { data: { can: action === "delete" ? gate.canDelete : gate.canEdit } };
+  },
   usePermissions: () => ({ data: permissions.data, isLoading: false }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
   CanAccess: ({ children }: { children?: ReactNode }) => children,
@@ -181,9 +187,11 @@ async function renderRecord(props: { mode: "create" } | { mode: "show" | "edit";
 describe("SourceRecord", () => {
   beforeEach(() => {
     stubDomApis();
+    locale.current = "en-US";
     search.value = "";
     gate.canEdit = true;
     gate.canDelete = true;
+    gate.canBrowseCatalog = true;
     replace.mockReset();
     notify.mockReset();
     permissions.data = ["sources:read", "sources:write"];
@@ -273,7 +281,6 @@ describe("SourceRecord", () => {
     await renderRecord({ mode: "show", sourceId: "src_1" });
 
     expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Choose a table to synchronize" }).getAttribute("href")).toBe("/console/catalog?source=src_1");
     expect(screen.getByText(copy["sources.capture.set"])).toBeTruthy();
     expect(screen.getByText("23:00")).toBeTruthy();
     expect(screen.getByText("02:00")).toBeTruthy();
@@ -284,6 +291,30 @@ describe("SourceRecord", () => {
     expect(screen.queryByRole("button", { name: copy["common.save"] })).toBeNull();
     expect(screen.queryByRole("link", { name: copy["sources.edit"] })).toBeNull();
     expect(getSourceAccess).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["en-US", en["catalog.title"]],
+    ["zh-CN", zh["catalog.title"]],
+  ] as const)("links a Source reader to its Catalog in %s", async (language, label) => {
+    locale.current = language;
+    permissions.data = ["sources:read", "metadata:read"];
+    gate.canEdit = false;
+    getSource.mockResolvedValue({ source: { ...LEDGER, can_write: false } });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    expect((await screen.findByRole("link", { name: label })).getAttribute("href")).toBe(
+      "/console/catalog?source=src_1",
+    );
+  });
+
+  it("hides Catalog navigation from a Source reader without Catalog access", async () => {
+    permissions.data = ["sources:read"];
+    gate.canBrowseCatalog = false;
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+
+    expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: en["catalog.title"] })).toBeNull();
   });
 
   it("keeps the key visible and saves an edit without leaving the page", async () => {

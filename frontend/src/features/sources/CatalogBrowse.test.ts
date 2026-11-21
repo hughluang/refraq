@@ -15,7 +15,7 @@ const listCatalogObjects = vi.hoisted(() => vi.fn());
 
 const schedules = vi.hoisted(() => ({ listSourceSchedules: vi.fn(), runSchedule: vi.fn() }));
 const mirrors = vi.hoisted(() => ({ listMirrors: vi.fn() }));
-const location = vi.hoisted(() => ({ search: "", author: true }));
+const location = vi.hoisted(() => ({ search: "" }));
 vi.mock("@/features/schedules/api", () => schedules);
 vi.mock("@/features/mirrors/api", () => mirrors);
 configure({ asyncUtilTimeout: 7000 });
@@ -29,7 +29,7 @@ function translate(key: string) {
 vi.mock("@refinedev/core", () => ({
   matchResourceFromRoute: () => ({ found: false }),
   useTranslate: () => translate,
-  useCan: () => ({ data: { can: location.author }, isLoading: false }),
+  useCan: () => ({ data: { can: true }, isLoading: false }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
 }));
 
@@ -99,7 +99,6 @@ function shell(node: ReactNode) {
 describe("CatalogBrowse source probe", () => {
   beforeEach(() => {
     location.search = "";
-    location.author = true;
     stubDomApis();
     listCatalogSources.mockReset();
     listCatalogObjects.mockReset();
@@ -141,7 +140,6 @@ describe("Source and Operations discovery", () => {
   beforeEach(() => {
     stubDomApis();
     location.search = "";
-    location.author = true;
     listCatalogSources.mockResolvedValue({ items: [{ id: "s1", name: "Sales", key: "sales" }], total: 1 });
     listCatalogObjects.mockResolvedValue({ items: [], total: 0 });
     schedules.listSourceSchedules.mockReset();
@@ -190,13 +188,12 @@ describe("Source and Operations discovery", () => {
     expect(screen.queryByRole("button", { name: copy["catalog.collect.action"] })).toBeNull();
   });
 
-  it.each([true, false])("shows the Operations empty action for a catalog author only (%s)", async (author) => {
-    location.author = author;
+  it("shows the Operations empty state before any source mirror is provisioned", async () => {
     mirrors.listMirrors.mockResolvedValue({ items: [], total: 0 });
     const { MirrorList } = await import("../mirrors/MirrorList");
     render(shell(createElement(MirrorList)));
-    expect(await screen.findByText(copy[author ? "mirrors.empty.author" : "mirrors.empty.operator"])).toBeTruthy();
-    expect(Boolean(screen.queryByRole("link", { name: copy["catalog.chooseSyncTable"] }))).toBe(author);
+    expect(await screen.findByText(copy["mirrors.empty"])).toBeTruthy();
+    expect(screen.queryByRole("link", { name: en["catalog.title"] })).toBeNull();
   });
 
   it("keeps filtered emptiness separate from a load failure and a revoked mirror permission", async () => {
@@ -210,6 +207,6 @@ describe("Source and Operations discovery", () => {
     fireEvent.click(screen.getByRole("button", { name: copy["common.refresh"] }));
     fireEvent.click(await screen.findByRole("button", { name: copy["status.unloaded"] }));
     expect(await screen.findByText(copy["forbidden.back"])).toBeTruthy();
-    expect(screen.queryByRole("link", { name: copy["catalog.chooseSyncTable"] })).toBeNull();
+    expect(screen.queryByRole("link", { name: en["catalog.title"] })).toBeNull();
   });
 });
