@@ -24,7 +24,7 @@ vi.mock("@mantine/core", () => ({
   Button: ({ children, onClick, disabled }: { children: ReactNode; onClick: () => void; disabled: boolean }) => createElement("button", { onClick, disabled }, children),
 }));
 
-const mirror = { id: "m1", source_id: "source-1", qualified_table: "public.orders", enabled: false, status: "disable_pending", published_generation_id: null, capture_generation: "capture-1", history_epoch: 7, readiness: [{ key: "ownership", result: "unknown", expected: "exclusion proof", observed: null, observed_at: null, owner: "deployer", action: "Confirm fence" }], control: { stop_ack: null }, progress: null, profile: { state: "unverified" }, fault: null };
+const mirror = { id: "m1", source_id: "source-1", qualified_table: "public.orders", enabled: false, status: "disable_pending", published_generation_id: null, capture_generation: "capture-1", history_epoch: 7, readiness: [{ key: "ownership", result: "unknown", expected: "exclusion proof", observed: null, observed_at: null, owner: "deployer", action: "Confirm fence" }], control: { stop_ack: null }, progress: null, profile: { state: "unverified" }, fault: null, operations: [] };
 afterEach(() => { cleanup(); state.write = true; vi.clearAllMocks(); });
 it("keeps unknown readiness and unconfirmed disable visible without fabricated progress", async () => {
   state.get.mockResolvedValue({ mirror });
@@ -33,6 +33,37 @@ it("keeps unknown readiness and unconfirmed disable visible without fabricated p
   expect(screen.getByText("mirrors.result.unknown")).toBeTruthy();
   expect(screen.getAllByText("mirrors.unknownEvidence").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "mirrors.enable" }).hasAttribute("disabled")).toBe(true);
+});
+it("confirms a stop only when refreshed evidence matches the current disable operation", async () => {
+  const observedAt = "2026-01-02T03:04:05Z";
+  const stopped = {
+    ...mirror,
+    status: "disabled",
+    published_generation_id: "g1",
+    control: {
+      control_revision: 2,
+      applied_revision: 2,
+      observed_at: observedAt,
+      stop_ack: { operation_id: "old-disable", source_operation_id: "source-stop", observed_at: observedAt },
+    },
+    operations: [{
+      id: "current-disable", mirror_id: "m1", kind: "disable", state: "applied", control_revision: 2,
+      observed_evidence_refs: ["source-stop"], requested_at: "2026-01-02T03:00:00Z",
+    }],
+  };
+  state.get.mockResolvedValueOnce({ mirror: stopped }).mockResolvedValueOnce({
+    mirror: { ...stopped, control: { ...stopped.control, stop_ack: { ...stopped.control.stop_ack, operation_id: "current-disable" } } },
+  });
+  render(createElement(MirrorDetail, { id: "m1" }));
+  await screen.findByText("mirrors.event.published");
+  expect(screen.getByText("mirrors.event.disableRequested")).toBeTruthy();
+  expect(screen.queryByText("mirrors.event.stopConfirmed")).toBeNull();
+  expect(screen.getByRole("button", { name: "mirrors.enable" }).hasAttribute("disabled")).toBe(true);
+
+  fireEvent.click(screen.getByRole("button", { name: "common.refresh" }));
+  expect(await screen.findByText("mirrors.event.stopConfirmed", { exact: false })).toBeTruthy();
+  expect(screen.queryByText("mirrors.event.disableRequested")).toBeNull();
+  expect(screen.getByRole("button", { name: "mirrors.enable" }).hasAttribute("disabled")).toBe(false);
 });
 it("sends the epoch captured when recovery opened and a required reason, then shows pending", async () => {
   state.get.mockResolvedValue({ mirror });

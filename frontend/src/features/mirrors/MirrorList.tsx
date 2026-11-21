@@ -36,11 +36,12 @@ export function MirrorList() {
       extra={<TextInput aria-label={t("mirrors.sourceFilter")} placeholder={t("mirrors.sourceFilter")} value={source} onChange={event => query.setFilter("source_id", event.currentTarget.value)} />} />}>
     <ListTable list={list}
       emptyMessage={t("mirrors.empty")}
-      columnCount={4} onClearFilters={query.clear}
-      head={<Table.Tr>{["source", "object", "lastEvent", "nextAction"].map(key => <Table.Th key={key}>{t(`mirrors.${key}`)}</Table.Th>)}</Table.Tr>}>
+      columnCount={5} onClearFilters={query.clear}
+      head={<Table.Tr>{["source", "object", "desiredState", "lastEvent", "nextAction"].map(key => <Table.Th key={key}>{t(`mirrors.${key}`)}</Table.Th>)}</Table.Tr>}>
       {list.items.map(mirror => <Table.Tr key={mirror.id}>
         <Table.Td>{mirror.source_name ?? mirror.source_key ?? mirror.source_id}</Table.Td>
         <Table.Td><ConsoleLink href={`/console/mirrors/${encodeURIComponent(mirror.id)}`}>{mirror.qualified_table}</ConsoleLink></Table.Td>
+        <Table.Td>{t(mirror.enabled ? "mirrors.desiredEnabled" : "mirrors.desiredDisabled")}</Table.Td>
         <Table.Td><MirrorEvent mirror={mirror} /></Table.Td>
         <Table.Td><MirrorNextAction mirror={mirror} /></Table.Td>
       </Table.Tr>)}

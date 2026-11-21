@@ -14,6 +14,30 @@ export type ReadinessItem = {
   owner: string;
   action: string;
 };
+type StopAcknowledgment = {
+  operation_id: string;
+  source_operation_id: string;
+  observed_at: string;
+};
+type MirrorControl = {
+  control_revision: number;
+  credential_revision: number | null;
+  owner_epoch: number | null;
+  runtime_instance_id: string | null;
+  applied_revision: number | null;
+  observed_at: string | null;
+  stop_ack: StopAcknowledgment | null;
+};
+type MirrorOperation = {
+  id: string;
+  mirror_id: string;
+  kind: "open" | "enable" | "disable" | "recovery";
+  state: "pending" | "applied" | "superseded";
+  control_revision: number;
+  observed_evidence_refs: string[];
+  fault_code: string | null;
+  requested_at: string;
+};
 export type Mirror = {
   id: string;
   source_id: string;
@@ -29,11 +53,11 @@ export type Mirror = {
   history_epoch: string | number | null;
   retained_lower_bound: unknown;
   committed_upper_bound: unknown;
-  control: Record<string, unknown>;
+  control: MirrorControl;
   progress: { stage: "scan" | "catching_up"; notification_offset: number; observed_at: string | null; generation_id: string } | null;
   profile: Record<string, unknown>;
   readiness: ReadinessItem[];
   fault: Record<string, unknown> | null;
-  operations?: { kind: string; state: string; control_revision: number; requested_at: string }[];
+  operations: MirrorOperation[];
 };
 export type PendingOperation = { operation_id: string; state: "pending" };

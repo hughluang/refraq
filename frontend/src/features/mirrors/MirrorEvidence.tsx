@@ -1,5 +1,6 @@
 import { useTranslate } from "@refinedev/core";
 import { Instant } from "@/components/display/Instant";
+import { getMirrorStopEvidence } from "./stopEvidence";
 import type { Mirror } from "./types";
 
 function outstanding(mirror: Mirror) {
@@ -10,20 +11,23 @@ function outstanding(mirror: Mirror) {
 
 export function MirrorEvent({ mirror }: { mirror: Mirror }) {
   const t = useTranslate();
-  const op = mirror.enabled && mirror.operations?.find(item => item.kind === "open" && item.state === "pending"
+  const op = mirror.enabled && mirror.operations.find(item => item.kind === "open" && item.state === "pending"
     && item.control_revision === mirror.control.control_revision);
   const blocker = outstanding(mirror).find(item => item.result === "fail" || item.observed_at);
   const progress = mirror.progress;
   const published = !!mirror.published_generation_id;
-  const request = op && op.control_revision === 1 && mirror.operations?.length === 1 ? "first" : "request";
+  const request = op && op.control_revision === 1 && mirror.operations.length === 1 ? "first" : "request";
+  const stop = getMirrorStopEvidence(mirror);
   return <>
+    {stop?.state === "pending" && <div>{t("mirrors.event.disableRequested")}</div>}
+    {stop?.state === "confirmed" && <div>{t("mirrors.event.stopConfirmed")} · <Instant value={stop.observedAt} /></div>}
     {published && <div>{t("mirrors.event.published")}</div>}
     {published && <div>{t("mirrors.freshnessUnknown")}</div>}
     {published && op && <div>{t("mirrors.event.replacement")}</div>}
     {blocker && <div>{blocker.key} · {t(`mirrors.result.${blocker.result}`)} {blocker.observed_at && <Instant value={blocker.observed_at} />}</div>}
     {progress && <div>{t(`mirrors.event.${progress.stage}`)} {progress.observed_at && <Instant value={progress.observed_at} />}</div>}
     {!progress && op && <div>{t(`mirrors.event.${request}`)} · {t("mirrors.requestedAt")} <Instant value={op.requested_at} /></div>}
-    {!published && !progress && !op && !blocker && <div>{t("mirrors.unknownEvidence")}</div>}
+    {!stop && !published && !progress && !op && !blocker && <div>{t("mirrors.unknownEvidence")}</div>}
   </>;
 }
 

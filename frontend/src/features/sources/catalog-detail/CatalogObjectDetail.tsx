@@ -29,7 +29,7 @@ import {
   ModuleAction,
   ModuleId,
 } from "@/features/console/module-identity";
-import { resolveCatalogObject } from "@/features/sources/api/catalog";
+import { enableCatalogMirror, resolveCatalogObject } from "@/features/sources/api/catalog";
 import { ColumnsTab } from "@/features/sources/catalog-detail/ColumnsTab";
 import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
 import { HistoryTab } from "@/features/sources/catalog-detail/HistoryTab";
@@ -46,6 +46,10 @@ type CatalogObjectDetailProps = {
 };
 
 export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
+  return <CatalogObjectRecord key={objectId} objectId={objectId} />;
+}
+
+function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
   const t = useTranslate();
   const { open } = useNotification();
   const { data: canWrite } = useCan({
@@ -56,6 +60,14 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     resource: ModuleId.catalog,
     action: ModuleAction.sample,
   });
+  const { data: canReadMirror } = useCan({
+    resource: ModuleId.mirrors,
+    action: ModuleAction.show,
+  });
+  const { data: canWriteMirror } = useCan({
+    resource: ModuleId.mirrors,
+    action: ModuleAction.edit,
+  });
   const canSamplePending = isAccessEvaluationPending(
     canSampleLoading,
     canSampleData,
@@ -63,7 +75,11 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   const writable = Boolean(canWrite?.can);
 
   const [object, setObject] = useState<CatalogObject | null>(null);
+  // Semantics edits replace the object with a response that lacks this projection.
+  const [mirror, setMirror] = useState<CatalogObject["mirror"]>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [enablingMirror, setEnablingMirror] = useState(false);
   const [failed, setFailed] = useState(false);
   const [reloadEpoch, setReloadEpoch] = useState(0);
   const [joinsVisited, setJoinsVisited] = useState(false);
@@ -82,12 +98,16 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   const { value: activeTab, setTab } = useConsoleTab(catalogTabs);
 
   const request = useRef<AbortController | null>(null);
+  const mirrorRequest = useRef<AbortSignal | null>(null);
   const load = useCallback(
     async (opts?: { refresh?: boolean }) => {
       request.current?.abort();
+      mirrorRequest.current = null;
+      setEnablingMirror(false);
       const controller = new AbortController();
       request.current = controller;
       const refresh = Boolean(opts?.refresh);
+      setRefreshing(refresh);
       if (!refresh) {
         setLoading(true);
       }
@@ -96,6 +116,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
         const objRes = await resolveCatalogObject(objectId, controller.signal);
         if (controller.signal.aborted) return;
         setObject(objRes.object);
+        setMirror(objRes.object?.mirror);
         if (refresh) {
           setReloadEpoch((n) => n + 1);
         }
@@ -109,7 +130,10 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           if (!controller.signal.aborted) void load();
         } });
       } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [objectId, t],
@@ -153,6 +177,33 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
         type: "error",
         message: t("common.copy.failed"),
       });
+    }
+  };
+
+  const enableMirror = async () => {
+    const signal = request.current?.signal;
+    if (
+      !object || !mirror?.can_enable || !canWriteMirror?.can || refreshing ||
+      !signal || signal.aborted || mirrorRequest.current
+    ) return;
+    mirrorRequest.current = signal;
+    setEnablingMirror(true);
+    try {
+      await enableCatalogMirror(object.id, signal);
+      if (signal.aborted) return;
+      open?.({ type: "success", message: t("catalog.mirror.accepted") });
+      void load({ refresh: true });
+    } catch (err) {
+      if (signal.aborted) return;
+      presentProblemNotification(t, err);
+      if (err instanceof ApiError && [401, 403, 404].includes(err.status)) {
+        void load({ refresh: true });
+      }
+    } finally {
+      if (mirrorRequest.current === signal) {
+        mirrorRequest.current = null;
+        setEnablingMirror(false);
+      }
     }
   };
 
@@ -227,7 +278,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
       {({ list, panels }) => (
         <PageChrome
           title={t("catalog.title")}
-          recordTitle={object.sync_table ? `${object.sync_table.source_name} / ${title}` : title}
+          recordTitle={title}
           titleBasis="10rem"
           description={object.business_name ?? undefined}
           recent={{ moduleId: "catalog", title }}
@@ -235,6 +286,21 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           tabs={list}
           actions={
             <Group gap="xs">
+              {!refreshing && canWriteMirror?.can && mirror?.can_enable ? (
+                <Button size="sm" onClick={() => void enableMirror()} loading={enablingMirror}>
+                  {t("catalog.mirror.enable")}
+                </Button>
+              ) : null}
+              {!refreshing && canReadMirror?.can && mirror?.mirror_id ? (
+                <Button
+                  component={ConsoleLink}
+                  href={`/console/mirrors/${encodeURIComponent(mirror.mirror_id)}`}
+                  size="sm"
+                  variant="light"
+                >
+                  {t("catalog.mirror.view")}
+                </Button>
+              ) : null}
               <Button
                 component={ConsoleLink}
                 href="/console/catalog"
@@ -248,7 +314,10 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
               <Button
                 size="sm"
                 variant="light"
-                onClick={() => void load({ refresh: true })}
+                disabled={enablingMirror}
+                onClick={() => {
+                  if (!mirrorRequest.current) void load({ refresh: true });
+                }}
                 aria-label={t("catalog.refresh")}
               >
                 <Text component="span" visibleFrom="sm">{t("catalog.refresh")}</Text>

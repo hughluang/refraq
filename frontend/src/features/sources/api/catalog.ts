@@ -1,4 +1,5 @@
 import { apiClient } from "@/lib/api";
+import type { Mirror } from "@/features/mirrors/types";
 import type { CatalogObject, SemanticsChange } from "@/features/sources/types";
 import type { OffsetPage } from "@/lib/pagination";
 
@@ -49,6 +50,13 @@ export function listCatalogObjects(
 
 export function getCatalogObject(objectId: string, signal?: AbortSignal) {
   return apiClient<{ object: CatalogObject }>(`/objects/${encodeURIComponent(objectId)}`, { signal });
+}
+
+export function enableCatalogMirror(objectId: string, signal: AbortSignal) {
+  return apiClient<{ mirror: Mirror; operation_id: string }>(
+    `/objects/${encodeURIComponent(objectId)}/mirror`,
+    { method: "POST", signal },
+  );
 }
 
 export async function resolveCatalogObject(objectRef: string, signal?: AbortSignal): Promise<{ object: CatalogObject | null }> {

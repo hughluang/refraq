@@ -8,6 +8,7 @@ import { Instant } from "@/components/display/Instant";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { MirrorEvent, MirrorNextAction } from "./MirrorEvidence";
+import { getMirrorStopEvidence } from "./stopEvidence";
 import { FormSection } from "@/components/form/FormSection";
 import { TextField } from "@/components/form/TextField";
 import { HeaderActions } from "@/components/layout/HeaderActions";
@@ -63,8 +64,9 @@ export function MirrorDetail({ id }: { id: string }) {
   }, [load]);
 
   const scope = mirror ? t("mirrors.scope", { source: mirror.source_name ?? mirror.source_id, table: mirror.qualified_table }) : "";
+  const stopPending = mirror !== null && getMirrorStopEvidence(mirror)?.state === "pending";
   async function toggle() {
-    if (!mirror || !canWrite?.can || enableIntent === null || submitting) return;
+    if (!mirror || !canWrite?.can || enableIntent === null || submitting || stopPending) return;
     setSubmitting(true);
     try {
       const revision = ++loadRevision.current;
@@ -75,7 +77,7 @@ export function MirrorDetail({ id }: { id: string }) {
         return;
       }
       setMirror(result.mirror);
-      setPending({ operation_id: result.operation_id, state: "pending" });
+      setPending(null);
     } catch (error) {
       presentProblemNotification(t, error);
       await load();
@@ -107,7 +109,8 @@ export function MirrorDetail({ id }: { id: string }) {
       <FormSection title={t("mirrors.identity")}>
         <DisplayField label={t("mirrors.source")} value={mirror.source_name ?? mirror.source_key ?? mirror.source_id} />
         <DisplayField label={t("mirrors.object")} value={mirror.qualified_table} />
-        <DisplayField label={t("mirrors.status")} value={t(`mirrors.status.${mirror.status}`)} helper={t("mirrors.intentOnly")} />
+        <DisplayField label={t("mirrors.desiredState")} value={t(mirror.enabled ? "mirrors.desiredEnabled" : "mirrors.desiredDisabled")} />
+        <DisplayField label={t("mirrors.status")} value={t(`mirrors.status.${stopPending ? "disable_pending" : mirror.status}`)} helper={t("mirrors.intentOnly")} />
         <DisplayField label={t("mirrors.generation")} value={mirror.published_generation_id} />
         <DisplayField label={t("mirrors.captureGeneration")} value={mirror.capture_generation} />
         <DisplayField label={t("mirrors.epoch")} value={mirror.history_epoch} />
@@ -126,7 +129,7 @@ export function MirrorDetail({ id }: { id: string }) {
       {(["profile", "control", "progress", "fault", "operations"] as const).map(key => <FormSection key={key} title={t(`mirrors.${key}`)} columns={1}><Evidence value={mirror[key]} /></FormSection>)}
       <FormSection title={t("mirrors.bounds")}><DisplayField label={t("mirrors.lower")} value={<Evidence value={mirror.retained_lower_bound} />} /><DisplayField label={t("mirrors.upper")} value={<Evidence value={mirror.committed_upper_bound} />} /></FormSection>
       {canWrite?.can && <FormSection title={t("mirrors.controls")}>
-        <Button size="sm" variant="light" loading={submitting} disabled={mirror.status === "disable_pending"} onClick={() => setEnableIntent(!mirror.enabled)}>{t(mirror.enabled ? "mirrors.disable" : "mirrors.enable")}</Button>
+        <Button size="sm" variant="light" loading={submitting} disabled={stopPending} onClick={() => setEnableIntent(!mirror.enabled)}>{t(mirror.enabled ? "mirrors.disable" : "mirrors.enable")}</Button>
         {(["retry", "run_now", "postpone", "manual"] as const).map(action => <Button key={action} size="sm" variant="light" disabled={submitting || mirror.history_epoch == null} onClick={() => { if (mirror.history_epoch == null) return; setReason(""); setRecovery({ action, epoch: mirror.history_epoch }); }}>{t(`mirrors.recovery.${action}`)}</Button>)}
       </FormSection>}
     </Stack> : null}
