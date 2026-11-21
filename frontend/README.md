@@ -69,6 +69,8 @@ Playwright drives a production Console against the API started as the ASGI app (
 
 The suite signs in as the initial administrator (`INITIAL_ADMIN_ACCOUNT` / `INITIAL_ADMIN_PASSWORD`, default `root` / `change-me`) and reuses that session. Each test seeds its own records through `/api` with the session cookie. `npm run e2e` builds the Console when the standalone server is missing or was built for a different `REFRAQ_API_UPSTREAM`, then runs Chromium. The Console listens through `.next/standalone/server.js` because `output: "standalone"` does not support `next start`. `npm run e2e:ui` opens the Playwright UI.
 
+Run the isolated sales-table journey with `E2E_CDC_JOURNEY=1 npm run e2e`. This mode assembles the memory Mirror fixture and selects only the sales journey and sign-in setup.
+
 ## Commands
 
 ```bash

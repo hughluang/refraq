@@ -3,6 +3,7 @@
 from dataclasses import asdict
 import json
 
+import simplejson
 from sqlalchemy import text
 
 from backend.metadata.mirrors.publication import REQUIRED_EVIDENCE
@@ -51,7 +52,7 @@ class Application:
                 raise ValueError("Unsupported mirror origin")
         parameters = {"authority": json.dumps(asdict(authority)), "generation": generation_id,
                       "partition": json.dumps(asdict(partition_identity)),
-                      "records": json.dumps([asdict(record) for record in records], allow_nan=False)}
+                      "records": simplejson.dumps([asdict(record) for record in records], allow_nan=False)}
         arguments = "CAST(:authority AS jsonb), :generation, CAST(:partition AS jsonb), CAST(:records AS jsonb)"
         if anchored_profile is not None:
             arguments += ", CAST(:profile AS jsonb), CAST(:scan AS jsonb)"

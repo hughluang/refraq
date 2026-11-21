@@ -27,7 +27,7 @@ from backend.channel.inbound_paths import (
 )
 from backend.channel.ids import new_channel_id
 from backend.channel.nodes import list_node_types
-from backend.channel.mirror_reads import object_ids, authorize_graph, mirror_graph
+from backend.channel.mirror_reads import history_mirror_ids, object_ids, authorize_graph, mirror_graph
 from backend.metadata.mirrors.service import (
     catalog_sync_table, current_version_mirrors, ensure_open_intent, publication_effects,
     reconcile_references, resolve_existing_mirror_binding, resolve_object_binding,
@@ -393,14 +393,13 @@ def delete_channel(
     withdraw_schedules_by_owner_ref(owner_ref_for(channel_id))
     get_inbound_path_store().withdraw_channel(channel_id)
     cancel_channel_jobs(channel_id)
-    versions, _ = get_channel_store().list_versions(channel_id, limit=1, offset=0)
 
-    def _clear(session: Any) -> None:
-        if versions and mirror_graph(versions[0].graph):
+    def _clear(session: Any, latest: ChannelVersionRecord | None) -> None:
+        if latest and mirror_graph(latest.graph):
             if session is None:
                 raise ChannelRequestInvalid("Mirror withdrawal requires a SQL transaction")
             reconcile_references(session, channel_id=channel_id,
-                                 channel_version=versions[0].number + 1, object_ids=[])
+                                 channel_version=latest.number + 1, object_ids=[])
         clear_assignment(kind=KIND_CHANNEL, subject_id=channel_id, session=session)
 
     if not get_channel_store().delete(channel_id, after=_clear):
@@ -481,11 +480,10 @@ def publish_channel(
     confirmation = _confirmation(record, actor_user_id)
     if object_ids(record.draft_graph) and mirrors_to_open is None:
         raise ChannelRequestInvalid("Mirror publication requires explicit open confirmation")
-    previous, _ = get_channel_store().list_versions(channel_id, limit=1, offset=0)
 
-    def _publish_mirrors(session: Any, version: ChannelVersionRecord) -> None:
+    def _publish_mirrors(session: Any, version: ChannelVersionRecord, previous: ChannelVersionRecord | None) -> None:
         ids = object_ids(version.graph)
-        if not mirror_graph(version.graph) and not any(mirror_graph(item.graph) for item in previous):
+        if not mirror_graph(version.graph) and not (previous and mirror_graph(previous.graph)):
             return
         if session is None:
             raise ChannelRequestInvalid("Mirror publication requires a SQL transaction")
@@ -501,10 +499,9 @@ def publish_channel(
         ensure_open_intent(
             session, operation_id=f"channel:{channel_id}:{version.number}",
             channel_id=channel_id, channel_version=version.number, object_ids=ids,
+            existing_mirror_ids=history_mirror_ids(version.graph),
             confirmed_mirrors_to_open=mirrors_to_open or [],
         )
-        reconcile_references(session, channel_id=channel_id,
-                             channel_version=version.number, object_ids=ids)
 
     version = get_channel_store().publish_version(
         channel_id,

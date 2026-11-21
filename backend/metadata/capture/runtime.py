@@ -1,6 +1,7 @@
 """Independent capture intent consumer with signed, scoped safety admission."""
 
 import argparse
+import json
 import os
 import signal
 from threading import Event
@@ -72,6 +73,7 @@ class CaptureRuntime:
         try:
             if replacement_owner_file is not None:
                 if owner_allocation_file is not None:
+                    self.poll_source(source_id, containment_only=True)
                     raise RuntimeBlocked("conflicting_owner_request_files")
                 try:
                     self.reconcile_replacement_owner(source_id, replacement_owner_file)
@@ -297,6 +299,36 @@ class CaptureRuntime:
             return "applied", prepared if command["kind"] == "reconcile" else None
 
 
+# Only these operator-actionable codes may cross the process diagnostics boundary.
+# Driver responses, evidence, and unrecognized exception text stay private.
+_REPORTED_FAULTS = frozenset({
+    "conflicting_owner_request_files", "replacement_owner_blocked", "owner_allocation_blocked",
+    "owner_assignment_unproven", "replacement_owner_requires_recovery", "published_scope_changed",
+    "source_executor_busy", "capture_evidence_rejected", "capture_delivery_blocked",
+    "open_generation_preparation_blocked", "capture_preparation_management_unconfirmed",
+    "capture_snapshot_management_unconfirmed", "incremental_snapshot_blocked",
+    "configuration_outcome_uncertain", "resume_outcome_uncertain", "stop_outcome_uncertain",
+    "readiness_unknown_or_failed", "retained_position_resume_driver_required",
+})
+
+
+def poll_sources(runtimes, previous_faults):
+    for source_id, runtime, request_file, replacement_file in runtimes:
+        try:
+            runtime.poll_once(source_id, owner_allocation_file=request_file, replacement_owner_file=replacement_file)
+        except RuntimeBlocked as exc:
+            code = str(exc)
+            if code not in _REPORTED_FAULTS:
+                code = "capture_runtime_blocked"
+            if previous_faults.get(source_id) != code:
+                print(json.dumps({"source_id": source_id, "state": "blocked", "code": code}), flush=True)
+            previous_faults[source_id] = code
+        else:
+            if previous_faults.pop(source_id, None) is not None:
+                print(json.dumps({"source_id": source_id, "state": "recovered"}), flush=True)
+    return bool(previous_faults)
+
+
 def _signing_authority(trust):
     return SignedAuthority(
         keys={kid: load_pem_public_key(protected_read(path)) for kid, path in trust["public_key_files"].items()},
@@ -403,14 +435,9 @@ def main():
                     notification_trust=_signing_authority(observers["notification"]["signing_trust"]),
                     max_observation_age_seconds=observers["max_age_seconds"], recheck=runtime.recheck_snapshot,
                 )
+        previous_faults = {}
         while not stopping.is_set():
-            blocked = False
-            for source_id, runtime, request_file, replacement_file in runtimes:
-                try:
-                    runtime.poll_once(source_id, owner_allocation_file=request_file,
-                                      replacement_owner_file=replacement_file)
-                except RuntimeBlocked:
-                    blocked = True
+            blocked = poll_sources(runtimes, previous_faults)
             if args.once:
                 return 2 if blocked else 0
             stopping.wait(interval)

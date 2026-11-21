@@ -22,7 +22,9 @@ export function RecordedTableRead({ channelId, detail, objectId, preferredNode }
 }) {
   const t = useTranslate();
   const nodes = detail.graph?.nodes.filter((node) => node.type === "read.mirror" && node.config.object_id === objectId) ?? [];
-  const node = nodes.find((item) => item.id === preferredNode) ?? nodes[0];
+  const node = preferredNode === null
+    ? (nodes.length === 1 ? nodes[0] : undefined)
+    : nodes.find((item) => item.id === preferredNode);
   if (!node) return <Stack align="start">
     <Text>{t("channels.verify.removed")}</Text>
     <Button component={ConsoleLink} href={`/console/channels/${encodeURIComponent(channelId)}`}>{t("channels.verify.current")}</Button>

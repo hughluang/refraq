@@ -157,6 +157,7 @@ TERMINAL_STOP_PROOFS = (
 
 @pytest.mark.parametrize(("readiness", "terminal_fault", "reason"), [
     ("fail", None, None),
+    ("unknown", "conflicting_assignments", None),
     ("unknown", None, None),
     *(("unknown", proof, "proof_unverified") for proof in TERMINAL_STOP_PROOFS),
     ("unknown", "owner_assignment_ref", "proof_unverified"),
@@ -204,7 +205,11 @@ def test_current_owner_can_stop_but_needs_terminal_proof_to_ack(
                                                           max_age_seconds=30, required_checks=CHECKS))
         source_id = managed_command["source_id"]
         if reason is None:
-            assert runtime.poll_source(source_id) == "applied"
+            if terminal_fault == "conflicting_assignments":
+                with pytest.raises(RuntimeBlocked, match="conflicting_owner_request_files"):
+                    runtime.poll_once(source_id, owner_allocation_file="ordinary", replacement_owner_file="replacement")
+            else:
+                assert runtime.poll_source(source_id) == "applied"
             assert capture_status(source_id)["control"]["stop_ack"]["operation_id"] == managed_command["operation_id"]
         else:
             with pytest.raises(RuntimeBlocked, match=reason):
@@ -345,3 +350,32 @@ def test_secret_permissions_and_connector_path_are_not_optional(tmp_path):
         protected_read(link)
     with pytest.raises(RuntimeBlocked):
         ConnectLifecycle(None, "../other/snapshot")
+
+
+def test_poll_reports_changes_once_and_continues_other_sources(capsys):
+    from backend.metadata.capture.runtime import poll_sources
+
+    states = iter(["conflicting_owner_request_files", "conflicting_owner_request_files",
+                   "new-sensitive-driver-detail", None, None])
+    healthy = []
+
+    class Faulting:
+        def poll_once(self, source_id, **assignment):
+            code = next(states)
+            if code is not None:
+                raise RuntimeBlocked(code)
+
+    class Healthy:
+        def poll_once(self, source_id, **assignment):
+            healthy.append(source_id)
+
+    runtimes = [("source-one", Faulting(), None, None), ("source-two", Healthy(), None, None)]
+    previous = {}
+    assert [poll_sources(runtimes, previous) for _ in range(5)] == [True, True, True, False, False]
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events == [
+        {"source_id": "source-one", "state": "blocked", "code": "conflicting_owner_request_files"},
+        {"source_id": "source-one", "state": "blocked", "code": "capture_runtime_blocked"},
+        {"source_id": "source-one", "state": "recovered"},
+    ]
+    assert healthy == ["source-two"] * 5

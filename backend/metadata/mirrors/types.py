@@ -66,6 +66,7 @@ class Record:
     key: dict[str, Any]
     values: dict[str, Any] | None
     unchanged_columns: tuple[str, ...] = ()
+    json_null_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

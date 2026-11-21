@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS source_mirror_state.version (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL);
-INSERT INTO source_mirror_state.version VALUES (true, 1) ON CONFLICT DO NOTHING;
+INSERT INTO source_mirror_state.version VALUES (true, 2) ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version;
 CREATE TABLE IF NOT EXISTS source_mirror_state.mirrors (
  id text PRIMARY KEY, source_id text NOT NULL, table_identity text NOT NULL,
  authority jsonb NOT NULL, published_generation_id text,
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS source_mirror_state.live_log (
  typed_key jsonb NOT NULL, before_image jsonb, after_image jsonb,
  PRIMARY KEY(mirror_id, history_epoch, commit_seq, entry_seq)
 );
+ALTER TABLE source_mirror_state.live_log
+ ADD COLUMN IF NOT EXISTS before_json_null_columns text[],
+ ADD COLUMN IF NOT EXISTS after_json_null_columns text[];
 CREATE TABLE IF NOT EXISTS source_mirror_state.certificates (
  operation_id text PRIMARY KEY, generation_id text NOT NULL UNIQUE REFERENCES source_mirror_state.generations,
  authority jsonb NOT NULL, evidence jsonb NOT NULL, verified_by text NOT NULL,
@@ -88,6 +91,8 @@ DECLARE
  certified source_mirror_state.certificates; seal_proof jsonb; sealed_end bigint;
  r jsonb; old_row jsonb; new_row jsonb; candidate jsonb; typed_key jsonb;
  predicate text; columns_sql text; updates_sql text; k text; n bigint;
+ json_columns text[]; typed_projection text; old_null_projection text; typed_record text;
+ json_nulls text[]; old_json_nulls text[]; changed boolean;
  entries integer := 0; seq bigint; previous_offset bigint := NULL;
  scan_end bigint; bounds jsonb; pre_stable bigint; pre_high bigint;
  sealed boolean := coalesce(scan ? 'eof', false);
@@ -215,6 +220,18 @@ BEGIN
  SELECT string_agg(format('t.%1$I IS NOT DISTINCT FROM k.%1$I', c), ' AND ') INTO predicate FROM unnest(g.key_columns) c;
  SELECT string_agg(format('%I', c), ', '), string_agg(format('%1$I = EXCLUDED.%1$I', c), ', ')
  INTO columns_sql, updates_sql FROM unnest(g.column_names) c;
+ -- jsonb_populate_record converts a JSON null to SQL NULL. Only an explicit logical
+ -- JSON null on a jsonb column overrides that conversion. Older callers omit the marker.
+ SELECT coalesce(array_agg(attname::text ORDER BY attnum) FILTER (WHERE atttypid = 'jsonb'::regtype), '{}'),
+        string_agg(CASE WHEN atttypid = 'jsonb'::regtype
+          THEN format('CASE WHEN %L = ANY($2) THEN ''null''::jsonb ELSE v.%I END AS %I', attname, attname, attname)
+          ELSE format('v.%I', attname) END, ', ' ORDER BY attnum),
+        'array_remove(ARRAY[' || coalesce(string_agg(
+          format('CASE WHEN t.%I = ''null''::jsonb THEN %L END', attname, attname), ', ' ORDER BY attnum)
+          FILTER (WHERE atttypid = 'jsonb'::regtype), '') || ']::text[], NULL)'
+ INTO json_columns, typed_projection, old_null_projection FROM pg_attribute
+ WHERE attrelid = format('source_mirror.%I', g.table_name)::regclass AND attnum > 0 AND NOT attisdropped;
+ typed_record := format('(SELECT %s FROM jsonb_populate_record(NULL::source_mirror.%I, $1) v)', typed_projection, g.table_name);
  FOR r IN SELECT value FROM jsonb_array_elements(records) LOOP
   n := (r->>'offset')::bigint;
   IF scan IS NULL THEN
@@ -241,18 +258,26 @@ BEGIN
     OR (SELECT count(*) FROM jsonb_object_keys(r->'key')) <> cardinality(g.key_columns) THEN
     RAISE EXCEPTION 'MIRROR_KEY_INVALID';
    END IF;
-   FOREACH k IN ARRAY g.key_columns LOOP
-    IF NOT (r->'key' ? k) OR r->'key'->k = 'null'::jsonb THEN RAISE EXCEPTION 'MIRROR_KEY_INVALID'; END IF;
+   SELECT ARRAY(SELECT c FROM jsonb_array_elements_text(coalesce(r->'json_null_columns', '[]')) c ORDER BY c)
+    INTO json_nulls;
+   FOREACH k IN ARRAY json_nulls LOOP
+    IF NOT (k = ANY(json_columns))
+     OR ((r->>'operation' = 'upsert' OR NOT (k = ANY(g.key_columns))) AND r->'values'->k IS DISTINCT FROM 'null'::jsonb)
+     OR (k = ANY(g.key_columns) AND r->'key'->k IS DISTINCT FROM 'null'::jsonb)
+     THEN RAISE EXCEPTION 'MIRROR_JSON_NULL_INVALID'; END IF;
    END LOOP;
-   EXECUTE format('SELECT to_jsonb(v) FROM jsonb_populate_record(NULL::source_mirror.%I, $1) v', g.table_name)
-    INTO typed_key USING r->'key';
+   FOREACH k IN ARRAY g.key_columns LOOP
+    IF NOT (r->'key' ? k) OR (r->'key'->k = 'null'::jsonb AND NOT (k = ANY(json_nulls))) THEN
+     RAISE EXCEPTION 'MIRROR_KEY_INVALID';
+    END IF;
+   END LOOP;
+   EXECUTE format('SELECT to_jsonb(k) FROM %s k', typed_record) INTO typed_key USING r->'key', json_nulls;
    SELECT jsonb_object_agg(c, typed_key->c) INTO typed_key FROM unnest(g.key_columns) c;
-   IF EXISTS(SELECT 1 FROM jsonb_each(typed_key) WHERE value = 'null'::jsonb) THEN
-    RAISE EXCEPTION 'MIRROR_KEY_INVALID';
-   END IF;
-   EXECUTE format('SELECT to_jsonb(t) FROM source_mirror.%1$I t, jsonb_populate_record(NULL::source_mirror.%1$I, $1) k WHERE %2$s', g.table_name, predicate)
-    INTO old_row USING typed_key;
+   EXECUTE format('SELECT to_jsonb(t), %s FROM source_mirror.%I t, %s k WHERE %s',
+                  old_null_projection, g.table_name, typed_record, predicate)
+    INTO old_row, old_json_nulls USING typed_key, json_nulls;
    new_row := NULL;
+   changed := old_row IS NOT NULL;
    IF r->>'operation' = 'upsert' THEN
     IF jsonb_typeof(r->'values') IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'MIRROR_ROW_INVALID'; END IF;
     candidate := r->'values';
@@ -261,27 +286,32 @@ BEGIN
       RAISE EXCEPTION 'MIRROR_UNCHANGED_VALUE_UNAVAILABLE';
      END IF;
      candidate := jsonb_set(candidate, ARRAY[k], old_row->k);
+     IF k = ANY(old_json_nulls) THEN json_nulls := array_append(json_nulls, k); END IF;
     END LOOP;
     IF (SELECT array_agg(c ORDER BY c) FROM jsonb_object_keys(candidate) c)
       IS DISTINCT FROM (SELECT array_agg(c ORDER BY c) FROM unnest(g.column_names) c) THEN
      RAISE EXCEPTION 'MIRROR_ROW_INVALID';
     END IF;
-    EXECUTE format('SELECT to_jsonb(v) FROM jsonb_populate_record(NULL::source_mirror.%I, $1) v', g.table_name)
-     INTO new_row USING candidate;
+    EXECUTE format('SELECT to_jsonb(v) FROM %s v', typed_record) INTO new_row USING candidate, json_nulls;
     FOREACH k IN ARRAY g.key_columns LOOP
      IF new_row->k IS DISTINCT FROM typed_key->k THEN RAISE EXCEPTION 'MIRROR_KEY_INVALID'; END IF;
     END LOOP;
-    IF old_row IS DISTINCT FROM new_row THEN
-     EXECUTE format('INSERT INTO source_mirror.%1$I (%2$s) SELECT %2$s FROM jsonb_populate_record(NULL::source_mirror.%1$I, $1) ON CONFLICT (%3$s) DO UPDATE SET %4$s',
-      g.table_name, columns_sql, (SELECT string_agg(format('%I', c), ', ') FROM unnest(g.key_columns) c), updates_sql) USING candidate;
+    changed := old_row IS DISTINCT FROM new_row
+      OR NOT (old_json_nulls @> json_nulls AND old_json_nulls <@ json_nulls);
+    IF changed THEN
+     EXECUTE format('INSERT INTO source_mirror.%I (%s) SELECT * FROM %s v ON CONFLICT (%s) DO UPDATE SET %s',
+      g.table_name, columns_sql, typed_record, (SELECT string_agg(format('%I', c), ', ') FROM unnest(g.key_columns) c),
+      updates_sql) USING candidate, json_nulls;
     END IF;
    ELSE
-    EXECUTE format('DELETE FROM source_mirror.%1$I t USING jsonb_populate_record(NULL::source_mirror.%1$I, $1) k WHERE %2$s', g.table_name, predicate) USING r->'key';
+    EXECUTE format('DELETE FROM source_mirror.%I t USING %s k WHERE %s', g.table_name, typed_record, predicate)
+     USING typed_key, json_nulls;
+    json_nulls := NULL;
    END IF;
-   IF old_row IS DISTINCT FROM new_row AND r->>'origin' = 'live' THEN
+   IF changed AND r->>'origin' = 'live' THEN
     entries := entries + 1;
     INSERT INTO source_mirror_state.live_log VALUES
-     (m.id, m.history_epoch, seq, entries, gid, g.capture_generation, 'live', r->>'operation', typed_key, old_row, new_row);
+     (m.id, m.history_epoch, seq, entries, gid, g.capture_generation, 'live', r->>'operation', typed_key, old_row, new_row, old_json_nulls, json_nulls);
    END IF;
   END IF;
   g.applied_offset := n;
@@ -402,7 +432,13 @@ BEGIN
  WHERE pin.run_id = run AND pin.mirror_id = mid;
  IF NOT FOUND OR pinned_generation.cleanup_pending THEN RAISE EXCEPTION 'MIRROR_READ_UNAVAILABLE'; END IF;
  SELECT string_agg(format('t.%I', c), ', ') INTO cols FROM unnest(pinned_generation.key_columns) c;
- SELECT string_agg(format('k.%I', c), ', ') INTO key_sql FROM unnest(pinned_generation.key_columns) c;
+ -- Every cursor key is a non-SQL-null primary key. Read a jsonb key directly so
+ -- its JSON literal null keeps its index ordering in a resumed page.
+ SELECT string_agg(CASE WHEN a.atttypid = 'jsonb'::regtype THEN format('($1->%L)', key.name)
+                        ELSE format('k.%I', key.name) END, ', ' ORDER BY key.ordinality)
+ INTO key_sql FROM unnest(pinned_generation.key_columns) WITH ORDINALITY AS key(name, ordinality)
+ JOIN pg_attribute a ON a.attrelid = format('source_mirror.%I', pinned_generation.table_name)::regclass
+                    AND a.attname = key.name AND a.attnum > 0 AND NOT a.attisdropped;
  EXECUTE format('SELECT coalesce(jsonb_agg(to_jsonb(v)), ''[]''::jsonb) FROM (SELECT t.* FROM source_mirror.%1$I t, jsonb_populate_record(NULL::source_mirror.%1$I, $1) k WHERE $1 IS NULL OR ROW(%2$s) > ROW(%3$s) ORDER BY %2$s LIMIT $2) v', pinned_generation.table_name, cols, key_sql)
  INTO rows USING after_key, page_limit;
  SELECT jsonb_object_agg(c, rows->(jsonb_array_length(rows)-1)->c) INTO last_key FROM unnest(pinned_generation.key_columns) c;

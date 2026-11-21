@@ -305,7 +305,7 @@ describe("ChannelRunDetail load feedback", () => {
   });
 
   it("opens the table read in the actual version and discards its records on denied refresh", async () => {
-    window.history.replaceState(null, "", "?verifyObject=orders&verifyNode=old-id");
+    window.history.replaceState(null, "", "?verifyObject=orders&verifyNode=new-id");
     const snapshot = detail("succeeded", [{ node_id: "new-id", execution_count: 1, status_counts: { succeeded: 1 } }]);
     api.getRun.mockResolvedValueOnce({ ...detail("queued"), graph: null, run: { ...run("queued"), version: null } })
       .mockResolvedValue({ ...snapshot, graph: { ...EMPTY_GRAPH, nodes: [
@@ -355,11 +355,17 @@ describe("ChannelRunDetail load feedback", () => {
   });
 
   it("links back to the current Channel if the actual graph removed the selected table", async () => {
+    api.getExecutionOutput.mockClear();
     window.history.replaceState(null, "", "?verifyObject=orders&verifyNode=gone");
-    api.getRun.mockResolvedValue(detail("succeeded"));
+    api.getRun.mockResolvedValue({ ...detail("succeeded"), graph: {
+      ...EMPTY_GRAPH,
+      nodes: [{ id: "different", name: "Other orders read", type: "read.mirror",
+        config: { object_id: "orders", freshness_policy: "continue" } }],
+    } });
     renderDetail();
     await advance(0);
     expect(screen.getByText("channels.verify.removed")).toBeTruthy();
+    expect(api.getExecutionOutput).not.toHaveBeenCalled();
     expect(screen.getByRole("link", { name: "channels.verify.current" }).getAttribute("href")).toBe("/console/channels/chn_1");
   });
 

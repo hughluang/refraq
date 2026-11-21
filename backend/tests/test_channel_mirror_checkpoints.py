@@ -150,6 +150,7 @@ def worker_history(setup_history, monkeypatch):
     monkeypatch.setattr(runner, "authorize_graph", lambda *args, **kw: None)
     monkeypatch.setattr(mirror_reads, "_reads", object())
     monkeypatch.setattr(mirror_reads, "_authorize", lambda *_: None)
+    monkeypatch.setattr(mirror_reads, "authorize_source_data", history.authorize_source_read)
     monkeypatch.setattr(mirror_reads, "capture_bound", history.capture_bound)
     monkeypatch.setattr(mirror_reads, "read_incremental", history.read_incremental)
     monkeypatch.setattr(checkpoints, "settlement_guard", history.settlement_guard)

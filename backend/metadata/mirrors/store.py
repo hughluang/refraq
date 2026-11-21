@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from threading import RLock
 
-from sqlalchemy import select, text
+from sqlalchemy import func, or_, select, text
 
 from backend.core.db import session_scope
 from backend.metadata.catalog.store import get_catalog_store
@@ -63,6 +63,26 @@ class MemoryMirrorStore:
 
     def list(self, session):
         return deepcopy(list(self.mirrors.values()))
+
+    def get(self, session, mirror_id):
+        return deepcopy(self.mirrors.get(mirror_id))
+
+    def page(self, session, *, source_id, status, q, limit, offset):
+        needle = (q or "").casefold()
+        rows = sorted((
+            row for row in self.mirrors.values()
+            if (source_id is None or row["source_id"] == source_id)
+            and (status is None or row["status"] == status)
+            and any(needle in row[key].casefold() for key in ("source_key", "source_name", "qualified_table"))
+        ), key=lambda row: (row["source_key"], row["qualified_table"], row["id"]))
+        return deepcopy(rows[offset:offset + limit]), len(rows)
+
+    def reference_counts(self, session, mirror_ids):
+        counts = dict.fromkeys(mirror_ids, 0)
+        for _, mid in self.references:
+            if mid in counts:
+                counts[mid] += 1
+        return counts
 
     def save(self, session, state):
         old = self.mirrors.get(state["id"])
@@ -149,6 +169,37 @@ class SqlMirrorStore:
     def list(self, session):
         self._lock_registry(session)
         return [deepcopy(row.state) for row in session.scalars(select(MirrorRow).order_by(MirrorRow.id).with_for_update().execution_options(populate_existing=True))]
+
+    def get(self, session, mirror_id):
+        return session.scalar(select(MirrorRow.state).where(MirrorRow.id == mirror_id))
+
+    def page(self, session, *, source_id, status, q, limit, offset):
+        criteria = []
+        if source_id is not None:
+            criteria.append(MirrorRow.source_id == source_id)
+        if status is not None:
+            criteria.append(MirrorRow.state["status"].as_string() == status)
+        source_key = MirrorRow.state["source_key"].as_string()
+        table = MirrorRow.state["qualified_table"].as_string()
+        postgres = session.get_bind().dialect.name == "postgresql"
+        if q:
+            fields = (source_key, MirrorRow.state["source_name"].as_string(), table)
+            if postgres:
+                fields = tuple(func.casefold(field.collate("pg_unicode_fast")) for field in fields)
+                criteria.append(or_(*(field.contains(q.casefold(), autoescape=True) for field in fields)))
+            else:
+                criteria.append(or_(*(field.icontains(q, autoescape=True) for field in fields)))
+        order = (source_key, table, MirrorRow.id)
+        if postgres:
+            order = tuple(column.collate("C") for column in order)
+        total = session.scalar(select(func.count()).select_from(MirrorRow).where(*criteria))
+        rows = session.scalars(select(MirrorRow.state).where(*criteria).order_by(*order)
+                               .limit(limit).offset(offset)).all()
+        return rows, total
+
+    def reference_counts(self, session, mirror_ids):
+        mid = MirrorReferenceRow.mirror_id
+        return dict(session.execute(select(mid, func.count()).where(mid.in_(mirror_ids)).group_by(mid)).all())
 
     def save(self, session, state):
         row = session.get(MirrorRow, state["id"])

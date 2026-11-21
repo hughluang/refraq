@@ -113,6 +113,7 @@ def project_job(job: JobRecord, viewer_id: str | None) -> JobRecord:
     run = get_run_store().get_run(job.id)
     payload = dict(job.input)
     payload.pop(ERROR_SOURCE_VERIFIED, None)
+    payload.pop("on_demand_test", None)
     if not job_diagnostics_protected(job, run):
         return replace(job, input=payload)
 

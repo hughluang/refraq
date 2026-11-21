@@ -97,7 +97,7 @@ class ChannelStore(Protocol):
         self,
         channel_id: str,
         *,
-        after: Callable[[Session | None], None] | None = None,
+        after: Callable[[Session | None, ChannelVersionRecord | None], None] | None = None,
     ) -> bool: ...
 
     def replace_draft(
@@ -116,7 +116,7 @@ class ChannelStore(Protocol):
         draft_revision: int,
         published_at: datetime,
         published_by_user_id: str,
-        after: Callable[[Session | None, ChannelVersionRecord], None] | None = None,
+        after: Callable[[Session | None, ChannelVersionRecord, ChannelVersionRecord | None], None] | None = None,
     ) -> ChannelVersionRecord: ...
 
     def latest_versions(
@@ -232,7 +232,7 @@ class MemoryChannelStore:
         self,
         channel_id: str,
         *,
-        after: Callable[[Session | None], None] | None = None,
+        after: Callable[[Session | None, ChannelVersionRecord | None], None] | None = None,
     ) -> bool:
         with self._lock:
             existing = self._channels.pop(channel_id, None)
@@ -244,7 +244,7 @@ class MemoryChannelStore:
             }
             if after is not None:
                 try:
-                    after(None)
+                    after(None, max(removed.values(), key=lambda version: version.number, default=None))
                 except Exception:
                     self._channels[channel_id] = existing
                     self._versions.update(removed)
@@ -278,7 +278,7 @@ class MemoryChannelStore:
         draft_revision: int,
         published_at: datetime,
         published_by_user_id: str,
-        after: Callable[[Session | None, ChannelVersionRecord], None] | None = None,
+        after: Callable[[Session | None, ChannelVersionRecord, ChannelVersionRecord | None], None] | None = None,
     ) -> ChannelVersionRecord:
         with self._lock:
             record = self._channels.get(channel_id)
@@ -298,7 +298,7 @@ class MemoryChannelStore:
                 published_by_user_id=published_by_user_id,
             )
             if after is not None:
-                after(None, version)
+                after(None, version, self._versions.get((channel_id, number - 1)))
             self._versions[(channel_id, number)] = version
             record.updated_at = published_at
             return _clone_version(version)
@@ -460,15 +460,15 @@ class SqlChannelStore:
         self,
         channel_id: str,
         *,
-        after: Callable[[Session | None], None] | None = None,
+        after: Callable[[Session | None, ChannelVersionRecord | None], None] | None = None,
     ) -> bool:
         with session_scope() as session:
-            row = session.get(ChannelRow, channel_id)
+            row = session.get(ChannelRow, channel_id, with_for_update=True)
             if row is None:
                 return False
-            session.delete(row)
             if after is not None:
-                after(session)
+                after(session, _latest_version(session, channel_id))
+            session.delete(row)
             return True
 
     def replace_draft(
@@ -497,18 +497,14 @@ class SqlChannelStore:
         draft_revision: int,
         published_at: datetime,
         published_by_user_id: str,
-        after: Callable[[Session | None, ChannelVersionRecord], None] | None = None,
+        after: Callable[[Session | None, ChannelVersionRecord, ChannelVersionRecord | None], None] | None = None,
     ) -> ChannelVersionRecord:
         with session_scope() as session:
             row = _locked_channel(session, channel_id)
             if row.draft_revision != draft_revision:
                 raise ChannelDraftConflict()
-            current = session.scalar(
-                select(func.max(ChannelVersionRow.number)).where(
-                    ChannelVersionRow.channel_id == channel_id
-                )
-            )
-            number = int(current or 0) + 1
+            previous = _latest_version(session, channel_id)
+            number = previous.number + 1 if previous else 1
             version = ChannelVersionRow(
                 channel_id=channel_id,
                 number=number,
@@ -520,7 +516,7 @@ class SqlChannelStore:
             row.updated_at = published_at
             session.flush()
             if after is not None:
-                after(session, _version_from_row(version))
+                after(session, _version_from_row(version), previous)
             return _version_from_row(version)
 
     def latest_versions(
@@ -568,6 +564,13 @@ class SqlChannelStore:
         with session_scope() as session:
             row = session.get(ChannelVersionRow, (channel_id, number))
             return None if row is None else _version_from_row(row)
+
+
+def _latest_version(session: Session, channel_id: str) -> ChannelVersionRecord | None:
+    row = session.scalar(select(ChannelVersionRow).where(
+        ChannelVersionRow.channel_id == channel_id
+    ).order_by(ChannelVersionRow.number.desc()).limit(1))
+    return _version_from_row(row) if row is not None else None
 
 
 def _locked_channel(session: Session, channel_id: str) -> ChannelRow:

@@ -39,6 +39,7 @@ export type UsePagedListResult<T> = {
   error: string | null;
   errorRequestId: string | null;
   accessDenied: boolean;
+  errorStatus: number | null;
   reload: () => Promise<void>;
   pageSize: number;
   presentation: ListPresentation;
@@ -67,7 +68,7 @@ export function usePagedList<T>({
   const [items, setItems] = useState<T[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(initialLoading);
-  const [failure, setFailure] = useState<{ message: string; requestId: string | null; accessDenied: boolean } | null>(null);
+  const [failure, setFailure] = useState<{ message: string; requestId: string | null; status: number | null } | null>(null);
   const error = failure?.message ?? null;
   const generationRef = useRef(0);
   const resetKey = JSON.stringify(resetDeps);
@@ -99,9 +100,9 @@ export function usePagedList<T>({
         setTotal(result.kind === "ok" ? result.page.total : 0);
         return;
       }
-      const accessDenied = result.error instanceof ApiError && [403, 404].includes(result.error.status);
-      setFailure({ message: result.message, requestId: result.requestId, accessDenied });
-      if (accessDenied) {
+      const status = result.error instanceof ApiError ? result.error.status : null;
+      setFailure({ message: result.message, requestId: result.requestId, status });
+      if (status === 403 || status === 404) {
         setItems([]);
         setTotal(0);
       }
@@ -160,7 +161,8 @@ export function usePagedList<T>({
     loading,
     error,
     errorRequestId: failure?.requestId ?? null,
-    accessDenied: failure?.accessDenied ?? false,
+    accessDenied: failure?.status === 403 || failure?.status === 404,
+    errorStatus: failure?.status ?? null,
     reload: load,
     pageSize,
     presentation: listPresentationOf({

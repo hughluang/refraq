@@ -160,6 +160,15 @@ describe("Source and Operations discovery", () => {
     expect(await screen.findByText(copy["catalog.collect.contact"])).toBeTruthy();
   });
 
+  it("keeps the selector when a bookmarked Source has become unavailable", async () => {
+    location.search = "source=old";
+    listCatalogObjects.mockRejectedValueOnce(new ApiError(404, "SOURCE_NOT_FOUND", "hidden"));
+    const { CatalogBrowse } = await import("./CatalogBrowse");
+    render(shell(createElement(CatalogBrowse)));
+    expect(await screen.findByText(copy["catalog.list.sourceUnavailable"])).toBeTruthy();
+    expect(screen.getByRole("button", { name: copy["catalog.fields.source"] })).toBeTruthy();
+  });
+
   it("collects through the selected Source's existing structure schedule", async () => {
     const { CatalogBrowse } = await import("./CatalogBrowse");
     schedules.listSourceSchedules.mockResolvedValue({ items: [{ id: "s7", work_kind: "structure" }], total: 1 });

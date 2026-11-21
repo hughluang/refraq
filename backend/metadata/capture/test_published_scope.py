@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.core.config import get_settings
 from backend.core.secrets import encrypt_secret
-from backend.core.time import utc_now
+from backend.core.time import FixedClock, get_clock, set_clock, utc_now
 from backend.metadata.capture import control, delivery_composition, runtime as entrypoint
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime import CaptureRuntime
@@ -32,6 +32,14 @@ from backend.metadata.sources.store import SourceRecord, get_source_store, reset
 
 
 SOURCE = "source-one"
+
+
+def pending_capture_commands():
+    with control.source_control_transaction(SOURCE) as (session, _):
+        binding = control.load_binding(session, SOURCE)
+        return tuple(op["command"] for op in control.list_operations(session, SOURCE)
+                     if binding is not None and op["evidence"] is None
+                     and op["command"]["control_revision"] == binding["control_revision"])
 
 
 @pytest.fixture
@@ -117,7 +125,7 @@ def test_committed_confirmed_open_becomes_current_capture_command(management, tm
     try:
         with pytest.raises(RuntimeBlocked, match="owner_assignment_unproven"):
             runtime.poll_once(SOURCE)
-        command, = control.pending_commands(SOURCE)
+        command, = pending_capture_commands()
         assert command["kind"] == "reconcile"
         assert command["control_revision"] == 2
         assert command["published_scope"] == [{
@@ -171,7 +179,7 @@ def test_published_intent_does_not_reserve_capture_before_credentials(management
         runtime = CaptureRuntime(journal=journal, connect=None, signals=None)
         assert runtime.poll_once(SOURCE) == "idle"
         assert control.capture_status(SOURCE)["binding_id"] is None
-        assert control.pending_commands(SOURCE) == ()
+        assert pending_capture_commands() == ()
 
         with control.source_control_transaction(SOURCE) as (session, source):
             configured = replace(source, capture_credential_ciphertext="encrypted", capture_revision=1)
@@ -180,7 +188,7 @@ def test_published_intent_does_not_reserve_capture_before_credentials(management
         assert control.capture_status(SOURCE)["binding_id"] is not None
         with pytest.raises(RuntimeBlocked, match="owner_assignment_unproven"):
             runtime.poll_once(SOURCE)
-        command, = control.pending_commands(SOURCE)
+        command, = pending_capture_commands()
         assert command["kind"] == "reconcile"
         assert [row["qualified_table"] for row in command["published_scope"] if row["included"]] == ["public.items"]
     finally:
@@ -195,7 +203,7 @@ def test_shared_references_disable_supersession_and_global_stop(management, tmp_
     def pending():
         with pytest.raises(RuntimeBlocked, match="owner_assignment_unproven"):
             runtime.poll_once(SOURCE)
-        command, = control.pending_commands(SOURCE)
+        command, = pending_capture_commands()
         return command
 
     try:
@@ -247,12 +255,12 @@ def test_shared_references_disable_supersession_and_global_stop(management, tmp_
 
 def test_rollbacks_leave_older_scope_and_command_current(management, tmp_path):
     transaction, _ = management
-    old, = control.pending_commands(SOURCE)
+    old, = pending_capture_commands()
     with pytest.raises(RuntimeError, match="publish rollback"), transaction() as session:
         publish(session, "workflow", 1, ["items"])
         raise RuntimeError("publish rollback")
     control.reconcile_published_scope(SOURCE)
-    assert control.pending_commands(SOURCE) == (old,)
+    assert pending_capture_commands() == (old,)
     assert service.list_mirrors()["total"] == 0
 
     with transaction() as session:
@@ -270,10 +278,10 @@ def test_rollbacks_leave_older_scope_and_command_current(management, tmp_path):
                 runtime.poll_once(SOURCE)
         finally:
             event.remove(SourceCaptureOperationRow, "after_insert", fail_after_insert)
-        assert control.pending_commands(SOURCE) == (old,)
+        assert pending_capture_commands() == (old,)
         with pytest.raises(RuntimeBlocked, match="owner_assignment_unproven"):
             runtime.poll_once(SOURCE)
-        recovered, = control.pending_commands(SOURCE)
+        recovered, = pending_capture_commands()
         assert recovered["control_revision"] == old["control_revision"] + 1
         assert recovered["kind"] == "reconcile"
     finally:
@@ -290,8 +298,13 @@ def test_rollbacks_leave_older_scope_and_command_current(management, tmp_path):
     *[(True, mismatch) for mismatch in (None, "connector", "delivery_settings", "scope_superseded", "containment")],
 ])
 def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
-    management, tmp_path, monkeypatch, capsys, mismatch, stopping,
+    management, tmp_path, monkeypatch, capsys, mismatch, stopping, request,
 ):
+    # The independent observers and the management intent use the same fixture instant.
+    # Invalid freshness scenarios explicitly offset their observation.
+    clock = get_clock()
+    set_clock(FixedClock(utc_now() - timedelta(seconds=1)))
+    request.addfinalizer(lambda: set_clock(clock))
     transaction, _ = management
     with transaction() as session:
         opened, = publish(session, "workflow", 1, ["items"])
@@ -301,7 +314,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             disabled = replace(source, status="disabled")
             get_source_store().save_source_on(session, disabled)
             control.record_source_intent(session, source, disabled, actor_user_id=None, actor_token_id=None)
-    pending, = control.pending_commands(SOURCE)
+    pending, = pending_capture_commands()
     previous = {key: pending[key] for key in control.AUTHORITY_KEYS}
     current = dict(previous, owner_epoch=1, runtime_instance_id="agent-one",
                    control_revision=pending["control_revision"] + 1)
@@ -387,7 +400,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
                 op = command["operation_id"]
                 assert payload["authorization"] == allocation_proof
                 assert control.capture_status(SOURCE)["control"]["owner_epoch"] == previous["owner_epoch"]
-                assert all(command != exposed for exposed in control.pending_commands(SOURCE))
+                assert all(command != exposed for exposed in pending_capture_commands())
                 if mismatch == "gateway_missing" or (mismatch == "containment" and len(allocation_calls) > 1):
                     raise RuntimeBlocked("private_http_unconfirmed")
                 result = allocation_observation(payload)
@@ -472,7 +485,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
         assert mutations == []
         assert len(allocation_calls) == 1
         if mismatch == "response_loss":
-            assert control.pending_commands(SOURCE) == (pending,)
+            assert pending_capture_commands() == (pending,)
             competing = dict(current, runtime_instance_id="agent-two")
             private("owner.json", dict(operation_id="competing", signature=signed(
                 "owner_allocation", "competing", allocation_scope, authority=competing, previous_authority=previous,
@@ -495,7 +508,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
                 patch.setattr(entrypoint, "allocate_owner", lose_promotion_response)
                 assert entrypoint.main() == 2
             assert mutations == []
-            committed, = control.pending_commands(SOURCE)
+            committed, = pending_capture_commands()
             assert committed["operation_id"] == "allocated"
             assert committed["owner_epoch"] == 1
             assert allocation_calls[0] == allocation_calls[1]
@@ -513,7 +526,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             assert control.capture_status(SOURCE)["control"]["owner_epoch"] == 0
             return
         containment["withhold_stop"] = False
-        stop_command, = control.pending_commands(SOURCE)
+        stop_command, = pending_capture_commands()
         previous = {key: stop_command[key] for key in control.AUTHORITY_KEYS}
         current = dict(previous, owner_epoch=2, control_revision=previous["control_revision"] + 1)
         allocation_proof = signed("owner_allocation", "unavailable", allocation_scope,
@@ -543,7 +556,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             disabled = replace(source, status="disabled")
             get_source_store().save_source_on(session, disabled)
             control.record_source_intent(session, source, disabled, actor_user_id=None, actor_token_id=None)
-        stop_command, = control.pending_commands(SOURCE)
+        stop_command, = pending_capture_commands()
         previous = {key: stop_command[key] for key in control.AUTHORITY_KEYS}
         current = dict(previous, owner_epoch=2, runtime_instance_id="agent-two",
                        control_revision=previous["control_revision"] + 1)
@@ -579,9 +592,9 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
     elif mismatch == "scope_superseded":
         assert mutations == ["/connectors/cap_one/config", "/connectors/cap_one/resume"]
         assert control.capture_status(SOURCE)["control"]["applied_revision"] is None
-        assert capsys.readouterr().out == ""
+        assert json.loads(capsys.readouterr().out) == dict(source_id=SOURCE, state="blocked", code="capture_evidence_rejected")
         control.reconcile_published_scope(SOURCE)
-        command, = control.pending_commands(SOURCE)
+        command, = pending_capture_commands()
         assert command["kind"] == "stop"
     elif mismatch:
         assert mutations == []

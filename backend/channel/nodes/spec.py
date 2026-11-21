@@ -52,6 +52,8 @@ class NodeResult:
 
 
 class EngineHooks(Protocol):
+    def read_mirror_page(self, *, object_id: str, after_key: Any, limit: int) -> dict[str, Any]: ...
+
     def capture_mirror_history(self, *, mirror_id: str) -> dict[str, Any]: ...
 
     def read_mirror_changes(

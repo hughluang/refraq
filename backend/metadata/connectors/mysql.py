@@ -121,6 +121,29 @@ class MysqlConnector:
                             comment=col["COLUMN_COMMENT"] or None,
                         )
                     )
+                index_parts = conn.execute(
+                    text(
+                        "SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, NON_UNIQUE "
+                        "FROM information_schema.STATISTICS "
+                        "WHERE BINARY TABLE_SCHEMA = BINARY :database "
+                        "ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX"
+                    ),
+                    {"database": schema},
+                ).mappings()
+                indexes = {}
+                for part in index_parts:
+                    name = part["INDEX_NAME"]
+                    column = part["COLUMN_NAME"]
+                    if column is None:
+                        raise ConnectorError("JOB_COLLECT_FAILED", "MySQL expression indexes are unsupported")
+                    if name == "PRIMARY":
+                        continue
+                    table_indexes = indexes.setdefault(part["TABLE_NAME"], {})
+                    if name not in table_indexes:
+                        table_indexes[name] = CollectedIndex(
+                            name=name, columns=[], is_unique=not part["NON_UNIQUE"],
+                        )
+                    table_indexes[name].columns.append(column)
                 objects = []
                 quote = conn.dialect.identifier_preparer.quote_identifier
                 for name, kind in [(n, "table") for n in tables] + [
@@ -149,20 +172,7 @@ class MysqlConnector:
                             )
                             for fk in inspector.get_foreign_keys(name, schema=schema)
                         ]
-                        obj.indexes = []
-                        for index in inspector.get_indexes(name, schema=schema):
-                            if any(col is None for col in index["column_names"]):
-                                raise ConnectorError(
-                                    "JOB_COLLECT_FAILED",
-                                    "MySQL expression indexes are unsupported",
-                                )
-                            obj.indexes.append(
-                                CollectedIndex(
-                                    name=index["name"],
-                                    columns=index["column_names"],
-                                    is_unique=bool(index["unique"]),
-                                )
-                            )
+                        obj.indexes = list(indexes.get(name, {}).values())
                     ddl = conn.exec_driver_sql(
                         f"SHOW CREATE {kind.upper()} {quote(schema)}.{quote(name)}"
                     ).first()
@@ -200,9 +210,9 @@ class MysqlConnector:
                 )
                 conn.exec_driver_sql("SET TRANSACTION READ ONLY")
                 conn.exec_driver_sql("START TRANSACTION READ ONLY")
-                result = conn.execution_options(stream_results=True).execute(
-                    text(limited.sql(dialect="mysql"))
-                )
+                result = conn.execution_options(
+                    stream_results=True, no_parameters=True,
+                ).exec_driver_sql(limited.sql(dialect="mysql", comments=False))
                 temporal_types = {
                     FIELD_TYPE.DATE: "date",
                     FIELD_TYPE.DATETIME: "datetime",

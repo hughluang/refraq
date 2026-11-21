@@ -197,6 +197,8 @@ def _mint_run(*, channel_id, channel_name, target, version, draft_revision,
                 identity = (admitted_graph.get("settings") or {}).get("mirror_execution_user_id")
             require_run_data_access(parent, identity, session=session)
         if (mirror_graph(admitted_graph) or inherited is not None) and target == "published":
+            if trigger_kind == "user" and not payload.get("pin_version"):
+                payload["on_demand_test"] = True
             payload = {**payload, "pin_version": True, "version": admitted_version}
         job = create_queued_job(
             kind="channel_run", input=payload, trigger_kind=trigger_kind,
@@ -320,7 +322,7 @@ def mint_scheduled_run(
             ChannelVersionRow.channel_id == channel_id
         ).order_by(ChannelVersionRow.number.desc()).limit(1).with_for_update())
         scheduled_graph = published.graph if published is not None else None
-        if scheduled_graph is not None:
+        if mirror_graph(scheduled_graph):
             scheduled_version = published.number
             scheduled_identity = (scheduled_graph.get("settings") or {}).get("mirror_execution_user_id")
             authorize_graph(scheduled_graph, scheduled_identity, session=session)

@@ -385,6 +385,7 @@
   "catalog.list.presentOnly": "仅在线",
   "catalog.list.noMatch": "没有符合筛选条件的目录对象",
   "catalog.list.noSources": "暂无 Source",
+  "catalog.list.sourceUnavailable": "此数据源不可用。请选择其他数据源浏览其目录。",
   "catalog.tabs.overview": "概览",
   "catalog.tabs.columns": "字段",
   "catalog.tabs.sample": "数据样本",

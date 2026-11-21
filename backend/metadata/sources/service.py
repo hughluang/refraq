@@ -418,7 +418,7 @@ def update_source(
 
 
 def _update_source_on(
-    existing: SourceRecord | None,
+    existing: SourceRecord,
     *,
     name: str | None,
     description: str | None | object,
@@ -432,8 +432,6 @@ def _update_source_on(
     actor_token_id: str | None,
     session: Session | None = None,
 ) -> tuple[SourceRecord, list[ScheduleOut]]:
-    if existing is None:
-        raise SourceNotFound()
     store = get_source_store()
     source_id = existing.id
     bound = load_binding(session, source_id) is not None

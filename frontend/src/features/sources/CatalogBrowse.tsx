@@ -217,12 +217,12 @@ export function CatalogBrowse() {
     if (urlSource) query.setFilter("source", urlSource);
   };
   const refreshAction = (
-    <Button size="sm" variant="light" onClick={() => phase === "empty" ? load() : void reload()}>
+    <Button size="sm" variant="light" onClick={() => sourceId ? void reload() : load()}>
       {t("catalog.refresh")}
     </Button>
   );
 
-  if (phase === "restricted" || list.accessDenied) return <ForbiddenState reason="metadata:read" />;
+  if (phase === "restricted" || list.errorStatus === 403) return <ForbiddenState reason="metadata:read" />;
   return (
     <PageChrome
       title={t("catalog.title")}
@@ -289,7 +289,9 @@ export function CatalogBrowse() {
         <PageBodySkeleton />
       ) : phase === "empty" ? (
         <EmptyState message={t("catalog.list.noSources")} />
-      ) : phase === "unloaded" ? null : (
+      ) : phase === "unloaded" ? null : list.errorStatus === 404 ? (
+        <EmptyState message={t("catalog.list.sourceUnavailable")} />
+      ) : (
         <>
           <ListTable
             list={list}

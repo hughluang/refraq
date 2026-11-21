@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -277,13 +277,14 @@ def _obj(
     source_id: str,
     source_key: str,
     object_type: str = "table",
+    engine: str = "postgresql",
 ) -> CatalogObjectRecord:
     now = utc_now()
     column_id = f"col_{object_id}"
     return CatalogObjectRecord(
         id=object_id,
         source_id=source_id,
-        locator_key=f"obj/postgresql/{source_key}/public/{object_type}/{name}",
+        locator_key=f"obj/{engine}/{source_key}/public/{object_type}/{name}",
         object_type=object_type,
         schema_name="public",
         name=name,
@@ -310,7 +311,7 @@ def _obj(
                 id=column_id,
                 object_id=object_id,
                 locator_key=(
-                    f"col/postgresql/{source_key}/public/{object_type}/{name}/column/id"
+                    f"col/{engine}/{source_key}/public/{object_type}/{name}/column/id"
                 ),
                 name="id",
                 ordinal=0,
@@ -822,3 +823,35 @@ def test_catalog_source_discovery_without_sources_administration(world: _World) 
     assert world.client.get("/catalog/sources", params={"source_id": world.source_b}).json()["total"] == 0
     world.login("hidden")
     assert world.client.get("/catalog/sources").json()["total"] == 0
+
+
+def test_mirror_picker_filters_visible_engines_and_catalog_presence_before_paging(world: _World) -> None:
+    source = require_source(world.source_a)
+    mysql = get_source_store().create_source(replace(source, id="src_mysql", engine="mysql", key="mysql"))
+    create_membership(subject_type="user", subject_id=world.users["viewer"], target=mysql.id, level="viewer")
+    same_name = "page_orders"
+    apply_structure_snapshot(
+        source=mysql, job_id="mysql_structure", schema_scope=None,
+        collected=[_obj(object_id="mysql_orders", name=same_name, source_id=mysql.id, source_key=mysql.key, engine="mysql")],
+    )
+
+    def pg_table(name: str, object_type: str = "table") -> CatalogObjectRecord:
+        return _obj(object_id=name, name=name, source_id=source.id, source_key=source.key, object_type=object_type)
+
+    present = [pg_table(same_name + "_a"), pg_table(same_name + "_b")]
+    view = pg_table(same_name + "_view", object_type="view")
+    apply_structure_snapshot(source=source, job_id="pg_before", schema_scope=None,
+                             collected=[*present, view, pg_table(same_name)])
+    apply_structure_snapshot(source=source, job_id="pg_after", schema_scope=None, collected=[*present, view])
+    world.login("viewer")
+    endpoint = "/catalog/objects/search"
+    params = {"q": same_name, "limit": 1, "mirror_eligible": "true"}
+    assert any(item["source_id"] == mysql.id
+               for item in world.client.get(endpoint, params={"q": same_name}).json()["items"])
+    for offset, names, more in [(0, [same_name + "_a"], True), (1, [same_name + "_b"], False), (2, [], False)]:
+        response = world.client.get(endpoint, params={**params, "offset": offset})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [(item["source_id"], item["name"]) for item in body["items"]] == [(source.id, name) for name in names]
+        assert body["truncated"] is more
+    assert world.client.get(endpoint, params={**params, "source_id": mysql.id}).json()["items"] == []

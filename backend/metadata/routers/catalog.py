@@ -197,6 +197,7 @@ async def search_objects(
     q: str | None = None,
     source_id: str | None = None,
     object_type: str | None = None,
+    mirror_eligible: bool = False,
     page: PageParams = Depends(page_params(CATALOG_SEARCH)),
     user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectSearchResponse:
@@ -206,12 +207,13 @@ async def search_objects(
             visible_source_ids=catalog_reads.search_visible_source_ids(user.id),
             source_id=source_id,
             object_type=object_type,
+            mirror_eligible=mirror_eligible,
             limit=page.limit,
             offset=page.offset,
         )
 
     found = (
-        await await_admitted(user.id, _run) if embedding_configured() else _run()
+        await await_admitted(user.id, _run) if embedding_configured() and not mirror_eligible else _run()
     )
     return CatalogObjectSearchResponse(
         items=[_object_out(o) for o in found.items],

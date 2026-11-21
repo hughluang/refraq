@@ -17,7 +17,7 @@ def test_publish_callback_failure_does_not_publish_version():
         draft_graph=empty_graph(), draft_revision=1, draft_updated_at=now,
         created_at=now, updated_at=now,
     ))
-    def reject(session, version):
+    def reject(session, version, previous):
         assert session is None
         assert version.number == 1
         raise ValueError("intent rejected")
@@ -28,7 +28,7 @@ def test_publish_callback_failure_does_not_publish_version():
 
 
 def test_mirror_node_calls_run_gateway_and_preserves_annotations():
-    from backend.channel.mirror_node import NODE_TYPE
+    from backend.channel.nodes.read.mirror import NODE_TYPE
 
     calls = []
     page = dict(rows=[{"id": 1}], next_key=None, generation_id="gen_one",
@@ -41,7 +41,7 @@ def test_mirror_node_calls_run_gateway_and_preserves_annotations():
 
 
 def test_unknown_freshness_does_not_silently_continue_for_fail_policy():
-    from backend.channel.mirror_node import NODE_TYPE
+    from backend.channel.nodes.read.mirror import NODE_TYPE
 
     hooks = SimpleNamespace(read_mirror_page=lambda **kw: dict(
         rows=[{"id": 1}], next_key=None, generation_id="gen_one",
@@ -113,7 +113,7 @@ def test_sql_publish_callback_shares_version_transaction_and_rolls_back(monkeypa
         draft_graph=empty_graph(), draft_revision=1, draft_updated_at=now,
         created_at=now, updated_at=now,
     ))
-    def reject(session, version):
+    def reject(session, version, previous):
         assert session.in_transaction()
         assert session.get(ChannelVersionRow, ("chn_one", 1)) is not None
         raise ValueError("intent rejected")
@@ -125,7 +125,7 @@ def test_sql_publish_callback_shares_version_transaction_and_rolls_back(monkeypa
 
 
 def test_node_keysets_reuse_gateway_and_skip_only_known_stale():
-    from backend.channel.mirror_node import NODE_TYPE
+    from backend.channel.nodes.read.mirror import NODE_TYPE
 
     calls = []
     def read(**kwargs):

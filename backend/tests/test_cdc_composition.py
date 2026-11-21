@@ -44,10 +44,10 @@ def test_migration_chain_and_checkpoint_legacy_backfill(monkeypatch):
     config = Config()
     config.set_main_option("script_location", str(ROOT / "backend/alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0099_channel_mirror_runs"]
-    revisions = list(script.walk_revisions("0092_job_delayed_recovery", "heads"))
+    assert len(script.get_heads()) == 1
+    revisions = list(script.walk_revisions("0092_job_delayed_recovery", "0100_mirror_references"))
     assert [revision.revision for revision in revisions] == [
-        "0099_channel_mirror_runs", "0098_mirror_checkpoints", "0097_mirror_recovery", "0096_mirror_history",
+        "0100_mirror_references", "0099_channel_mirror_runs", "0098_mirror_checkpoints", "0097_mirror_recovery", "0096_mirror_history",
         "0095_mirror_management", "0094_foundation_notifications", "0093_source_capture_control",
         "0092_job_delayed_recovery",
     ]

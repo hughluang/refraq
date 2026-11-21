@@ -117,10 +117,11 @@ const mirrorAdapter: RecordPickerAdapter = {
 const catalogTableAdapter: RecordPickerAdapter = {
   async search(q) {
     if (!q) return [];
-    const page = await searchCatalogObjects(q, { object_type: "table", limit: RECORD_PICKER_LIMIT });
-    return page.items.filter((object) => object.is_present).map(tableOption);
+    const page = await searchCatalogObjects(q, { mirror_eligible: true, limit: RECORD_PICKER_LIMIT });
+    return page.items.map(tableOption);
   },
-  resolve: (ids, signal) => Promise.all(ids.map(async (id) => tableOption((await getCatalogObject(id, signal)).object))),
+  resolve: async (ids, signal) => (await Promise.all(ids.map(async (id) => (await getCatalogObject(id, signal)).object)))
+    .filter((object) => object.sync_table != null).map(tableOption),
 };
 
 const EMPTY_GRAPH: ProblemGraph = { nodes: [], edges: [] };

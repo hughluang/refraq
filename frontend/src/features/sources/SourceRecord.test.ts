@@ -303,6 +303,27 @@ describe("SourceRecord", () => {
     expect(getSourceAccess).not.toHaveBeenCalled();
   });
 
+  it("can configure a legacy Source after saving a name without assigning an engine", async () => {
+    const legacy = { ...LEDGER, engine: null, has_access: false, access: null };
+    getSource.mockResolvedValue({ source: legacy });
+    patchSource.mockResolvedValue({ source: { ...legacy, name: "Ledger West" } });
+    getAccessSchema.mockResolvedValue({ schema: { properties: { host: { type: "string", default: "db.local" } }, required: ["host"] } });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    fireEvent.change(await screen.findByLabelText(/^Name/), { target: { value: "Ledger West" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenCalledWith("src_1", { name: "Ledger West" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit connection" }));
+    const host = await screen.findByRole("textbox", { name: /^Host/ });
+    expect((host as HTMLInputElement).value).toBe("db.local");
+    fireEvent.change(host, { target: { value: "legacy.internal" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["common.save"] }));
+    await waitFor(() => expect(patchSource).toHaveBeenLastCalledWith("src_1", {
+      engine: "postgresql", access: { host: "legacy.internal" },
+    }));
+    expect(getSourceAccess).not.toHaveBeenCalled();
+  });
+
   it("tests the saved connection without fetching credentials and hides writer actions for a viewer", async () => {
     testStored.mockResolvedValue({ ok: true });
     await renderRecord({ mode: "show", sourceId: "src_1" });

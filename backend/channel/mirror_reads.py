@@ -2,19 +2,17 @@
 
 from typing import Any
 
-from backend.admin.errors import AuthForbidden
 from backend.admin.user_store import get_user_store
 from backend.channel.mirror_changes import is_mirror
 from backend.channel.run_store import get_run_store
 from backend.core.errors import AppError
-from backend.metadata.source_access import authorize_source_read_on
+from backend.metadata.mirrors.authorization import authorize_source_data
 from backend.metadata.mirrors.reads import Reads
 from backend.metadata.mirrors.history import capture_bound, read_incremental
 from backend.metadata.mirrors.service import resolve_object_binding, authorize_object_reads
 from backend.channel.models import ChannelRunRow
 from backend.core.db import session_scope
 from backend.jobs.store import get_job_store
-from backend.metadata.source_access import allows
 
 
 class MirrorReadUnavailable(AppError):
@@ -85,9 +83,9 @@ def validate_terminal_proof(*, run_id: str, terminal_proof) -> None:
 
 
 def release_completed_run(run) -> None:
-    if getattr(run, "mirror_state", None) is None:
+    if getattr(run, "mirror_pin_state", None) != "held":
         return
-    if not run.mirror_state.get("pins"):
+    if not (run.mirror_state or {}).get("pins"):
         return
     if _reads is None:
         raise MirrorReadUnavailable()
@@ -95,6 +93,8 @@ def release_completed_run(run) -> None:
         "run_id": run.job_id, "pins": run.mirror_state["pins"],
         "source_ids": run.mirror_state["source_ids"],
     })
+    get_run_store().mark_pins_released(run.job_id)
+    run.mirror_pin_state = "released"
 
 
 def object_ids(graph: Any) -> list[str]:
@@ -109,11 +109,14 @@ def _mirror_history_node(node: dict[str, Any]) -> bool:
     return isinstance(config, dict) and is_mirror(config)
 
 
+def history_mirror_ids(graph: Any) -> list[str]:
+    return sorted({node["config"]["source"]["mirror_id"]
+                   for node in graph.get("nodes", []) if _mirror_history_node(node)})
+
+
 def authorize_graph(graph: Any, user_id: str | None, *, session=None) -> None:
     ids = object_ids(graph)
-    mirror_ids = sorted({node["config"]["source"]["mirror_id"]
-                         for node in (graph or {}).get("nodes", [])
-                         if _mirror_history_node(node)})
+    mirror_ids = history_mirror_ids(graph)
     if not ids and not mirror_ids:
         return
     if _reads is None:
@@ -141,12 +144,19 @@ def _authorize(user_id: str | None, sources: list[str]) -> None:
     user = get_user_store().get_by_id(user_id) if user_id else None
     if user is None or user.status != "active" or getattr(user, "identity_source", None) == "system":
         raise MirrorDataForbidden()
-    try:
-        allowed = all(allows(user_id, source, "sources:data_read") for source in sources)
-    except AuthForbidden as exc:
-        raise MirrorDataForbidden() from exc
-    if not allowed:
+    _authorize_sources(user_id, sources)
+
+
+def _authorize_sources(user_id: str | None, sources: list[str], *, session=None) -> None:
+    if not user_id:
         raise MirrorDataForbidden()
+    try:
+        for source in sources:
+            authorize_source_data(session=session, execution_user_id=user_id, source_id=source)
+    except AppError as exc:
+        if exc.http_status in {403, 404}:
+            raise MirrorDataForbidden() from exc
+        raise
 
 
 def execution_identity(graph: Any, *, trigger_kind: str, actor_id: str | None) -> str | None:
@@ -171,10 +181,7 @@ def require_run_data_access(run: Any, user_id: str | None, *, session=None) -> N
     if session is None:
         _authorize(user_id, sources)
     else:
-        if not user_id:
-            raise MirrorDataForbidden()
-        for source in sources:
-            authorize_source_read_on(session=session, execution_user_id=user_id, source_id=source)
+        _authorize_sources(user_id, sources, session=session)
 
 
 def _history_identity(run):
@@ -273,6 +280,17 @@ def read_run_page(run: Any, *, mirror_id: str, after_key: Any, limit: int) -> di
         raise MirrorReadUnavailable()
     if state is not None:
         require_run_data_access(run, user_id)
+    if getattr(run, "mirror_pin_state", None) == "released":
+        raise MirrorReadUnavailable()
+    previous_pins = (state or {}).get("pins") or {}
+    if mirror_id not in previous_pins:
+        pending = getattr(run, "pending_pin_mirror_id", None)
+        if pending is not None and pending != mirror_id:
+            raise MirrorReadUnavailable()
+        # The target can commit a new pin before its response reaches this worker.
+        run.mirror_pin_state = "acquiring"
+        run.pending_pin_mirror_id = mirror_id
+        get_run_store().update_run(run)
     pin = _reads.acquire_pin(
         run_id=run.job_id, mirror_id=mirror_id, execution_user_id=user_id,
     )
@@ -286,6 +304,9 @@ def read_run_page(run: Any, *, mirror_id: str, after_key: Any, limit: int) -> di
         raise MirrorReadUnavailable()
     pins[mirror_id] = reference
     sources = sorted(set((state or {}).get("source_ids") or []) | {pin.source_id})
+    if getattr(run, "pending_pin_mirror_id", None) == mirror_id:
+        run.pending_pin_mirror_id = None
+        run.mirror_pin_state = "held"
     run.mirror_state = {**(state or {}), "pins": pins, "source_ids": sources}
     get_run_store().update_run(run)
     page = _reads.read_page(

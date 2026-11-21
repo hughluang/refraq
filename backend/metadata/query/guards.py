@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 
-from sqlglot import exp, parse
-from sqlglot.errors import ParseError, SqlglotError
+from sqlglot import Dialect, exp, parse
+from sqlglot.errors import ParseError, SqlglotError, TokenError
+from sqlglot.tokens import TokenType
 
 from backend.core.sql_ast import READ_QUERY_ROOTS, WRITE_OR_DDL, iter_function_names
 from backend.metadata.errors import QueryMultiStatement, QueryNotReadonly
@@ -157,6 +158,25 @@ def dialect_for_engine(engine: str) -> str:
     return dialect
 
 
+_MYSQL_COMMENT = re.compile(r"(?P<block>/\*.*?\*/)|(?:\#|--(?=\s|$))[^\n]*", re.DOTALL)
+
+
+def _mysql_has_directives(sql: str) -> bool:
+    offset = 0
+    def has_directive(start: int, end: int) -> bool:
+        return any(
+            block[2:].lstrip().startswith(("!", "+"))
+            for comment in _MYSQL_COMMENT.finditer(sql, start, end)
+            if (block := comment.group("block"))
+        )
+
+    for token in Dialect.get_or_raise("mysql").tokenize(sql):
+        if token.token_type == TokenType.HINT or has_directive(offset, token.start):
+            return True
+        offset = token.end + 1
+    return has_directive(offset, len(sql))
+
+
 def assert_readonly_single_statement(sql: str, *, engine: str) -> str:
     """Validate SQL is a single read-only SELECT / set-op via AST.
 
@@ -169,11 +189,11 @@ def assert_readonly_single_statement(sql: str, *, engine: str) -> str:
         raise QueryNotReadonly("SQL statement is empty")
 
     dialect = dialect_for_engine(engine)
-    if dialect == "mysql" and re.search(r"/\*\s*[!+]", body):
-        raise QueryNotReadonly("MySQL executable comments and optimizer hints are not allowed")
     try:
+        if dialect == "mysql" and _mysql_has_directives(body):
+            raise QueryNotReadonly("MySQL executable comments and optimizer hints are not allowed")
         statements = parse(body, read=dialect)
-    except ParseError as exc:
+    except (ParseError, TokenError) as exc:
         raise QueryNotReadonly(f"Invalid SQL: {exc}") from exc
 
     if not statements:

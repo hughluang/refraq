@@ -14,7 +14,7 @@ from backend.metadata.mirrors.types import AnchoredProfile, Authority, Partition
 from dataclasses import asdict
 
 
-VERSION = 1
+VERSION = 2
 ROLES = ("refraq_mirror_owner", "refraq_mirror_applier", "refraq_mirror_gateway")
 TYPES = {"bigint", "integer", "smallint", "boolean", "text", "uuid", "date", "bytea", "jsonb", "timestamp", "timestamptz"}
 FUNCTIONS = {
@@ -61,7 +61,7 @@ def install(connection):
             connection.execute(sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC, refraq_mirror_applier, refraq_mirror_gateway").format(sql.Identifier(schema)))
         connection.execute("SET LOCAL ROLE refraq_mirror_owner")
         marker = connection.execute("SELECT to_regclass('source_mirror_state.version')").fetchone()[0]
-        if marker and connection.execute("SELECT version FROM source_mirror_state.version").fetchone() != (VERSION,):
+        if marker and connection.execute("SELECT version FROM source_mirror_state.version").fetchone() not in {(1,), (VERSION,)}:
             raise ValueError("Mirror target version mismatch")
         connection.execute(Path(__file__).with_name("target.sql").read_text())
         connection.execute(Path(__file__).with_name("history.sql").read_text())

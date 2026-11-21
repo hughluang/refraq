@@ -109,16 +109,23 @@ def deliver_due(session: Session, *, policy: EgressPolicy, budget: DeliveryBudge
                 event.attempts = 0
                 event.state = "pending"
                 event.next_attempt_at = now
+            elif event.kind == "test":
+                event.state = "delivered" if all(value == "delivered" for value in outcomes.values()) else "failed"
+                if fault is None and event.state == "failed":
+                    event.last_fault_code = next(
+                        attempt["fault_code"] for attempt in reversed(event.attempt_history)
+                        if attempt["fault_code"] is not None
+                    )
             else:
                 event.state = "delivered" if fault is None else "failed"
         event.outcomes = outcomes
-        channel.last_fault_code = fault
         if event.kind == "test" and channel.test_operation_id == event.id:
-            state = "pending" if event.state in {"pending", "retry"} else (
-                "verified" if all(outcomes.get(route) == "delivered" for route in ("primary", "fallback")) else "failed")
+            state = {"retry": "pending", "delivered": "verified"}.get(event.state, event.state)
+            channel.last_fault_code = event.last_fault_code
             channel.delivery_state = {"state": state,
                 "primary": outcomes.get("primary", "pending"), "fallback": outcomes.get("fallback", "pending")}
         elif event.kind == "event":
+            channel.last_fault_code = fault
             state = dict(channel.delivery_state)
             state["last_event"] = {"event_id": event.id, "state": event.state,
                 "route": event.route, "outcomes": outcomes, "last_fault_code": fault}

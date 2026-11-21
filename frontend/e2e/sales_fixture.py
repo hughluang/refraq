@@ -38,7 +38,7 @@ class SalesReads(Reads):
     def read_page(self, *, pin, execution_user_id, after_key, limit):
         authorize(execution_user_id=execution_user_id, source_id=pin.source_id)
         return dict(rows=[{"order_key": "ORD-104", "amount": self.amounts[pin.generation_id]}],
-                    freshness={"status": "ready"}, next_key=None, source_ids=[pin.source_id],
+                    freshness={"status": "unknown"}, next_key=None, source_ids=[pin.source_id],
                     generation_id=pin.generation_id)
 
     def release_run_pins(self, *, run_id, terminal_proof):
@@ -61,7 +61,7 @@ def install():
 
             def publish_with_memory_transaction(channel_id, *, after=None, **fields):
                 with store.transaction() as session:
-                    callback = (lambda _, version: after(session, version)) if after else None
+                    callback = (lambda _, version, previous: after(session, version, previous)) if after else None
                     return publish(channel_id, after=callback, **fields)
 
             channels.publish_version = publish_with_memory_transaction
@@ -85,7 +85,7 @@ def install():
             assert mirror["source_id"] in ("src_sales-en", "src_sales-zh")
             generation = f"fixture-{mirror_id}-{amount}"
             reads.amounts[generation] = amount
-            mirror.update(published_generation_id=generation, status="ready")
+            mirror.update(published_generation_id=generation, status="unknown")
             for operation in store.operations.values():
                 if operation["mirror_id"] == mirror_id:
                     operation["state"] = "applied"

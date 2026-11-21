@@ -342,9 +342,8 @@ def mysql_result_source(client, monkeypatch):
             return iter(rows)
 
     connection = SimpleNamespace(
-        exec_driver_sql=lambda sql: None,
+        exec_driver_sql=lambda sql: Result() if sql.startswith("SELECT") else None,
         execution_options=lambda **options: connection,
-        execute=lambda sql: Result(),
     )
     engine = SimpleNamespace(
         connect=lambda: nullcontext(connection), dispose=lambda: None

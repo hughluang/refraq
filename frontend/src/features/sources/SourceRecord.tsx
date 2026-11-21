@@ -492,6 +492,11 @@ function SourceExisting({
   const writable = Boolean(record.can_write && canWrite?.can);
   const editable = mode === "edit" && writable;
   const editAccess = async () => {
+    if (record.has_access === false && schema) {
+      form.setFieldValue("access", defaultsFromSchema(schema));
+      setEditingAccess(true);
+      return;
+    }
     setLoadingAccess(true);
     try {
       const { access } = await getSourceAccess(sourceId);
@@ -515,13 +520,13 @@ function SourceExisting({
     try {
       const name = values.name.trim();
       const description = values.description.trim() || null;
-      const engineChanged = engine !== record.engine;
+      const engineChanged = editingAccess && engine !== record.engine;
       const updated = await patchSource(sourceId, {
         ...(form.isDirty("name") && name !== record.name && { name }),
         ...(form.isDirty("description") && description !== (record.description || null) && { description }),
         ...(values.status !== record.status && { status: values.status }),
         ...(engineChanged && { engine }),
-        ...(editingAccess && (form.isDirty("access") || engineChanged) && { access: values.access }),
+        ...(editingAccess && (record.has_access === false || form.isDirty("access") || engineChanged) && { access: values.access }),
         ...captureWrite(values),
         ...snapshotWrite(values, record),
       });

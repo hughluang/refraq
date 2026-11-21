@@ -45,6 +45,12 @@ def _float(raw):
     return value
 
 
+def _decimal(raw):
+    # Retain the admitted finite range while decoding the original decimal digits.
+    _float(raw)
+    return Decimal(raw)
+
+
 def _json(raw):
     return json.loads(raw, object_pairs_hook=_pairs, parse_float=_float,
                       parse_constant=lambda _: _blocked())
@@ -143,7 +149,7 @@ def _scalar(value, schema):
     if name == "io.debezium.data.Uuid":
         return str(UUID(value))
     if name == "io.debezium.data.Json":
-        return _json(value)
+        return json.loads(value, object_pairs_hook=_pairs, parse_float=_decimal, parse_constant=lambda _: _blocked())
     return value
 
 
@@ -202,13 +208,15 @@ class PostgreSQLDecoder:
                 _blocked()
             typed_key = {name: _scalar(key_doc["payload"][name], field)
                          for name, field in self.key_fields.items()}
-            if any(v is None for v in typed_key.values()) or any(
+            # Key fields are mandatory; only a logical JSON literal null decodes to None.
+            json_null_keys = tuple(k for k, v in typed_key.items() if v is None)
+            if any(
                 _unavailable(key_doc["payload"][k], f) for k, f in self.key_fields.items()
             ):
                 _blocked()
             if value is None:
                 return Record(offset, self.table_identity, self.capture_generation,
-                              "tombstone", "live", typed_key, None)
+                              "tombstone", "live", typed_key, None, json_null_columns=json_null_keys)
             doc = _json(value)
             if set(doc) != {"schema", "payload"} or not _same_schema(doc["schema"], self.value_schema):
                 _blocked()
@@ -241,7 +249,7 @@ class PostgreSQLDecoder:
                 if before is None or after is not None:
                     _blocked()
                 return Record(offset, self.table_identity, self.capture_generation,
-                              "delete", origin, typed_key, None)
+                              "delete", origin, typed_key, None, json_null_columns=json_null_keys)
             if (op in {"c", "r"} and before is not None
                     or not isinstance(after, dict) or set(after) != set(self.columns)):
                 _blocked()
@@ -249,9 +257,12 @@ class PostgreSQLDecoder:
             if unchanged and (op != "u" or set(unchanged) & self.key_fields.keys()):
                 _blocked()
             values = {k: _scalar(v, self.columns[k]) for k, v in after.items() if k not in unchanged}
-            if any(values.get(k) != v for k, v in typed_key.items()):
+            json_nulls = tuple(k for k, v in values.items() if v is None and after[k] is not None
+                               and self.columns[k].get("name") == "io.debezium.data.Json")
+            if (any(values.get(k) != v for k, v in typed_key.items())
+                    or set(json_nulls) & typed_key.keys() != set(json_null_keys)):
                 _blocked()
             return Record(offset, self.table_identity, self.capture_generation,
-                          "upsert", origin, typed_key, values, unchanged)
+                          "upsert", origin, typed_key, values, unchanged, json_nulls)
         except Exception:
             _blocked()

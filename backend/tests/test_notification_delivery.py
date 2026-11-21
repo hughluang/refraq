@@ -62,20 +62,29 @@ def test_persisted_bounded_retry_then_independent_fallback(session, policy, noti
     assert "top-secret" not in str(read_channel(session))
 
 
-def test_failed_test_still_exercises_fallback_and_never_admits(session, policy, notification_clock):
+@pytest.mark.parametrize("fallback_status", [204, 503])
+def test_failed_test_still_exercises_fallback_and_never_admits(session, policy, notification_clock, fallback_status):
     replace(session, policy)
-    request_route_test(session, actor_user_id="operator", actor_token_id=None)
+    pending = request_route_test(session, actor_user_id="operator", actor_token_id=None)
     session.commit()
     seen = []
     def handler(request):
         seen.append(request.url.host)
-        return httpx.Response(503, text="top-secret")
+        status = fallback_status if request.url.host == "fallback.invalid" else 503
+        return httpx.Response(status, text="top-secret")
     budget = DeliveryBudget(1, (), 1, 1)
     for _ in range(2):
         deliver_due(session, policy=policy, budget=budget, now=notification_clock.now(), transport=httpx.MockTransport(handler))
         session.commit()
     assert seen == ["primary.invalid", "fallback.invalid"]
-    assert read_channel(session)["channel"]["delivery_state"] == {"state": "failed", "primary": "failed", "fallback": "failed"}
+    row = session.get(NotificationEventRow, pending["operation_id"])
+    channel = read_channel(session)["channel"]
+    assert row.state == "failed"
+    assert channel["delivery_state"] == {
+        "state": "failed", "primary": "failed",
+        "fallback": "delivered" if fallback_status == 204 else "failed",
+    }
+    assert channel["last_fault_code"] == row.last_fault_code == "NOTIFICATION_REMOTE_REJECTED"
     with pytest.raises(NotificationDeliveryUnconfirmed):
         ensure_routes_verified(session)
 

@@ -14,10 +14,9 @@ export function MirrorChannel({ channelId, version, mirror }: { channelId: strin
   if (!table) return null;
   const nodes = record?.graph?.nodes.filter(node => table.node_ids.includes(node.id)
     && node.type === "read.mirror" && node.config.object_id === mirror.object_id);
-  if (!nodes?.length) return null;
   return <>
     <ConsoleLink href={`/console/channels/${encodeURIComponent(channelId)}`}>{t("mirrors.backChannel", { version })}</ConsoleLink>
-    {nodes.map(node => <div key={node.id}>
+    {nodes?.map(node => <div key={node.id}>
       {mirror.published_generation_id && mirror.operations?.some(op => op.kind === "open" && op.state === "pending"
         && op.control_revision === mirror.control.control_revision) && ["fail", "skip", "continue"].includes(String(node.config.freshness_policy))
         && <div>{node.name} · {t(`mirrors.policy.${node.config.freshness_policy}`)}</div>}

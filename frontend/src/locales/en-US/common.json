@@ -385,6 +385,7 @@
   "catalog.list.presentOnly": "Present only",
   "catalog.list.noMatch": "No Catalog Objects Match These Filters",
   "catalog.list.noSources": "No Sources",
+  "catalog.list.sourceUnavailable": "This Source is unavailable. Choose another Source to browse its catalog.",
   "catalog.tabs.overview": "Overview",
   "catalog.tabs.columns": "Columns",
   "catalog.tabs.sample": "Sample",

@@ -98,12 +98,20 @@ def purge_expired_run_records() -> int:
     Node executions go with the run. Jobs stay. ``ds_*`` tables with no
     loading or ready registry row are dropped after the run records.
     """
+    runs = get_run_store()
+    for job_id in runs.terminal_runs_with_pins():
+        try:
+            recovery.release_completed_run(runs.get_run(job_id))
+        except Exception:
+            logger.warning("Channel pin release remains pending for run %s", job_id)
+            continue
+        recovery.discard_unkept_run(job_id)
     seal_unsealed_terminal_datasets()
     now = utc_now()
     drop_expired_datasets(now)
     cutoff = now - timedelta(days=channel_run_record_retention_days())
     drop_datasets_for_due_runs(cutoff)
-    deleted = get_run_store().delete_expired_terminal_runs(cutoff)
+    deleted = runs.delete_expired_terminal_runs(cutoff)
     drop_orphan_dataset_tables()
     return deleted
 

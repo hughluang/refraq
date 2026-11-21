@@ -6,7 +6,7 @@ from backend.metadata.type_mappings.service import resolve_normalized_type
 
 import pytest
 
-from backend.metadata.connectors.base import SourceEndpoint
+from backend.metadata.connectors.base import ConnectorError, SourceEndpoint
 from backend.metadata.connectors.registry import get_connector
 from backend.metadata.connectors.specs import get_connector_spec
 from backend.metadata.errors import QueryNotReadonly, SourceAccessInvalid
@@ -127,6 +127,7 @@ def test_mysql_driver_options_are_real_and_secrets_are_not_in_url(monkeypatch):
         ("SELECT id FROM t LIMIT 1 OFFSET 2", "SELECT id FROM t LIMIT 1 OFFSET 2"),
         ("SELECT id FROM t LIMIT 100 OFFSET 2", "SELECT id FROM t LIMIT 3 OFFSET 2"),
         ("SELECT 1 UNION SELECT 2", "SELECT 1 UNION SELECT 2 LIMIT 3"),
+        ("SELECT ':label /*+ 100%'", "SELECT ':label /*+ 100%' LIMIT 3"),
     ],
 )
 def test_mysql_readonly_applies_timeout_transaction_stream_and_cap(monkeypatch, sql, expected_sql):
@@ -148,14 +149,12 @@ def test_mysql_readonly_applies_timeout_transaction_stream_and_cap(monkeypatch, 
     class Connection:
         def exec_driver_sql(self, sql):
             calls.append(sql)
+            if sql.startswith("SELECT"):
+                return Result()
 
         def execution_options(self, **options):
-            assert options == {"stream_results": True}
+            assert options == {"stream_results": True, "no_parameters": True}
             return self
-
-        def execute(self, sql):
-            calls.append(str(sql))
-            return Result()
 
     class Engine:
         disposed = False
@@ -191,7 +190,8 @@ def test_mysql_readonly_applies_timeout_transaction_stream_and_cap(monkeypatch, 
     assert engine.disposed
 
 
-def test_mysql_collect_preserves_native_columns_keys_and_quoted_ddl(monkeypatch):
+@pytest.mark.parametrize("expression_parts", [None, [None], ["order", None]])
+def test_mysql_collect_preserves_native_columns_keys_and_quoted_ddl(monkeypatch, expression_parts):
     from contextlib import nullcontext
     from types import SimpleNamespace
     from sqlalchemy.dialects.mysql import dialect as mysql_dialect
@@ -228,6 +228,12 @@ def test_mysql_collect_preserves_native_columns_keys_and_quoted_ddl(monkeypatch)
         def execute(self, sql, params):
             assert params == {"database": "Sales"}
             calls.append(str(sql))
+            if "information_schema.STATISTICS" in str(sql):
+                parts = expression_parts if expression_parts is not None else ["order"]
+                return SimpleNamespace(mappings=lambda: [
+                    {"TABLE_NAME": "select`x", "INDEX_NAME": "uq", "COLUMN_NAME": part, "NON_UNIQUE": 0}
+                    for part in parts
+                ])
             return Result()
 
         def exec_driver_sql(self, sql):
@@ -248,9 +254,6 @@ def test_mysql_collect_preserves_native_columns_keys_and_quoted_ddl(monkeypatch)
                 "referred_columns": ["id"],
             }
         ],
-        get_indexes=lambda *a, **kw: [
-            {"name": "uq", "column_names": ["order"], "unique": True}
-        ],
     )
     engine = SimpleNamespace(
         connect=lambda: nullcontext(Connection()), dispose=lambda: None
@@ -267,6 +270,11 @@ def test_mysql_collect_preserves_native_columns_keys_and_quoted_ddl(monkeypatch)
         schema_filter="Sales",
         ssl_mode="disable",
     )
+    if expression_parts is not None:
+        with pytest.raises(ConnectorError, match="expression indexes"):
+            get_connector("mysql").collect_structure(endpoint)
+        assert all(not call.startswith("SHOW CREATE") for call in calls)
+        return
     (obj,) = get_connector("mysql").collect_structure(endpoint).objects
     assert obj.schema_name == "Sales" and obj.name == "select`x"
     assert obj.columns[0].data_type == "decimal(20,6) unsigned"
@@ -347,13 +355,11 @@ def test_mysql_duration_column_preserves_signed_extended_hours(monkeypatch):
 
     class Connection:
         def exec_driver_sql(self, sql):
-            pass
+            if sql.startswith("SELECT"):
+                return Result()
 
         def execution_options(self, **options):
             return self
-
-        def execute(self, sql):
-            return Result()
 
     engine = SimpleNamespace(connect=lambda: nullcontext(Connection()), dispose=lambda: None)
     monkeypatch.setattr(mysql, "create_engine", lambda *args, **kwargs: engine)

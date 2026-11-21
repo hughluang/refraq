@@ -439,3 +439,37 @@ def test_progress_projects_only_current_correlated_notifications(opened, monkeyp
     snapshot["binding"]["allocation_operation_id"] = op["id"]
     state["owner_epoch"] += 1
     assert service.get_mirror(mid)["progress"] is None
+
+
+def test_same_intent_keeps_revision_and_real_enable_creates_a_consumable_open(opened):
+    store, mid = opened
+    original = next(iter(store.operations))
+    repeated = service.set_enabled(mid, enabled=True, actor_user_id="u")
+    assert repeated["operation_id"] == original
+    assert repeated["mirror"]["control"]["control_revision"] == 1
+
+    disabled = service.set_enabled(mid, enabled=False, actor_user_id="u")
+    assert service.set_enabled(mid, enabled=False, actor_user_id="u") == disabled
+    reopened = service.set_enabled(mid, enabled=True, actor_user_id="u")
+    assert service.set_enabled(mid, enabled=True, actor_user_id="u") == reopened
+    assert store.operations[original]["state"] == "superseded"
+    assert store.operations[disabled["operation_id"]]["state"] == "superseded"
+    pending = store.operations[reopened["operation_id"]]
+    assert (pending["kind"], pending["state"], pending["control_revision"]) == ("open", "pending", 3)
+
+
+def test_history_only_publication_preserves_disabled_intent_and_refcounts(opened):
+    store, mid = opened
+    service.set_enabled(mid, enabled=False, actor_user_id="u")
+    with store.transaction() as session:
+        result = service.ensure_open_intent(
+            session, operation_id="history", channel_id="c2", channel_version=1,
+            object_ids=[], existing_mirror_ids=[mid, mid], confirmed_mirrors_to_open=[])
+    assert result == []
+    assert service.get_mirror(mid)["enabled"] is False
+    assert service.get_mirror(mid)["published_reference_count"] == 2
+    assert {op["kind"] for op in store.operations.values()} == {"open", "disable"}
+    with pytest.raises(service.MirrorError, match="MIRROR_CONTROL_CONFLICT"):
+        with store.transaction() as session:
+            service.ensure_open_intent(session, operation_id="history", channel_id="c2", channel_version=1,
+                                       object_ids=[], confirmed_mirrors_to_open=[])

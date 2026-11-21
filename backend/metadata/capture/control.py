@@ -432,20 +432,6 @@ def capture_status(source_id: str) -> dict:
         }
 
 
-def pending_commands(source_id: str) -> tuple[dict, ...]:
-    """Return the current durable command; acceptance never marks it applied."""
-    with source_control_transaction(source_id) as (session, source):
-        state = load_binding(session, source_id)
-        if state is None:
-            return ()
-        return tuple(
-            op["command"]
-            for op in list_operations(session, source_id)
-            if op["evidence"] is None
-            and op["command"]["control_revision"] == state["control_revision"]
-        )
-
-
 def record_applied_evidence(
     *, source_id: str, operation_id: str, evidence: dict
 ) -> dict:

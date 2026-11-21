@@ -29,8 +29,10 @@ def grants(monkeypatch):
     allowed = {ACTOR, RECEIVER}
     monkeypatch.setattr(mirror_reads, "get_user_store", lambda: SimpleNamespace(
         get_by_id=lambda user_id: SimpleNamespace(status="active", identity_source="local")))
-    monkeypatch.setattr(mirror_reads, "allows", lambda user_id, source, permission:
-                        user_id in allowed and source == SOURCE and permission == "sources:data_read")
+    def authorize(*, execution_user_id, source_id, session=None):
+        if execution_user_id not in allowed or source_id != SOURCE:
+            raise mirror_reads.MirrorDataForbidden()
+    monkeypatch.setattr(mirror_reads, "authorize_source_data", authorize)
     monkeypatch.setattr(channel_run, "authorize_graph", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "complete_mirror_success", lambda run, result:
                         mark_succeeded(run.job_id, result=result))
@@ -176,14 +178,14 @@ def test_error_workflow_inherits_sources_and_rechecks_both_identities(
     assert _job_view(retry.id, RECEIVER).input["error_source"]["job_id"] == parent_id
     grants.remove(ACTOR)
     if viewer_has_source_membership:
-        original_allows = mirror_reads.allows
+        original_authorize = mirror_reads.authorize_source_data
 
-        def allows(user_id, source, permission):
-            if user_id == ACTOR:
+        def authorize(*, execution_user_id, source_id, session=None):
+            if execution_user_id == ACTOR:
                 raise AuthForbidden()
-            return original_allows(user_id, source, permission)
+            return original_authorize(execution_user_id=execution_user_id, source_id=source_id)
 
-        monkeypatch.setattr(mirror_reads, "allows", allows)
+        monkeypatch.setattr(mirror_reads, "authorize_source_data", authorize)
     assert "error_source" not in _job_view(job_id, ACTOR).input
     assert "error_source" not in _job_view(retry.id, ACTOR).input
 

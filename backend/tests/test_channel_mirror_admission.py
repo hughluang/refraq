@@ -175,7 +175,7 @@ def test_publish_forwards_explicit_confirmation_and_same_session(monkeypatch, no
     confirmations = [{"source_id": "s", "object_id": "o", "mirror_id": "m"}]
     calls = []
     def publish(*args, **kwargs):
-        kwargs["after"](marker, version)
+        kwargs["after"](marker, version, None)
         return version
     monkeypatch.setattr(service, "_require", lambda *a: record)
     monkeypatch.setattr(service, "_require_publish_permissions", lambda *a: None)
@@ -199,7 +199,9 @@ def test_publish_forwards_explicit_confirmation_and_same_session(monkeypatch, no
     assert calls[0] == ("auth", marker)
     assert calls[1][1] is marker
     assert calls[1][2]["confirmed_mirrors_to_open"] is confirmations
-    assert calls[2] == ("refs", marker)
+    assert calls[1][2]["object_ids"] == (["o"] if node_type == "read.mirror" else [])
+    assert calls[1][2]["existing_mirror_ids"] == ([] if node_type == "read.mirror" else ["m"])
+    assert len(calls) == 2
     graph["nodes"].append({"type": "trigger.scheduled", "config": {}})
     with pytest.raises(AppError, match="Unattended mirror graphs require an execution identity"):
         service.publish_channel(channel_id="c", draft_revision=1, actor_user_id="u", actor_token_id=None,
@@ -234,6 +236,19 @@ def test_scheduler_uses_admission_session_without_external_identity_reads(monkey
     assert events[2][1]["session"] is marker
 
 
+def test_schedule_without_mirror_ignores_leftover_execution_user(monkeypatch):
+    graph = {"nodes": [{"type": "trigger.scheduled"}], "settings": {"mirror_execution_user_id": "old_user"}}
+    session = SimpleNamespace(scalar=lambda *args: SimpleNamespace(graph=graph, number=2))
+    records = []
+    now = utc_now()
+    monkeypatch.setattr(channel_run, "create_queued_job", lambda **kw: SimpleNamespace(id="job"))
+    monkeypatch.setattr(channel_run, "get_run_store", lambda: SimpleNamespace(
+        insert_run=lambda record, **kw: records.append(record)))
+    channel_run.mint_scheduled_run(schedule_id="s", channel_id="c", node_id="t", scheduled_for=now,
+                                   is_delayed_recovery=False, now=now, session=session)
+    assert records[0].mirror_execution_user_id is None
+
+
 def test_terminal_release_validates_before_any_target_sql(monkeypatch):
     from backend.metadata.mirrors.reads import Reads
     from backend.metadata.mirrors.composition import terminal_proof_adapter
@@ -264,15 +279,16 @@ def test_success_settlement_releases_before_discard_and_retains_failed_release(m
     run = SimpleNamespace(job_id="j", channel_id="c", target="published")
     monkeypatch.setattr(recovery, "release_completed_run", lambda r: events.append("release"))
     monkeypatch.setattr(recovery, "_write_streak", lambda *a: events.append("streak"))
-    monkeypatch.setattr(recovery, "_discard_job", lambda *a: events.append("discard"))
+    monkeypatch.setattr(recovery, "discard_unkept_run", lambda *a: events.append("discard"))
     recovery.settle_success(run, checkpoints_settled=True)
-    assert events == ["release", "streak", "discard"]
+    assert events == ["streak", "release", "discard"]
     events.clear()
     def unavailable(r):
         raise mirror_reads.MirrorReadUnavailable()
     monkeypatch.setattr(recovery, "release_completed_run", unavailable)
-    recovery.settle_success(run, checkpoints_settled=True)
-    assert events == []
+    with pytest.raises(mirror_reads.MirrorReadUnavailable):
+        recovery.settle_success(run, checkpoints_settled=True)
+    assert events == ["streak"]
 
 
 def test_success_cas_authorizes_with_exact_settlement_session(monkeypatch):
@@ -288,5 +304,30 @@ def test_success_cas_authorizes_with_exact_settlement_session(monkeypatch):
     monkeypatch.setattr(runner, "mark_succeeded", lambda *a, **kw: events.append(("cas", kw["session"])) or SimpleNamespace(status="succeeded"))
     monkeypatch.setattr(runner, "advance_from_run_in_session", lambda s, r: events.append(("checkpoint", s)))
     run = SimpleNamespace(job_id="j", graph={"nodes": [{"type": "read.mirror"}]}, mirror_execution_user_id="u")
+    monkeypatch.setattr(runner, "require_run_data_access",
+                        lambda r, user, *, session: events.append(("sources", session)))
     assert runner.complete_mirror_success(run, {}).status == "succeeded"
-    assert events == [("auth", marker), ("cas", marker), ("checkpoint", marker), "commit"]
+    assert events == [("sources", marker), ("auth", marker), ("cas", marker), ("checkpoint", marker), "commit"]
+
+
+def test_settlement_rechecks_revoked_inherited_source_before_success(session, monkeypatch):
+    from backend.channel import runner
+
+    run = SimpleNamespace(job_id="j", graph={"nodes": []}, mirror_execution_user_id="u",
+                          mirror_state={"inherited_source_ids": ["inherited"],
+                                        "source_ids": ["s", "inherited"]})
+    session.execute(text("INSERT INTO source_memberships VALUES ('user','u','inherited','viewer')"))
+    mirror_reads.require_run_data_access(run, "u", session=session)
+    session.execute(text("DELETE FROM source_memberships WHERE target='inherited'"))
+    session.commit()
+
+    @contextmanager
+    def settlement():
+        with Session(session.get_bind()) as durable, durable.begin():
+            yield durable
+
+    monkeypatch.setattr(runner, "session_scope", settlement)
+    monkeypatch.setattr(runner, "mark_succeeded", lambda *a, **kw: pytest.fail("unexpected success"))
+    monkeypatch.setattr(runner, "advance_from_run_in_session", lambda *a: pytest.fail("unexpected write"))
+    with pytest.raises(mirror_reads.MirrorDataForbidden):
+        runner.complete_mirror_success(run, {})

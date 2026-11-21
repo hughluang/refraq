@@ -15,10 +15,14 @@ def run_record():
     )
 
 
+def forbidden(**kwargs):
+    raise mirror_reads.MirrorDataForbidden()
+
+
 def allow(monkeypatch):
     monkeypatch.setattr(mirror_reads, "get_user_store", lambda: SimpleNamespace(
         get_by_id=lambda user_id: SimpleNamespace(status="active")))
-    monkeypatch.setattr(mirror_reads, "allows", lambda *args: True)
+    monkeypatch.setattr(mirror_reads, "authorize_source_data", lambda **kwargs: None)
 
 
 def test_manual_and_unattended_identity_never_use_entity_system_fallback(monkeypatch):
@@ -51,7 +55,7 @@ def test_actual_gateway_persists_pin_before_rows_and_revocation_denies_reuse(mon
     saved = []
     calls = []
     monkeypatch.setattr(mirror_reads, "get_run_store", lambda: SimpleNamespace(
-        update_run=lambda record: saved.append(dict(record.mirror_state))))
+        update_run=lambda record: saved.append(dict(record.mirror_state or {}))))
 
     class Connection:
         def execute(self, statement, params):
@@ -79,7 +83,7 @@ def test_actual_gateway_persists_pin_before_rows_and_revocation_denies_reuse(mon
         assert run.mirror_state["freshness"] == {"mir_one": {"status": "ready"}}
         mirror_reads.read_run_page(run, mirror_id="mir_one", after_key=[1], limit=10)
         assert calls[-1][1]["after"] == "[1]"
-        monkeypatch.setattr(mirror_reads, "allows", lambda *args: False)
+        monkeypatch.setattr(mirror_reads, "authorize_source_data", forbidden)
         before = len(calls)
         with pytest.raises(AppError):
             mirror_reads.read_run_page(run, mirror_id="mir_one", after_key=[1], limit=10)
@@ -93,13 +97,14 @@ def test_union_authorization_rechecks_every_source_and_disabled_identity(monkeyp
     run = run_record()
     run.mirror_state = {"source_ids": ["src_one", "src_two"]}
     checked = []
-    def authorized(user, source, permission):
-        checked.append((user, source, permission))
-        return source != "src_two"
-    monkeypatch.setattr(mirror_reads, "allows", authorized)
+    def authorized(*, execution_user_id, source_id, session=None):
+        checked.append((execution_user_id, source_id))
+        if source_id == "src_two":
+            forbidden()
+    monkeypatch.setattr(mirror_reads, "authorize_source_data", authorized)
     with pytest.raises(AppError):
         mirror_reads.require_run_data_access(run, "usr_viewer")
-    assert checked == [("usr_viewer", "src_one", "sources:data_read"), ("usr_viewer", "src_two", "sources:data_read")]
+    assert checked == [("usr_viewer", "src_one"), ("usr_viewer", "src_two")]
     monkeypatch.setattr(mirror_reads, "get_user_store", lambda: SimpleNamespace(
         get_by_id=lambda user: SimpleNamespace(status="disabled")))
     with pytest.raises(AppError):
@@ -154,7 +159,7 @@ def test_retry_refuses_revoked_provenance_before_mint(monkeypatch):
     run.version = 1
     run.trigger_node_id = "trigger"
     run.mirror_state = {"source_ids": ["src_one"]}
-    monkeypatch.setattr(mirror_reads, "allows", lambda *args: False)
+    monkeypatch.setattr(mirror_reads, "authorize_source_data", forbidden)
     monkeypatch.setattr(recovery, "get_channel_store", lambda: SimpleNamespace(get=lambda channel: None))
     minted = []
     logged = []
@@ -201,3 +206,133 @@ def test_stored_data_endpoints_refuse_unknown_provenance(monkeypatch, endpoint):
     with pytest.raises(AppError) as error:
         calls[endpoint]()
     assert error.value.code == "AUTH_FORBIDDEN"
+
+
+def test_release_response_loss_retains_evidence_until_acknowledged(monkeypatch):
+    from backend.channel import tasks
+    from backend.channel.run_store import ChannelRunRecord, get_run_store
+    from backend.core.time import utc_now
+    from backend.jobs.store import claim_queued, create_queued_job, get_job_store, mark_succeeded
+
+    runs = get_run_store()
+    job = create_queued_job(kind="channel_run", input={"on_demand_test": True, "pin_version": True},
+                            trigger_kind="user", trigger_ref="u")
+    claim_queued(job.id)
+    assert mark_succeeded(job.id).status == "succeeded"
+    state = {"pins": {"m": {"source_id": "s", "generation_id": "g"}}, "source_ids": ["s"]}
+    run = ChannelRunRecord(
+        job_id=job.id, channel_id="c", target="published", version=1, draft_revision=None,
+        graph={"settings": {"keep_test_runs": False}}, trigger_node_id="t",
+        ignore_checkpoints=False, outcome="completed",
+        failed_node_id=None, skipped_node_ids=[], created_at=utc_now(), mirror_state=state,
+        mirror_execution_user_id="u", mirror_pin_state="held",
+    )
+    runs.insert_run(run)
+    monkeypatch.setattr(tasks, "channel_run_record_retention_days", lambda: 30)
+    monkeypatch.setattr(tasks, "drop_orphan_dataset_tables", lambda: None)
+    proofs = []
+
+    def release(**kwargs):
+        proofs.append(kwargs["terminal_proof"])
+        if len(proofs) == 1:
+            raise ConnectionError("lost reply")
+
+    monkeypatch.setattr(mirror_reads, "_reads", SimpleNamespace(release_run_pins=release))
+    with pytest.raises(ConnectionError):
+        mirror_reads.release_completed_run(run)
+    tasks.recovery.discard_unkept_run(job.id)
+    assert runs.get_run(job.id).mirror_state == state
+    assert not runs.get_run(job.id).can_discard
+    tasks.purge_expired_run_records()
+    assert proofs[0] == proofs[1]
+    assert run.mirror_state == state
+    assert run.mirror_pin_state == "released"
+    assert runs.get_run(job.id) is None
+    assert get_job_store().get(job.id) is None
+
+
+def test_retry_of_known_mirror_keeps_other_uncertain_acquisition(monkeypatch):
+    allow(monkeypatch)
+    run = run_record()
+    run.mirror_state = {"pins": {"known": {"generation_id": "g", "source_id": "s"}}, "source_ids": ["s"]}
+    run.mirror_pin_state = "held"
+    monkeypatch.setattr(mirror_reads, "get_run_store", lambda: SimpleNamespace(update_run=lambda _: None))
+    requested = []
+
+    def acquire(**kwargs):
+        mirror_id = kwargs["mirror_id"]
+        requested.append(mirror_id)
+        if requested == ["pending"]:
+            raise ConnectionError("target reply lost")
+        return SimpleNamespace(run_id=run.job_id, mirror_id=mirror_id, generation_id="g", source_id="s")
+
+    monkeypatch.setattr(mirror_reads, "_reads", SimpleNamespace(
+        acquire_pin=acquire, read_page=lambda **kw: {"generation_id": "g", "source_ids": ["s"]},
+    ))
+    def read(mirror_id):
+        return mirror_reads.read_run_page(run, mirror_id=mirror_id, after_key=None, limit=1)
+
+    with pytest.raises(ConnectionError):
+        read("pending")
+    read("known")
+    assert run.mirror_pin_state == "acquiring"
+    assert run.pending_pin_mirror_id == "pending"
+    with pytest.raises(mirror_reads.MirrorReadUnavailable):
+        read("other")
+    read("pending")
+    assert requested == ["pending", "known", "pending"]
+    assert run.mirror_pin_state == "held"
+    assert run.pending_pin_mirror_id is None
+
+
+@pytest.mark.parametrize("backend", ["memory", "sql"])
+def test_terminal_ttl_retains_every_uncertain_pin_state(monkeypatch, backend):
+    from contextlib import contextmanager
+    from datetime import timedelta
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+    from backend.channel import run_store
+    from backend.channel.models import ChannelRunRow
+    from backend.core.time import utc_now
+
+    states = {"history": "unused", "released": "released", "unknown": None,
+              "held": "held", "acquiring": "acquiring"}
+    cutoff = utc_now()
+    if backend == "sql":
+        from sqlalchemy.ext.compiler import compiles
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        @compiles(JSONB, "sqlite")
+        def json_type(element, compiler, **kw):
+            return "JSON"
+
+        engine = create_engine("sqlite://")
+        ChannelRunRow.__table__.create(engine)
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT)"))
+            conn.execute(text("INSERT INTO jobs VALUES (:id, 'succeeded')"), [{"id": k} for k in states])
+
+        @contextmanager
+        def scope():
+            with Session(engine) as session, session.begin():
+                yield session
+
+        monkeypatch.setattr(run_store, "session_scope", scope)
+        runs = run_store.SqlRunStore()
+    else:
+        jobs = {name: SimpleNamespace(status="succeeded") for name in states}
+        monkeypatch.setattr(run_store, "get_job_store", lambda: jobs)
+        runs = run_store.MemoryRunStore()
+
+    for job_id, pin_state in states.items():
+        runs.insert_run(run_store.ChannelRunRecord(
+            job_id=job_id, channel_id="c", target="published", version=1,
+            draft_revision=None, graph={"nodes": []}, trigger_node_id="t", ignore_checkpoints=False,
+            outcome="completed", failed_node_id=None, skipped_node_ids=[], created_at=cutoff-timedelta(days=5),
+            mirror_state={"source_ids": ["s"]}, mirror_execution_user_id="u", mirror_pin_state=pin_state,
+        ))
+    assert runs.terminal_runs_with_pins() == ["held"]
+    assert set(runs.job_ids_due(cutoff)) == {"history", "released"}
+    assert runs.delete_expired_terminal_runs(cutoff) == 2
+    for key in ("held", "unknown", "acquiring"):
+        assert runs.get_run(key).mirror_state == {"source_ids": ["s"]}

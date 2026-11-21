@@ -65,6 +65,8 @@ class ChannelRunRow(Base):
         JSONB, nullable=True
     )
     mirror_execution_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mirror_pin_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pending_pin_mirror_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     mirror_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 

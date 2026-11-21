@@ -354,3 +354,88 @@ def test_observer_role_boundary_and_reinstall(publication_target):
     install(admin)
     with publication.observe_committed(**observe) as observed:
         assert observed.published_generation_id == request["generation_id"]
+
+
+def test_logical_json_preserves_numeric_and_null_identity_through_delivery(publication_target):
+    import json
+    from copy import deepcopy
+    from backend.metadata.capture.test_delivery import SCHEMA, decoder, envelope, wire_key
+
+    admin, application, _ = publication_target
+    generation = "a" * 32
+    partition = PartitionIdentity("cluster", "topic-json", 0)
+    table = sql.Identifier("source_mirror", "m_" + MIRROR_ID[4:20] + "_" + generation)
+    create_generation(
+        admin, mirror_id=MIRROR_ID, generation_id=generation, authority=AUTHORITY,
+        operation_id="json-open", table_identity="table", history_epoch="epoch",
+        schema_fingerprint="schema", columns={"id": "integer", "body": "jsonb"},
+        key_columns=("id",), partition_identity=partition, start_offset=-1,
+    )
+    schema = deepcopy(SCHEMA)
+    for side in schema["fields"][:2]:
+        side["fields"][1]["name"] = "io.debezium.data.Json"
+    capture = decoder(value_schema=schema)
+    precise = '{"n":12345678901234567890.12345}'
+    target_query = sql.SQL("SELECT body IS NULL, jsonb_typeof(body), body->>'n' FROM {}").format(table)
+    for offset, (body, expected, sequence) in enumerate([
+        (precise, (False, "object", "12345678901234567890.12345"), 1),
+        (None, (True, None, None), 2),
+        ("null", (False, "null", None), 3),
+        ("__debezium_unavailable_value", (False, "null", None), 3),
+        (None, (True, None, None), 4),
+    ]):
+        message = envelope(op="u" if offset else "c", body=body)
+        if offset:
+            message["payload"]["before"]["body"] = None
+        message["schema"] = schema
+        record = capture.decode(offset=offset, key=wire_key(), value=json.dumps(message).encode())
+        for _ in range(2):
+            coverage = application.apply_batch(
+                authority=AUTHORITY, generation_id=generation, partition_identity=partition, records=[record],
+            )
+            assert admin.execute(target_query).fetchone() == expected
+            assert coverage == {"offset": offset, "commit_seq": sequence}
+    history = admin.execute(
+        "SELECT before_image->'body'->>'n', after_image->'body'->>'n', "
+        "before_json_null_columns, after_json_null_columns FROM source_mirror_state.live_log ORDER BY commit_seq"
+    ).fetchall()
+    assert history == [(None, "12345678901234567890.12345", None, []),
+                       ("12345678901234567890.12345", None, [], []),
+                       (None, None, [], ["body"]), (None, None, ["body"], [])]
+
+
+def test_legacy_target_marker_upgrade_retains_history(publication_target):
+    admin, application, _ = publication_target
+    request = prepare_generation(admin, 1)
+    row = Record(0, "orders", AUTHORITY.capture_generation, "upsert", "live", {"id": 1}, {"id": 1})
+    deliver(application, request, row)
+    with admin.transaction():
+        admin.execute("ALTER TABLE source_mirror_state.live_log DROP COLUMN before_json_null_columns, DROP COLUMN after_json_null_columns")
+        admin.execute("UPDATE source_mirror_state.version SET version = 1")
+    install(admin)
+    install(admin)
+    assert admin.execute("SELECT source_mirror_state.target_version()").fetchone() == (2,)
+    assert admin.execute("SELECT after_image, after_json_null_columns FROM source_mirror_state.live_log").fetchone() == ({"id": 1}, None)
+    assert deliver(application, request, row) == {"offset": 0, "commit_seq": 1}
+
+
+def test_json_literal_null_key_pages_in_native_order(publication_target):
+    admin, application, _ = publication_target
+    generation = "c" * 32
+    partition = PartitionIdentity("cluster", "json-keys", 0)
+    create_generation(
+        admin, mirror_id=MIRROR_ID, generation_id=generation, authority=AUTHORITY,
+        operation_id="json-keys-open", table_identity="table", history_epoch="epoch",
+        schema_fingerprint="schema", columns={"id": "jsonb"}, key_columns=("id",),
+        partition_identity=partition, start_offset=-1,
+    )
+    records = [Record(0, "table", "capture", "upsert", "live", {"id": None}, {"id": None},
+                      json_null_columns=("id",)),
+               Record(1, "table", "capture", "upsert", "live", {"id": "next"}, {"id": "next"})]
+    application.apply_batch(authority=AUTHORITY, generation_id=generation, partition_identity=partition, records=records)
+    admin.execute("INSERT INTO source_mirror_state.reader_pins VALUES ('reader', %s, %s)", (MIRROR_ID, generation))
+    page_sql = "SELECT source_mirror_state.read_page('reader', %s, %s, 1)"
+    first = admin.execute(page_sql, (MIRROR_ID, None)).fetchone()[0]
+    assert first["rows"] == [{"id": None}]
+    second = admin.execute(page_sql, (MIRROR_ID, Jsonb(first["next_key"]))).fetchone()[0]
+    assert second["rows"] == [{"id": "next"}]

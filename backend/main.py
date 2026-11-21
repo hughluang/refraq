@@ -86,7 +86,7 @@ from backend.core.db import get_session_factory
 from backend.channel.mirror_reads import bind_reads, validate_terminal_proof
 from backend.channel.diagnostics import project_job as project_channel_job
 from backend.metadata.mirrors.service import bind_source_read_authorizer
-from backend.metadata.source_access import authorize_source_read_on
+from backend.metadata.mirrors.authorization import authorize_source_data
 from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
@@ -188,20 +188,22 @@ def _bootstrap_site(target_settings: Settings) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    bind_history(None)
     bind_reads(None)
     bind_recovery(None)
-    bind_source_read_authorizer(authorize_source_read_on)
+    bind_source_read_authorizer(authorize_source_data)
     adapters = None
     try:
         adapters = compose_mirrors(settings, verify_terminal_proof=validate_terminal_proof)
         if adapters is not None:
             session_factory = get_session_factory()
-            bind_history(session_factory=session_factory, target=adapters.history_target)
+            history = History(session_factory=session_factory, target=adapters.history_target)
+            bind_history(history)
             bind_reads(adapters.reads)
             if settings.mirror_recovery_retry_delays_seconds is not None:
                 bind_recovery(Recovery(
                     session_factory=session_factory,
-                    history=History(session_factory=session_factory, target=adapters.history_target),
+                    history=history,
                     retry_delays=settings.mirror_recovery_retry_delays_seconds,
                 ))
         _bootstrap_site(settings)
@@ -213,6 +215,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.exception("entity access view reconciliation failed")
         yield
     finally:
+        bind_history(None)
         bind_source_read_authorizer(None)
         bind_reads(None)
         bind_recovery(None)

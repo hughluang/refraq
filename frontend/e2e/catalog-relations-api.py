@@ -26,7 +26,10 @@ def seed() -> None:
     if os.environ.get("REFRAQ_STORE_BACKEND") != "memory":
         raise RuntimeError("Relations fixtures require the memory backend")
     now = utc_now()
-    for case in ("sales-en", "sales-zh", "author", "edit", "lifecycle", "failure", "paths", "dense", "en-light", "en-dark", "zh-light", "zh-dark"):
+    cases = ("sales-en", "sales-zh") if os.environ.get("E2E_CDC_JOURNEY") == "1" else (
+        "author", "edit", "lifecycle", "failure", "paths", "dense", "en-light", "en-dark", "zh-light", "zh-dark",
+    )
+    for case in cases:
         sales = case.startswith("sales-")
         key = case if sales else f"relations-{case}"
         source = SourceRecord(
@@ -76,8 +79,9 @@ if __name__ == "__main__":
     if sys.argv[1:3] != ["-m", "uvicorn"]:
         raise RuntimeError("Expected the existing Playwright uvicorn command")
     seed()
-    from sales_fixture import install
+    if os.environ.get("E2E_CDC_JOURNEY") == "1":
+        from sales_fixture import install
 
-    install()
+        install()
     sys.argv = ["uvicorn", *sys.argv[3:]]
     runpy.run_module("uvicorn", run_name="__main__")

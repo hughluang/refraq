@@ -23,6 +23,7 @@ from backend.admin.subjects import (
 )
 from backend.admin.user_store import get_user_store
 from backend.core.time import utc_now
+from backend.metadata.errors import SourceNotFound
 from backend.metadata.source_access.errors import (
     SourceMembershipLevelUnknown,
     SourceMembershipSubjectUnknown,
@@ -187,7 +188,7 @@ def allows(user_id: str, source_id: str, permission: str, *more_source_ids: str)
     return True
 
 
-def authorize_source_read_on(*, session: Session, execution_user_id: str, source_id: str) -> None:
+def authorize_source_read_on(*, session: Session, execution_user_id: str, source_id: str | None) -> None:
     """Resolve current identity, Role and Source grants in the caller transaction."""
     actor = session.execute(text(
         "SELECT u.id, u.status, u.identity_source, r.id AS role_id, r.key, r.permissions "
@@ -197,13 +198,15 @@ def authorize_source_read_on(*, session: Session, execution_user_id: str, source
         raise AuthForbidden()
     if actor["role_id"] is None:
         raise AuthForbidden()
-    if actor["key"] == SUPER_ADMIN_KEY:
-        return
     permissions = actor["permissions"]
     if isinstance(permissions, str):
         permissions = json.loads(permissions)
-    if "sources:data_read" not in permissions:
+    if actor["key"] != SUPER_ADMIN_KEY and "sources:data_read" not in permissions:
         raise AuthForbidden()
+    if source_id is None:
+        raise SourceNotFound()
+    if actor["key"] == SUPER_ADMIN_KEY:
+        return
     granted = session.execute(text(
         "SELECT m.level FROM source_memberships m WHERE m.target IN (:source, :every) AND ("
         "(m.subject_type = 'user' AND m.subject_id = :user) OR "
@@ -213,6 +216,8 @@ def authorize_source_read_on(*, session: Session, execution_user_id: str, source
         "WHERE gm.user_id = :user AND gm.group_id = m.subject_id)))"
     ), {"source": source_id, "every": EVERY_SOURCE_TARGET,
         "user": execution_user_id, "role": actor["role_id"]}).scalars().all()
+    if not granted:
+        raise SourceNotFound()
     if not any("sources:data_read" in _LEVEL_KEYS.get(level, ()) for level in granted):
         raise AuthForbidden()
 

@@ -75,7 +75,28 @@ for (const [locale, t] of [["en-US", en], ["zh-CN", zh]] as const) {
     const confirm = page.getByRole("dialog").getByRole("button", { name: t["channels.run.confirm"], exact: true });
     await confirm.click();
     const order = page.getByRole("row").filter({ hasText: "ORD-104" });
+    await expect(page.getByText(t["channels.verify.policy"])).toBeVisible();
+    await expect(order).toHaveCount(0);
+
+    const channelId = new URL(page.url()).pathname.split("/")[3];
+    const draftUrl = `/api/channels/${channelId}/draft`;
+    const draftResponse = await request.get(draftUrl);
+    expect(draftResponse.ok(), await draftResponse.text()).toBeTruthy();
+    const draft = await draftResponse.json();
+    const read = draft.graph.nodes.find((node: { type: string }) => node.type === "read.mirror");
+    expect(read.config.freshness_policy).toBe("fail");
+    read.config.freshness_policy = "continue";
+    const saved = await request.put(draftUrl, { data: { base_revision: draft.draft_revision, graph: draft.graph } });
+    expect(saved.ok(), await saved.text()).toBeTruthy();
+    const edit = `/console/channels/${channelId}/edit`;
+    await page.goto(edit);
+    await publish.click();
+    await review.getByRole("button", { name: t["channels.publish.confirm"], exact: true }).click();
+    await expect(follow).toBeVisible();
+    await page.getByRole("button", { name: run, exact: true }).click();
+    await confirm.click();
     await expect(order).toContainText("24.60");
+    await expect(page.getByText(t["channels.verify.unknown"])).toBeVisible();
     const firstUrl = page.url();
     const first = new URL(firstUrl).pathname.split("/").pop()!;
     await expect(page.getByText(first, { exact: true })).toBeVisible();

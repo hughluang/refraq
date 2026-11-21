@@ -126,10 +126,10 @@ class History:
 
     def _authorize(self, session, mirror_id, execution_user_id):
         mirror = session.get(MirrorRow, mirror_id, populate_existing=True)
+        self.authorize_source_read(session=session, execution_user_id=execution_user_id,
+                                   source_id=mirror.source_id if mirror is not None else None)
         if mirror is None:
             raise MirrorError("MIRROR_NOT_FOUND", 404)
-        self.authorize_source_read(session=session, execution_user_id=execution_user_id,
-                                   source_id=mirror.source_id)
         return mirror.source_id
 
     def _bounds(self, gate, bound, source_id):
@@ -165,8 +165,8 @@ class History:
         if type(limit) is not int or not 1 <= limit <= 500:
             raise ValueError("History page limit must be between 1 and 500")
         with self.session_factory() as session, session.begin():
-            gate = self._gate(session, mirror_id)
             source = self._authorize(session, mirror_id, execution_user_id)
+            gate = self._gate(session, mirror_id)
             result = self.target.read_incremental(mirror_id=mirror_id, after=after, through=through, limit=limit)
             lower, upper = self._bounds(gate, result, source)
             start = _position(after, mirror_id, gate.history_epoch)
@@ -197,10 +197,11 @@ class History:
             raise ValueError("Settlement requires an active caller management transaction")
         proposals = list(proposals)
         ids = sorted({proposal["mirror_id"] for proposal in proposals})
+        sources = {mid: self._authorize(session, mid, execution_user_id) for mid in ids}
         gates = {mirror_id: self._gate(session, mirror_id) for mirror_id in ids}
         for mirror_id in ids:
             gate = gates[mirror_id]
-            source = self._authorize(session, mirror_id, execution_user_id)
+            source = sources[mirror_id]
             bound = self.target.capture_bound(mirror_id=mirror_id)
             lower, upper = self._bounds(gate, bound, source)
             for proposal in proposals:
@@ -296,9 +297,9 @@ class History:
 _history = None
 
 
-def bind_history(*, session_factory, target):
+def bind_history(service):
     global _history
-    _history = History(session_factory=session_factory, target=target)
+    _history = service
 
 
 def _service():

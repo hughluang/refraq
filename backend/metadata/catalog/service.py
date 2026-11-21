@@ -36,6 +36,7 @@ from backend.metadata.joins.graph import (
     find_reachable_object_paths,
 )
 from backend.metadata.sources.service import require_source
+from backend.metadata.sources.store import get_source_store
 
 T = TypeVar("T")
 RankMode = Literal["vector", "lexical"]
@@ -124,23 +125,30 @@ def search_objects(
     visible_source_ids: frozenset[str] | None,
     source_id: str | None = None,
     object_type: str | None = None,
+    mirror_eligible: bool = False,
     limit: int = 20,
     offset: int = 0,
 ) -> CatalogSearchPage[ObjectView]:
     cleaned = (query or "").strip()
     if not cleaned:
         raise CatalogSearchQueryRequired()
+    if mirror_eligible:
+        sources, _ = get_source_store().list_sources(
+            engine="postgresql", visible_ids=visible_source_ids,
+        )
+        visible_source_ids = frozenset(source.id for source in sources if source.kind == "database")
     scope = _source_scope(visible_source_ids, source_id)
     if scope is None:
-        return CatalogSearchPage([], _search_rank_mode(), False)
+        return CatalogSearchPage([], "lexical" if mirror_eligible else _search_rank_mode(), False)
     source_filter, source_ids = scope
     store = get_catalog_store()
-    if not embedding_configured():
+    if mirror_eligible or not embedding_configured():
         items, total = store.search_objects(
             cleaned,
             source_id=source_filter,
             source_ids=source_ids,
-            object_type=object_type,
+            object_type="table" if mirror_eligible else object_type,
+            include_absent=not mirror_eligible,
             limit=limit,
             offset=offset,
         )

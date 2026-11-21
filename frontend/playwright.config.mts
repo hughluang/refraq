@@ -6,10 +6,14 @@ import { defineConfig, devices } from "@playwright/test";
 
 const frontendDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(frontendDir, "..");
-const venvPython = path.join(repoRoot, "backend/.venv/bin/python");
+const venvPython = [".venv/bin/python", "backend/.venv/bin/python"]
+  .map((candidate) => path.join(repoRoot, candidate))
+  .find((candidate) => fs.existsSync(candidate));
 const python =
-  process.env.E2E_PYTHON ??
-  (fs.existsSync(venvPython) ? venvPython : "python3");
+  process.env.E2E_PYTHON ?? venvPython ?? "python3";
+const salesJourney = process.env.E2E_CDC_JOURNEY === "1";
+const authSetup = /auth\.setup\.ts/;
+const salesSpec = /cdc-console-journey\.spec\.ts/;
 
 // Keep direct fixture launchers supported alongside Python interpreter overrides.
 const apiLauncher = python.endsWith(".py") ? `"${python}"` : `"${python}" frontend/e2e/catalog-relations-api.py`;
@@ -41,10 +45,10 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
-    { name: "setup", testMatch: /auth\.setup\.ts/ },
+    { name: "setup", testMatch: authSetup },
     {
       name: "chromium",
-      testIgnore: /auth\.setup\.ts/,
+      ...(salesJourney ? { testMatch: salesSpec } : { testIgnore: [authSetup, salesSpec] }),
       dependencies: ["setup"],
       use: {
         ...devices["Desktop Chrome"],
@@ -68,6 +72,7 @@ export default defineConfig({
         INITIAL_ADMIN_ACCOUNT: adminAccount,
         INITIAL_ADMIN_PASSWORD: adminPassword,
         TZ: "UTC",
+        E2E_CDC_JOURNEY: salesJourney ? "1" : "0",
       },
     },
     {

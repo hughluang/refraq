@@ -1,6 +1,7 @@
 """Confirmed Channel publication through the guarded PostgreSQL Mirror target."""
 
 from contextlib import ExitStack, closing
+from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from uuid import uuid4
@@ -283,14 +284,14 @@ def restricted_target(native_target, channel_management, monkeypatch):
             )
         )
         monkeypatch.setattr(history, "_history", None)
-        history.bind_history(
+        history.bind_history(history.History(
             session_factory=channel_management,
             target=history.SqlHistoryTarget(
                 engine=gateway,
                 invalidation_engine=applier,
                 timeout_ms=3000,
             ),
-        )
+        ))
         yield applier
 
 
@@ -834,3 +835,88 @@ def test_confirmed_channel_open_rechecks_grants_and_keeps_pin_across_switch(
     )
     assert fresh_page["generation_id"] == replacement_id
     assert fresh_page["rows"] == [replacement_row]
+
+
+@pytest.mark.integration
+def test_delete_observes_publishing_version_under_channel_lock(channel_management, monkeypatch):
+    from sqlalchemy import event
+    from backend.channel.store import SqlChannelStore
+    from backend.channel.models import ChannelOwnedVariableRow, ChannelCheckpointRow
+
+    engine = channel_management.kw["bind"]
+    db.Base.metadata.create_all(engine, tables=[ChannelOwnedVariableRow.__table__, ChannelCheckpointRow.__table__])
+    actor = {"actor_user_id": PUBLISHER, "actor_token_id": None}
+    channel = channels.create_channel(name="Concurrent deletion", description=None, **actor)
+    store = SqlChannelStore()
+    # Install the ordinary version first. The deletion must observe its successor.
+    store.publish_version(channel.id, draft_revision=1, published_at=utc_now(), published_by_user_id=PUBLISHER)
+    read = {"id": "read", "type": "read.mirror", "config": {"object_id": "items"}}
+    graph = {"nodes": [read], "edges": [], "settings": {}}
+    draft = store.replace_draft(channel.id, base_revision=1, graph=graph, now=utc_now())
+    deletion_at_lock = Event()
+    wrote_reference = Event()
+    binding = mirrors.resolve_object_binding("items")
+    confirmation = [{"object_id": "items", "mirror_id": binding["mirror_id"], "source_id": SOURCE}]
+
+    def publish_intent(session, version, previous):
+        mirrors.ensure_open_intent(session, operation_id="race-open", channel_id=channel.id,
+                                   channel_version=version.number, object_ids=["items"],
+                                   confirmed_mirrors_to_open=confirmation)
+        wrote_reference.set()
+        assert deletion_at_lock.wait(10)
+
+    def watch_channel_lock(conn, cursor, statement, params, context, many):
+        if "FROM channels" in statement and "FOR UPDATE" in statement and wrote_reference.is_set():
+            deletion_at_lock.set()
+
+    event.listen(engine, "before_cursor_execute", watch_channel_lock)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            publishing = pool.submit(store.publish_version, channel.id, draft_revision=draft.draft_revision,
+                                     published_at=utc_now(), published_by_user_id=PUBLISHER, after=publish_intent)
+            assert wrote_reference.wait(10)
+            deleting = pool.submit(channels.delete_channel, channel_id=channel.id, **actor)
+            publishing.result(timeout=15)
+            deleting.result(timeout=15)
+    finally:
+        event.remove(engine, "before_cursor_execute", watch_channel_lock)
+    assert store.get(channel.id) is None
+    assert mirrors.get_mirror(binding["mirror_id"])["published_reference_count"] == 0
+
+
+@pytest.mark.integration
+def test_legacy_pin_migration_retains_uncertain_evidence(management_engine):
+    from importlib import import_module
+    import json
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import text
+
+    migration = import_module("backend.alembic.versions.0101_channel_pin_retention")
+    snapshot = {"nodes": [{"type": "read.mirror"}]}
+    history_only = {"nodes": [{"type": "read.changes"}]}
+    old = [
+        ("ordinary", None, {"nodes": []}, None, "unused"),
+        ("snapshot", "u", snapshot, {"pins": {"m": {"source_id": "s", "generation_id": "g"}}}, "held"),
+        ("history", "u", history_only, {"history_bounds": {"m": {}}, "source_ids": ["s"]}, "unused"),
+        ("inherited", "u", {"nodes": []}, {"inherited_source_ids": ["s"], "source_ids": ["s"]}, "unused"),
+        ("uncertain", "u", snapshot, None, None),
+        ("mixed", "u", snapshot, {"history_bounds": {"m": {}}}, None),
+        ("no_graph", "u", None, None, None),
+    ]
+    with management_engine.begin() as conn:
+        conn.execute(text("CREATE TABLE channel_runs (job_id text PRIMARY KEY, mirror_execution_user_id text, "
+                          "graph jsonb, mirror_state jsonb)"))
+        conn.execute(text("INSERT INTO channel_runs VALUES "
+                          "(:job, :user, CAST(:graph AS jsonb), CAST(:state AS jsonb))"), [
+            {"job": job, "user": user, "graph": json.dumps(graph), "state": json.dumps(state)}
+            for job, user, graph, state, _ in old
+        ])
+        with Operations.context(MigrationContext.configure(conn)):
+            migration.upgrade()
+            migration.downgrade()
+            migration.upgrade()
+        assert dict(conn.execute(text("SELECT job_id, mirror_pin_state FROM channel_runs")).all()) == {
+            job: expected for job, _, _, _, expected in old
+        }

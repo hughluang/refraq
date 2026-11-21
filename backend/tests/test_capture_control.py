@@ -3,7 +3,7 @@
 import pytest
 
 from backend.core.time import utc_now
-from backend.metadata.capture.control import pending_commands, record_applied_evidence
+from backend.metadata.capture.control import record_applied_evidence
 from backend.metadata.errors import SourceCaptureControlConflict
 from backend.tests.test_sources_jobs import client, _access
 from backend.metadata.capture.control import capture_status
@@ -108,7 +108,7 @@ def test_stop_requires_exact_current_evidence_and_duplicate_identity(client):
     ).json()["source"]
     source_id = source["id"]
     client.patch(f"/sources/{source_id}", json={"status": "disabled"})
-    (command,) = pending_commands(source_id)
+    command, = (op for op in capture_status(source_id)["operations"] if op["state"] == "pending")
     evidence = {
         key: command[key]
         for key in (
@@ -138,7 +138,7 @@ def test_stop_requires_exact_current_evidence_and_duplicate_identity(client):
     assert capture_status(source_id)["control"]["stop_ack"] is None
     assert record_applied_evidence(**kwargs, evidence=evidence) == evidence
     assert record_applied_evidence(**kwargs, evidence=evidence) == evidence
-    assert pending_commands(source_id) == ()
+    assert all(op["state"] != "pending" for op in capture_status(source_id)["operations"])
     client.patch(f"/sources/{source_id}", json={"capture_credential": None})
     assert capture_status(source_id)["control"]["stop_ack"] is None
     with pytest.raises(SourceCaptureControlConflict):

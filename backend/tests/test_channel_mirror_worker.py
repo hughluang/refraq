@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.channel import channel_run, mirror_reads
+from backend.channel import channel_run, mirror_reads, recovery
 from backend.core.errors import AppError
 
 
@@ -68,7 +68,7 @@ def test_runtime_assembles_and_closes_actual_adapters(monkeypatch):
     monkeypatch.setattr(runtime, "bind_reads", lambda value: events.append(("reads", value)))
     monkeypatch.setattr(runtime, "bind_source_read_authorizer", lambda value: events.append(("auth", value)))
     monkeypatch.setattr(runtime, "get_session_factory", lambda: "sessions")
-    monkeypatch.setattr(runtime, "bind_history", lambda **kw: events.append(("history", kw)))
+    monkeypatch.setattr(runtime, "bind_history", lambda value: events.append(("history", value)))
     def compose(settings, *, verify_terminal_proof):
         assert verify_terminal_proof is mirror_reads.validate_terminal_proof
         return adapters
@@ -76,7 +76,7 @@ def test_runtime_assembles_and_closes_actual_adapters(monkeypatch):
     with runtime.channel_mirror_runtime():
         assert ("reads", adapters.reads) in events
     assert events[-1] == "close"
-    assert events[-3] == ("reads", None)
+    assert events[-4:] == [("history", None), ("reads", None), ("auth", None), "close"]
 
 
 @pytest.mark.parametrize("node_type", ["read.mirror", "read.changes", "volume.changes_dataset"])
@@ -117,6 +117,7 @@ def test_mint_authorization_and_both_inserts_use_one_session(monkeypatch, kind, 
         assert kw["session"] is marker
         assert seen == authorizations
         assert kw["input"]["version"] == 3
+        assert recovery._is_on_demand_test(SimpleNamespace(trigger_kind=kind, input=kw["input"])) == (kind == "user")
         return SimpleNamespace(id="job")
     monkeypatch.setattr(channel_run, "create_queued_job", create)
     monkeypatch.setattr(channel_run, "get_run_store", lambda: SimpleNamespace(
@@ -182,6 +183,7 @@ def test_seal_commits_before_release_and_preserves_retry_pins(monkeypatch, retry
         events.append("committed")
     monkeypatch.setattr(recovery, "session_scope", scope)
     monkeypatch.setattr(recovery, "release_completed_run", lambda run: events.append("released"))
+    monkeypatch.setattr(recovery, "discard_unkept_run", lambda job_id: None)
     recovery.seal_supervised_run("j")
     if retryable:
         assert events == []

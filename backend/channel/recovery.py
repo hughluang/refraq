@@ -12,7 +12,6 @@ from backend.channel.checkpoints import advance_from_run
 from backend.channel.dataset_registry import drop_datasets_for_jobs
 from backend.channel.diagnostics import job_diagnostics_protected
 from backend.channel.mirror_reads import require_run_data_access, release_completed_run
-from backend.core.errors import AppError
 from backend.channel.run_store import get_run_store
 from backend.channel.store import get_channel_store
 from backend.core.time import format_instant, utc_now
@@ -36,6 +35,7 @@ def seal_supervised_run(job_id: str) -> None:
         return
     if job_before.status == "succeeded":
         release_completed_run(run_before)
+        discard_unkept_run(job_id)
         return
     if (job_before.status == "failed" and job_before.trigger_kind != "error"
             and run_before.target == "published" and run_before.version is not None
@@ -53,6 +53,7 @@ def seal_supervised_run(job_id: str) -> None:
         }}
     record = get_run_store().get_run(job_id)
     release_completed_run(record)
+    discard_unkept_run(job_id)
 
 
 def settle_success(run: Any, *, checkpoints_settled: bool = False) -> None:
@@ -65,15 +66,11 @@ def settle_success(run: Any, *, checkpoints_settled: bool = False) -> None:
     """
     if not checkpoints_settled:
         advance_from_run(run)
-    if checkpoints_settled:
-        try:
-            release_completed_run(run)
-        except AppError:
-            # Retain both durable evidence and pins when release cannot be proven.
-            return
     if run.target == "published":
         _write_streak(run.channel_id, 0)
-    _discard_job(getattr(run, "job_id", None))
+    if checkpoints_settled:
+        release_completed_run(run)
+    discard_unkept_run(getattr(run, "job_id", None))
 
 
 def settle_failure(
@@ -92,7 +89,7 @@ def settle_failure(
     if job.trigger_kind == "error":
         if run.target == "published":
             _bump_streak(run.channel_id)
-        _discard_job(job.id)
+        discard_unkept_run(job.id)
         return
     if (
         run.target == "published"
@@ -132,7 +129,7 @@ def _release_failed_chain(job: JobRecord) -> None:
         _discard_jobs(doomed)
 
 
-def _discard_job(job_id: Any) -> None:
+def discard_unkept_run(job_id: Any) -> None:
     if not isinstance(job_id, str) or not job_id:
         return
     job = get_job_store().get(job_id)
@@ -142,13 +139,13 @@ def _discard_job(job_id: Any) -> None:
 
 
 def _discard_jobs(job_ids: list[str]) -> None:
-    drop_datasets_for_jobs(job_ids)
     runs = get_run_store()
     jobs = get_job_store()
     for job_id in job_ids:
         run = runs.get_run(job_id)
-        if getattr(run, "mirror_state", None) is not None:
+        if run is not None and not run.can_discard:
             continue
+        drop_datasets_for_jobs([job_id])
         runs.delete_run(job_id)
         jobs.delete(job_id)
 
@@ -178,7 +175,8 @@ def _discards(job: JobRecord) -> bool:
 def _is_on_demand_test(job: JobRecord) -> bool:
     if job.trigger_kind != "user":
         return False
-    return (job.input or {}).get("pin_version") is not True
+    payload = job.input or {}
+    return payload.get("on_demand_test") is True or payload.get("pin_version") is not True
 
 
 def _keep(settings: Any, key: str) -> bool:

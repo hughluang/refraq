@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 def complete_mirror_success(run: Any, result: dict) -> Any:
     with session_scope() as session:
+        require_run_data_access(run, getattr(run, "mirror_execution_user_id", None), session=session)
         if mirror_graph(getattr(run, "graph", None)):
             authorize_graph(run.graph, run.mirror_execution_user_id, session=session)
         done = mark_succeeded(run.job_id, result=result, session=session)
@@ -184,7 +185,6 @@ def _run_channel_job(job_id: str) -> dict[str, str]:
         is_mirror = mirror_graph(run.graph) or run.mirror_state is not None
         if is_mirror:
             try:
-                require_run_data_access(run, run.mirror_execution_user_id)
                 done = complete_mirror_success(run, result)
             except Exception as exc:
                 code, message = public_error(

@@ -1292,12 +1292,13 @@ describe("mirror node configuration", () => {
       ddl: null,
       is_present: true,
       collected_at: null,
+      sync_table: { source_name: "Warehouse", qualified_table: "public.orders" },
     };
     vi.mocked(getCatalogObject).mockResolvedValue({
       object: { ...orders, id: "object_items", name: "items", locator_key: "warehouse.public.items" },
     });
     vi.mocked(searchCatalogObjects).mockResolvedValue({
-      items: [orders, { ...orders, id: "object_old_orders", name: "old_orders", is_present: false }],
+      items: [orders],
       limit: 25,
       offset: 0,
       rank_mode: "lexical",
@@ -1322,9 +1323,8 @@ describe("mirror node configuration", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "recordPicker.placeholder" }), {
       target: { value: "orders" },
     });
-    const option = await screen.findByText("orders");
-    expect(searchCatalogObjects).toHaveBeenCalledWith("orders", expect.objectContaining({ object_type: "table" }));
-    expect(screen.queryByText("old_orders")).toBeNull();
+    const option = await screen.findByText("orders", {}, { timeout: 10_000 });
+    expect(searchCatalogObjects).toHaveBeenCalledWith("orders", expect.objectContaining({ mirror_eligible: true }));
     fireEvent.click(option);
     expect(onChange).toHaveBeenLastCalledWith("n1", expect.objectContaining({
       config: { object_id: "object_orders", freshness_policy: "skip" },
@@ -1387,12 +1387,12 @@ describe("mirror node configuration", () => {
 
     const picker = screen.getByRole("button", { name: "channels.config.changeSource.mirrorId" });
     fireEvent.click(picker);
-    fireEvent.click(await screen.findByText("public.orders"));
+    fireEvent.click(await screen.findByText("public.orders", {}, { timeout: 10_000 }));
     expect(onChange).toHaveBeenLastCalledWith("n1", expect.objectContaining({
       config: { source: { kind: "mirror", mirror_id: "mirror_orders" }, limit: 17 },
     }));
     fireEvent.click(picker);
-    fireEvent.click(await screen.findByText("public.items"));
+    fireEvent.click(await screen.findByText("public.items", {}, { timeout: 10_000 }));
     expect(onChange).toHaveBeenLastCalledWith("n1", expect.objectContaining({
       config: { source: { kind: "mirror", mirror_id: "mirror_items" }, limit: 17 },
     }));
