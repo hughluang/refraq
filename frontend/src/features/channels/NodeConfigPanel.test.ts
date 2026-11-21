@@ -13,11 +13,8 @@ import { problemIdentity } from "@/features/channels/problemLabel";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import type { GraphProblem } from "@/features/channels/types";
 import { listEntities, listVersions } from "@/features/entities/api";
-import { listMirrors } from "@/features/mirrors/api";
-import type { Mirror } from "@/features/mirrors/types";
-import { getCatalogObject, searchCatalogObjects } from "@/features/sources/api/catalog";
 import { listSources } from "@/features/sources/api/sources";
-import type { CatalogObject, Source } from "@/features/sources/types";
+import type { Source } from "@/features/sources/types";
 import type { EntityAttribute, EntityVersion } from "@/features/entities/types";
 
 const enMessages = en as Record<string, string>;
@@ -103,9 +100,6 @@ const LABELS: Record<string, string> = {
   "channels.config.fields.transform.code.code.description": "Python body of main.",
   "channels.config.fields.read.source_query.source_id": "Source",
   "channels.config.fields.read.source_query.source_id.description": "Registered Source.",
-  "channels.config.fields.read.mirror.object_id": en["channels.config.fields.read.mirror.object_id"],
-  "channels.config.fields.read.mirror.object_id.description":
-    en["channels.config.fields.read.mirror.object_id.description"],
   "channels.config.fields.read.changes.entity_id":
     zhMessages["channels.config.fields.read.changes.entity_id"],
   "channels.config.fields.read.changes.entity_id.description":
@@ -136,16 +130,6 @@ vi.mock("@refinedev/core", () => ({
 
 vi.mock("@/features/sources/api/sources", () => ({
   listSources: vi.fn(async () => ({ items: [], total: 0, limit: 100, offset: 0 })),
-}));
-
-vi.mock("@/features/sources/api/catalog", () => ({
-  searchCatalogObjects: vi.fn(),
-  getCatalogObject: vi.fn(),
-}));
-
-vi.mock("@/features/mirrors/api", () => ({
-  listMirrors: vi.fn(),
-  getMirror: vi.fn(),
 }));
 
 vi.mock("@/features/entities/api", () => ({
@@ -1270,141 +1254,6 @@ describe("code and source query fields", () => {
 const SCHEMA_ENTITY = "Business Entity whose Change Log is read.";
 const SCHEMA_SOURCES =
   "Optional subset of user, channel_run, and unattributed. Absent or empty returns every source. Hidden entries still advance the cursor.";
-
-describe("mirror node configuration", () => {
-  beforeEach(() => {
-    stubDomApis();
-    HTMLElement.prototype.scrollIntoView ??= vi.fn();
-  });
-  afterEach(cleanup);
-
-  it("uses the localized Catalog table picker and stores the object's id", async () => {
-    const orders: CatalogObject = {
-      id: "object_orders",
-      locator_key: "warehouse.public.orders",
-      source_id: "source_warehouse",
-      object_type: "table",
-      schema_name: "public",
-      name: "orders",
-      business_name: null,
-      business_description: null,
-      columns: [],
-      ddl: null,
-      is_present: true,
-      collected_at: null,
-      sync_table: { source_name: "Warehouse", qualified_table: "public.orders" },
-    };
-    vi.mocked(getCatalogObject).mockResolvedValue({
-      object: { ...orders, id: "object_items", name: "items", locator_key: "warehouse.public.items" },
-    });
-    vi.mocked(searchCatalogObjects).mockResolvedValue({
-      items: [orders],
-      limit: 25,
-      offset: 0,
-      rank_mode: "lexical",
-      truncated: false,
-    });
-    const onChange = await renderPanel(
-      {
-        type: "object",
-        required: ["object_id", "freshness_policy"],
-        properties: {
-          object_id: { type: "string", description: "Catalog Object whose Source mirror supplies rows." },
-          freshness_policy: { type: "string", enum: ["continue", "skip", "fail"] },
-        },
-      },
-      node({ object_id: "object_items", freshness_policy: "skip" }, "read.mirror"),
-    );
-
-    expect(await screen.findByText("items")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Catalog table Description" }));
-    expect(screen.getByText(en["channels.config.fields.read.mirror.object_id.description"])).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Catalog table" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "recordPicker.placeholder" }), {
-      target: { value: "orders" },
-    });
-    const option = await screen.findByText("orders", {}, { timeout: 10_000 });
-    expect(searchCatalogObjects).toHaveBeenCalledWith("orders", expect.objectContaining({ mirror_eligible: true }));
-    fireEvent.click(option);
-    expect(onChange).toHaveBeenLastCalledWith("n1", expect.objectContaining({
-      config: { object_id: "object_orders", freshness_policy: "skip" },
-    }));
-  });
-
-  it.each(["read.changes", "volume.changes_dataset"])("switches %s between Entity and existing mirrors", async (nodeType) => {
-    vi.mocked(listVersions).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
-    const orders: Mirror = {
-      id: "mirror_orders",
-      source_id: "source_warehouse",
-      source_key: "warehouse",
-      source_name: "Warehouse",
-      object_id: "object_orders",
-      table_identity: "public.orders",
-      qualified_table: "public.orders",
-      enabled: true,
-      status: "ready",
-      published_generation_id: null,
-      capture_generation: null,
-      history_epoch: null,
-      retained_lower_bound: null,
-      committed_upper_bound: null,
-      control: {},
-      progress: {},
-      profile: {},
-      readiness: [],
-      fault: null,
-      published_reference_count: 0,
-    };
-    vi.mocked(listMirrors).mockResolvedValue({
-      items: [orders, { ...orders, id: "mirror_items", qualified_table: "public.items" }],
-      total: 2,
-      limit: 25,
-      offset: 0,
-    });
-    const onChange = await renderPanel(
-      {
-        type: "object",
-        properties: {
-          entity_id: { type: "string", "x-refraq-ref": "entity" },
-          sources: { type: "array", items: { type: "string", enum: ["user"] } },
-          source: {
-            type: "object",
-            properties: { kind: { const: "mirror" }, mirror_id: { type: "string" } },
-          },
-          limit: { type: "integer" },
-        },
-      },
-      node({ entity_id: "entity_orders", sources: ["user"], limit: 17 }, nodeType),
-      vi.fn(), [], true, null, null, { liveEdits: true },
-    );
-
-    const stream = screen.getByRole("combobox", { name: "channels.config.changeSource.kind" });
-    fireEvent.mouseDown(stream);
-    fireEvent.click(screen.getByRole("option", { name: "channels.config.changeSource.mirror", hidden: true }));
-    expect(onChange).toHaveBeenLastCalledWith("n1", expect.objectContaining({
-      config: { source: { kind: "mirror", mirror_id: "" }, limit: 17 },
-    }));
-
-    const picker = screen.getByRole("button", { name: "channels.config.changeSource.mirrorId" });
-    fireEvent.click(picker);
-    fireEvent.click(await screen.findByText("public.orders", {}, { timeout: 10_000 }));
-    expect(onChange).toHaveBeenLastCalledWith("n1", expect.objectContaining({
-      config: { source: { kind: "mirror", mirror_id: "mirror_orders" }, limit: 17 },
-    }));
-    fireEvent.click(picker);
-    fireEvent.click(await screen.findByText("public.items", {}, { timeout: 10_000 }));
-    expect(onChange).toHaveBeenLastCalledWith("n1", expect.objectContaining({
-      config: { source: { kind: "mirror", mirror_id: "mirror_items" }, limit: 17 },
-    }));
-
-    fireEvent.mouseDown(stream);
-    fireEvent.click(screen.getByRole("option", { name: "channels.config.changeSource.entity", hidden: true }));
-    expect(onChange).toHaveBeenLastCalledWith("n1", expect.objectContaining({
-      config: { entity_id: "", limit: 17 },
-    }));
-    expect(screen.queryByRole("button", { name: "channels.config.changeSource.mirrorId" })).toBeNull();
-  });
-});
 
 describe("read.changes field descriptions", () => {
   beforeEach(stubDomApis);

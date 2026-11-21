@@ -1,11 +1,9 @@
 export const MIRROR_STATUSES = ["waiting", "snapshotting", "catching_up", "ready", "stale", "rebuilding", "paused", "needs_attention", "disable_pending", "unknown", "disabled", "source_fault"] as const;
-export type RecoveryAction = "retry" | "run_now" | "postpone" | "manual" | "reconcile_state";
+export type RecoveryAction = "retry" | "run_now" | "postpone" | "manual";
 export type RecoveryRequest = {
   action: RecoveryAction;
   expected_history_epoch: string | number;
   reason?: string;
-  channel_id?: string;
-  channel_version?: number;
 };
 export type ReadinessItem = {
   key: string;
@@ -37,6 +35,5 @@ export type Mirror = {
   readiness: ReadinessItem[];
   fault: Record<string, unknown> | null;
   operations?: { kind: string; state: string; control_revision: number; requested_at: string }[];
-  published_reference_count: number;
 };
 export type PendingOperation = { operation_id: string; state: "pending" };

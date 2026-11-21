@@ -86,7 +86,6 @@ export function searchCatalogObjects(
   opts?: {
     source_id?: string;
     object_type?: string;
-    mirror_eligible?: boolean;
     limit?: number;
     offset?: number;
   },
@@ -95,7 +94,6 @@ export function searchCatalogObjects(
   params.set("q", q);
   if (opts?.source_id) params.set("source_id", opts.source_id);
   if (opts?.object_type) params.set("object_type", opts.object_type);
-  if (opts?.mirror_eligible) params.set("mirror_eligible", "true");
   if (opts?.limit != null) params.set("limit", String(opts.limit));
   if (opts?.offset != null) params.set("offset", String(opts.offset));
   return apiClient<{

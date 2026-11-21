@@ -5,7 +5,6 @@ import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { RecordedTableRead } from "./RecordedTableRead";
 import { JobTimes } from "@/features/jobs/JobTimes";
 import { DelayedRecoveryBadge } from "@/features/jobs/DelayedRecoveryBadge";
 import { CopyIcon } from "@/components/icons";
@@ -89,7 +88,6 @@ export function ChannelRunDetail({
     isTerminal: (body) => isTerminalRun(body.run.status),
   });
   const detail = live.error instanceof ApiError && [403, 404].includes(live.error.status) ? null : live.data;
-  const verifyObject = searchParams.get("verifyObject");
   const [executionReload, setExecutionReload] = useState(0);
   const gesture = useRef(0);
   const [selectionRequest, setSelectionRequest] = useState<{ seq: number; token: number } | null>(
@@ -178,11 +176,6 @@ export function ChannelRunDetail({
           void rerunRun(channelId, jobId)
             .then((body) => {
               const context = new URLSearchParams(historyContext(window.location.search));
-              if (verifyObject) {
-                context.set("verifyObject", verifyObject);
-                const node = searchParams.get("verifyNode");
-                if (node) context.set("verifyNode", node);
-              }
               push(`/console/channels/${channelId}/runs/${body.run.job_id}?${context}`);
             })
             .catch((error: unknown) => {
@@ -362,9 +355,7 @@ export function ChannelRunDetail({
         </Text>
       ) : null}
       {failedNode ? <Text size="sm">{failedNode}</Text> : null}
-      {graph && verifyObject && detail.run.target === "published" ? (
-        <RecordedTableRead channelId={channelId} detail={detail} objectId={verifyObject} preferredNode={searchParams.get("verifyNode")} />
-      ) : graph ? (
+      {graph ? (
       <div
         ref={workspaceRef}
         className={`channel-run-workspace channel-run-workspace--${arrangement}`}

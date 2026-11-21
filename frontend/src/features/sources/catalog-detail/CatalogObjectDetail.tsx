@@ -60,7 +60,6 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     canSampleLoading,
     canSampleData,
   );
-  const { data: canAuthor } = useCan({ resource: ModuleId.channels, action: ModuleAction.edit });
   const writable = Boolean(canWrite?.can);
 
   const [object, setObject] = useState<CatalogObject | null>(null);
@@ -236,11 +235,6 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           tabs={list}
           actions={
             <Group gap="xs">
-              {object.sync_table && canAuthor?.can && (
-                <Button component={ConsoleLink} href={`/console/channels/new?object=${encodeURIComponent(object.id)}`} size="sm">
-                  {t("channels.create.setupTable")}
-                </Button>
-              )}
               <Button
                 component={ConsoleLink}
                 href="/console/catalog"

@@ -1,9 +1,8 @@
 "use client";
 
 import { Button, Table, TextInput } from "@mantine/core";
-import { useCan, useTranslate } from "@refinedev/core";
+import { useTranslate } from "@refinedev/core";
 import { useCallback } from "react";
-import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { ListTable } from "@/components/display/ListTable";
 import { ListToolbar } from "@/components/display/ListToolbar";
@@ -24,9 +23,6 @@ const filters = [
 
 export function MirrorList() {
   const t = useTranslate();
-  const catalog = useCan({ resource: ModuleId.catalog, action: ModuleAction.list });
-  const channel = useCan({ resource: ModuleId.channels, action: ModuleAction.edit });
-  const canChoose = catalog.data?.can && channel.data?.can;
   const query = useListQuery({ filters });
   const source = query.select("source_id");
   const status = query.select("status");
@@ -39,8 +35,8 @@ export function MirrorList() {
     toolbar={<ListToolbar query={query} filters={[{ key: "status", label: t("mirrors.status"), options: MIRROR_STATUSES.map(value => ({ value, label: t(`mirrors.status.${value}`) })) }]}
       extra={<TextInput aria-label={t("mirrors.sourceFilter")} placeholder={t("mirrors.sourceFilter")} value={source} onChange={event => query.setFilter("source_id", event.currentTarget.value)} />} />}>
     <ListTable list={list}
-      emptyMessage={t(canChoose ? "mirrors.empty.author" : "mirrors.empty.operator")}
-      emptyAction={canChoose && <Button component={ConsoleLink} href="/console/catalog" size="sm">{t("catalog.chooseSyncTable")}</Button>} columnCount={4} onClearFilters={query.clear}
+      emptyMessage={t("mirrors.empty")}
+      columnCount={4} onClearFilters={query.clear}
       head={<Table.Tr>{["source", "object", "lastEvent", "nextAction"].map(key => <Table.Th key={key}>{t(`mirrors.${key}`)}</Table.Th>)}</Table.Tr>}>
       {list.items.map(mirror => <Table.Tr key={mirror.id}>
         <Table.Td>{mirror.source_name ?? mirror.source_key ?? mirror.source_id}</Table.Td>

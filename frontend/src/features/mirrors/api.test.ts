@@ -11,8 +11,8 @@ it("sends literal global filters and offset pagination without requesting rows",
 });
 
 it("binds recovery to the selected mirror and observed history epoch", async () => {
-  await requestRecovery("mirror/a", { action: "reconcile_state", expected_history_epoch: 7, reason: "Approved state repair", channel_id: "channel-1", channel_version: 3 });
-  expect(api).toHaveBeenCalledWith("/mirrors/mirror%2Fa/recovery-requests", expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "reconcile_state", expected_history_epoch: 7, reason: "Approved state repair", channel_id: "channel-1", channel_version: 3 }) }));
+  await requestRecovery("mirror/a", { action: "run_now", expected_history_epoch: 7, reason: "Approved state repair" });
+  expect(api).toHaveBeenCalledWith("/mirrors/mirror%2Fa/recovery-requests", expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "run_now", expected_history_epoch: 7, reason: "Approved state repair" }) }));
 });
 
 it("returns disable acceptance without claiming runtime stop", async () => {

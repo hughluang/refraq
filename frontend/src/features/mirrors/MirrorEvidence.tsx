@@ -32,5 +32,5 @@ export function MirrorNextAction({ mirror }: { mirror: Mirror }) {
   const blockers = outstanding(mirror);
   return <>{blockers.length ? blockers.map(item => <div key={item.key}>{item.key === "capture_admission" && item.owner === "deployer" && item.action === "Qualify capture before admission"
       ? t("mirrors.confirmCapture") : <>{item.key} · {item.owner} · {item.action}</>}</div>)
-    : t(mirror.published_generation_id ? "mirrors.verifyCopy" : "mirrors.checkLater")}</>;
+    : t("mirrors.checkLater")}</>;
 }

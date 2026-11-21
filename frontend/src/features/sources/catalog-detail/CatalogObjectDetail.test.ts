@@ -135,7 +135,6 @@ describe("CatalogObjectDetail load", () => {
     const { CatalogObjectDetail } = await import("@/features/sources/catalog-detail/CatalogObjectDetail");
     render(shell(createElement(CatalogObjectDetail, { objectId: "obj_1" })));
     await screen.findByRole("heading", { name: "Sales / public.orders" });
-    expect(screen.getByRole("link", { name: "Set up sync in a Data Channel" }).getAttribute("href")).toBe("/console/channels/new?object=obj_1");
     const locator = screen.getByText("obj/postgresql/demo/public/table/orders");
     const details = locator.closest("details")!;
     expect(details.open).toBe(false);
@@ -177,7 +176,7 @@ describe("CatalogObjectDetail load", () => {
     expect(getCatalogObject).toHaveBeenCalledTimes(1);
   });
 
-  it("removes the table and its setup action when refresh discovers revoked access", async () => {
+  it("removes the table when refresh discovers revoked access", async () => {
     getCatalogObject.mockResolvedValueOnce({ object: {
       id: "obj_1", source_id: "source", schema_name: "public", name: "orders",
       object_type: "table", locator_key: "obj/postgresql/demo/public/table/orders",
@@ -185,9 +184,8 @@ describe("CatalogObjectDetail load", () => {
     } }).mockRejectedValueOnce(new ApiError(404, "CATALOG_OBJECT_NOT_FOUND", ""));
     const { CatalogObjectDetail } = await import("./CatalogObjectDetail");
     render(shell(createElement(CatalogObjectDetail, { objectId: "obj_1" })));
-    await screen.findByRole("link", { name: "Set up sync in a Data Channel" });
+    await screen.findByRole("heading", { name: "Sales / public.orders" });
     fireEvent.click(screen.getByRole("button", { name: copy["catalog.refresh"] }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Sales / public.orders" })).toBeNull());
-    expect(screen.queryByRole("link", { name: "Set up sync in a Data Channel" })).toBeNull();
   });
 });

@@ -73,7 +73,6 @@ export function listChannels(params?: {
 }
 
 export function createChannel(body: {
-  table_setup?: { object_id: string; request_id: string; manual_name?: string; read_name?: string };
   name: string;
   description: string | null;
   tags?: { tag_ids: string[]; names: string[] };
@@ -188,7 +187,7 @@ export function previewPublish(id: string) {
   });
 }
 
-export function publishChannel(id: string, { draft_revision, mirrors_to_open }: Confirmation) {
+export function publishChannel(id: string, { draft_revision }: Confirmation) {
   return apiClient<{ version: ChannelVersion; confirmation: Confirmation }>(
     `/channels/${id}/publish`,
     {
@@ -196,11 +195,6 @@ export function publishChannel(id: string, { draft_revision, mirrors_to_open }: 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         draft_revision,
-        mirrors_to_open: mirrors_to_open.map(({ source_id, object_id, mirror_id }) => ({
-          source_id,
-          object_id,
-          mirror_id,
-        })),
       }),
     },
   );

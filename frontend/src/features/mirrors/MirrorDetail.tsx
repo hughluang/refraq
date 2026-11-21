@@ -8,10 +8,8 @@ import { Instant } from "@/components/display/Instant";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { MirrorEvent, MirrorNextAction } from "./MirrorEvidence";
-import { MirrorChannel } from "./MirrorChannel";
 import { FormSection } from "@/components/form/FormSection";
 import { TextField } from "@/components/form/TextField";
-import { NumberField } from "@/components/form/NumberField";
 import { HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
@@ -27,7 +25,7 @@ function Evidence({ value }: { value: unknown }) {
   return <Text size="sm" style={{ overflowWrap: "anywhere" }}>{String(value)}</Text>;
 }
 
-export function MirrorDetail({ id, channelId: referringChannel, version }: { id: string; channelId?: string | null; version?: number }) {
+export function MirrorDetail({ id }: { id: string }) {
   const t = useTranslate();
   const { data: canWrite } = useCan({ resource: "mirrors", action: "edit" });
   const [enableIntent, setEnableIntent] = useState<boolean | null>(null);
@@ -36,8 +34,6 @@ export function MirrorDetail({ id, channelId: referringChannel, version }: { id:
   const [pending, setPending] = useState<PendingOperation | null>(null);
   const [recovery, setRecovery] = useState<{ action: RecoveryAction; epoch: string | number } | null>(null);
   const [reason, setReason] = useState("");
-  const [channelId, setChannelId] = useState("");
-  const [channelVersion, setChannelVersion] = useState<number | string>("");
   const [submitting, setSubmitting] = useState(false);
   const loadRevision = useRef(0);
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -66,7 +62,7 @@ export function MirrorDetail({ id, channelId: referringChannel, version }: { id:
     return () => { loadRevision.current++; controller.abort(); };
   }, [load]);
 
-  const scope = mirror ? t("mirrors.sharedScope", { source: mirror.source_name ?? mirror.source_id, table: mirror.qualified_table, count: mirror.published_reference_count }) : "";
+  const scope = mirror ? t("mirrors.scope", { source: mirror.source_name ?? mirror.source_id, table: mirror.qualified_table }) : "";
   async function toggle() {
     if (!mirror || !canWrite?.can || enableIntent === null || submitting) return;
     setSubmitting(true);
@@ -87,12 +83,10 @@ export function MirrorDetail({ id, channelId: referringChannel, version }: { id:
   }
   async function recover() {
     if (!mirror || !recovery || !canWrite?.can || submitting || (recovery.action !== "retry" && !reason.trim())) return;
-    if (recovery.action === "reconcile_state" && (!channelId.trim() || !Number.isInteger(channelVersion) || Number(channelVersion) < 1)) return;
     setSubmitting(true);
     try {
       const result = await requestRecovery(id, {
         action: recovery.action, expected_history_epoch: recovery.epoch, ...(reason.trim() ? { reason: reason.trim() } : {}),
-        ...(recovery.action === "reconcile_state" ? { channel_id: channelId.trim(), channel_version: Number(channelVersion) } : {}),
       });
       setPending(result);
       setRecovery(null);
@@ -109,7 +103,6 @@ export function MirrorDetail({ id, channelId: referringChannel, version }: { id:
       <FormSection title={t("mirrors.lastEvent")}>
         <MirrorEvent mirror={mirror} />
         <DisplayField label={t("mirrors.nextAction")} value={<MirrorNextAction mirror={mirror} />} />
-        {referringChannel && version && <MirrorChannel key={`${referringChannel}/${version}`} channelId={referringChannel} version={version} mirror={mirror} />}
       </FormSection>
       <FormSection title={t("mirrors.identity")}>
         <DisplayField label={t("mirrors.source")} value={mirror.source_name ?? mirror.source_key ?? mirror.source_id} />
@@ -118,7 +111,6 @@ export function MirrorDetail({ id, channelId: referringChannel, version }: { id:
         <DisplayField label={t("mirrors.generation")} value={mirror.published_generation_id} />
         <DisplayField label={t("mirrors.captureGeneration")} value={mirror.capture_generation} />
         <DisplayField label={t("mirrors.epoch")} value={mirror.history_epoch} />
-        <DisplayField label={t("mirrors.references")} value={mirror.published_reference_count} />
         <DisplayField label={t("mirrors.operation")} value={pending ? `${pending.operation_id}: ${t("mirrors.pending")}` : null} />
       </FormSection>
       <FormSection title={t("mirrors.readiness")} description={t("mirrors.readinessHelp")} columns={1}>
@@ -135,17 +127,16 @@ export function MirrorDetail({ id, channelId: referringChannel, version }: { id:
       <FormSection title={t("mirrors.bounds")}><DisplayField label={t("mirrors.lower")} value={<Evidence value={mirror.retained_lower_bound} />} /><DisplayField label={t("mirrors.upper")} value={<Evidence value={mirror.committed_upper_bound} />} /></FormSection>
       {canWrite?.can && <FormSection title={t("mirrors.controls")}>
         <Button size="sm" variant="light" loading={submitting} disabled={mirror.status === "disable_pending"} onClick={() => setEnableIntent(!mirror.enabled)}>{t(mirror.enabled ? "mirrors.disable" : "mirrors.enable")}</Button>
-        {(["retry", "run_now", "postpone", "manual", "reconcile_state"] as const).map(action => <Button key={action} size="sm" variant="light" disabled={submitting || mirror.history_epoch == null} onClick={() => { if (mirror.history_epoch == null) return; setReason(""); setChannelId(""); setChannelVersion(""); setRecovery({ action, epoch: mirror.history_epoch }); }}>{t(`mirrors.recovery.${action}`)}</Button>)}
+        {(["retry", "run_now", "postpone", "manual"] as const).map(action => <Button key={action} size="sm" variant="light" disabled={submitting || mirror.history_epoch == null} onClick={() => { if (mirror.history_epoch == null) return; setReason(""); setRecovery({ action, epoch: mirror.history_epoch }); }}>{t(`mirrors.recovery.${action}`)}</Button>)}
       </FormSection>}
     </Stack> : null}
     <ConfirmActionModal opened={!!mirror && !!canWrite?.can && enableIntent !== null} onClose={() => setEnableIntent(null)}
       title={t(enableIntent ? "mirrors.enable" : "mirrors.disable")} body={`${scope} ${t(enableIntent ? "mirrors.impact.enable" : "mirrors.impact.disable")}`}
       loading={submitting} onConfirm={() => void toggle()} />
     <ConfirmActionModal opened={!!mirror && !!canWrite?.can && recovery !== null} onClose={() => { if (!submitting) setRecovery(null); }} title={t(`mirrors.recovery.${recovery?.action ?? "retry"}`)} body={`${scope} ${t(`mirrors.impact.${recovery?.action ?? "retry"}`)}`} loading={submitting}
-      confirmDisabled={(recovery?.action !== "retry" && !reason.trim()) || (recovery?.action === "reconcile_state" && (!channelId.trim() || !Number.isInteger(channelVersion) || Number(channelVersion) < 1))} onConfirm={() => void recover()}>
+      confirmDisabled={recovery?.action !== "retry" && !reason.trim()} onConfirm={() => void recover()}>
       <DisplayField label={t("mirrors.epoch")} value={recovery?.epoch} />
       <TextField editable label={t("mirrors.reason")} required={recovery?.action !== "retry"} value={reason} onChange={event => setReason(event.currentTarget.value)} />
-      {recovery?.action === "reconcile_state" ? <><TextField editable label={t("mirrors.channelId")} required value={channelId} onChange={event => setChannelId(event.currentTarget.value)} /><NumberField editable label={t("mirrors.channelVersion")} required min={1} allowDecimal={false} value={channelVersion} onChange={setChannelVersion} /></> : null}
     </ConfirmActionModal>
   </PageChrome>;
 }

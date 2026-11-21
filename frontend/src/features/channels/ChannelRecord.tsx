@@ -16,8 +16,7 @@ import {
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
-import { useCan, useNotification, usePermissions, useTranslate } from "@refinedev/core";
-import { PublishedTableRunAction, type TableSelection } from "./PublishedTableRunAction";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { usePublishedChannelVersion } from "./usePublishedChannelVersion";
 import { useSearchParams } from "next/navigation";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
@@ -48,8 +47,6 @@ import { AdjustmentsIcon, ErrorIcon, ListIcon, VariableIcon, VersionsIcon } from
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextareaField } from "@/components/form/TextareaField";
-import { RecordPicker } from "@/components/form/RecordPicker";
-import { userRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { TextField } from "@/components/form/TextField";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
@@ -75,7 +72,6 @@ import {
   validateDraft,
   type DraftValidation,
 } from "@/features/channels/api";
-import { getCatalogObject } from "@/features/sources/api/catalog";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import { SourceDisplaysProvider } from "@/features/channels/RegisteredSourceField";
 import { RunKeepingFields } from "@/features/channels/RunKeepingFields";
@@ -95,7 +91,6 @@ import type {
   GraphProblem,
   RefinedPort,
   SourceDisplay,
-  MirrorBinding,
 } from "@/features/channels/types";
 import {
   graphWithoutUnsetIntegers,
@@ -171,24 +166,6 @@ export function ChannelRecord(props: Props) {
 
 function ChannelCreate() {
   const t = useTranslate();
-  const objectId = useSearchParams()?.get("object") ?? null;
-  const [selection, setSelection] = useState<{ id: string; label?: string; error?: unknown } | null>(null);
-  useEffect(() => {
-    if (objectId === null) return;
-    const controller = new AbortController();
-    getCatalogObject(objectId, controller.signal).then(({ object }) => {
-      if (controller.signal.aborted) return;
-      const table = object.sync_table;
-      setSelection(table && object.id === objectId
-        ? { id: objectId, label: `${table.source_name} / ${table.qualified_table}` }
-        : { id: objectId });
-    }).catch((error) => {
-      if (!controller.signal.aborted) setSelection({ id: objectId, error });
-    });
-    return () => controller.abort();
-  }, [objectId]);
-  const selectedTable = selection?.id === objectId ? selection : null;
-  const setupBlocked = objectId !== null && !selectedTable?.label;
   const { open } = useNotification();
   const { data: canWrite } = useCan({
     resource: ModuleId.channels,
@@ -219,7 +196,7 @@ function ChannelCreate() {
                 {t("common.cancel")}
               </Button>
               <HeaderAction primary>
-                <Button type="submit" form={FORM_ID} size="sm" disabled={setupBlocked} loading={form.submitting}>
+                <Button type="submit" form={FORM_ID} size="sm" loading={form.submitting}>
                   {t("channels.create.submit")}
                 </Button>
               </HeaderAction>
@@ -232,24 +209,11 @@ function ChannelCreate() {
         id={FORM_ID}
         onSubmit={form.onSubmit(async (values) => {
           try {
-            if (setupBlocked) return;
             const description = values.description.trim();
-            let requestId: string | undefined;
-            if (objectId) {
-              const previous = window.history.state?.channelTableSetup;
-              requestId = previous?.objectId === objectId ? previous.requestId : undefined;
-              if (!requestId) {
-                requestId = crypto.randomUUID();
-                window.history.replaceState({
-                  ...window.history.state, channelTableSetup: { objectId, requestId },
-                }, "");
-              }
-            }
             const created = await createChannel({
               name: values.name.trim(),
               description: description ? description : null,
               tags: tagsControl.current?.flush() ?? tagDraft,
-              ...(objectId && requestId ? { table_setup: { object_id: objectId, request_id: requestId, manual_name: t("channels.seed.manual"), read_name: t("channelNodeTypes.read.mirror.label") } } : {}),
             });
             form.markSaved();
             suppressLeaveGuard();
@@ -261,12 +225,6 @@ function ChannelCreate() {
         })}
       >
         <Stack gap="sm">
-          {objectId !== null && (
-            <Text role="status" c={selectedTable?.error ? "red" : undefined}>
-              {selectedTable ? selectedTable.label ?? problemMessage(t, selectedTable.error, t("channels.create.tableUnavailable")) : t("common.loading")}
-            </Text>
-          )}
-          {selectedTable?.label && <Text size="sm">{t("channels.create.setupHelp")}</Text>}
           <IdentityFields form={form} editable />
           <ChannelTagsControl
             ref={tagsControl}
@@ -290,7 +248,7 @@ function ChannelExisting({
   channelId: string;
 }) {
   const t = useTranslate();
-  const { push, replace } = useConsoleNavigation();
+  const { replace } = useConsoleNavigation();
   const searchParams = useSearchParams();
   const { open } = useNotification();
   const stopRunAction = useConsoleMutation();
@@ -305,7 +263,6 @@ function ChannelExisting({
   });
   const [channel, setChannel] = useState<Channel | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
-  const [draftBindings, setDraftBindings] = useState<MirrorBinding[]>([]);
   const [sourceDisplays, setSourceDisplays] = useState<SourceDisplay[]>([]);
   const [baseline, setBaseline] = useState("");
   const [revision, setRevision] = useState(1);
@@ -337,7 +294,7 @@ function ChannelExisting({
   const [publishJobId, setPublishJobId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
-  const [runRequest, setRunRequest] = useState<{ stopAt: string | null; table?: TableSelection } | null>(null);
+  const [runRequest, setRunRequest] = useState<{ stopAt: string | null } | null>(null);
   const [ignoreCheckpoints, setIgnoreCheckpoints] = useState(false);
   const [sessionRun, setSessionRun] = useState<ChannelRunDetail | null>(null);
   const [adoptToken, setAdoptToken] = useState(0);
@@ -358,13 +315,11 @@ function ChannelExisting({
   const publishedNumber = channel?.latest_version?.number ?? null;
   const published = usePublishedChannelVersion(channelId, publishedNumber, reloadToken);
   const publishedGraph = published?.graph ?? null;
-  const { data: canReadMirror } = useCan({ resource: ModuleId.mirrors, action: ModuleAction.show });
   const detailsForm = useConsoleForm<{
     description: string;
     timeout: number | string;
     retryLimit: number | string;
     errorChannelId: string | null;
-    mirrorExecutionUserId: string;
     keepSucceededRuns: boolean;
     keepFailedRuns: boolean;
     keepTestRuns: boolean;
@@ -374,18 +329,9 @@ function ChannelExisting({
       timeout: "",
       retryLimit: "",
       errorChannelId: null,
-      mirrorExecutionUserId: "",
       keepSucceededRuns: true,
       keepFailedRuns: true,
       keepTestRuns: true,
-    },
-    validate: {
-      mirrorExecutionUserId: (value) => {
-        const id = value.trim();
-        return !id || /^[A-Za-z0-9_-]{1,64}$/.test(id)
-          ? null
-          : t("channels.settings.mirrorExecutionUserIdInvalid");
-      },
     },
   });
   const formRef = useRef(form);
@@ -439,7 +385,6 @@ function ChannelExisting({
         arrivalRef.current = true;
         setChannel(channelBody.channel);
         setGraph(graphWithoutUnsetIntegers(draft.graph, types.items));
-        setDraftBindings(draft.mirror_bindings ?? []);
         setSourceDisplays(draft.source_displays ?? []);
         setDraftEpoch((epoch) => epoch + 1);
         setBaseline(JSON.stringify(draft.graph));
@@ -475,21 +420,6 @@ function ChannelExisting({
 
   const writable = mode === "edit" && Boolean(canWrite?.can);
   const runActive = sessionRun != null && !isTerminalRun(sessionRun.run.status);
-  const { data: heldPermissions } = usePermissions<string[]>({});
-  const canVerify = Boolean(canWrite?.can && heldPermissions?.includes("sources:data_read"));
-  const verifyObject = searchParams.get("verifyObject");
-  const verifyNode = searchParams.get("verifyNode");
-  const openedVerification = useRef<string | null>(null);
-  useEffect(() => {
-    if (!verifyObject || !writable || !canVerify || !publishedGraph || runActive) return;
-    if (!published?.mirror_bindings?.some((table) => table.object_id === verifyObject && table.node_ids.includes(verifyNode ?? ""))) return;
-    const key = JSON.stringify([channelId, verifyObject, verifyNode]);
-    if (openedVerification.current === key) return;
-    const node = publishedGraph.nodes.find((item) => item.id === verifyNode && item.type === "read.mirror" && item.config.object_id === verifyObject);
-    if (!node) return;
-    openedVerification.current = key;
-    setRunRequest({ stopAt: null, table: { objectId: verifyObject, nodeId: node.id } });
-  }, [channelId, verifyObject, verifyNode, published, publishedGraph, writable, canVerify, runActive]);
   const draftAccess: DraftAccess = !writable ? "browse" : runActive ? "locked" : "edit";
   const draftEditable = draftAccess === "edit";
   const canStop = Boolean(canWrite?.can || canJobs?.can);
@@ -695,7 +625,6 @@ function ChannelExisting({
       nextGraph = graphWithoutUnsetIntegers(saved.graph, catalog);
       setRevision(saved.draft_revision);
       setGraph(nextGraph);
-      setDraftBindings(saved.mirror_bindings ?? []);
       setSourceDisplays(saved.source_displays ?? []);
       setBaseline(JSON.stringify(nextGraph));
       setAdoptToken((token) => token + 1);
@@ -746,10 +675,8 @@ function ChannelExisting({
 
   const launch = () => {
     const stopAt = runRequest?.stopAt ?? null;
-    const table = runRequest?.table;
-    const targetGraph = table ? publishedGraph : graph;
-    if (!writable || !targetGraph || runActive || (table && !canVerify)) return;
-    const triggers = targetGraph.nodes.filter((node) => node.type.startsWith("trigger."));
+    if (!writable || runActive) return;
+    const triggers = graph.nodes.filter((node) => node.type.startsWith("trigger."));
     if (triggers.length !== 1) {
       notifyError(new RecordInvalid(t("channels.run.needTrigger")), t("channels.run.startFailed"));
       return;
@@ -757,14 +684,14 @@ function ChannelExisting({
     if (!occupyPage()) return;
     void (async () => {
       try {
-        if (!table) await persist();
+        await persist();
       } catch (error) {
         await catchFailure(error, t("channels.save.failed"));
         return;
       }
       let started: Awaited<ReturnType<typeof startRun>>;
       try {
-        started = await startRun(channelId, table ? { target: "published" } : {
+        started = await startRun(channelId, {
           target: "draft",
           ignore_checkpoints: ignoreCheckpoints,
           stop_at_node_id: stopAt,
@@ -774,12 +701,7 @@ function ChannelExisting({
         return;
       }
       try {
-        if (table) {
-          const query = new URLSearchParams({ verifyObject: table.objectId, verifyNode: table.nodeId, run_origin: "edit" });
-          push(`/console/channels/${encodeURIComponent(channelId)}/runs/${encodeURIComponent(started.run.job_id)}?${query}`);
-        } else {
-          await rememberRun(started.run.job_id);
-        }
+        await rememberRun(started.run.job_id);
         setRunRequest(null);
       } catch (error) {
         await catchFailure(error, t("channels.run.loadFailed"));
@@ -819,14 +741,6 @@ function ChannelExisting({
   const showLifecycle = Boolean(canWrite?.can);
   const startPublish = () => {
     if (!showLifecycle) return;
-    const unattended = graph.nodes.some(({ type }) => ["trigger.scheduled", "trigger.inbound", "trigger.error"].includes(type));
-    const readsMirror = graph.nodes.some(({ type, config }) => type === "read.mirror" ||
-      (["read.changes", "volume.changes_dataset"].includes(type) && config.source != null &&
-        typeof config.source === "object" && "kind" in config.source && config.source.kind === "mirror"));
-    if (unattended && readsMirror && !graph.settings.mirror_execution_user_id) {
-      notifyError(new RecordInvalid(t("channels.settings.mirrorExecutionUserRequired")), t("channels.publish.failed"));
-      return;
-    }
     if (!occupyPage()) return;
     void (async () => {
       let saved: Awaited<ReturnType<typeof persist>>;
@@ -910,7 +824,6 @@ function ChannelExisting({
       timeout: graph.settings.run_timeout_sec ?? "",
       retryLimit: graph.settings.run_retry_limit ?? "",
       errorChannelId: graph.settings.error_channel_id,
-      mirrorExecutionUserId: graph.settings.mirror_execution_user_id ?? "",
       keepSucceededRuns: graph.settings.keep_succeeded_runs !== false,
       keepFailedRuns: graph.settings.keep_failed_runs !== false,
       keepTestRuns: graph.settings.keep_test_runs !== false,
@@ -928,7 +841,6 @@ function ChannelExisting({
     timeout: number | string;
     retryLimit: number | string;
     errorChannelId: string | null;
-    mirrorExecutionUserId: string;
     keepSucceededRuns: boolean;
     keepFailedRuns: boolean;
     keepTestRuns: boolean;
@@ -936,7 +848,6 @@ function ChannelExisting({
     form.setFieldValue("description", values.description.trim().slice(0, DESCRIPTION_MAX));
     const next = runTimeoutSec(values.timeout);
     const retryLimit = runRetryLimit(values.retryLimit);
-    const mirrorExecutionUserId = values.mirrorExecutionUserId.trim() || null;
     setGraph((current) =>
       current
         ? {
@@ -946,9 +857,6 @@ function ChannelExisting({
               run_timeout_sec: next,
               run_retry_limit: retryLimit,
               error_channel_id: values.errorChannelId,
-              ...(mirrorExecutionUserId !== null || current.settings.mirror_execution_user_id !== undefined
-                ? { mirror_execution_user_id: mirrorExecutionUserId }
-                : {}),
               keep_succeeded_runs: values.keepSucceededRuns,
               keep_failed_runs: values.keepFailedRuns,
               keep_test_runs: values.keepTestRuns,
@@ -1245,36 +1153,6 @@ function ChannelExisting({
         )}
       />
       <FillColumn>
-        {writable && draftBindings.filter(table => graph.nodes.some(node =>
-          table.node_ids.includes(node.id) && node.config.object_id === table.object_id)).map(table => (
-          <Text size="sm" px="xs" key={table.object_id}>
-            {t("channels.draft.table")} · {table.source_name} / {table.qualified_table}
-          </Text>
-        ))}
-        {published?.mirror_bindings?.length ? (
-          <Stack gap="xs" p="xs" mah="30%" style={{ overflowY: "auto", flexShrink: 0 }}>
-            <Text fw={600}>{t("channels.tableReview.version", { number: published.number })}</Text>
-            {published.mirror_bindings.map((table) => {
-              const read = publishedGraph?.nodes.find((node) => node.type === "read.mirror" && table.node_ids.includes(node.id));
-              const effect = table.publication_effect;
-              return (
-                <Group key={table.object_id} gap="sm">
-                  <Text size="sm" fw={500}>{table.source_name} / {table.qualified_table}</Text>
-                  {effect && <Text size="sm">{t(`channels.tableReceipt.${effect}`)}</Text>}
-                  <Text size="sm">{t(table.copy_published ? "channels.tableCurrent.copy" : `channels.tableCurrent.${table.effect}`)}</Text>
-                  {table.needs_attention && <Text size="sm">{t("channels.tableCurrent.attention")}</Text>}
-                  {canReadMirror?.can && ["shared", "reopen"].includes(table.effect) && (
-                    <ConsoleLink href={`/console/mirrors/${encodeURIComponent(table.mirror_id)}?channel=${encodeURIComponent(channelId)}&version=${published.number}`}>
-                      {t("channels.tableReview.follow")}
-                    </ConsoleLink>
-                  )}
-                  {read && canVerify && <PublishedTableRunAction channelId={channelId} nodeId={read.id} objectId={table.object_id} mode={mode}
-                    onRun={writable && !runActive ? (selected) => setRunRequest({ stopAt: null, table: selected }) : undefined} />}
-                </Group>
-              );
-            })}
-          </Stack>
-        ) : null}
         <LiveStatusAnnouncer
           text={
             runLive.data
@@ -1285,13 +1163,6 @@ function ChannelExisting({
         {runLive.data && !isTerminalRun(runLive.data.run.status) ? (
           <JobStatusBadge status={runLive.data.run.status} freshness={runFreshness} />
         ) : null}
-        {draftEditable && graph.nodes.some((node) => ["trigger.scheduled", "trigger.inbound", "trigger.error"].includes(node.type))
-          && graph.nodes.some((node) => node.type === "read.mirror" ||
-            (["read.changes", "volume.changes_dataset"].includes(node.type) && (node.config.source as { kind?: string } | undefined)?.kind === "mirror")) && (
-          <Button variant="light" onClick={openDescription}>
-            {graph.settings.mirror_execution_user_id ? t("channels.settings.mirrorExecutionUserId") : t("channels.settings.mirrorExecutionUserRequired")}
-          </Button>
-        )}
         <SourceDisplaysProvider displays={sourceDisplays}>
           <ChannelCanvas
             key={draftEpoch}
@@ -1315,18 +1186,15 @@ function ChannelExisting({
       <Modal
         opened={runRequest != null}
         onClose={() => setRunRequest(null)}
-        title={runRequest?.table ? t("channels.verify.run") : runNodeName != null ? t("channels.run.upTo", { node: runNodeName }) : t("channels.run.open")}
+        title={runNodeName != null ? t("channels.run.upTo", { node: runNodeName }) : t("channels.run.open")}
       >
         <Stack gap="sm">
           <Text size="sm">
-            {runRequest?.table ? t("channels.verify.confirm") : runNodeName != null
+            {runNodeName != null
               ? t("channels.run.writesUpTo", { node: runNodeName })
               : t("channels.run.writes")}
           </Text>
-          {runRequest?.table && publishedGraph?.nodes.some((node) =>
-            node.id === runRequest.table?.nodeId && node.config.freshness_policy === "fail"
-          ) && <Text size="sm">{t("channels.verify.policy")}</Text>}
-          {(runRequest?.table ? publishedGraph : graph)?.nodes.some(
+          {graph.nodes.some(
             (node) => node.type === "read.changes" || node.type === "volume.changes_dataset",
           ) ? (
             <>
@@ -1335,12 +1203,12 @@ function ChannelExisting({
                   ? t("channels.run.cursorStays")
                   : t("channels.run.cursorAdvances")}
               </Text>
-              {!runRequest?.table && <Switch
+              <Switch
                 label={t("channels.run.ignoreCheckpoints")}
                 description={t("channels.run.ignoreCheckpointsHint")}
                 checked={ignoreCheckpoints}
                 onChange={(event) => setIgnoreCheckpoints(event.currentTarget.checked)}
-              />}
+              />
             </>
           ) : null}
           <Group justify="flex-end">
@@ -1412,15 +1280,6 @@ function ChannelExisting({
               clearable
               onChange={(next) => detailsForm.setFieldValue("errorChannelId", next)}
             />
-            <RecordPicker
-              editable
-              clearable
-              adapter={userRecordAdapter()}
-              label={t("channels.settings.mirrorExecutionUserId")}
-              description={t("channels.settings.mirrorExecutionUserIdHint")}
-              {...detailsForm.fieldProps("mirrorExecutionUserId")}
-              onChange={(id) => detailsForm.setFieldValue("mirrorExecutionUserId", id ?? "")}
-            />
             <RunKeepingFields
               keepSucceededRuns={detailsForm.values.keepSucceededRuns}
               keepFailedRuns={detailsForm.values.keepFailedRuns}
@@ -1482,13 +1341,6 @@ function ChannelExisting({
                 errorChannelsFailed ? t("channels.settings.errorChannelLoadFailed") : undefined
               }
             />
-            <RecordPicker
-              editable={false}
-              adapter={userRecordAdapter()}
-              label={t("channels.settings.mirrorExecutionUserId")}
-              description={t("channels.settings.mirrorExecutionUserIdHint")}
-              value={graph.settings.mirror_execution_user_id ?? ""}
-            />
             <RunKeepingFields
               keepSucceededRuns={graph.settings.keep_succeeded_runs !== false}
               keepFailedRuns={graph.settings.keep_failed_runs !== false}
@@ -1532,7 +1384,7 @@ function ChannelExisting({
             })
             .catch((error: unknown) => {
               if (error instanceof ApiError &&
-                  (error.code === "CHANNEL_DRAFT_CONFLICT" || error.code === "MIRROR_CONTROL_CONFLICT")) {
+                  error.code === "CHANNEL_DRAFT_CONFLICT") {
                 setPublishReview(null);
                 notifyError(new RecordInvalid(t("channels.publish.reviewChanged")), t("channels.publish.failed"));
                 return;
@@ -1543,15 +1395,6 @@ function ChannelExisting({
         }}
       >
         <Stack gap="xs">
-          {preview?.mirror_bindings?.map((table) => (
-            <Stack key={table.object_id} gap={2}>
-              <Text size="sm" fw={500}>{table.source_name} / {table.qualified_table}</Text>
-              <Text size="sm">{t(table.effect === "reopen" && !preview.mirrors_to_open.some((open) => open.object_id === table.object_id)
-                ? "channels.tableCurrent.reopen" : `channels.tableReview.${table.effect}`)}</Text>
-            </Stack>
-          ))}
-          {preview && preview.mirrors_to_open.some((open) => !preview.mirror_bindings?.some((table) => table.object_id === open.object_id)) &&
-            <Text size="sm">{t("channels.tableReview.request")}</Text>}
           <Text size="sm">{t("channels.publish.runs")}</Text>
           {preview && preview.runs_to_cancel.length > 0 ? (
             <Stack gap={4}>

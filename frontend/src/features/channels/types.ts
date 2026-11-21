@@ -33,7 +33,6 @@ export type GraphSettings = {
   run_timeout_sec: number | null;
   run_retry_limit?: number | null;
   error_channel_id: string | null;
-  mirror_execution_user_id?: string | null;
   /** Absent means keep. A published run uses the version's values. */
   keep_succeeded_runs?: boolean;
   keep_failed_runs?: boolean;
@@ -79,7 +78,6 @@ export type SourceDisplay = {
 };
 
 export type ChannelDraft = {
-  mirror_bindings?: MirrorBinding[];
   draft_revision: number;
   draft_updated_at: string;
   graph: Graph;
@@ -191,22 +189,7 @@ export type TemplatePreviewResult =
       bindings?: TemplatePreviewBinding[];
     };
 
-export type MirrorBinding = {
-  object_id: string;
-  mirror_id: string;
-  source_id: string;
-  source_name: string;
-  qualified_table: string;
-  node_ids: string[];
-  copy_published?: boolean;
-  needs_attention?: boolean;
-  current_reference?: boolean | null;
-  publication_effect?: "first_open" | "reopen" | "shared" | "request" | null;
-  effect: "first_open" | "reopen" | "shared";
-};
-
 export type ChannelVersion = {
-  mirror_bindings?: MirrorBinding[];
   channel_id: string;
   number: number;
   graph?: Graph;
@@ -217,9 +200,7 @@ export type ChannelVersion = {
 };
 
 export type Confirmation = {
-  mirror_bindings?: MirrorBinding[];
   draft_revision: number;
-  mirrors_to_open: { source_id: string; object_id: string; mirror_id: string }[];
   runs_to_cancel: { job_id: string; version: number; started_at: string }[];
   missing_run_timeout: boolean;
 };
