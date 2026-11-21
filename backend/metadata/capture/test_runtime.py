@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import httpx
@@ -13,6 +14,7 @@ from backend.metadata.capture.authority import SignedAuthority
 
 from backend.core.config import get_settings
 from backend.core.time import utc_now
+from backend.metadata.capture import control
 from backend.metadata.capture.control import AUTHORITY_KEYS, capture_status
 from backend.metadata.capture.runtime import CaptureRuntime, CommandJournal, RuntimeBlocked
 from backend.metadata.capture.runtime_adapters import ConnectLifecycle, ReadinessSignals, STOP_PROOFS
@@ -133,7 +135,7 @@ def managed_command(monkeypatch, request):
     reset_source_store()
     request.addfinalizer(get_settings.cache_clear)
     request.addfinalizer(reset_source_store)
-    cmd = command()
+    cmd = {**command(), "published_scope": []}
     store = get_source_store()
     now = utc_now()
     store.create_source(SourceRecord(
@@ -143,7 +145,7 @@ def managed_command(monkeypatch, request):
     ))
     store.capture_bindings[cmd["source_id"]] = {
         **{key: cmd[key] for key in AUTHORITY_KEYS}, "desired": "stopped",
-        "stop_ack": None, "observed_at": None, "applied_revision": None,
+        "stop_ack": None, "observed_at": None, "applied_revision": None, "published_scope": [],
     }
     store.capture_operations[cmd["operation_id"]] = {"command": cmd, "evidence": None}
     return cmd
@@ -243,8 +245,18 @@ def test_running_state_requires_signed_start_readiness(phase, failed_check, read
         http.client.close()
 
 
-def test_real_durable_intent_stop_recovers_response_loss_without_second_mutation(tmp_path, managed_command):
+@pytest.mark.parametrize("historical_scope", [False, True], ids=["empty-scope", "absent-scope"])
+def test_real_durable_intent_stop_recovers_response_loss_without_second_mutation(
+    tmp_path, managed_command, historical_scope, monkeypatch,
+):
     cmd = managed_command
+    store = get_source_store()
+    binding = store.capture_bindings[cmd["source_id"]]
+    if historical_scope:
+        cmd.pop("published_scope")
+        binding.pop("published_scope")
+    projections = []
+    monkeypatch.setattr(control, "record_mirror_stop_evidence", lambda *args: projections.append(args))
     external = {"stopped": False, "mutations": 0}
 
     def handler(request):
@@ -273,6 +285,13 @@ def test_real_durable_intent_stop_recovers_response_loss_without_second_mutation
     assert external["mutations"] == 1
     assert capture_status(cmd["source_id"])["availability"] == "disabled"
     assert runtime(journal).poll_source(cmd["source_id"]) == "idle"
+    assert projections == []
+    with control.source_control_transaction(cmd["source_id"]) as (session, source):
+        control.record_source_intent(
+            session, source, replace(source, capture_revision=source.capture_revision + 1),
+            actor_user_id=None, actor_token_id=None,
+        )
+    assert capture_status(cmd["source_id"])["control"]["stop_ack"] is None
     journal.close()
     http.client.close()
 

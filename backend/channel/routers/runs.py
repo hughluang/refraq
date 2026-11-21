@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.admin.deps import get_actor_token_id, require_permission
+from backend.admin.errors import AuthForbidden
 from backend.admin.user_store import UserRecord, get_user_store
 from backend.channel.dataset_registry import get_dataset_store
 from backend.channel.errors import (
@@ -19,6 +20,7 @@ from backend.channel.errors import (
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import NodeType
 from backend.channel.run_store import (
+    ChannelRunRecord,
     ContainerRoundRecord,
     NodeExecutionRecord,
     get_run_store,
@@ -271,7 +273,7 @@ def http_list_executions(
     status: Literal["running", "succeeded", "failed", "skipped", "cancelled"] | None = None,
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> dict[str, Any]:
-    _owned(channel_id, job_id)
+    _require_run_payload(channel_id, job_id)
     items, total = get_run_store().query_executions(
         job_id,
         node_id=node_id,
@@ -299,7 +301,7 @@ def http_execution_output(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
-    _owned(channel_id, job_id)
+    _require_run_payload(channel_id, job_id)
     record = get_run_store().get_execution(job_id, seq)
     if record is None:
         raise ChannelRunNotFound()
@@ -317,7 +319,7 @@ def http_execution_rounds(
     _actor: UserRecord = Depends(require_permission("channel:read")),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> dict[str, Any]:
-    run = _owned(channel_id, job_id)
+    run = _require_run_payload(channel_id, job_id)
     record = get_run_store().get_execution(job_id, seq)
     if record is None:
         raise ChannelRunNotFound()
@@ -345,7 +347,7 @@ def http_dataset_rows(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
     """Page dataset rows. This read does not consult the capacity ceiling."""
-    _owned(channel_id, job_id)
+    _require_run_payload(channel_id, job_id)
     record = get_dataset_store().get(dataset_id)
     if record is None:
         raise ChannelDatasetUnavailable("not_found")
@@ -383,7 +385,7 @@ def http_preview_template(
     body: TemplatePreviewRequest,
     _actor: UserRecord = Depends(require_permission("channel:write")),
 ) -> dict[str, Any]:
-    _owned(channel_id, job_id)
+    _require_run_payload(channel_id, job_id)
     return preview_template(
         channel_id=channel_id,
         job_id=job_id,
@@ -407,7 +409,7 @@ def http_node_sample(
     catalog: Sequence[NodeType] = Depends(get_node_catalog),
 ) -> dict[str, Any]:
     """Read a Node Sample. The request executes no node and writes nothing."""
-    _owned(channel_id, job_id)
+    _require_run_payload(channel_id, job_id)
     return node_sample(
         channel_id=channel_id,
         job_id=job_id,
@@ -479,12 +481,18 @@ def _scope_arg(scope: list[ScopeLevelIn] | None) -> list[dict[str, Any]] | None:
     return [item.model_dump() for item in scope]
 
 
-def _owned(channel_id: str, job_id: str) -> Any:
+def _owned(channel_id: str, job_id: str) -> ChannelRunRecord:
     record = get_run_store().get_run(job_id)
     if record is None or record.channel_id != channel_id:
         raise ChannelRunNotFound()
     return record
 
+
+def _require_run_payload(channel_id: str, job_id: str) -> ChannelRunRecord:
+    run = _owned(channel_id, job_id)
+    if get_job_store().get(job_id) is None:
+        raise AuthForbidden()
+    return run
 
 
 def _snapshot_nodes(graph: Any) -> list[dict[str, str]]:

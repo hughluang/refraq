@@ -106,8 +106,9 @@ def _advance_intent(session, state, source, published_scope):
 
 
 def _retire_stop_evidence(session, state):
-    if state.get("stop_ack") is not None:
-        clear_mirror_stop_evidence(session, state["published_scope"], state["stop_ack"]["operation_id"])
+    scope = state.get("published_scope")
+    if scope and state.get("stop_ack") is not None:
+        clear_mirror_stop_evidence(session, scope, state["stop_ack"]["operation_id"])
 
 
 def reconcile_published_scope(source_id):
@@ -504,8 +505,9 @@ def record_applied_evidence(
         state["observed_at"] = evidence["observed_at"]
         state["stop_ack"] = evidence if command["kind"] == "stop" else None
         save_binding(session, state)
+        projected_scope = command.get("published_scope")
         if (command["kind"] == "stop" and state["desired"] == "stopped"
                 and state["runtime_instance_id"] and state["owner_epoch"] > 0
-                and command["published_scope"] == read_published_scope(session, source_id)):
+                and projected_scope and projected_scope == read_published_scope(session, source_id)):
             record_mirror_stop_evidence(session, command, evidence)
         return evidence
