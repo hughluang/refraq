@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +15,6 @@ os.environ.pop("DATABASE_URL", None)
 os.environ.pop("REDIS_URL", None)
 os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
-from backend.admin.audit_store import get_audit_store  # noqa: E402
 from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
@@ -725,39 +724,7 @@ def test_search_with_no_visible_source_is_an_empty_page(world: _World) -> None:
     assert columns.json()["items"] == []
 
 
-def test_catalog_detail_offers_sync_for_visible_supported_tables(world):
-    world.login("viewer")
-    eligible = world.client.get(f"/objects/{world.object_a}").json()["object"]
-    assert eligible["sync_table"] == {"source_name": "src-a", "qualified_table": "public.orders"}
-    procedure = world.client.get(f"/objects/{world.procedure_a}").json()["object"]
-    assert procedure["sync_table"] is None
-    assert world.client.get(f"/objects/{world.object_b}").status_code == 404
-
-    world.login("steward")
-    for path, changes in [
-        ("semantics", {"business_name": "Orders"}),
-        ("columns/semantics", {"columns": [{"column_name": "id", "business_name": "Identifier"}]}),
-    ]:
-        saved = world.client.patch(f"/objects/{world.object_a}/{path}", json=changes)
-        assert saved.status_code == 200, saved.text
-        assert saved.json()["object"]["sync_table"] == eligible["sync_table"]
-
-
-@pytest.mark.parametrize("field", ["manual_name", "read_name"])
-def test_table_setup_rejects_blank_node_name(world, field):
-    world.login("viewer")
-    body = {"name": "Orders", "table_setup": {
-        "object_id": world.object_a, "request_id": "df287872-c9f9-4f70-bf45-11719a430a99", field: "   ",
-    }}
-    assert world.client.post("/channels", json=body).status_code == 422
-    body["table_setup"][field] = "  Verify orders  "
-    created = world.client.post("/channels", json=body)
-    assert created.status_code == 201
-    draft = world.client.get(f"/channels/{created.json()['channel']['id']}/draft").json()
-    assert "Verify orders" in [node["name"] for node in draft["graph"]["nodes"]]
-
-
-def test_write_only_steward_can_edit_without_sync_table(world):
+def test_write_only_steward_can_edit_semantics(world):
     role = create_role(get_role_store(), key="semantics_writer", name="Semantics writer",
                        permissions=["console:access", "metadata:write"])
     writer = _user("semantics_writer", role.id)
@@ -765,52 +732,7 @@ def test_write_only_steward_can_edit_without_sync_table(world):
     world.login("semantics_writer")
     response = world.client.patch(f"/objects/{world.object_a}/semantics", json={"business_name": "Orders"})
     assert response.status_code == 200, response.text
-    assert response.json()["object"]["sync_table"] is None
-
-
-def test_create_channel_from_table_retries_after_later_edit(world):
-    world.login("viewer")
-    body = {"name": "Orders workflow", "tags": {"names": ["Orders"]}, "table_setup": {
-        "object_id": world.object_a, "request_id": "df287872-c9f9-4f70-bf45-11719a430a99",
-    }}
-    created = world.client.post("/channels", json=body)
-    assert created.status_code == 201, created.text
-    channel_id = created.json()["channel"]["id"]
-    url = f"/channels/{channel_id}/draft"
-    graph = world.client.get(url).json()["graph"]
-    trigger, read = graph["nodes"]
-    assert trigger["type"] == "trigger.manual"
-    assert read["type"] == "read.mirror"
-    assert read["config"] == {"object_id": world.object_a, "freshness_policy": "fail"}
-    edge, = graph["edges"]
-    assert edge["source"] == {"node_id": trigger["id"], "port": "main"}
-    assert edge["target"] == {"node_id": read["id"], "port": "main"}
-    read["name"] = "Verify amount"
-    assert world.client.put(url, json={"base_revision": 1, "graph": graph}).is_success
-    assert world.client.post("/channels", json=body).json()["channel"]["id"] == channel_id
-    assert world.client.get(url).json()["graph"]["nodes"][1]["name"] == "Verify amount"
-    assert world.client.get("/mirrors").json()["items"] == []
-    graph.update(nodes=[trigger], edges=[])
-    saved = world.client.put(url, json={"base_revision": 2, "graph": graph})
-    assert saved.is_success, saved.text
-    published = world.client.post(f"/channels/{channel_id}/publish", json={"draft_revision": saved.json()["draft_revision"]})
-    assert published.is_success, published.text
-    current = world.client.get(f"/channels/{channel_id}").json()
-    assert current["channel"]["latest_version"]["number"] == 1
-    assert world.client.post("/channels", json=body).json() == current
-    for action in ("channel.create", "tags.replace"):
-        events, _ = get_audit_store().list_events(action=action, resource_type="channel")
-        assert sum(event.resource_id == channel_id for event in events) == 1
-    world.login("steward")
-    other = world.client.post("/channels", json=body)
-    assert other.status_code == 201 and other.json()["channel"]["id"] != channel_id
-    world.login("viewer")
-    apply_structure_snapshot(source=require_source(world.source_a), job_id="job_removed",
-                             collected=[], schema_scope=None)
-    assert world.client.get(f"/objects/{world.object_a}").json()["object"]["sync_table"] is None
-    for object_id in (world.object_a, world.object_b, world.procedure_a):
-        body["table_setup"]["object_id"] = object_id
-        assert world.client.post("/channels", json=body).status_code == 404
+    assert response.json()["object"]["business_name"] == "Orders"
 
 
 def test_catalog_source_discovery_without_sources_administration(world: _World) -> None:
@@ -823,35 +745,3 @@ def test_catalog_source_discovery_without_sources_administration(world: _World) 
     assert world.client.get("/catalog/sources", params={"source_id": world.source_b}).json()["total"] == 0
     world.login("hidden")
     assert world.client.get("/catalog/sources").json()["total"] == 0
-
-
-def test_mirror_picker_filters_visible_engines_and_catalog_presence_before_paging(world: _World) -> None:
-    source = require_source(world.source_a)
-    mysql = get_source_store().create_source(replace(source, id="src_mysql", engine="mysql", key="mysql"))
-    create_membership(subject_type="user", subject_id=world.users["viewer"], target=mysql.id, level="viewer")
-    same_name = "page_orders"
-    apply_structure_snapshot(
-        source=mysql, job_id="mysql_structure", schema_scope=None,
-        collected=[_obj(object_id="mysql_orders", name=same_name, source_id=mysql.id, source_key=mysql.key, engine="mysql")],
-    )
-
-    def pg_table(name: str, object_type: str = "table") -> CatalogObjectRecord:
-        return _obj(object_id=name, name=name, source_id=source.id, source_key=source.key, object_type=object_type)
-
-    present = [pg_table(same_name + "_a"), pg_table(same_name + "_b")]
-    view = pg_table(same_name + "_view", object_type="view")
-    apply_structure_snapshot(source=source, job_id="pg_before", schema_scope=None,
-                             collected=[*present, view, pg_table(same_name)])
-    apply_structure_snapshot(source=source, job_id="pg_after", schema_scope=None, collected=[*present, view])
-    world.login("viewer")
-    endpoint = "/catalog/objects/search"
-    params = {"q": same_name, "limit": 1, "mirror_eligible": "true"}
-    assert any(item["source_id"] == mysql.id
-               for item in world.client.get(endpoint, params={"q": same_name}).json()["items"])
-    for offset, names, more in [(0, [same_name + "_a"], True), (1, [same_name + "_b"], False), (2, [], False)]:
-        response = world.client.get(endpoint, params={**params, "offset": offset})
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert [(item["source_id"], item["name"]) for item in body["items"]] == [(source.id, name) for name in names]
-        assert body["truncated"] is more
-    assert world.client.get(endpoint, params={**params, "source_id": mysql.id}).json()["items"] == []

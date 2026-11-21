@@ -444,7 +444,6 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "trigger.manual",
         "trigger.scheduled",
         "read.changes",
-        "read.mirror",
         "read.source_query",
         "read.sql",
         "transform.code",
@@ -3071,54 +3070,61 @@ def _usage_row(
     )
 
 
-def test_review_identifies_distinct_tables_and_rechecks_source_visibility(client):
-    from backend.metadata.mirrors import service as mirrors
-    from backend.metadata.mirrors.store import MemoryMirrorStore
+@pytest.mark.parametrize(
+    ("node_type", "config"),
+    [
+        ("read.mirror", {"object_id": "obj_orders"}),
+        ("read.changes", {"source": {"kind": "mirror", "mirror_id": "mir_orders"}}),
+        ("volume.changes_dataset", {"source": {"kind": "mirror", "mirror_id": "mir_orders"}}),
+    ],
+)
+def test_draft_rejects_withdrawn_mirror_inputs(client, node_type, config):
+    channel = _channel(client, "Orders")
+    path = f"/channels/{channel}/draft"
+    draft = client.get(path).json()
+    graph = dict(TRIGGER_GRAPH, nodes=[
+        dict(TRIGGER_GRAPH["nodes"][0], type=node_type, config=config),
+    ])
+    saved = client.put(path, json={"base_revision": draft["draft_revision"], "graph": graph})
+    assert saved.status_code == 422, saved.text
+    assert client.get(path).json() == draft
 
-    registry = MemoryMirrorStore()
-    mirrors.bind_management(store=registry)
-    try:
-        nodes = []
-        for suffix, name in [("a", "Sales"), ("b", "Returns")]:
-            source = _registered_source(client, key=suffix, name=name)
-            registry.bindings[suffix] = dict(
-                source_id=source["id"], source_name=name, source_key=suffix,
-                qualified_table="public.orders", object_id=suffix, table_identity=suffix,
-            )
-        for number, object_id in enumerate(["a", "b", "a"]):
-            nodes.append(dict(TRIGGER_GRAPH["nodes"][0], type="read.mirror", id=f"nd_{number}",
-                              ref=f"orders_{number}", config={"object_id": object_id, "freshness_policy": "fail"}))
-        channel = _channel(client, "Order review")
-        _save_draft(client, channel, dict(TRIGGER_GRAPH, nodes=nodes))
-        path = f"/channels/{channel}/publish/preview"
-        review = client.post(path)
-        assert review.status_code == 200, review.text
-        first, second = review.json()["mirror_bindings"]
-        assert (first["source_name"], first["qualified_table"], first["effect"], first["node_ids"]) == (
-            "Sales", "public.orders", "first_open", ["nd_0", "nd_2"])
-        assert second["source_name"] == "Returns"
-        mid = first["mirror_id"]
-        registry.mirrors[mid] = dict(registry.bindings["a"], id=mid, enabled=True, status="waiting")
-        assert client.post(path).json()["mirror_bindings"][0]["effect"] == "shared"
-        registry.mirrors[mid]["enabled"] = False
-        assert client.post(path).json()["mirror_bindings"][0]["effect"] == "reopen"
-        writer = _writer_client("unassigned_author")
-        try:
-            denied = writer.post(path)
-            assert denied.status_code == 403
-            assert "Sales" not in denied.text
-            assert writer.get(f"/channels/{channel}/draft").json()["mirror_bindings"] == []
-            draft = client.get(f"/channels/{channel}/draft").json()
-            draft["graph"]["nodes"][0]["config"]["freshness_policy"] = "continue"
-            saved = writer.put(f"/channels/{channel}/draft", json={
-                "base_revision": draft["draft_revision"], "graph": draft["graph"],
-            })
-            assert saved.status_code == 403
-        finally:
-            writer.__exit__(None, None, None)
-        del registry.bindings["a"]
-        assert client.post(path).status_code == 404
-        remaining = client.get(f"/channels/{channel}/draft").json()["mirror_bindings"]
-        assert [table["source_name"] for table in remaining] == ["Returns"]
-    finally:
-        mirrors.bind_management()
+
+def test_create_rejects_withdrawn_table_setup(client):
+    response = client.post("/channels", json={
+        "name": "Orders",
+        "table_setup": {
+            "object_id": "obj_orders",
+            "request_id": "df287872-c9f9-4f70-bf45-11719a430a99",
+        },
+    })
+    assert response.status_code == 422, response.text
+
+
+def test_publish_rejects_withdrawn_confirmation(client):
+    channel = _channel(client, "Orders")
+    revision = _save_draft(client, channel, TRIGGER_GRAPH)
+    path = f"/channels/{channel}/publish"
+    body = {"draft_revision": revision}
+    rejected = client.post(path, json={**body, "mirrors_to_open": []})
+    assert rejected.status_code == 422, rejected.text
+
+    preview = client.post(f"{path}/preview")
+    assert preview.status_code == 200, preview.text
+    assert preview.json() == {
+        **body, "runs_to_cancel": [], "missing_run_timeout": True,
+    }
+    response = client.post(path, json=body)
+    assert response.status_code == 201, response.text
+    assert response.json()["version"]["number"] == 1
+    assert "mirror_bindings" not in response.json()["version"]
+
+
+def test_draft_rejects_withdrawn_execution_identity(client):
+    channel = _channel(client, "Orders")
+    path = f"/channels/{channel}/draft"
+    graph = dict(TRIGGER_GRAPH, settings={
+        **TRIGGER_GRAPH["settings"], "mirror_execution_user_id": "usr_example",
+    })
+    rejected = client.put(path, json={"base_revision": 1, "graph": graph})
+    assert rejected.status_code == 422, rejected.text

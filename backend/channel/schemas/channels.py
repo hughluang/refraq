@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import keyword
 import re
-from uuid import UUID
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -117,7 +116,6 @@ class GraphSettingsIn(BaseModel):
     run_timeout_sec: int | None = None
     run_retry_limit: int | None = None
     error_channel_id: str | None = None
-    mirror_execution_user_id: str | None = Field(default=None, pattern=_ID_RE.pattern)
     keep_succeeded_runs: bool = True
     keep_failed_runs: bool = True
     keep_test_runs: bool = True
@@ -242,22 +240,12 @@ class ChannelTagAssignmentIn(BaseModel):
     names: list[str] = Field(default_factory=list)
 
 
-class TableSetupIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    object_id: str = Field(min_length=1, max_length=128)
-    request_id: UUID
-    manual_name: NodeName = "Run manually"
-    read_name: NodeName = "Read current rows"
-
-
 class ChannelCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
     description: str | None = None
     tags: ChannelTagAssignmentIn | None = None
-    table_setup: TableSetupIn | None = None
 
     @field_validator("name")
     @classmethod
@@ -336,19 +324,10 @@ class DraftPutRequest(BaseModel):
     graph: GraphIn
 
 
-class MirrorOpenConfirmation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source_id: str = Field(min_length=1)
-    object_id: str = Field(min_length=1)
-    mirror_id: str = Field(min_length=1)
-
-
 class PublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     draft_revision: int = Field(ge=1)
-    mirrors_to_open: list[MirrorOpenConfirmation] | None = None
 
 
 class ValidateRequest(BaseModel):
@@ -412,27 +391,12 @@ class SourceDisplayOut(BaseModel):
         return presented
 
 
-class MirrorBindingOut(BaseModel):
-    source_id: str
-    source_name: str
-    qualified_table: str
-    object_id: str
-    mirror_id: str
-    node_ids: list[str]
-    effect: Literal["first_open", "reopen", "shared"]
-    copy_published: bool
-    needs_attention: bool
-    current_reference: bool | None = None
-    publication_effect: Literal["first_open", "reopen", "shared", "request"] | None = None
-
-
 class DraftResponse(BaseModel):
     """Stored draft. ``graph`` is the stored document, not re-checked as ``GraphIn``."""
 
     draft_revision: int
     draft_updated_at: Instant
     graph: dict[str, Any]
-    mirror_bindings: list[MirrorBindingOut] = Field(default_factory=list)
     source_displays: list[SourceDisplayOut] = Field(default_factory=list)
 
 
@@ -471,9 +435,7 @@ class RunToCancelOut(BaseModel):
 
 
 class ConfirmationOut(BaseModel):
-    mirror_bindings: list[MirrorBindingOut] = Field(default_factory=list)
     draft_revision: int
-    mirrors_to_open: list[dict[str, Any]]
     runs_to_cancel: list[RunToCancelOut]
     missing_run_timeout: bool
 
@@ -490,7 +452,6 @@ class VersionOut(VersionSummaryOut):
     """Stored version. ``graph`` is the stored document, not re-checked as ``GraphIn``."""
 
     graph: dict[str, Any]
-    mirror_bindings: list[MirrorBindingOut] = Field(default_factory=list)
     source_displays: list[SourceDisplayOut] = Field(default_factory=list)
 
 

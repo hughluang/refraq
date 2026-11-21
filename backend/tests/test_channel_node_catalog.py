@@ -22,7 +22,6 @@ _NODES_ROOT = Path(__file__).resolve().parents[1] / "channel" / "nodes"
 
 # Literals from the output-view contract, not derived from the node modules.
 _OUTPUT_VIEWS = {
-    "read.mirror": OutputView(kind="rows", rows="rows"),
     "trigger.error": OutputView(kind="record"),
     "trigger.inbound": OutputView(kind="record"),
     "trigger.manual": OutputView(kind="record"),

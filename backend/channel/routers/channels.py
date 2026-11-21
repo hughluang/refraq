@@ -75,8 +75,6 @@ from backend.channel.service import (
     set_channel_active,
     publish_channel,
     referenced_source_displays,
-    mirror_bindings,
-    version_mirror_bindings,
     save_draft,
     validate_draft,
 )
@@ -125,7 +123,6 @@ def _draft_out(record: ChannelRecord, user_id: str) -> DraftResponse:
         draft_updated_at=record.draft_updated_at,
         graph=record.draft_graph,
         source_displays=referenced_source_displays(user_id, record.draft_graph),
-        mirror_bindings=mirror_bindings(user_id, record.draft_graph),
     )
 
 
@@ -153,7 +150,6 @@ def _version_out(
         published_by_name=summary.published_by_name,
         graph=record.graph,
         source_displays=referenced_source_displays(user_id, record.graph),
-        mirror_bindings=version_mirror_bindings(user_id, record),
     )
 
 
@@ -303,10 +299,7 @@ def http_create_channel(
         actor_token_id=actor_token_id,
         tag_ids=list(tags.tag_ids) if tags is not None else [],
         names=list(tags.names) if tags is not None else [],
-        table_setup=body.table_setup,
     )
-    if body.table_setup is not None:
-        return ChannelResponse(channel=_channel_out(*get_channel(record.id)))
     return ChannelResponse(channel=_channel_out(record, None))
 
 
@@ -530,7 +523,7 @@ def http_preview_publish(
     channel_id: str,
     user: UserRecord = Depends(require_permission("channel:write")),
 ) -> ConfirmationOut:
-    return ConfirmationOut.model_validate(preview_publish(channel_id, user.id))
+    return ConfirmationOut.model_validate(preview_publish(channel_id))
 
 
 @router.post(
@@ -548,7 +541,6 @@ def http_publish(
     version, confirmation = publish_channel(
         channel_id=channel_id,
         draft_revision=body.draft_revision,
-        mirrors_to_open=None if body.mirrors_to_open is None else [item.model_dump() for item in body.mirrors_to_open],
         actor_user_id=user.id,
         actor_token_id=actor_token_id,
         permissions=resolve_user_permissions(user, roles),

@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
-from backend.metadata.errors import CatalogObjectNotFound
 
 from backend.admin.audit import persist_audit_event
 from backend.admin.errors import AuthForbidden
@@ -18,7 +16,7 @@ from backend.channel.errors import (
     ChannelRequestInvalid,
     ChannelVersionNotFound,
 )
-from backend.channel.graph import validate
+from backend.channel.graph import validate, withdrawn_input_problems
 from backend.channel.checkpoints import get_checkpoint_store
 from backend.channel.inbound_paths import (
     get_inbound_path_store,
@@ -27,16 +25,9 @@ from backend.channel.inbound_paths import (
 )
 from backend.channel.ids import new_channel_id
 from backend.channel.nodes import list_node_types
-from backend.channel.mirror_reads import history_mirror_ids, object_ids, authorize_graph, mirror_graph
-from backend.metadata.mirrors.service import (
-    catalog_sync_table, current_version_mirrors, ensure_open_intent, publication_effects,
-    reconcile_references, resolve_existing_mirror_binding, resolve_object_binding,
-)
-from backend.core.errors import AppError
 from backend.channel.nodes.spec import Problem
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import get_run_store
-from backend.channel.schemas.channels import TableSetupIn
 from backend.channel.schedules import (
     cancel_channel_jobs,
     owner_ref_for,
@@ -88,20 +79,6 @@ __all__ = [
 ]
 
 
-def _table_graph(object_id: str, manual_name: str, read_name: str) -> dict:
-    graph = empty_graph()
-    graph["nodes"] = [
-        {"id": "nd_manual", "ref": "run_manually", "type": "trigger.manual", "name": manual_name,
-         "position": {"x": 0, "y": 0}, "config": {}, "on_error": "stop", "retry": None},
-        {"id": "nd_read", "ref": "read_current_rows", "type": "read.mirror", "name": read_name,
-         "position": {"x": 320, "y": 0}, "config": {"object_id": object_id, "freshness_policy": "fail"},
-         "on_error": "stop", "retry": None},
-    ]
-    graph["edges"] = [{"id": "edge_read", "source": {"node_id": "nd_manual", "port": "main"},
-                       "target": {"node_id": "nd_read", "port": "main"}}]
-    return graph
-
-
 def create_channel(
     *,
     name: str,
@@ -110,24 +87,14 @@ def create_channel(
     actor_token_id: str | None,
     tag_ids: list[str] | None = None,
     names: list[str] | None = None,
-    table_setup: TableSetupIn | None = None,
 ) -> ChannelRecord:
-    if table_setup is None:
-        channel_id = new_channel_id()
-        graph = empty_graph()
-    else:
-        if catalog_sync_table(table_setup.object_id, user_id=actor_user_id) is None:
-            raise CatalogObjectNotFound()
-        request_key = f"refraq/table/{actor_user_id}/{table_setup.object_id}/{table_setup.request_id}"
-        channel_id = "chn_" + uuid5(NAMESPACE_URL, request_key).hex
-        graph = _table_graph(table_setup.object_id, table_setup.manual_name, table_setup.read_name)
     now = utc_now()
     record = ChannelRecord(
-        id=channel_id,
+        id=new_channel_id(),
         name=name,
         description=description,
         active=False,
-        draft_graph=graph,
+        draft_graph=empty_graph(),
         draft_revision=1,
         draft_updated_at=now,
         created_at=now,
@@ -159,7 +126,7 @@ def create_channel(
             session=session,
         )
 
-    return get_channel_store().create(record, replay_existing=table_setup is not None, after=_bind)
+    return get_channel_store().create(record, after=_bind)
 
 
 def _tag_subject_ids(tag_ids: list[str] | None) -> frozenset[str] | None:
@@ -394,12 +361,7 @@ def delete_channel(
     get_inbound_path_store().withdraw_channel(channel_id)
     cancel_channel_jobs(channel_id)
 
-    def _clear(session: Any, latest: ChannelVersionRecord | None) -> None:
-        if latest and mirror_graph(latest.graph):
-            if session is None:
-                raise ChannelRequestInvalid("Mirror withdrawal requires a SQL transaction")
-            reconcile_references(session, channel_id=channel_id,
-                                 channel_version=latest.number + 1, object_ids=[])
+    def _clear(session: Any) -> None:
         clear_assignment(kind=KIND_CHANNEL, subject_id=channel_id, session=session)
 
     if not get_channel_store().delete(channel_id, after=_clear):
@@ -430,6 +392,9 @@ def save_draft(
     current = _require(channel_id)
     if current.draft_revision != base_revision:
         raise ChannelDraftConflict()
+    problems = withdrawn_input_problems(graph)
+    if problems:
+        raise ChannelGraphInvalid(problems[0].detail, problems=problems)
     require_draft_permissions(current.draft_graph, graph, permissions)
     _require_draft_source_levels(current.draft_graph, graph, actor_user_id)
     saved = get_channel_store().replace_draft(
@@ -453,9 +418,9 @@ def validate_draft(channel_id: str, graph: Mapping[str, Any]) -> list[Problem]:
     return validate(graph, ChannelReferenceResolver(channel_id))
 
 
-def preview_publish(channel_id: str, user_id: str) -> dict[str, Any]:
+def preview_publish(channel_id: str) -> dict[str, Any]:
     record = _require(channel_id)
-    return _confirmation(record, user_id)
+    return _confirmation(record)
 
 
 def publish_channel(
@@ -465,7 +430,6 @@ def publish_channel(
     actor_user_id: str,
     actor_token_id: str | None,
     permissions: Sequence[str] = (),
-    mirrors_to_open: list[dict[str, str]] | None = None,
 ) -> tuple[ChannelVersionRecord, dict[str, Any]]:
     record = _require(channel_id)
     if record.draft_revision != draft_revision:
@@ -477,46 +441,13 @@ def publish_channel(
     if errors:
         raise ChannelGraphInvalid(errors[0].detail, problems=errors)
     require_inbound_publish(channel_id, record.draft_graph)
-    confirmation = _confirmation(record, actor_user_id)
-    if object_ids(record.draft_graph) and mirrors_to_open is None:
-        raise ChannelRequestInvalid("Mirror publication requires explicit open confirmation")
-
-    def _publish_mirrors(session: Any, version: ChannelVersionRecord, previous: ChannelVersionRecord | None) -> None:
-        ids = object_ids(version.graph)
-        if not mirror_graph(version.graph) and not (previous and mirror_graph(previous.graph)):
-            return
-        if session is None:
-            raise ChannelRequestInvalid("Mirror publication requires a SQL transaction")
-        if mirror_graph(version.graph):
-            authorize_graph(version.graph, actor_user_id, session=session)
-            selected = (version.graph.get("settings") or {}).get("mirror_execution_user_id")
-            unattended = any(node.get("type") in {"trigger.scheduled", "trigger.inbound", "trigger.error"}
-                             for node in version.graph.get("nodes", []))
-            if unattended and selected is None:
-                raise ChannelRequestInvalid("Unattended mirror graphs require an execution identity")
-            if selected is not None:
-                authorize_graph(version.graph, selected, session=session)
-        ensure_open_intent(
-            session, operation_id=f"channel:{channel_id}:{version.number}",
-            channel_id=channel_id, channel_version=version.number, object_ids=ids,
-            existing_mirror_ids=history_mirror_ids(version.graph),
-            confirmed_mirrors_to_open=mirrors_to_open or [],
-        )
-
+    confirmation = _confirmation(record)
     version = get_channel_store().publish_version(
         channel_id,
         draft_revision=draft_revision,
         published_at=utc_now(),
         published_by_user_id=actor_user_id,
-        after=_publish_mirrors,
     )
-    if confirmation.get("mirror_bindings"):
-        effects = publication_effects(channel_id=channel_id, version=version.number)
-        for table in confirmation["mirror_bindings"]:
-            effect = effects.get(table["object_id"])
-            if effect is not None and effect != "request":
-                table["effect"] = effect
-    confirmation["draft_revision"] = draft_revision
     sync_published_schedule(record, version.graph)
     sync_published_inbound_path(channel_id, version.graph)
     _audit(
@@ -683,7 +614,6 @@ def _require_draft_source_levels(
         if not _guarded_changed(previous.get(str(node.get("id"))), node):
             continue
         _require_source_level(node, user_id)
-        mirror_bindings(user_id, {"nodes": [node]}, required=True)
 
 
 def _require_publish_source_levels(graph: Mapping[str, Any], user_id: str) -> None:
@@ -726,67 +656,11 @@ def _require(channel_id: str) -> ChannelRecord:
     return record
 
 
-def mirror_bindings(user_id: str, graph: Mapping[str, Any], *, required: bool = False):
-    """Project verified table identities for the viewer of this graph."""
-    references = {}
-    for node in _graph_nodes(graph):
-        config = _node_config(node)
-        source = config.get("source")
-        if node.get("type") == "read.mirror":
-            key = ("object", config.get("object_id"))
-        elif (node.get("type") in {"read.changes", "volume.changes_dataset"}
-              and isinstance(source, dict) and source.get("kind") == "mirror"):
-            key = ("mirror", source.get("mirror_id"))
-        else:
-            continue
-        if isinstance(key[1], str) and isinstance(node.get("id"), str):
-            references.setdefault(key, []).append(node["id"])
-
-    tables = {}
-    for (kind, identifier), node_ids in references.items():
-        try:
-            binding = (resolve_object_binding(identifier) if kind == "object"
-                       else resolve_existing_mirror_binding(identifier))
-            if not _level_meets(effective_level(user_id, binding["source_id"]), "viewer"):
-                raise AuthForbidden("Source viewer access required")
-        except AppError as error:
-            if required or error.http_status not in {403, 404, 409}:
-                raise
-            continue
-        table = tables.setdefault(binding["object_id"], {
-            key: binding[key] for key in ("object_id", "source_id", "source_name",
-                                          "qualified_table", "mirror_id", "effect")
-        })
-        table["copy_published"] = binding["copy_published"]
-        table["needs_attention"] = binding["status"] in {"needs_attention", "source_fault"}
-        table.setdefault("node_ids", []).extend(node_ids)
-    return list(tables.values())
-
-
-def version_mirror_bindings(user_id: str, version: ChannelVersionRecord):
-    tables = mirror_bindings(user_id, version.graph)
-    if tables:
-        current = current_version_mirrors(channel_id=version.channel_id, version=version.number)
-        effects = publication_effects(channel_id=version.channel_id, version=version.number)
-        for table in tables:
-            table["current_reference"] = table["mirror_id"] in current
-            table["publication_effect"] = effects.get(table["object_id"])
-    return tables
-
-
-def _confirmation(record: ChannelRecord, user_id: str) -> dict[str, Any]:
-    timeout = record.draft_graph["settings"]["run_timeout_sec"]
-    mirrors = mirror_bindings(user_id, record.draft_graph, required=True)
-    opens = set(object_ids(record.draft_graph))
+def _confirmation(record: ChannelRecord) -> dict[str, Any]:
     return {
         "draft_revision": record.draft_revision,
-        "mirror_bindings": mirrors,
-        "mirrors_to_open": [
-            {key: mirror[key] for key in ("source_id", "object_id", "mirror_id")}
-            for mirror in mirrors if mirror["object_id"] in opens and mirror["effect"] != "shared"
-        ],
         "runs_to_cancel": _runs_to_cancel(record.id),
-        "missing_run_timeout": timeout is None,
+        "missing_run_timeout": record.draft_graph["settings"]["run_timeout_sec"] is None,
     }
 
 

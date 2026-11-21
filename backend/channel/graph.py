@@ -32,6 +32,7 @@ __all__ = [
     "refine_ports",
     "template_site",
     "validate",
+    "withdrawn_input_problems",
 ]
 
 _RESERVED_REFS = frozenset({"nodes", "channel", "run", "platform"})
@@ -95,6 +96,26 @@ def validate(
     problems.extend(_container_frame_problems(nodes, edges, by_id, by_type))
     problems.extend(_reference_problems(nodes, by_type, resolver))
     problems.extend(_settings_problems(graph["settings"], resolver))
+    return problems
+
+
+def withdrawn_input_problems(graph: Mapping[str, Any]) -> list[Problem]:
+    """Reject retired inputs on draft save, which otherwise permits incomplete graphs."""
+    problems: list[Problem] = []
+    for node in graph["nodes"]:
+        node_type = node["type"]
+        if node_type == "read.mirror":
+            path = ("type",)
+        elif node_type in {"read.changes", "volume.changes_dataset"} and "source" in node["config"]:
+            path = ("config", "source")
+        else:
+            continue
+        problems.append(Problem(
+            "CHANNEL_NODE_INPUT_WITHDRAWN",
+            "Source Mirror inputs are unavailable in Data Channels",
+            node_id=node["id"],
+            path=path,
+        ))
     return problems
 
 

@@ -11,8 +11,6 @@ from backend.channel.change_range import (
     read_change_range,
 )
 from backend.channel.checkpoints import CheckpointPosition
-from backend.channel.diagnostics import public_error
-from backend.channel.mirror_changes import execute_read, is_mirror, source_schema
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
     MAIN_INPUT,
@@ -24,7 +22,6 @@ from backend.channel.nodes.spec import (
     OutputView,
     object_schema,
 )
-from backend.core.errors import AppError
 from backend.entity.history.service import (
     HistorySide,
     IncrementalEvent,
@@ -55,14 +52,6 @@ def _refine(
     upstream: Mapping[str, Any],
     resolver: Any,
 ) -> dict[str, Any]:
-    del upstream, resolver
-    if is_mirror(config):
-        return {"main": {"type": "object", "properties": {
-            "entries": {"type": "array", "items": {"type": "object"}},
-            "count": {"type": "integer"}, "has_more": {"type": "boolean"},
-            "last_position": {"type": ["object", "null"]},
-            "source_ids": {"type": "array", "items": {"type": "string"}},
-        }}, "error": None}
     return {"main": _OUTPUT, "error": None}
 
 
@@ -72,15 +61,6 @@ class _GroupingUnsafe(Exception):
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    if is_mirror(config):
-        try:
-            return NodeResult(status="succeeded", output=execute_read(node, hooks))
-        except AppError as exc:
-            code, message = public_error(exc.code, fallback="MIRROR_READ_UNAVAILABLE")
-            return NodeResult(status="failed", error_code=code, error_message=message)
-        except Exception:
-            return NodeResult(status="failed", error_code="MIRROR_READ_UNAVAILABLE",
-                              error_message="Mirror history read failed.")
     entity_id = str(config["entity_id"])
     node_id = str(node["id"])
     limit = int(config.get("limit") or _DEFAULT_LIMIT)
@@ -280,7 +260,7 @@ NODE_TYPE = NodeType(
     trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT, ERROR_OUTPUT),
-    config_schema=source_schema(object_schema(
+    config_schema=object_schema(
         {
             "entity_id": {
                 "type": "string",
@@ -325,7 +305,7 @@ NODE_TYPE = NodeType(
             },
         },
         ["entity_id"],
-    )),
+    ),
     output_view=OutputView(
         kind="rows",
         rows="entries",

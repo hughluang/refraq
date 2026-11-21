@@ -400,19 +400,19 @@ def test_changes_dataset_declares_a_bounded_volume_load() -> None:
     mirror = {"kind": "mirror", "mirror_id": "mir_orders"}
     assert validator.is_valid({"entity_id": "ent_orders"})
     assert validator.is_valid({"entity_id": "ent_orders", "sources": ["channel_run"], "limit": 1})
-    assert validator.is_valid({"source": mirror, "limit": 10, "statement_timeout_sec": 30})
     for config in (
         {},
         {"sources": ["user"]},
         {"entity_id": ""},
         {"entity_id": "ent_orders", "source": mirror},
-        {"source": mirror, "sources": ["user"]},
+        {"source": mirror, "limit": 10, "statement_timeout_sec": 30},
         {"source": {"kind": "entity", "mirror_id": "mir_orders"}},
         {"source": {"kind": "mirror"}},
         {"source": {"kind": "mirror", "mirror_id": ""}},
     ):
         assert not validator.is_valid(config), config
     assert "shape" not in schema["properties"]
+    assert "source" not in schema["properties"]
     limit = schema["properties"]["limit"]
     assert limit["type"] == "integer"
     assert limit["minimum"] == 1
