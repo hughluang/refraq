@@ -9,5 +9,6 @@
   ],
   "cursorpyright.analysis.extraPaths": [
     "${workspaceFolder}"
-  ]
+  ],
+  "python.terminal.useEnvFile": true
 }
