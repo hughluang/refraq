@@ -3,7 +3,7 @@ import { Instant } from "@/components/display/Instant";
 import { getMirrorStopEvidence } from "./stopEvidence";
 import type { Mirror } from "./types";
 
-const waitReasons = new Set(["source_disabled", "capture_credential_missing", "table_unqualified", "snapshot_window_closed"]);
+const waitReasons = new Set(["source_disabled", "capture_credential_missing", "table_unqualified", "snapshot_window_closed", "snapshot_slot_busy", "publication_pending", "incremental_snapshot_blocked"]);
 
 export function readinessLabel(key: string, t: ReturnType<typeof useTranslate>) {
   return waitReasons.has(key) ? t(`mirrors.wait.${key}`) : key;
@@ -19,10 +19,19 @@ function outstanding(mirror: Mirror) {
       && (mirror.published_generation_id || mirror.progress)));
 }
 
+export function currentOpen(mirror: Mirror) {
+  if (!mirror.enabled) return;
+  const opens = mirror.operations.filter(operation =>
+    operation.kind === "open" && operation.control_revision === mirror.control.control_revision);
+  // The API returns operations oldest first, including replaced attempts in the same revision.
+  return opens.findLast(operation => operation.state === "pending")
+    ?? opens.findLast(operation => operation.state === "applied");
+}
+
 export function MirrorEvent({ mirror }: { mirror: Mirror }) {
   const t = useTranslate();
-  const op = mirror.enabled && mirror.operations.find(item => item.kind === "open" && item.state === "pending"
-    && item.control_revision === mirror.control.control_revision);
+  const open = currentOpen(mirror);
+  const op = open?.state === "pending" ? open : undefined;
   const blocker = outstanding(mirror).find(item => item.result === "fail" || item.observed_at);
   const progress = mirror.progress;
   const published = !!mirror.published_generation_id;

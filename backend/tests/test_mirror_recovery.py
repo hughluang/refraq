@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.metadata.models import SourceCaptureBindingRow, SourceRow
 from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
-from backend.metadata.mirrors.models import MirrorRow
+from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
 from backend.metadata.mirrors import router
 from backend.metadata.mirrors.recovery import Recovery, RuntimeDispatchAdapter, bind_recovery, schema_resume_allowed
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
@@ -65,7 +65,7 @@ class Target:
 @pytest.fixture
 def recovery():
     engine = create_engine("sqlite://")
-    for table in (SourceRow.__table__, SourceCaptureBindingRow.__table__, MirrorRow.__table__, HistoryGateRow.__table__,
+    for table in (SourceRow.__table__, SourceCaptureBindingRow.__table__, MirrorRow.__table__, MirrorOperationRow.__table__, HistoryGateRow.__table__,
                   HistoryInvalidationRow.__table__, RecoveryRow.__table__):
         table.create(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
@@ -74,7 +74,9 @@ def recovery():
         session.add(SourceRow(id="source", key="source", locator_key="source", name="Source", kind="database", created_at=now, updated_at=now))
         for mid in ("a", "b"):
             session.add(MirrorRow(id=mid, source_id="source", table_identity=mid, enabled=True,
-                                  state=dict(capture_generation="old", published_generation_id="complete")))
+                                  state=dict(id=mid, source_id="source", object_id=mid, table_identity=mid, qualified_table=f"public.{mid}",
+                                             enabled=True, status="ready", control=dict(control_revision=1),
+                                             capture_generation="old", published_generation_id="complete")))
             session.add(HistoryGateRow(mirror_id=mid, history_epoch="epoch", lower_commit_seq=0,
                                        lower_entry_seq=0, status="available"))
     runtime = Runtime()

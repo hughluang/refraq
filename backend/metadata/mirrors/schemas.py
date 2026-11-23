@@ -66,6 +66,16 @@ class SnapshotProgress(StrictModel):
     notification_offset: int = Field(ge=0)
     generation_id: str
     observed_at: Instant | None
+    scanned_bytes: int | None = Field(default=None, ge=0)
+    byte_notification_offset: int | None = Field(default=None, ge=0)
+    bytes_observed_at: Instant | None = None
+    scan_percent: float | None = Field(default=None, ge=0, le=100)
+    scan_complete: bool = False
+
+
+class SnapshotSlotHolder(StrictModel):
+    mirror_id: str
+    qualified_table: str
 
 
 class Mirror(StrictModel):
@@ -85,6 +95,8 @@ class Mirror(StrictModel):
     committed_upper_bound: HistoryPosition | None = None
     control: Control
     progress: SnapshotProgress | None = None
+    snapshot_slot_holder: SnapshotSlotHolder | None = None
+    publication_wait: SnapshotSlotHolder | None = None
     profile: Profile
     readiness: list[Readiness]
     fault: None = None
@@ -95,7 +107,14 @@ class MirrorResponse(StrictModel):
     mirror: Mirror
 
 
+class MirrorDetail(Mirror):
+    source_size_bytes: int | None = Field(ge=0)
+    estimated_rows: int | None = Field(ge=0)
+    storage_destination: str
+
+
 class MirrorDetailResponse(MirrorResponse):
+    mirror: MirrorDetail
     can_enable: bool
 
 
@@ -112,6 +131,11 @@ class PatchMirrorRequest(StrictModel):
 
 class PatchMirrorResponse(MirrorResponse):
     operation_id: str
+
+
+class MirrorActionReceipt(StrictModel):
+    operation_id: str
+    enabled: bool
 
 
 class RecoveryResponse(StrictModel):

@@ -38,6 +38,7 @@ type MirrorOperation = {
   fault_code: string | null;
   requested_at: string;
 };
+export type MirrorReference = { mirror_id: string; qualified_table: string };
 export type Mirror = {
   id: string;
   source_id: string;
@@ -54,10 +55,27 @@ export type Mirror = {
   retained_lower_bound: unknown;
   committed_upper_bound: unknown;
   control: MirrorControl;
-  progress: { stage: "scan" | "catching_up"; notification_offset: number; observed_at: string | null; generation_id: string } | null;
+  snapshot_slot_holder?: MirrorReference | null;
+  publication_wait?: MirrorReference | null;
+  progress: {
+    stage: "scan" | "catching_up";
+    generation_id: string;
+    notification_offset: number;
+    observed_at: string | null;
+    scanned_bytes: number | null;
+    byte_notification_offset: number | null;
+    bytes_observed_at: string | null;
+    scan_percent: number | null;
+    scan_complete: boolean;
+  } | null;
   profile: Record<string, unknown>;
   readiness: ReadinessItem[];
   fault: Record<string, unknown> | null;
   operations: MirrorOperation[];
+};
+export type MirrorDetail = Mirror & {
+  storage_destination: string;
+  source_size_bytes: number | null;
+  estimated_rows: number | null;
 };
 export type PendingOperation = { operation_id: string; state: "pending" };

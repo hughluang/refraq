@@ -10,8 +10,10 @@ import { ApiError } from "@/lib/api";
 import en from "@/locales/en-US/common.json";
 import { ConsoleNotifications } from "@/providers/notification-provider";
 
+import { MirrorTableDrawer } from "@/features/mirrors/MirrorTableDrawer";
 import { CatalogObjectDetail } from "./CatalogObjectDetail";
 
+const listMirrorTables = vi.hoisted(() => vi.fn());
 const getCatalogObject = vi.hoisted(() => vi.fn());
 const openNotification = vi.hoisted(() => vi.fn());
 const mirrorGrants = vi.hoisted(() => new Set<string>());
@@ -40,9 +42,9 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/console/catalog/obj_1",
+  usePathname: () => window.location.pathname,
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock("@/features/branding/BrandingProvider", () => ({
@@ -58,7 +60,7 @@ vi.mock("@/features/sources/api/catalog", async () => {
   const actual = await vi.importActual<typeof import("@/features/sources/api/catalog")>(
     "@/features/sources/api/catalog",
   );
-  return { ...actual, resolveCatalogObject: getCatalogObject };
+  return { ...actual, resolveCatalogObject: getCatalogObject, listMirrorTables };
 });
 
 function stubDomApis() {
@@ -102,6 +104,17 @@ const orders = {
   columns: [], is_present: true, mirror: { enabled: false, can_enable: true, can_disable: false, mirror_id: null },
 };
 
+const table = {
+  object_id: orders.id, source_id: "source", source_key: "orders", source_name: "Orders DB",
+  qualified_table: "public.orders", storage_destination: "source_mirror", source_size_bytes: 8192,
+  estimated_rows: 23, mirror: orders.mirror, snapshot_holder: null,
+};
+
+async function openTableSetting() {
+  fireEvent.click(await screen.findByRole("button", { name: "Mirror synchronization" }));
+  return screen.findByRole("switch", { name: "Mirror synchronization" });
+}
+
 function acceptedMirror() {
   return new Response(JSON.stringify({ mirror: { enabled: true, can_enable: false, can_disable: true, mirror_id: "mirror_1" }, operation_id: "op_1" }), { status: 200 });
 }
@@ -119,6 +132,8 @@ function stubMirrorPut(post: (request: RequestInit) => Promise<Response>) {
 describe("CatalogObjectDetail load", () => {
   beforeEach(() => {
     stubDomApis();
+    window.history.replaceState(null, "", "/console/catalog/obj_1");
+    listMirrorTables.mockReset().mockResolvedValue({ items: [table] });
     getCatalogObject.mockReset();
     mirrorGrants.clear();
     openNotification.mockReset();
@@ -131,6 +146,49 @@ describe("CatalogObjectDetail load", () => {
     vi.unstubAllGlobals();
   });
 
+  it("retries the selected Catalog table when its first read fails", async () => {
+    mirrorGrants.add("edit");
+    listMirrorTables.mockRejectedValueOnce(new ApiError(503, "UNAVAILABLE", "Catalog offline", "req-19"));
+    render(shell(createElement(MirrorTableDrawer, { objectId: orders.id })));
+    fireEvent.click(screen.getByRole("button", { name: "Mirror synchronization" }));
+    expect(await screen.findByRole("button", { name: copy["status.unloaded"] })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: copy["common.retry"] }));
+    expect(await screen.findByRole("switch", { name: "Mirror synchronization" })).toBeTruthy();
+    expect(listMirrorTables).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a recovered read's Retry notification while a save is pending", async () => {
+    mirrorGrants.add("edit");
+    listMirrorTables.mockRejectedValueOnce(new ApiError(503, "UNAVAILABLE", "Catalog offline"));
+    let finish!: (response: Response) => void;
+    const submit = stubMirrorPut(() => new Promise(resolve => { finish = resolve; }));
+    render(shell(createElement(MirrorTableDrawer, { objectId: orders.id })));
+    fireEvent.click(screen.getByRole("button", { name: "Mirror synchronization" }));
+    const oldRetry = await screen.findByRole("button", { name: copy["common.retry"] });
+    fireEvent.click(screen.getByRole("button", { name: copy["status.unloaded"] }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Mirror synchronization" }));
+    fireEvent.click(oldRetry);
+    expect(listMirrorTables).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[0][0].signal?.aborted).toBe(false);
+
+    await act(async () => finish(acceptedMirror()));
+    expect(await screen.findByText("op_1")).toBeTruthy();
+    expect(screen.getByRole("switch", { checked: true }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("withdraws the detail link and holder evidence when the management read returns forbidden", async () => {
+    mirrorGrants.add("show");
+    listMirrorTables.mockResolvedValue({ items: [{ ...table, mirror: { ...orders.mirror, mirror_id: "mirror_1" },
+      snapshot_holder: { mirror_id: "holder", qualified_table: "public.shipment" } }] });
+    vi.stubGlobal("fetch", async () => new Response('{"code":"AUTH_FORBIDDEN"}', { status: 403 }));
+    render(shell(createElement(MirrorTableDrawer, { objectId: orders.id })));
+    await openTableSetting();
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("link", { name: "View mirror" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "public.shipment" })).toBeNull();
+    expect(screen.queryByText(en["mirrors.copyAvailability"])).toBeNull();
+  });
+
   it("submits the resolved object id once and follows the accepted Mirror with read access", async () => {
     mirrorGrants.add("edit").add("show");
     getCatalogObject.mockResolvedValueOnce({ object: orders }).mockResolvedValue({
@@ -140,7 +198,7 @@ describe("CatalogObjectDetail load", () => {
     const submit = stubMirrorPut(() => new Promise<Response>((resolve) => { finish = resolve; }));
     render(shell(createElement(CatalogObjectDetail, { objectId: orders.locator_key })));
 
-    const enable = await screen.findByRole("switch", { name: "Mirror synchronization" });
+    const enable = await openTableSetting();
     act(() => {
       fireEvent.click(enable);
       fireEvent.click(enable);
@@ -149,11 +207,10 @@ describe("CatalogObjectDetail load", () => {
     expect(submit.mock.calls[0][0].body).toBe('{"enabled":true}');
     await act(async () => finish(acceptedMirror()));
 
-    expect(openNotification).toHaveBeenCalledWith(expect.objectContaining({
-      type: "success", message: "Mirror setting saved",
-    }));
+    expect(await screen.findByText("Request accepted")).toBeTruthy();
+    expect(screen.getByText("op_1")).toBeTruthy();
     const link = await screen.findByRole("link", { name: "View mirror" });
-    expect(link.getAttribute("href")).toBe("/console/mirrors/mirror_1");
+    expect(link.getAttribute("href")).toBe("/console/mirrors/mirror_1?from=%2Fconsole%2Fcatalog%2Fobj_1%3FmirrorTable%3Dobj_1");
     expect(screen.getByRole("switch", { name: "Mirror synchronization", checked: true })).toBeTruthy();
   });
 
@@ -163,7 +220,9 @@ describe("CatalogObjectDetail load", () => {
       object: { ...orders, mirror: { enabled: false, can_enable: true, can_disable: false, mirror_id: "mirror_1" } },
     });
     const record = () => shell(createElement(CatalogObjectDetail, { objectId: orders.id }));
+    listMirrorTables.mockResolvedValue({ items: [{ ...table, mirror: { ...orders.mirror, mirror_id: "mirror_1" } }] });
     const view = render(record());
+    await openTableSetting();
     expect(await screen.findByRole("link", { name: "View mirror" })).toBeTruthy();
     expect(screen.getByRole("switch", { name: "Mirror synchronization" }).hasAttribute("disabled")).toBe(true);
 
@@ -173,9 +232,51 @@ describe("CatalogObjectDetail load", () => {
     expect(screen.queryByRole("switch", { name: "Mirror synchronization" })).toBeNull();
 
     mirrorGrants.add("edit");
+    listMirrorTables.mockResolvedValue({ items: [table] });
     view.rerender(record());
     expect(screen.queryByRole("link", { name: "View mirror" })).toBeNull();
-    expect(screen.getByRole("switch", { name: "Mirror synchronization" })).toBeTruthy();
+    expect(await screen.findByRole("switch", { name: "Mirror synchronization" })).toBeTruthy();
+    expect(screen.getByText(en["mirrors.enablePlan"])).toBeTruthy();
+  });
+
+  it("refreshes evidence for the same Mirror after each accepted switch change", async () => {
+    mirrorGrants.add("edit").add("show");
+    const mirrorId = "mirror_1";
+    const off = { ...orders.mirror, mirror_id: mirrorId };
+    const on = { ...off, enabled: true, can_enable: false, can_disable: true };
+    listMirrorTables.mockResolvedValue({ items: [{ ...table, mirror: off }] });
+    const stoppedAt = "2026-01-01T00:00:00Z";
+    const stop = { id: "stop-1", kind: "disable", state: "applied", control_revision: 2,
+      mirror_id: mirrorId, observed_evidence_refs: ["source-stop"] };
+    const stopped = {
+      id: mirrorId, enabled: false, status: "disabled", published_generation_id: "g1", readiness: [],
+      control: { control_revision: 2, applied_revision: 2, observed_at: stoppedAt,
+        stop_ack: { operation_id: stop.id, source_operation_id: "source-stop", observed_at: stoppedAt } },
+      operations: [stop],
+    };
+    const reopen = { id: "open-2", kind: "open", state: "pending", control_revision: 3, requested_at: stoppedAt };
+    const reopened = { ...stopped, enabled: true, status: "waiting", control: { control_revision: 3 }, operations: [stop, reopen] };
+    const stopping = { ...stopped, status: "disable_pending", control: { control_revision: 4 },
+      operations: [stop, { ...stop, id: "stop-3", state: "pending", control_revision: 4 }] };
+    const evidence = vi.fn().mockReturnValueOnce(stopped).mockReturnValueOnce(reopened).mockReturnValue(stopping);
+    vi.stubGlobal("fetch", async (path: string, options: RequestInit) => {
+      if (path === `/api/mirrors/${mirrorId}`) return Response.json({ mirror: evidence() });
+      if (path === "/api/objects/obj_1/mirror" && options.method === "PUT") {
+        return Response.json(JSON.parse(String(options.body)).enabled
+          ? { mirror: on, operation_id: reopen.id } : { mirror: off, operation_id: "stop-3" });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(shell(createElement(MirrorTableDrawer, { objectId: orders.id })));
+    const control = await openTableSetting();
+    await screen.findByText(en["mirrors.event.stopConfirmed"], { exact: false });
+
+    fireEvent.click(control);
+    expect(await screen.findByText(en["mirrors.event.replacement"])).toBeTruthy();
+    fireEvent.click(control);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText(en["mirrors.event.disableRequested"])).toBeTruthy();
+    expect(evidence).toHaveBeenCalledTimes(3);
   });
 
   it("withdraws the stale enable action and reports the problem when the server denies it", async () => {
@@ -183,15 +284,16 @@ describe("CatalogObjectDetail load", () => {
     getCatalogObject.mockResolvedValueOnce({ object: orders }).mockResolvedValue({
       object: { ...orders, mirror: null },
     });
+    listMirrorTables.mockResolvedValueOnce({ items: [table] }).mockResolvedValue({ items: [] });
     const submit = stubMirrorPut(async () => new Response(
       JSON.stringify({ code: "AUTH_FORBIDDEN", detail: "Forbidden" }),
       { status: 403 },
     ));
     render(shell(createElement(CatalogObjectDetail, { objectId: orders.id })));
 
-    fireEvent.click(await screen.findByRole("switch", { name: "Mirror synchronization" }));
+    fireEvent.click(await openTableSetting());
     expect(await screen.findByRole("alert")).toBeTruthy();
-    expect(getCatalogObject).toHaveBeenCalledTimes(2);
+    expect(listMirrorTables).toHaveBeenCalledTimes(2);
     expect(submit).toHaveBeenCalledTimes(1);
     expect(openNotification).not.toHaveBeenCalled();
     expect(screen.queryByRole("switch", { name: "Mirror synchronization" })).toBeNull();
@@ -204,7 +306,8 @@ describe("CatalogObjectDetail load", () => {
     }).mockResolvedValue({ object: orders });
     const submit = stubMirrorPut(async () => { throw new TypeError("Connection closed"); });
     render(shell(createElement(CatalogObjectDetail, { objectId: orders.id })));
-    const control = await screen.findByRole("switch", { checked: true });
+    listMirrorTables.mockResolvedValueOnce({ items: [{ ...table, mirror: { enabled: true, can_enable: false, can_disable: true, mirror_id: null } }] });
+    const control = await openTableSetting();
     fireEvent.click(control);
     expect(submit).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
@@ -218,7 +321,7 @@ describe("CatalogObjectDetail load", () => {
     expect(await screen.findByRole("alert")).toBeTruthy();
   });
 
-  it("keeps the pending enable request when the user tries to refresh", async () => {
+  it("disables the setting while enable acceptance is pending", async () => {
     mirrorGrants.add("edit").add("show");
     getCatalogObject.mockResolvedValueOnce({ object: orders }).mockResolvedValue({
       object: { ...orders, mirror: { enabled: true, can_enable: false, can_disable: true, mirror_id: "mirror_1" } },
@@ -226,11 +329,8 @@ describe("CatalogObjectDetail load", () => {
     let finish!: (response: Response) => void;
     const submit = stubMirrorPut(() => new Promise<Response>((resolve) => { finish = resolve; }));
     render(shell(createElement(CatalogObjectDetail, { objectId: orders.id })));
-    fireEvent.click(await screen.findByRole("switch", { name: "Mirror synchronization" }));
-    const refresh = screen.getByRole("button", { name: "Refresh" });
-    fireEvent.click(refresh);
-
-    expect(refresh.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(await openTableSetting());
+    expect(screen.getByRole("switch", { name: "Mirror synchronization" }).hasAttribute("disabled")).toBe(true);
     expect(submit.mock.calls[0][0].signal?.aborted).toBe(false);
     expect(getCatalogObject).toHaveBeenCalledTimes(1);
     await act(async () => finish(acceptedMirror()));
@@ -247,13 +347,56 @@ describe("CatalogObjectDetail load", () => {
     let finish!: (response: Response) => void;
     const submit = stubMirrorPut(() => new Promise<Response>((resolve) => { finish = resolve; }));
     const view = render(shell(createElement(CatalogObjectDetail, { objectId: orders.id })));
-    fireEvent.click(await screen.findByRole("switch", { name: "Mirror synchronization" }));
+    fireEvent.click(await openTableSetting());
     view.rerender(shell(createElement(CatalogObjectDetail, { objectId: "other_object" })));
     expect(submit.mock.calls[0][0].signal?.aborted).toBe(true);
     await act(async () => finish(acceptedMirror()));
     expect(getCatalogObject).toHaveBeenCalledTimes(2);
     expect(openNotification).not.toHaveBeenCalled();
     expect(screen.queryByRole("link", { name: "View mirror" })).toBeNull();
+  });
+
+  it("returns a paged and filtered picker to the selected table and names its slot holder", async () => {
+    mirrorGrants.add("show");
+    window.history.replaceState(null, "", "/console/mirrors?mirrorTable=list&tableSource=source&tableQuery=sales%20order&tablePage=2");
+    const candidate = { ...table, qualified_table: "public.sales orders", mirror: { ...orders.mirror, mirror_id: "m1" }, snapshot_holder: { mirror_id: "other", qualified_table: "public.shipment" } };
+    listMirrorTables.mockResolvedValue({ items: [candidate], limit: 10, total: 11, offset: 10 });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('{"items":[]}')));
+    render(shell(createElement(MirrorTableDrawer)));
+
+    const drawer = screen.getByRole("dialog");
+    drawer.style.overflowY = "auto";
+    drawer.scrollTop = 125;
+    using visibleRows = vi.spyOn(HTMLButtonElement.prototype, "getClientRects")
+      .mockReturnValue([new DOMRect(0, 0, 120, 24)] as unknown as DOMRectList);
+    fireEvent.click(await screen.findByRole("button", { name: candidate.qualified_table }));
+    expect(listMirrorTables.mock.calls[0][0]).toEqual({ source_id: "source", q: "sales order", limit: 10, offset: 10 });
+    const holder = await screen.findByRole("link", { name: "public.shipment" });
+    const origin = new URL(holder.getAttribute("href")!, window.location.href).searchParams.get("from");
+    expect(origin).toBe(window.location.pathname + window.location.search);
+    expect(origin).toContain("mirrorTable=obj_1");
+    expect(origin).toContain("tablePage=2");
+    drawer.scrollTop = 0;
+    fireEvent.click(screen.getByRole("button", { name: "Back to tables" }));
+    const row = await screen.findByRole("button", { name: candidate.qualified_table });
+    await waitFor(() => expect(document.activeElement === row).toBe(true));
+    expect(drawer.scrollTop).toBe(125);
+    expect(listMirrorTables.mock.lastCall?.[0]).toMatchObject({ offset: 10, q: "sales order" });
+  });
+
+  it("restores the search draft when browser navigation interrupts a pending edit", async () => {
+    window.history.replaceState(null, "", "/console/catalog?mirrorTable=list&tableQuery=public.old");
+    listMirrorTables.mockResolvedValue({ items: [], limit: 10, total: 0, offset: 0 });
+    const record = () => shell(createElement(MirrorTableDrawer));
+    const view = render(record());
+    const search = await screen.findByRole<HTMLInputElement>("textbox", { name: copy["mirrors.tableSearch"] });
+    fireEvent.change(search, { target: { value: "outgoing" } });
+    window.history.replaceState(null, "", "/console/catalog?mirrorTable=list&tableQuery=public.restored");
+    view.rerender(record());
+    expect(search.value).toBe("public.restored");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
+    expect(new URLSearchParams(window.location.search).get("tableQuery")).toBe("public.restored");
+    expect(listMirrorTables.mock.lastCall?.[0].q).toBe("public.restored");
   });
 
   it("shows unloaded and one notice with the request id when the object fails to load", async () => {

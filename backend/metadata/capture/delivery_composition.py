@@ -24,7 +24,7 @@ from backend.metadata.mirrors.bootstrap import validate_target
 from backend.metadata.mirrors.history import History, SqlHistoryTarget
 from backend.metadata.mirrors.publication import Publication
 from backend.metadata.mirrors.service import (
-    MirrorError, OpenGenerationBinding, confirm_retained_opens, current_open_preparations, initial_history_epoch, read_published_scope,
+    MirrorError, OpenGenerationBinding, confirm_retained_opens, current_open_preparations, initial_history_epoch, read_dispatch_scope,
     reconcile_open_generation, request_reopen_baseline, require_current_open_allocations,
     require_current_retained_opens,
 )
@@ -230,7 +230,7 @@ class SourceDelivery:
                 or state["desired"] != "configured" or state["owner_epoch"] <= 0
                 or state["runtime_instance_id"] != self.signals.runtime_instance_id):
             raise RuntimeBlocked("delivery_current_authority_required")
-        scope = read_published_scope(session, self.source_id)
+        scope = read_dispatch_scope(session, self.source_id, state=state)
         if scope != state.get("published_scope"):
             raise RuntimeBlocked("published_scope_changed")
         self._load_installation()

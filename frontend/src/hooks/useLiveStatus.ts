@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export const LIVE_STATUS_INTERVAL_MS = 2000;
 
 export type UseLiveStatusOptions<T> = {
-  fetch: (signal: AbortSignal) => Promise<T>;
+  fetch: (signal: AbortSignal, trigger: "initial" | "poll" | "refresh") => Promise<T>;
   isTerminal: (data: T) => boolean;
   enabled?: boolean;
   /** Keep discovering new collection members after the visible items finish. */
@@ -84,7 +84,7 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
     setRefreshing(false);
     setLastSuccessAt(null);
 
-    const run = (): Promise<LiveRefreshResult> => {
+    const run = (trigger: "initial" | "poll" | "refresh"): Promise<LiveRefreshResult> => {
       if (!alive) return Promise.resolve({ ok: true });
       lastAttemptAt = Date.now();
       const seq = ++requestSeq.current;
@@ -94,7 +94,7 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
       controllers.add(controller);
       setRefreshing(true);
       return fetchRef
-        .current(controller.signal)
+        .current(controller.signal, trigger)
         .then((next): LiveRefreshResult => {
           if (!alive || seq !== requestSeq.current) return { ok: true };
           dataRef.current = next;
@@ -117,14 +117,14 @@ export function useLiveStatus<T>(options: UseLiveStatusOptions<T>): LiveStatusSt
         });
     };
 
-    runRef.current = run;
+    runRef.current = () => run("refresh");
 
     const terminal = () =>
       dataRef.current != null && terminalRef.current(dataRef.current);
 
     const automatic = () => {
       if (controllers.size > 0) return;
-      void run();
+      void run(lastAttemptAt === 0 ? "initial" : "poll");
     };
     if (!pausedRef.current) automatic();
 

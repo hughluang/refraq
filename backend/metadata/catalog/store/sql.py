@@ -1122,16 +1122,20 @@ def _sql_append_join_change(session: Any, change: CatalogJoinChangeRecord) -> No
 
 
 def _sql_stamp_objects(session: Any, plan: StructureRefreshPlan) -> None:
-    ids = list(plan.stamp_object_ids)
-    for offset in range(0, len(ids), _STAMP_CHUNK):
-        chunk = ids[offset : offset + _STAMP_CHUNK]
+    for offset in range(0, len(plan.collection_stamps), _STAMP_CHUNK):
+        chunk = plan.collection_stamps[offset : offset + _STAMP_CHUNK]
         session.execute(
-            update(CatalogObjectRow)
-            .where(CatalogObjectRow.id.in_(chunk))
-            .values(
-                collected_at=plan.collected_at,
-                last_structure_job_id=plan.last_structure_job_id,
-            )
+            update(CatalogObjectRow),
+            [
+                {
+                    "id": stamp.object_id,
+                    "source_size_bytes": stamp.source_size_bytes,
+                    "estimated_rows": stamp.estimated_rows,
+                    "collected_at": plan.collected_at,
+                    "last_structure_job_id": plan.last_structure_job_id,
+                }
+                for stamp in chunk
+            ],
         )
 
 
@@ -1160,6 +1164,8 @@ def _sql_persist_object(
             ddl=obj.ddl,
             comment=obj.comment,
             primary_key_json=_dumps_json(obj.primary_key),
+            source_size_bytes=obj.source_size_bytes,
+            estimated_rows=obj.estimated_rows,
             is_present=obj.is_present,
             business_name=obj.business_name,
             business_description=obj.business_description,
@@ -1185,6 +1191,8 @@ def _sql_persist_object(
         row.ddl = obj.ddl
         row.comment = obj.comment
         row.primary_key_json = _dumps_json(obj.primary_key)
+        row.source_size_bytes = obj.source_size_bytes
+        row.estimated_rows = obj.estimated_rows
         row.is_present = obj.is_present
         row.last_structure_job_id = obj.last_structure_job_id
         row.collected_at = obj.collected_at
@@ -1433,6 +1441,8 @@ def _row_to_object(
         ddl=ddl,
         comment=row.comment,
         primary_key=_loads_json(row.primary_key_json),
+        source_size_bytes=row.source_size_bytes,
+        estimated_rows=row.estimated_rows,
         is_present=row.is_present,
         business_name=row.business_name,
         business_description=row.business_description,

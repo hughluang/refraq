@@ -61,6 +61,8 @@ class CollectedObject:
     primary_key: list[str] = field(default_factory=list)
     foreign_keys: list[CollectedForeignKey] = field(default_factory=list)
     indexes: list[CollectedIndex] = field(default_factory=list)
+    source_size_bytes: int | None = None
+    estimated_rows: int | None = None
 
 
 @dataclass

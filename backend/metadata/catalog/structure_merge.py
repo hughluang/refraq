@@ -44,13 +44,20 @@ class StructureJoinUpsert:
 
 
 @dataclass(frozen=True)
+class ObjectCollectionStamp:
+    object_id: str
+    source_size_bytes: int | None
+    estimated_rows: int | None
+
+
+@dataclass(frozen=True)
 class StructureRefreshPlan:
     """Narrow domain plan: records + join ops. No ORM/storage types."""
 
     source_id: str
     objects: tuple[CatalogObjectRecord, ...]
     upsert_joins: tuple[StructureJoinUpsert, ...]
-    stamp_object_ids: tuple[str, ...]
+    collection_stamps: tuple[ObjectCollectionStamp, ...]
     last_structure_job_id: str
     collected_at: datetime
     diff: StructureDiffFacts
@@ -225,6 +232,8 @@ def build_structure_refresh_plan(
                 incoming_obj,
                 id=object_id,
                 locator_key=obj_locator,
+                last_structure_job_id=job_id,
+                collected_at=now,
                 columns=cols,
                 foreign_keys=fks,
                 indexes=idxs,
@@ -254,6 +263,8 @@ def build_structure_refresh_plan(
             ddl=incoming_obj.ddl,
             comment=incoming_obj.comment,
             primary_key=incoming_obj.primary_key,
+            source_size_bytes=incoming_obj.source_size_bytes,
+            estimated_rows=incoming_obj.estimated_rows,
             is_present=True,
             last_structure_job_id=job_id,
             collected_at=now,
@@ -262,13 +273,11 @@ def build_structure_refresh_plan(
             foreign_keys=fks,
             indexes=idxs,
         )
-        if _structure_equal(match, updated):
-            continue
         by_id[match.id] = updated
-        touched_ids.add(match.id)
+        if not _structure_equal(match, updated):
+            touched_ids.add(match.id)
 
-    final_objects = list(by_id.values())
-    present = [o for o in final_objects if o.is_present and o.source_id == source_id]
+    present = [o for o in by_id.values() if o.is_present and o.source_id == source_id]
 
     expected: dict[tuple[str, str], tuple[str, str]] = {}
     for obj in present:
@@ -300,11 +309,10 @@ def build_structure_refresh_plan(
             )
         )
 
-    stamp_object_ids = tuple(
-        obj.id
-        for obj in final_objects
-        if obj.is_present
-        and obj.source_id == source_id
+    collection_stamps = tuple(
+        ObjectCollectionStamp(obj.id, obj.source_size_bytes, obj.estimated_rows)
+        for obj in present
+        if obj.id not in touched_ids
         and (schema_scope is None or obj.schema_name == schema_scope)
     )
     diff = compute_structure_diff(
@@ -316,7 +324,7 @@ def build_structure_refresh_plan(
         source_id=source_id,
         objects=tuple(by_id[oid] for oid in touched_ids),
         upsert_joins=tuple(upserts),
-        stamp_object_ids=stamp_object_ids,
+        collection_stamps=collection_stamps,
         last_structure_job_id=job_id,
         collected_at=now,
         diff=diff,

@@ -274,6 +274,8 @@ def _record_notification(binding, operation, record, offset):
             return False
         operation.pop("notification_phase", None)
         operation.pop("notification_timestamp", None)
+        operation.pop("progress_sample", None)
+        operation.pop("byte_sample", None)
         return True
     if (aggregate != "Incremental Snapshot" or value.get("id") != operation["id"]
             or record.get("key") != {"id": operation["id"]} or "completion" in operation):
@@ -300,5 +302,25 @@ def _record_notification(binding, operation, record, offset):
         operation["completion"] = dict(offset=offset, timestamp=timestamp)
     else:
         return False
+    if kind in {"STARTED", "DATA_COLLECTIONS_RESOLVED", "IN_PROGRESS", "TABLE_SCAN_COMPLETED"}:
+        # Native Debezium notifications have no byte counter. A deployment
+        # observer may attach measured bytes to the signed, table-bound sample.
+        previous = operation.get("byte_sample")
+        if previous is None:
+            legacy = operation.get("progress_sample", {})
+            if "scanned_bytes" in legacy:
+                # Earlier ledgers carried bytes forward under a later notification's timestamp.
+                previous = {key: legacy[key] for key in ("scanned_bytes", "scan_total_bytes") if key in legacy}
+                operation["byte_sample"] = previous
+        operation["progress_sample"] = dict(offset=offset, timestamp=timestamp)
+        measured = _decimal(data.get("scanned_bytes"))
+        if measured is not None and (previous is None or measured >= previous["scanned_bytes"]):
+            sample = dict(scanned_bytes=measured, offset=offset, timestamp=timestamp)
+            total = _decimal(data.get("scan_total_bytes"))
+            if "scan_total_bytes" not in data and previous is not None:
+                total = previous.get("scan_total_bytes")
+            if total and measured <= total:
+                sample["scan_total_bytes"] = total
+            operation["byte_sample"] = sample
     operation.update(notification_phase=kind, notification_timestamp=timestamp)
     return True

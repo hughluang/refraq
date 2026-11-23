@@ -70,6 +70,8 @@ for (const [locale, t] of [["en-US", en], ["zh-CN", zh]] as const) {
       await signIn(page, operator, password);
       await openCatalog(page);
 
+      const settings = page.getByRole("button", { name: t["mirrors.synchronization"], exact: true });
+      await settings.click();
       const enable = page.getByRole("switch", { name: t["mirrors.synchronization"], exact: true });
       await expect(enable).toBeVisible();
       const acceptance = page.waitForResponse(response =>
@@ -81,14 +83,14 @@ for (const [locale, t] of [["en-US", en], ["zh-CN", zh]] as const) {
       const { mirror: { mirror_id: mirrorId }, operation_id } = await accepted.json();
       expect(mirrorId).toBeTruthy();
       await expect(enable).toBeChecked();
-      await expect(page.getByText(t["catalog.mirror.accepted"], { exact: true })).toBeVisible();
+      await expect(page.getByText(t["mirrors.accepted"], { exact: true })).toBeVisible();
       const repeated = await page.request.put(enableUrl, { data: { enabled: true } });
       expect(repeated.status(), await repeated.text()).toBe(200);
       expect(await repeated.json()).toMatchObject({ mirror: { mirror_id: mirrorId }, operation_id });
 
       const follow = page.getByRole("link", { name: t["catalog.mirror.view"], exact: true });
       await page.reload();
-      await expect(follow).toHaveAttribute("href", `/console/mirrors/${mirrorId}`);
+      await expect(follow).toHaveAttribute("href", `/console/mirrors/${mirrorId}?from=${encodeURIComponent(catalogUrl + "?mirrorTable=" + objectId)}`);
       await reader.reload();
       await expect(reader.getByRole("heading", { name: "public.orders", exact: true })).toBeVisible();
       await expect(reader.getByRole("link", { name: t["catalog.mirror.view"], exact: true })).toHaveCount(0);
@@ -123,10 +125,11 @@ for (const [locale, t] of [["en-US", en], ["zh-CN", zh]] as const) {
       await expect(page.getByText(t["mirrors.event.disableRequested"], { exact: true })).toBeVisible();
       await expect(page.getByText(t["mirrors.event.stopConfirmed"])).toHaveCount(0);
       await page.goto(catalogUrl);
+      await settings.click();
       await expect(enable).not.toBeChecked();
       await enable.click();
       await expect(enable).toBeChecked();
-      await expect(follow).toHaveAttribute("href", `/console/mirrors/${mirrorId}`);
+      await expect(follow).toHaveAttribute("href", `/console/mirrors/${mirrorId}?from=${encodeURIComponent(catalogUrl + "?mirrorTable=" + objectId)}`);
     } finally {
       await readerContext.close();
     }

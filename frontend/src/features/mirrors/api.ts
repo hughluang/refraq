@@ -1,6 +1,6 @@
 import { apiClient } from "@/lib/api";
 import type { OffsetPage } from "@/lib/pagination";
-import type { Mirror, PendingOperation, RecoveryRequest } from "./types";
+import type { Mirror, MirrorDetail, PendingOperation, RecoveryRequest } from "./types";
 
 export function listMirrors(params: { source_id?: string; status?: string; q?: string; limit: number; offset: number }) {
   const query = new URLSearchParams();
@@ -13,11 +13,11 @@ export function listMirrors(params: { source_id?: string; status?: string; q?: s
 }
 
 export function getMirror(id: string, signal?: AbortSignal) {
-  return apiClient<{ mirror: Mirror; can_enable: boolean }>(`/mirrors/${encodeURIComponent(id)}`, { signal });
+  return apiClient<{ mirror: MirrorDetail; can_enable: boolean }>(`/mirrors/${encodeURIComponent(id)}`, { signal });
 }
 
 export function setMirrorEnabled(id: string, enabled: boolean, signal?: AbortSignal) {
-  return apiClient<{ mirror: Mirror; operation_id: string }>(`/mirrors/${encodeURIComponent(id)}`, {
+  return apiClient<{ mirror: Mirror; operation_id: string } | { enabled: boolean; operation_id: string }>(`/mirrors/${encodeURIComponent(id)}`, {
     method: "PATCH", signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }),
   });
 }

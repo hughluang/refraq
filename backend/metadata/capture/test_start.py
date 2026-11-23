@@ -12,7 +12,7 @@ from backend.core.config import get_settings
 from backend.core.time import utc_now
 from backend.core.secrets import encrypt_secret
 from backend.metadata.capture.authority import SignedAuthority
-from backend.metadata.capture.control import AUTHORITY_KEYS, allocate_owner, capture_status
+from backend.metadata.capture.control import AUTHORITY_KEYS, allocate_owner, capture_status, reconcile_published_scope
 from backend.metadata.capture.credentials import CredentialFiles
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime import CaptureRuntime
@@ -96,6 +96,85 @@ def test_owner_allocation_uses_current_previous_term_and_emits_real_intent(manag
         for altered in (dict(operation_id="cop_replay"), dict(signed_proof=proof + "other")):
             with pytest.raises((RuntimeBlocked, SourceCaptureControlConflict)):
                 allocate_owner(**(request | altered))
+    finally:
+        http.client.close()
+
+
+@pytest.mark.parametrize("slot_from_previous_owner", [True, False])
+def test_takeover_during_deferred_enrollment_requires_full_fence_and_releases_old_slot(managed_command, slot_from_previous_owner):
+    source_id = managed_command["source_id"]
+    sources = get_source_store()
+    source = sources.get_source(source_id)
+    source.status = "active"
+    source.capture_credential_ciphertext = "fixture"
+    source.capture_revision = managed_command["credential_revision"]
+    registry = mirrors._storage()
+    for name in ("orders", "items"):
+        registry.bindings[name] = dict(source_id=source_id, source_name="One", source_key="one", object_id=name,
+                                       table_identity=name, qualified_table=f"public.{name}")
+        opened = mirrors.enable_for_object(name, actor_user_id="operator")
+        if name == "orders":
+            installed = mirrors.read_published_scope(None, source_id)
+            first = opened["operation_id"]
+    full_scope = mirrors.read_published_scope(None, source_id)
+    state = sources.capture_bindings[source_id]
+    previous = {key: state[key] for key in AUTHORITY_KEYS}
+    stamp = dict(previous, capture_generation=str(previous["capture_generation"]))
+    stamp["resource_binding_id"] = stamp.pop("binding_id")
+    generation = "generation-one"
+    binding = dict(authority=stamp, generation_id=generation, allocation_operation_id=first,
+                   mirror_id=installed[0]["mirror_id"])
+    slot = generation if slot_from_previous_owner else "older-generation"
+    snapshots = {generation: dict(binding=binding, state="submission_uncertain" if slot_from_previous_owner else "catching_up")}
+    if not slot_from_previous_owner:
+        snapshots[slot] = dict(binding=dict(binding, generation_id=slot, authority=dict(stamp, control_revision=1)), state="blocked")
+    registry.operations[first]["allocation"] = dict(observed=True, mirror_revision=1, generation_id=generation,
+                                                    binding=dict(authority=stamp))
+    state.update(desired="configured", published_scope=installed, applied_revision=previous["control_revision"],
+                 incremental_snapshots=dict(active=slot, generations=snapshots))
+    reconcile_published_scope(source_id)
+    assert sources.capture_bindings[source_id]["published_scope"] == installed
+
+    key = Ed25519PrivateKey.generate()
+    authority = dict(previous, owner_epoch=previous["owner_epoch"] + 1, runtime_instance_id="agent-two",
+                     control_revision=previous["control_revision"] + 1)
+    profile = {"tables": ["public.orders", "public.items"]}
+    scope = dict(profile=profile, published_scope=full_scope)
+    observed_commands = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        result = allocation_observation(payload)
+        observed_commands.append(payload["command"])
+        if len(observed_commands) == 1:
+            result["target_fence"]["mirror_receipts"].pop(next(row["mirror_id"] for row in full_scope
+                                                               if row["table_identity"] == "items"))
+        return httpx.Response(200, json={"signature": token(key, purpose="observation:owner_allocation",
+                              authority=authority, scope=scope, observation=result)})
+
+    http = FakeHTTP(handler)
+    signals = ReadinessSignals(http, verifier=verifier(key), runtime_instance_id="agent-two",
+                               max_age_seconds=30, required_checks=CHECKS, scope=profile)
+    request = dict(source_id=source_id, operation_id="cop_new", signals=signals)
+    proof = token(key, authority=authority, scope=scope, previous_authority=previous)
+    try:
+        with pytest.raises(RuntimeBlocked, match="signed_authority_unverified"):
+            allocate_owner(**request, signed_proof=token(key, authority=authority,
+                           scope=dict(profile=profile, published_scope=installed), previous_authority=previous))
+        with pytest.raises(RuntimeBlocked, match="allocation_target_fence_unproven"):
+            allocate_owner(**request, signed_proof=proof)
+        unpromoted = sources.capture_bindings[source_id]
+        assert unpromoted["published_scope"] == installed
+        assert unpromoted["incremental_snapshots"]["active"] == slot
+        command = allocate_owner(**request, signed_proof=proof)
+        assert command["published_scope"] == full_scope
+        assert observed_commands == [command, command]
+        assert allocate_owner(**request, signed_proof=proof) == command
+        reconcile_published_scope(source_id)
+        promoted = sources.capture_bindings[source_id]
+        assert promoted["control_revision"] == authority["control_revision"]
+        assert promoted["published_scope"] == full_scope
+        assert promoted["incremental_snapshots"] == dict(active=None if slot_from_previous_owner else slot, generations=snapshots)
     finally:
         http.client.close()
 
@@ -260,3 +339,96 @@ def test_postgresql_profile_inspects_capture_identity_before_config(managed_comm
         assert config.get("provide.transaction.metadata") == ("true" if transactions else None)
         assert "private" not in config.values()
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def scanning_source(managed_command):
+    source_id = managed_command["source_id"]
+    sources = get_source_store()
+    source = sources.get_source(source_id)
+    source.status = "active"
+    source.capture_credential_ciphertext = "fixture"
+    source.capture_revision = managed_command["credential_revision"]
+    registry = mirrors._storage()
+    for name in ("orders", "items"):
+        registry.bindings[name] = dict(source_id=source_id, source_name="One", source_key="one", object_id=name,
+                                       table_identity=name, qualified_table=f"public.{name}")
+    opened = mirrors.enable_for_object("orders", actor_user_id="operator")
+    state = sources.capture_bindings[source_id]
+    authority = {key: state[key] for key in AUTHORITY_KEYS}
+    stamp = dict(authority, capture_generation=str(authority["capture_generation"]))
+    stamp["resource_binding_id"] = stamp.pop("binding_id")
+    registry.operations[opened["operation_id"]]["allocation"] = dict(
+        observed=True, mirror_revision=1, generation_id="scanning", binding=dict(authority=stamp))
+    state.update(desired="configured", published_scope=mirrors.read_published_scope(None, source_id),
+                 applied_revision=authority["control_revision"], incremental_snapshots=dict(
+                     active="scanning", generations={"scanning": dict(state="snapshotting", binding=dict(
+                         authority=stamp, generation_id="scanning", mirror_id=opened["mirror"]["id"],
+                         allocation_operation_id=opened["operation_id"]))}))
+    return source_id, registry, authority
+
+
+def test_withdrawing_an_undispatched_sibling_preserves_the_active_copy(scanning_source):
+    source_id, registry, authority = scanning_source
+    sibling = mirrors.enable_for_object("items", actor_user_id="operator")
+    mirrors.set_enabled(sibling["mirror"]["id"], enabled=False, actor_user_id="operator")
+    reconcile_published_scope(source_id)
+    state = get_source_store().capture_bindings[source_id]
+    assert {key: state[key] for key in AUTHORITY_KEYS} == authority
+    assert state["incremental_snapshots"]["active"] == "scanning"
+    assert [entry["qualified_table"] for entry in state["published_scope"]] == ["public.orders"]
+    assert registry.ops(registry, sibling["mirror"]["id"])[-1]["state"] == "pending"
+
+
+@pytest.mark.parametrize("change", ["enroll", "withdraw"])
+def test_exact_takeover_retry_survives_registry_drift_after_a_lost_reply(scanning_source, change):
+    exercise_takeover_retry(scanning_source, change, allocation_observation)
+
+
+def exercise_takeover_retry(scanning_source, change, observe_fence):
+    source_id, registry, previous = scanning_source
+    if change == "withdraw":
+        sibling = mirrors.enable_for_object("items", actor_user_id="operator")
+    profile = {"tables": ["public.orders", "public.items"]}
+    scope = dict(profile=profile, published_scope=mirrors.read_published_scope(None, source_id))
+    authority = dict(previous, owner_epoch=previous["owner_epoch"] + 1,
+                     control_revision=previous["control_revision"] + 1, runtime_instance_id="agent-two")
+    key = Ed25519PrivateKey.generate()
+    proof = token(key, authority=authority, scope=scope, previous_authority=previous)
+    receipts = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        observed = observe_fence(payload)
+        receipts.append((payload, observed["target_fence"]))
+        if len(receipts) == 1:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"signature": token(
+            key, authority=authority, scope=scope, purpose="observation:owner_allocation",
+            observation=observed)})
+
+    http = FakeHTTP(handler)
+    signals = ReadinessSignals(http, verifier=verifier(key), runtime_instance_id="agent-two",
+                               max_age_seconds=30, required_checks=CHECKS, scope=profile)
+    request = dict(source_id=source_id, operation_id="cop_new", signed_proof=proof, signals=signals)
+    try:
+        with pytest.raises(RuntimeBlocked):
+            allocate_owner(**request)
+        if change == "enroll":
+            mirrors.enable_for_object("items", actor_user_id="operator")
+        else:
+            mirrors.set_enabled(sibling["mirror"]["id"], enabled=False, actor_user_id="operator")
+        reconcile_published_scope(source_id)
+        assert get_source_store().capture_bindings[source_id]["control_revision"] == previous["control_revision"]
+        command = allocate_owner(**request)
+        assert command["published_scope"] == scope["published_scope"]
+        assert allocate_owner(**request) == command
+        assert receipts[0] == receipts[1]
+        state = get_source_store().capture_bindings[source_id]
+        assert state["owner_epoch"] == authority["owner_epoch"]
+        assert state["control_revision"] == authority["control_revision"] + 1
+        assert state["published_scope"] == mirrors.read_published_scope(None, source_id)
+        assert state["incremental_snapshots"]["active"] is None
+        assert state["allocation"]["command"] == command
+    finally:
+        http.client.close()

@@ -5,6 +5,7 @@ import type { EntityStatus } from "@/features/entities/publishStatus";
 import type { BusinessEntity } from "@/features/entities/types";
 import { getRole, listRoles } from "@/features/roles/api";
 import type { RoleRow } from "@/features/roles/types";
+import { listCatalogSources } from "@/features/sources/api/catalog";
 import { getSource, listSources } from "@/features/sources/api/sources";
 import type { Source } from "@/features/sources/types";
 import { getUser, getUserGroup, listUserGroups } from "@/features/subjects/api";
@@ -305,5 +306,15 @@ const dictionaryAdapter: RecordPickerAdapter = {
       },
       signal,
     );
+  },
+};
+
+export const catalogSourceAdapter: RecordPickerAdapter = {
+  async search(q, signal) {
+    return (await listCatalogSources({ q, limit: RECORD_PICKER_LIMIT, signal })).items;
+  },
+  async resolve(ids, signal) {
+    const pages = await Promise.all(ids.map(source_id => listCatalogSources({ source_id, signal })));
+    return pages.flatMap(page => page.items);
   },
 };

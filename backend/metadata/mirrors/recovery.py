@@ -20,6 +20,7 @@ from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.history import admit_observed_history
 from backend.metadata.mirrors.history_models import HistoryGateRow
 from backend.metadata.mirrors.models import MirrorRow
+from backend.metadata.mirrors.store import SqlMirrorStore
 from backend.metadata.mirrors.recovery_store import RecoveryRow, lock_source
 from backend.metadata.mirrors.service import (
     MirrorError, publication_certificate_ref, record_replacement_publication, replacement_publication_allocation,
@@ -228,9 +229,9 @@ class Recovery:
             gate = session.get(HistoryGateRow, mirror.id)
             lower, upper = admit_observed_history(session, mirror=mirror, gate=gate, history_epoch=epoch,
                                                   bound=observed.history_bound)
-            mirror.state = dict(mirror.state, published_generation_id=generation_id,
+            SqlMirrorStore().save(session, dict(mirror.state, published_generation_id=generation_id,
                                 capture_generation=authority.capture_generation, history_epoch=epoch,
-                                retained_lower_bound=lower, committed_upper_bound=upper)
+                                retained_lower_bound=lower, committed_upper_bound=upper))
             journal.update(state="applied", submission_uncertain=False, publication_receipt=receipt)
             row.journal = journal
             return generation_id

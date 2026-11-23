@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useId, useSyncExternalStore, useTransition } from "react";
 
 import {
@@ -75,4 +75,12 @@ export function useConsoleNavigation(): ConsoleNavigation {
   }, [router]);
 
   return { push, replace, refresh, pending };
+}
+
+/** Address used by record drill-down links and dialogs that survive browser navigation. */
+export function useConsoleLocation() {
+  const pathname = usePathname() ?? "/console";
+  const search = useSearchParams();
+  const query = search?.toString() ?? "";
+  return { pathname, search, href: pathname + (query ? "?" + query : "") };
 }

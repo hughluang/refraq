@@ -504,7 +504,7 @@ def _persist_objects(store, objects) -> None:
         source_id=SOURCE_ID,
         objects=tuple(objects),
         upsert_joins=(),
-        stamp_object_ids=(),
+        collection_stamps=(),
         last_structure_job_id=job_id,
         collected_at=now,
         diff=_empty_diff(),
@@ -518,6 +518,7 @@ def test_persist_plan_writes_objects_stamps_and_inserts_missing_joins(
 ) -> None:
     from backend.metadata.catalog.join_origin import STRUCTURE_JOIN_ORIGIN
     from backend.metadata.catalog.structure_merge import (
+        ObjectCollectionStamp,
         StructureJoinUpsert,
         StructureRefreshPlan,
     )
@@ -530,6 +531,8 @@ def test_persist_plan_writes_objects_stamps_and_inserts_missing_joins(
     assert orders is not None
     now = utc_now()
     job_id = f"job_{uuid.uuid4().hex[:12]}"
+    baseline, _joins = catalog_store.read_baseline(SOURCE_ID)
+    payments_id = next(obj.id for obj in baseline if obj.name == "payments")
     plan = StructureRefreshPlan(
         source_id=SOURCE_ID,
         objects=(orders,),
@@ -541,12 +544,11 @@ def test_persist_plan_writes_objects_stamps_and_inserts_missing_joins(
                 join_expression="id = order_id",
             ),
         ),
-        stamp_object_ids=(orders.id,),
+        collection_stamps=(ObjectCollectionStamp(payments_id, None, None),),
         last_structure_job_id=job_id,
         collected_at=now,
         diff=_empty_diff(),
     )
-    baseline, _joins = catalog_store.read_baseline(SOURCE_ID)
     assert any(o.id == orders.id for o in baseline)
     copied = next(o for o in baseline if o.id == orders.id)
     copied.business_name = "mutated-outside-store"
@@ -556,7 +558,7 @@ def test_persist_plan_writes_objects_stamps_and_inserts_missing_joins(
     with catalog_store.catalog_write(SOURCE_ID) as write:
         write.persist_plan(plan)
 
-    stamped = catalog_store.get_object(orders.id)
+    stamped = catalog_store.get_object(payments_id)
     assert stamped is not None
     assert stamped.last_structure_job_id == job_id
     found = catalog_store.get_join_by_pair(from_id, to_id)
@@ -634,7 +636,7 @@ def test_catalog_write_rolls_back_on_exception(catalog_store) -> None:
                     source_id=SOURCE_ID,
                     objects=(extra,),
                     upsert_joins=(),
-                    stamp_object_ids=(),
+                    collection_stamps=(),
                     last_structure_job_id="job_abort",
                     collected_at=utc_now(),
                     diff=_empty_diff(),
@@ -777,6 +779,59 @@ def test_structure_commit_assigns_blank_ids_and_writes_diff(catalog_store) -> No
     assert diff is not None
     assert diff.job_id == job_id
     assert diff.source_id == SOURCE_ID
+
+
+def test_statistics_refresh_preserves_child_revisions_and_semantics(catalog_store) -> None:
+    from sqlalchemy import select
+
+    from backend.core.db import session_scope
+    from backend.metadata.catalog.records import CatalogForeignKeyRecord, CatalogIndexRecord
+    from backend.metadata.catalog.store.sql import SqlCatalogStore
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.models import CatalogForeignKeyRow, CatalogIndexRow
+    from backend.metadata.sources.service import require_source
+
+    _seed_source()
+    source = require_source(SOURCE_ID)
+    table = _object("orders", ready=False, business_name=None, columns=["id", "archived"])
+    table.foreign_keys = [CatalogForeignKeyRecord("parent", ["id"], "public", "parent", ["id"])]
+    table.indexes = [CatalogIndexRecord("by_id", ["id"], True)]
+    parent = _object("parent", ready=False, business_name=None, columns=["id"])
+    apply_structure_snapshot(source=source, job_id="initial", collected=[parent, table], schema_scope=None)
+    catalog_store.patch_object_semantics(table.id, business_name="Orders")
+    catalog_store.patch_column_semantics(table.columns[0].id, business_name="Order ID")
+
+    # One refresh drops a column and also measures the table.
+    changed = replace(table, columns=table.columns[:1], source_size_bytes=2**34, estimated_rows=0)
+    receipt = apply_structure_snapshot(source=source, job_id="drop", collected=[parent, changed], schema_scope=None)
+    before = catalog_store.get_object(table.id)
+    assert receipt.facts.diff_class != "unchanged"
+    assert (before.source_size_bytes, before.estimated_rows) == (2**34, 0)
+    assert before.business_name == "Orders"
+    assert before.columns[0].business_name == "Order ID"
+    assert not next(col for col in before.columns if col.name == "archived").is_present
+
+    def constraint_timestamps():
+        with session_scope() as session:
+            return tuple(
+                session.scalars(select(row.updated_at).where(row.object_id == table.id)).one()
+                for row in (CatalogForeignKeyRow, CatalogIndexRow)
+            )
+
+    if isinstance(catalog_store, SqlCatalogStore):
+        constraint_revisions = constraint_timestamps()
+    for job_id, size, rows in (("unmeasured", None, None), ("empty", 0, 0)):
+        observed = replace(changed, source_size_bytes=size, estimated_rows=rows)
+        receipt = apply_structure_snapshot(source=source, job_id=job_id, collected=[parent, observed], schema_scope=None)
+        latest = catalog_store.get_object(table.id)
+        assert receipt.facts.diff_class == "unchanged"
+        assert latest.collected_at > before.collected_at
+        assert latest == replace(
+            before, source_size_bytes=size, estimated_rows=rows,
+            collected_at=latest.collected_at, last_structure_job_id=job_id,
+        )
+    if isinstance(catalog_store, SqlCatalogStore):
+        assert constraint_timestamps() == constraint_revisions
 
 
 def test_structure_commit_failure_after_diff_leaves_both_unchanged(
@@ -1012,3 +1067,34 @@ def test_search_source_ids_rank_only_that_finite_set(catalog_store) -> None:
         generation=1,
         source_ids=frozenset({SOURCE_ID}),
     ) == [local.columns[0].id]
+
+
+def test_mirror_picker_pages_after_qualified_name_filter(catalog_store, monkeypatch):
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.mirrors import service
+    from backend.metadata.sources.service import require_source
+
+    monkeypatch.setattr(service, "_store", None)
+    _seed_source()
+    collected = [
+        replace(_object(f"orders_{i:02}", ready=False, business_name=None, columns=[]),
+                source_size_bytes=8192, estimated_rows=i)
+        for i in range(12)
+    ]
+    records = [*collected, _object("orders full", ready=False, business_name=None, columns=[])]
+    apply_structure_snapshot(source=require_source(SOURCE_ID), job_id="initial", collected=records, schema_scope=None)
+    page = service.list_catalog_mirror_tables(visible_ids=frozenset([SOURCE_ID]), object_id=None,
+                                              q="PUBLIC.orders_", can_read=True, can_write=False,
+                                              limit=10, offset=10)
+    assert page["total"] == 12
+    assert [row["qualified_table"] for row in page["items"]] == ["public.orders_10", "public.orders_11"]
+    assert all(row["source_size_bytes"] == 8192 for row in page["items"])
+    assert [row["estimated_rows"] for row in page["items"]] == [10, 11]
+    assert all(not row["mirror"]["can_enable"] for row in page["items"])
+    for query in ("orders ", " "):
+        page = service.list_catalog_mirror_tables(
+            visible_ids=frozenset([SOURCE_ID]), object_id=None, q=query,
+            can_read=True, can_write=False, limit=10, offset=0,
+        )
+        assert page["total"] == 1
+        assert [row["qualified_table"] for row in page["items"]] == ["public.orders full"]

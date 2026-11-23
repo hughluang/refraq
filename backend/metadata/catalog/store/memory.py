@@ -117,10 +117,12 @@ class _MemoryPersistPort:
         self._store._objects[obj.id] = obj
 
     def stamp_objects(self, plan: StructureRefreshPlan) -> None:
-        for oid in plan.stamp_object_ids:
-            obj = self._store._objects[oid]
-            self._store._objects[oid] = replace(
+        for stamp in plan.collection_stamps:
+            obj = self._store._objects[stamp.object_id]
+            self._store._objects[stamp.object_id] = replace(
                 obj,
+                source_size_bytes=stamp.source_size_bytes,
+                estimated_rows=stamp.estimated_rows,
                 collected_at=plan.collected_at,
                 last_structure_job_id=plan.last_structure_job_id,
             )

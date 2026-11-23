@@ -90,7 +90,7 @@ def setup_delivery(monkeypatch, tmp_path):
     owner.stamp.pop("published_scope")
     monkeypatch.setattr(composition, "source_control_transaction", transaction)
     monkeypatch.setattr(composition, "load_binding", lambda *args: state)
-    monkeypatch.setattr(composition, "read_published_scope", lambda *args: state["published_scope"])
+    monkeypatch.setattr(composition, "read_dispatch_scope", lambda *args, **kwargs: state["published_scope"])
     monkeypatch.setattr(composition, "target_metadata", lambda *args: metadata)
     consumer = FakeConsumer([Message(0)], events)
     app = RecordingApplication(events)

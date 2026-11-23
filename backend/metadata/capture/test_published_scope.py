@@ -488,10 +488,14 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             return
         if mismatch == "superseded_pending":
             service.set_enabled(opened["id"], enabled=False, actor_user_id="operator")
-            assert entrypoint.main() == 2
-            assert len(allocation_calls) == 1
+            assert entrypoint.main() == 0
+            assert allocation_calls == [allocation_calls[0]] * 2
+            assert len(receipts) == 1
             assert mutations == []
-            assert control.capture_status(SOURCE)["control"]["owner_epoch"] == 0
+            state = control.capture_status(SOURCE)["control"]
+            assert state["owner_epoch"] == 1 and state["desired"] == "stopped"
+            assert state["applied_revision"] == current["control_revision"] + 1
+            assert state["stop_ack"]["operation_id"] != "allocated"
             return
         containment["withhold_stop"] = False
         stop_command, = pending_capture_commands()

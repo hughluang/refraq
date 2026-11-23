@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     ForeignKey,
     Integer,
@@ -122,6 +123,8 @@ class CatalogObjectRow(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     ddl: Mapped[str | None] = mapped_column(Text, nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    estimated_rows: Mapped[int | None] = mapped_column(BigInteger)
     primary_key_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     business_name: Mapped[str | None] = mapped_column(String(256), nullable=True)

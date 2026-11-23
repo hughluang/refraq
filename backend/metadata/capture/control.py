@@ -29,6 +29,7 @@ from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.service import (
     clear_mirror_stop_evidence,
     read_published_scope,
+    read_dispatch_scope,
     record_mirror_stop_evidence,
 )
 from backend.metadata.sources.store import SourceRecord, get_source_store
@@ -81,8 +82,8 @@ def table_exclusion_refs(scope, exclusions):
     return refs
 
 
-def _desired(source, published_scope, state):
-    profile = state.get("allocation", {}).get("scope", {}).get("profile")
+def _desired(source, published_scope, allocation_scope):
+    profile = allocation_scope.get("profile")
     wanted = selected_tables(profile, published_scope) if profile else included_tables(published_scope)
     if source.status == "active" and source.capture_credential_ciphertext and wanted:
         return "configured"
@@ -124,7 +125,7 @@ def _advance_intent(session, state, source, published_scope):
     state.update(control_revision=state["control_revision"] + 1,
                  credential_revision=source.capture_revision, stop_ack=None,
                  applied_revision=None, observed_at=None, published_scope=published_scope,
-                 desired=_desired(source, published_scope, state))
+                 desired=_desired(source, published_scope, state.get("allocation", {}).get("scope", {})))
     command = _command(state, source, f"cop_{uuid4().hex}")
     save_binding(session, state)
     save_operation(session, command)
@@ -146,8 +147,14 @@ def reconcile_published_scope(source_id):
         state = load_binding(session, source_id)
         if state is None:
             return
-        scope = read_published_scope(session, source_id)
-        if scope == state.get("published_scope", []) and state["desired"] == _desired(source, scope, state):
+        pending = state.get("pending_allocation")
+        if pending and pending["previous_authority"] == {key: state[key] for key in AUTHORITY_KEYS}:
+            # The gateway may have fenced the predecessor before losing its reply.
+            # Resolve that exact reservation before issuing a new scope command.
+            return
+        scope = read_dispatch_scope(session, source_id, state=state)
+        if (scope == state.get("published_scope", [])
+                and state["desired"] == _desired(source, scope, state.get("allocation", {}).get("scope", {}))):
             return
         _advance_intent(session, state, source, scope)
 
@@ -196,15 +203,27 @@ def record_source_intent(
     )
 
 
-def _allocation_context(session, source, state, profile_scope):
-    published_scope = read_published_scope(session, source.id)
-    desired = _desired(source, published_scope, state or {})
-    if (state is None or state["credential_revision"] != source.capture_revision
-            or state["desired"] != desired or state.get("published_scope", []) != published_scope
-            or (desired == "configured" and not profile_matches_scope(profile_scope, published_scope))):
+def _allocation_context(session, source, state, profile_scope, *, ordinary_takeover):
+    if state is None or state["credential_revision"] != source.capture_revision:
         raise SourceCaptureControlConflict()
-    return ({key: state[key] for key in AUTHORITY_KEYS},
-            {"profile": profile_scope, "published_scope": published_scope})
+    current = state.get("published_scope", [])
+    previous = {key: state[key] for key in AUTHORITY_KEYS}
+    desired = _desired(source, current, state.get("allocation", {}).get("scope", {}))
+    if state["desired"] != desired:
+        raise SourceCaptureControlConflict()
+    pending = state.get("pending_allocation") if ordinary_takeover else None
+    if pending and pending["previous_authority"] == previous:
+        if pending["scope"]["profile"] != profile_scope:
+            raise SourceCaptureControlConflict()
+        return previous, pending["scope"]
+    published_scope = read_published_scope(session, source.id)
+    if current != published_scope and not (
+        ordinary_takeover and current == read_dispatch_scope(session, source.id, state=state)
+    ):
+        raise SourceCaptureControlConflict()
+    if desired == "configured" and not profile_matches_scope(profile_scope, published_scope):
+        raise SourceCaptureControlConflict()
+    return previous, {"profile": profile_scope, "published_scope": published_scope}
 
 
 def allocate_owner(*, source_id, operation_id, signed_proof, signals):
@@ -225,7 +244,7 @@ def allocate_owner(*, source_id, operation_id, signed_proof, signals):
                     or command["runtime_instance_id"] != signals.runtime_instance_id):
                 raise SourceCaptureControlConflict()
             return command
-        previous, scope = _allocation_context(session, source, state, signals.scope)
+        previous, scope = _allocation_context(session, source, state, signals.scope, ordinary_takeover=True)
         if replacement_blocks_lifecycle(session, state):
             raise SourceCaptureControlConflict()
         authority = {**previous, "owner_epoch": state["owner_epoch"] + 1,
@@ -234,8 +253,7 @@ def allocate_owner(*, source_id, operation_id, signed_proof, signals):
         pending = state.get("pending_allocation")
         if pending is not None and pending["previous_authority"] == previous:
             command = pending["command"]
-            if (command["operation_id"] != operation_id or pending["scope"] != scope
-                    or pending["request_digest"] != request_digest
+            if (command["operation_id"] != operation_id or pending["request_digest"] != request_digest
                     or any(command[key] != authority[key] for key in AUTHORITY_KEYS)):
                 raise SourceCaptureControlConflict()
         else:
@@ -245,7 +263,8 @@ def allocate_owner(*, source_id, operation_id, signed_proof, signals):
                                              scope=scope, operation_id=operation_id)
             if claims.get("previous_authority") != previous:
                 raise SourceCaptureControlConflict()
-            command = _command({**state, **authority}, source, operation_id)
+            desired = _desired(source, scope["published_scope"], scope)
+            command = _command(dict(authority, desired=desired, published_scope=scope["published_scope"]), source, operation_id)
             pending = dict(command=command, scope=scope, previous_authority=previous,
                            request_digest=request_digest)
             state["pending_allocation"] = pending
@@ -256,9 +275,9 @@ def allocate_owner(*, source_id, operation_id, signed_proof, signals):
         if (state.get("allocation", {}).get("command") == command
                 and state["allocation"]["request_digest"] == request_digest):
             return command
-        current, scope = _allocation_context(session, source, state, signals.scope)
+        current, scope = _allocation_context(session, source, state, signals.scope, ordinary_takeover=True)
         if (state.get("pending_allocation") != pending or current != previous
-                or scope != pending["scope"] or load_operation(session, operation_id) is not None):
+                or load_operation(session, operation_id) is not None):
             raise SourceCaptureControlConflict()
         evidence = signals.allocation_observation(pending, signed_proof)
         persist_audit_event(
@@ -269,9 +288,24 @@ def allocate_owner(*, source_id, operation_id, signed_proof, signals):
         save_operation(session, command)
         state.pop("pending_allocation")
         _retire_stop_evidence(session, state)
+        ledger = state.get("incremental_snapshots", {})
+        active = ledger.get("active")
+        if active:
+            binding = ledger["generations"][active]["binding"]
+            snapshot_authority = dict(previous, resource_binding_id=previous["binding_id"],
+                                      capture_generation=str(previous["capture_generation"]))
+            del snapshot_authority["binding_id"]
+            if (binding["generation_id"] == active and binding["authority"] == snapshot_authority
+                    and binding["mirror_id"] in evidence["target_fence"]["mirror_receipts"]):
+                ledger["active"] = None
         state.update(authority, applied_revision=None, observed_at=None, stop_ack=None,
+                     published_scope=scope["published_scope"], desired="stopped" if command["kind"] == "stop" else "configured",
                      allocation={**pending, "evidence": evidence})
         save_binding(session, state)
+        desired_scope = read_published_scope(session, source_id)
+        if desired_scope != scope["published_scope"]:
+            # Make registry changes effective before the reserved command can run.
+            _advance_intent(session, state, source, desired_scope)
         return command
 
 
@@ -344,7 +378,7 @@ def _replacement_context(session, source, state, operation_id, profile):
             or state["owner_epoch"] <= 0 or not state["runtime_instance_id"]
             or type(state["capture_generation"]) is not int or state["capture_generation"] < 1):
         raise SourceCaptureControlConflict()
-    previous, scope = _allocation_context(session, source, state, profile)
+    previous, scope = _allocation_context(session, source, state, profile, ordinary_takeover=False)
     return previous, _replacement_scope(session, source, operation_id, previous, scope)
 
 
@@ -487,7 +521,7 @@ def record_applied_evidence(
         if command["kind"] != "stop" and replacement_blocks_lifecycle(session, state):
             raise SourceCaptureControlConflict()
         if (command["kind"] == "reconcile"
-                and command.get("published_scope") != read_published_scope(session, source_id)):
+                and command.get("published_scope") != read_dispatch_scope(session, source_id, state=state)):
             raise SourceCaptureControlConflict()
         if any(
             command[key] != state[key] or evidence.get(key) != state[key]

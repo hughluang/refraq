@@ -247,6 +247,8 @@ def _to_catalog_records(
                 name=obj.name,
                 ddl=obj.ddl,
                 comment=obj.comment,
+                source_size_bytes=obj.source_size_bytes,
+                estimated_rows=obj.estimated_rows,
                 primary_key=list(obj.primary_key) if obj.primary_key else None,
                 is_present=True,
                 business_name=None,

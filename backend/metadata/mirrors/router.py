@@ -2,13 +2,16 @@
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from backend.admin.deps import get_actor_token_id, require_permission
+from backend.admin.deps import get_actor_token_id, require_permission, resolve_user_permissions
+from backend.admin.permissions import permissions_include
+from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.user_store import UserRecord
 from backend.metadata.mirrors import recovery, service
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
 from backend.metadata.mirrors.schemas import (
     MirrorListResponse,
     MirrorDetailResponse,
+    MirrorActionReceipt,
     MirrorStatus,
     PatchMirrorRequest,
     PatchMirrorResponse,
@@ -39,18 +42,20 @@ def get_mirror(
     return service.get_mirror_detail(mirror_id)
 
 
-@router.patch("/mirrors/{mirror_id}", response_model=PatchMirrorResponse)
+@router.patch("/mirrors/{mirror_id}", response_model=PatchMirrorResponse | MirrorActionReceipt)
 def patch_mirror(
     mirror_id: str,
     payload: PatchMirrorRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("mirror:write")),
+    roles: RoleStore = Depends(get_role_store),
 ):
     return service.set_enabled(
         mirror_id,
         enabled=payload.enabled,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
+        can_read=permissions_include(resolve_user_permissions(user, roles), "mirror:read"),
     )
 
 

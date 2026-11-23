@@ -1,0 +1,76 @@
+.summary {
+  container-type: inline-size;
+  display: grid;
+  gap: var(--mantine-spacing-md);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.overview {
+  display: grid;
+  gap: var(--mantine-spacing-lg);
+  align-items: start;
+}
+
+@container (min-width: 41rem) {
+  .overview:has(.path) { grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr); }
+}
+
+.label {
+  margin: 0 0 var(--mantine-spacing-xs);
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 600;
+}
+
+.path {
+  display: flex;
+  list-style: none;
+  padding: 0;
+  margin: var(--mantine-spacing-sm) 0 0;
+}
+
+.path li {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  color: var(--mantine-color-dimmed);
+  padding-inline-end: var(--mantine-spacing-xs);
+}
+
+.path li::before {
+  content: "";
+  display: block;
+  position: relative;
+  z-index: 1;
+  width: .65rem;
+  height: .65rem;
+  margin-bottom: .45rem;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: var(--mantine-color-body);
+}
+
+.path li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  inset-inline: .55rem 0;
+  top: .26rem;
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+.path li[data-phase="current"], .path li[data-phase="complete"] { color: var(--mantine-primary-color-light-color); }
+.path li[data-phase="blocked"] { color: var(--mantine-color-orange-text); }
+.path li[data-phase="complete"]::before { background: currentColor; }
+.stage { display: block; font-size: var(--mantine-font-size-sm); font-weight: 600; }
+.path small { display: block; font-size: var(--mantine-font-size-xs); }
+.copy { padding: var(--mantine-spacing-sm) var(--mantine-spacing-md); border: 1px dashed var(--mantine-color-default-border); border-radius: var(--mantine-radius-sm); }
+.copy[data-published="true"] { background: var(--mantine-primary-color-light); border-style: solid; }
+.copy strong { display: block; font-size: var(--mantine-font-size-md); }
+.measurement progress { display: block; width: min(100%, 32rem); height: .6rem; margin-block: .35rem; accent-color: var(--mantine-primary-color-filled); }
+
+@container (max-width: 22rem) {
+  .path { flex-direction: column; gap: .5rem; }
+  .path li { padding-inline-start: 1.25rem; }
+  .path li::before { position: absolute; top: .28rem; inset-inline-start: 0; }
+  .path li:not(:last-child)::after { inset-inline: .25rem auto; top: .8rem; bottom: -.65rem; border-inline-start: 1px solid var(--mantine-color-default-border); }
+}

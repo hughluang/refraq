@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
+from importlib import import_module
 import os
 from threading import Barrier
 from uuid import uuid4
@@ -10,7 +11,9 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 import pytest
-from sqlalchemy import create_engine
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
 from backend.core.errors import AppError
@@ -289,6 +292,86 @@ def test_replacement_only_allocates_the_audited_generation(opened):
     with store.transaction() as session, pytest.raises(AppError, match='MIRROR_CONTROL_CONFLICT'):
         service.require_current_open_allocations(session, authority=authority, allocations=[(replacement, generation_id)])
     assert initial_operation_id != recovery_id
+
+
+@pytest.mark.integration
+def test_concurrent_catalog_enables_create_one_open(opened):
+    store, _, _, authority = opened
+    now = utc_now()
+    with store.transaction() as session:
+        session.add(CatalogObjectRow(id="items", source_id=authority.source_id, locator_key="items",
+                                     object_type="table", schema_name="sales", name="items",
+                                     created_at=now, updated_at=now))
+    start = Barrier(4, timeout=10)
+
+    def enable(index):
+        start.wait()
+        if index % 2:
+            result = service.enable_for_object("items", actor_user_id="operator")
+            return result["mirror"]["id"], result["operation_id"]
+        result = service.set_enabled_for_object("items", source_id=authority.source_id, enabled=True,
+                                                can_read=True, actor_user_id="operator")
+        return result["mirror"]["mirror_id"], result["operation_id"]
+
+    with ThreadPoolExecutor(4) as workers:
+        identities = set(workers.map(enable, range(4)))
+    (mirror_id, operation_id), = identities
+    with store.transaction() as session:
+        op, = store.ops(session, mirror_id)
+        assert (op["kind"], op["id"], op["control_revision"]) == ("open", operation_id, 1)
+
+
+@pytest.mark.integration
+def test_sql_inventory_and_catalog_picker_keep_observed_and_retained_bindings(opened):
+    store, mirror_id, operation_id, authority = opened
+    with store.transaction() as session:
+        operation, = store.ops(session, mirror_id)
+        bound = dict(authority=asdict(authority), object_id="orders", table_identity="orders",
+                     qualified_table="sales.orders", history_epoch="epoch", schema_fingerprint="schema",
+                     partition_identity={"partition": 0})
+        operation["allocation"] = dict(generation_id="copy", observed=True, mirror_revision=1, binding=bound)
+        store.save_op(session, operation)
+        state = load_binding(session, authority.source_id)
+        state["applied_revision"] = authority.control_revision
+        state["incremental_snapshots"] = dict(active=None, generations={"copy": dict(
+            id="scan", receipt=True, state="catching_up", scan=dict(offset=1, timestamp=1700000000000),
+            completion=dict(offset=2, timestamp=1700000001000), binding=dict(
+                authority=asdict(authority), mirror_id=mirror_id, mirror_revision=1,
+                allocation_operation_id=operation_id, generation_id="copy", table_identity="orders",
+                qualified_table="sales.orders", history_epoch="epoch", schema_fingerprint="schema",
+                data_partition={"partition": 0},
+            ),
+        )})
+        save_binding(session, state)
+    # Exercise adoption of an existing snapshot whose saved status still says waiting.
+    migration = import_module("backend.alembic.versions.0104_mirror_effective_status")
+    with store.transaction() as session:
+        connection = session.connection()
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            migration.upgrade()
+        assert "ix_source_mirrors_effective_status" in {
+            index["name"] for index in inspect(connection).get_indexes("source_mirrors")
+        }
+        assert connection.exec_driver_sql("SELECT effective_status FROM source_mirrors").scalar_one() == "catching_up"
+    page = service.list_mirrors(status="catching_up", q="sales.orders", limit=1)
+    assert page["total"] == 1 and page["items"][0]["id"] == mirror_id
+    assert service.list_mirrors(status="waiting")["total"] == 0
+    assert service.list_mirrors(status="catching_up", offset=1)["items"] == []
+    assert service.list_mirrors(status="catching_up", offset=1)["total"] == 1
+    with store.transaction() as session:
+        source = session.get(SourceRow, authority.source_id)
+        source.engine = "mysql"
+        session.add(CatalogObjectRow(id="unbound", source_id=authority.source_id, locator_key="unbound",
+                                     object_type="table", schema_name="sales", name="unbound",
+                                     created_at=utc_now(), updated_at=utc_now()))
+    tables = service.list_catalog_mirror_tables(visible_ids={authority.source_id}, object_id=None, q=None,
+                                                can_read=True, can_write=True, limit=10, offset=0)
+    assert tables["total"] == 1 and tables["items"][0]["object_id"] == "orders"
+    assert tables["items"][0]["mirror"]["can_disable"] is True
+    hidden = service.list_catalog_mirror_tables(visible_ids=set(), object_id=None, q=None,
+                                                can_read=True, can_write=True, limit=10, offset=0)
+    assert hidden["total"] == 0
 
 
 @pytest.mark.integration

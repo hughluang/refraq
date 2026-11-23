@@ -191,6 +191,8 @@ class PostgresqlConnector:
                         name=row["name"],
                         object_type=row["object_type"],
                         comment=row["comment"],
+                        source_size_bytes=row["source_size_bytes"],
+                        estimated_rows=row["estimated_rows"],
                     )
                     for row in stream_mappings(conn, _OBJECT_SQL, params)
                 ]
@@ -330,6 +332,9 @@ _OBJECT_SQL = text(
         ELSE c.relkind::text
       END AS object_type,
       c.oid AS oid,
+      CASE WHEN c.relkind = 'r' THEN pg_catalog.pg_table_size(c.oid) END AS source_size_bytes,
+      CASE WHEN c.relkind IN ('r', 'p') AND c.reltuples >= 0
+           THEN c.reltuples::bigint END AS estimated_rows,
       obj_description(c.oid, 'pg_class') AS comment
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

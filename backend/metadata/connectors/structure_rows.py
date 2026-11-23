@@ -24,6 +24,8 @@ class ObjectRow:
     name: str
     object_type: str
     comment: str | None = None
+    source_size_bytes: int | None = None
+    estimated_rows: int | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +126,8 @@ def assemble(
             name=obj.name,
             object_type=obj.object_type,
             comment=obj.comment,
+            source_size_bytes=obj.source_size_bytes,
+            estimated_rows=obj.estimated_rows,
         )
 
     column_count = _consume_columns(objects, rows.columns)
@@ -149,6 +153,8 @@ def assemble(
 
 @dataclass
 class _ObjectBuild:
+    source_size_bytes: int | None
+    estimated_rows: int | None
     schema_name: str
     name: str
     object_type: str
@@ -166,6 +172,8 @@ class _ObjectBuild:
             object_type=self.object_type,
             columns=sorted(self.columns, key=lambda col: col.ordinal),
             ddl=self.ddl,
+            source_size_bytes=self.source_size_bytes,
+            estimated_rows=self.estimated_rows,
             comment=self.comment,
             primary_key=[name for _, name in sorted(self.primary_key)],
             foreign_keys=[

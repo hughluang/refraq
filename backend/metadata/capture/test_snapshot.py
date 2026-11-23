@@ -21,6 +21,7 @@ from backend.metadata.capture.control import source_control_transaction
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked
 from backend.metadata.capture.snapshot import SnapshotBinding, SnapshotCoordinator
 from backend.metadata.capture.store import load_binding, save_binding
+from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors.types import Authority, PartitionIdentity
 from backend.metadata.models import SourceCaptureBindingRow, SourceRow
 from backend.metadata.sources.store import SourceRecord, get_source_store, reset_source_store
@@ -124,6 +125,7 @@ def prepared(monkeypatch, request):
         request.addfinalizer(cleanup)
         SourceRow.__table__.create(engine)
         SourceCaptureBindingRow.__table__.create(engine)
+        MirrorRow.__table__.create(engine)
     monkeypatch.setenv("REFRAQ_STORE_BACKEND", "persistent" if request.param == "postgresql" else "memory")
     reset_settings_cache()
     reset_source_store()
@@ -211,6 +213,71 @@ def test_receipt_and_both_native_terminals_are_required_for_catch_up(tmp_path, p
         assert worker.reconcile(binding) == completed
         assert worker.reconcile(other).state == "submission_uncertain"
         assert len(signals.signals) == 2
+    finally:
+        worker.journal.close()
+
+
+def test_signed_table_progress_keeps_observed_bytes_across_the_terminal(tmp_path, prepared):
+    binding, _ = prepared
+    signals = SignalFixture()
+    worker = coordinator(tmp_path, signals)
+    try:
+        op = worker.reconcile(binding).operation_id
+        signals.receipt_visible = True
+        signals.records.extend(signals.beginning(binding, op))
+        signals.records.append(signals.native(binding, op, 11, "IN_PROGRESS",
+                                              current_collection_in_progress=binding.qualified_table,
+                                              scanned_bytes="320", scan_total_bytes="1000"))
+        assert worker.reconcile(binding).state == "snapshotting"
+        signals.records.extend([
+            signals.native(binding, op, 12, "IN_PROGRESS", current_collection_in_progress=binding.qualified_table,
+                           scanned_bytes="450"),
+            signals.native(binding, op, 13, "IN_PROGRESS", current_collection_in_progress=binding.qualified_table,
+                           scanned_bytes="319", scan_total_bytes="999"),
+            signals.native(binding, op, 14, "TABLE_SCAN_COMPLETED", scanned_collection=binding.qualified_table,
+                           status="SUCCEEDED", total_rows_scanned="1"),
+            signals.native(binding, op, 15, "COMPLETED"),
+        ])
+        assert worker.reconcile(binding).state == "catching_up"
+        with source_control_transaction(binding.authority.source_id) as (session, source):
+            ledger = load_binding(session, source.id)["incremental_snapshots"]
+            operation = ledger["generations"][binding.generation_id]
+        assert operation["byte_sample"] == dict(offset=12, timestamp=signals.records[-4]["value"]["timestamp"],
+                                                scanned_bytes=450, scan_total_bytes=1000)
+        assert operation["progress_sample"]["offset"] == operation["scan"]["offset"] == 14
+        assert ledger["active"] is None
+    finally:
+        worker.journal.close()
+
+
+def test_legacy_bytes_keep_unknown_provenance_until_measured_again(tmp_path, prepared):
+    binding, _ = prepared
+    signals = SignalFixture()
+    worker = coordinator(tmp_path, signals)
+    try:
+        op = worker.reconcile(binding).operation_id
+        signals.receipt_visible = True
+        signals.records.extend(signals.beginning(binding, op))
+        assert worker.reconcile(binding).state == "snapshotting"
+        with source_control_transaction(binding.authority.source_id) as (session, source):
+            state = load_binding(session, source.id)
+            legacy = state["incremental_snapshots"]["generations"][binding.generation_id]["progress_sample"]
+            legacy.update(scanned_bytes=300, scan_total_bytes=1000)
+            save_binding(session, state)
+        for offset, measured in ((11, None), (12, "400")):
+            data = {"scanned_bytes": measured} if measured else {}
+            signals.records.append(signals.native(binding, op, offset, "IN_PROGRESS",
+                                                  current_collection_in_progress=binding.qualified_table, **data))
+            assert worker.reconcile(binding).state == "snapshotting"
+            with source_control_transaction(binding.authority.source_id) as (session, source):
+                state = load_binding(session, source.id)
+                operation = state["incremental_snapshots"]["generations"][binding.generation_id]
+            assert operation["progress_sample"]["offset"] == offset
+            if measured is None:
+                assert operation["byte_sample"] == dict(scanned_bytes=300, scan_total_bytes=1000)
+            else:
+                assert operation["byte_sample"] == dict(scanned_bytes=400, scan_total_bytes=1000, offset=offset,
+                                                        timestamp=signals.records[-1]["value"]["timestamp"])
     finally:
         worker.journal.close()
 

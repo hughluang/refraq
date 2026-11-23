@@ -6,10 +6,10 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
-from backend.metadata.mirrors.service import catalog_mirror, enable_for_object, set_enabled_for_object
-from backend.metadata.mirrors.schemas import PatchMirrorRequest, PatchMirrorResponse
+from backend.metadata.mirrors.service import catalog_mirror, enable_for_object, list_catalog_mirror_tables, set_enabled_for_object
+from backend.metadata.mirrors.schemas import MirrorActionReceipt, PatchMirrorRequest, PatchMirrorResponse
 from backend.admin.deps import get_actor_token_id, require_permission, resolve_user_permissions
-from backend.admin.role_store import get_role_store
+from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.permissions import permissions_include
 from backend.admin.errors import AuthForbidden
 from backend.admin.user_store import UserRecord
@@ -57,6 +57,7 @@ from backend.metadata.schemas.catalog import (
     CatalogColumnsSemanticsBatchResponse,
     CatalogDdlResponse,
     CatalogMirrorSettingResponse,
+    CatalogMirrorTableListResponse,
     CatalogObjectListResponse,
     CatalogObjectOut,
     CatalogObjectResponse,
@@ -130,18 +131,18 @@ def _column_out(view: catalog_views.ColumnView) -> CatalogColumnOut:
     )
 
 
-def _object_out(
-    view: catalog_views.ObjectView, *, detail_for: UserRecord | None = None
-) -> CatalogObjectOut:
-    if detail_for is None:
-        return CatalogObjectOut.model_validate(present_object(view, profile=ObjectPresentProfile.HTTP_SUMMARY))
+def _object_out(view: catalog_views.ObjectView) -> CatalogObjectOut:
+    return CatalogObjectOut.model_validate(present_object(view, profile=ObjectPresentProfile.HTTP_SUMMARY))
+
+
+def _object_detail_out(view: catalog_views.ObjectView, user: UserRecord, roles: RoleStore) -> CatalogObjectOut:
     payload = present_object(view, profile=ObjectPresentProfile.HTTP_DETAIL)
     try:
-        can_read_catalog = allows(detail_for.id, view.source_id, "metadata:read")
+        can_read_catalog = allows(user.id, view.source_id, "metadata:read")
     except AuthForbidden:
         can_read_catalog = False
     if can_read_catalog:
-        permissions = resolve_user_permissions(detail_for, get_role_store())
+        permissions = resolve_user_permissions(user, roles)
         payload["mirror"] = catalog_mirror(
             view.id, source_id=view.source_id,
             can_read=permissions_include(permissions, "mirror:read"),
@@ -175,6 +176,27 @@ def list_catalog_sources(
     return CatalogSourceListResponse(
         items=[CatalogSourceOut.model_validate(record, from_attributes=True) for record in records],
         total=total, limit=page.limit, offset=page.offset,
+    )
+
+
+@router.get("/catalog/mirror-tables", response_model=CatalogMirrorTableListResponse)
+def mirror_tables(
+    source_id: str | None = None,
+    object_id: str | None = None,
+    q: str | None = None,
+    page: PageParams = Depends(page_params(default_limit=10, max_limit=100)),
+    user: UserRecord = Depends(require_permission("metadata:read")),
+    roles: RoleStore = Depends(get_role_store),
+):
+    visible = catalog_reads.search_visible_source_ids(user.id)
+    if source_id is not None:
+        requested = frozenset([source_id])
+        visible = requested if visible is None else visible & requested
+    permissions = resolve_user_permissions(user, roles)
+    return list_catalog_mirror_tables(
+        visible_ids=visible, object_id=object_id, q=q, limit=page.limit, offset=page.offset,
+        can_read=permissions_include(permissions, "mirror:read"),
+        can_write=permissions_include(permissions, "mirror:write"),
     )
 
 
@@ -267,24 +289,27 @@ async def search_columns(
 def get_object(
     object_id: str,
     user: UserRecord = Depends(require_permission("metadata:read")),
+    roles: RoleStore = Depends(get_role_store),
 ) -> CatalogObjectResponse:
     record = _require_object_permission(user.id, object_id, "metadata:read")
-    return CatalogObjectResponse(object=_object_out(catalog_reads.get_object(record.id), detail_for=user))
+    return CatalogObjectResponse(object=_object_detail_out(catalog_reads.get_object(record.id), user, roles))
 
 
 @router.post(
     "/objects/{object_id}/mirror",
-    response_model=PatchMirrorResponse,
+    response_model=PatchMirrorResponse | MirrorActionReceipt,
     status_code=status.HTTP_202_ACCEPTED,
 )
 def enable_object_mirror(
     object_id: str,
     request: Request,
     user: UserRecord = Depends(require_permission("mirror:write")),
+    roles: RoleStore = Depends(get_role_store),
 ):
     record = _require_object_permission(user.id, object_id, "metadata:read")
+    permissions = resolve_user_permissions(user, roles)
     return enable_for_object(
-        record.id, actor_user_id=user.id, actor_token_id=get_actor_token_id(request),
+        record.id, can_read=permissions_include(permissions, "mirror:read"), actor_user_id=user.id, actor_token_id=get_actor_token_id(request),
     )
 
 
@@ -294,9 +319,10 @@ def set_object_mirror(
     payload: PatchMirrorRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("mirror:write")),
+    roles: RoleStore = Depends(get_role_store),
 ):
     record = _require_object_permission(user.id, object_id, "metadata:read")
-    permissions = resolve_user_permissions(user, get_role_store())
+    permissions = resolve_user_permissions(user, roles)
     return set_enabled_for_object(
         record.id, source_id=record.source_id, enabled=payload.enabled,
         can_read=permissions_include(permissions, "mirror:read"),
@@ -393,6 +419,7 @@ def patch_object_semantics(
     payload: ObjectSemanticsPatchRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
+    roles: RoleStore = Depends(get_role_store),
 ) -> CatalogObjectResponse:
     _require_object_permission(user.id, object_id, "metadata:write")
     data = payload.model_dump(exclude_unset=True)
@@ -404,9 +431,8 @@ def patch_object_semantics(
         semantic_source="user_input",
     )
     return CatalogObjectResponse(
-        object=_object_out(
-            catalog_views.object_view(record, include_columns=True),
-            detail_for=user,
+        object=_object_detail_out(
+            catalog_views.object_view(record, include_columns=True), user, roles,
         )
     )
 
@@ -437,6 +463,7 @@ def patch_columns_semantics_batch(
     payload: CatalogColumnsSemanticsBatchRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
+    roles: RoleStore = Depends(get_role_store),
 ) -> CatalogColumnsSemanticsBatchResponse:
     _require_object_permission(user.id, object_id, "metadata:write")
     result = catalog_semantics.set_column_semantics_batch(
@@ -447,7 +474,7 @@ def patch_columns_semantics_batch(
         semantic_source="user_input",
     )
     return CatalogColumnsSemanticsBatchResponse(
-        object=_object_out(catalog_reads.get_object(object_id), detail_for=user),
+        object=_object_detail_out(catalog_reads.get_object(object_id), user, roles),
         updated_count=result["updated_count"],
         requested_count=result["requested_count"],
         skipped_columns=result["skipped_columns"],

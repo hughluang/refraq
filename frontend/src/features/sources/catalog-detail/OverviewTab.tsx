@@ -10,7 +10,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import { Instant } from "@/components/display/Instant";
@@ -50,6 +50,7 @@ type OverviewTabProps = {
   object: CatalogObject;
   writable: boolean;
   onSaved: (object: CatalogObject) => void;
+  mirrorControls?: ReactNode;
 };
 
 function formFromObject(obj: CatalogObject): OverviewFormValues {
@@ -64,7 +65,7 @@ function formFromObject(obj: CatalogObject): OverviewFormValues {
   };
 }
 
-export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
+export function OverviewTab({ object, writable, onSaved, mirrorControls }: OverviewTabProps) {
   const t = useTranslate();
   const form = useConsoleForm<OverviewFormValues>({
     initialValues: formFromObject(object),
@@ -228,6 +229,7 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
           label={t("catalog.structure.collectedAt")}
           value={<Instant value={object.collected_at} />}
         />
+        {mirrorControls}
       </Stack>
     </SimpleGrid>
   );

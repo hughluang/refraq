@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -26,6 +27,7 @@ from backend.metadata.catalog.structure_diff import (  # noqa: E402
     empty_counts,
 )
 from backend.metadata.catalog.structure_merge import (  # noqa: E402
+    ObjectCollectionStamp,
     StructureRefreshPlan,
     build_structure_refresh_plan,
 )
@@ -130,14 +132,19 @@ def _table(*, now: datetime, data_type: str = "integer") -> CatalogObjectRecord:
     )
 
 
-def _plan(existing: list[CatalogObjectRecord], incoming: list[CatalogObjectRecord]):
+def _plan(
+    existing: list[CatalogObjectRecord],
+    incoming: list[CatalogObjectRecord],
+    *,
+    schema_scope: str | None = None,
+):
     return build_structure_refresh_plan(
         source_id="src_1",
         job_id="job_refresh",
         existing_objects=existing,
         existing_joins=[],
         incoming=incoming,
-        schema_scope=None,
+        schema_scope=schema_scope,
         engine="postgresql",
         kind="database",
         source_key="demo",
@@ -150,8 +157,33 @@ def test_unchanged_refresh_emits_empty_objects_and_stamps() -> None:
     table = _table(now=now)
     plan = _plan([table], [table])
     assert plan.objects == ()
-    assert plan.stamp_object_ids == ("obj_orders",)
+    assert plan.collection_stamps == (ObjectCollectionStamp("obj_orders", None, None),)
     assert plan.diff.diff_class == "unchanged"
+
+
+def test_scoped_refresh_writes_each_collected_object_once() -> None:
+    orders = _table(now=utc_now())
+    changed = replace(orders, comment="New comment", source_size_bytes=8192, estimated_rows=0)
+    inserted = replace(orders, id="obj_parent", name="parent", columns=[], estimated_rows=12)
+    unmeasured = replace(
+        orders, id="obj_unknown", name="unknown", locator_key="obj/postgresql/demo/public/table/unknown",
+        source_size_bytes=128, columns=[],
+    )
+    outside = replace(orders, id="obj_outside", schema_name="other", columns=[])
+
+    plan = _plan(
+        [orders, unmeasured, outside],
+        [changed, inserted, replace(unmeasured, source_size_bytes=None)],
+        schema_scope="public",
+    )
+    assert {
+        obj.id: (obj.last_structure_job_id, obj.collected_at, obj.source_size_bytes, obj.estimated_rows)
+        for obj in plan.objects
+    } == {
+        orders.id: ("job_refresh", plan.collected_at, 8192, 0),
+        inserted.id: ("job_refresh", plan.collected_at, None, 12),
+    }
+    assert plan.collection_stamps == (ObjectCollectionStamp(unmeasured.id, None, None),)
 
 
 def test_no_change_refresh_advances_collected_at() -> None:
@@ -223,7 +255,7 @@ def test_stamp_missing_object_id_raises() -> None:
         source_id="src_1",
         objects=(),
         upsert_joins=(),
-        stamp_object_ids=("missing",),
+        collection_stamps=(ObjectCollectionStamp("missing", None, None),),
         last_structure_job_id="job_x",
         collected_at=now,
         diff=StructureDiffFacts(
@@ -356,3 +388,20 @@ def test_diff_persist_failure_leaves_catalog_unchanged(
     diffs, total = get_structure_diff_store().list_for_source("src_1")
     assert total == 0
     assert diffs == []
+
+
+def test_statistics_refresh_preserves_structure_revision_and_measured_zero():
+    source = require_source("src_1")
+    table = _table(now=utc_now())
+    apply_structure_snapshot(source=source, job_id="initial", collected=[table], schema_scope=None)
+    saved = get_catalog_store().get_object(table.id)
+    sample = replace(table, source_size_bytes=2**34, estimated_rows=0)
+    plan = _plan([saved], [sample])
+    assert plan.objects == ()
+    assert plan.collection_stamps == (ObjectCollectionStamp(table.id, 2**34, 0),)
+    receipt = apply_structure_snapshot(source=source, job_id="sample", collected=[sample], schema_scope=None)
+    latest = get_catalog_store().get_object(table.id)
+    assert (latest.source_size_bytes, latest.estimated_rows) == (2**34, 0)
+    assert latest.updated_at == saved.updated_at
+    assert latest.last_structure_job_id == "sample"
+    assert receipt.facts.counts == empty_counts()

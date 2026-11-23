@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.metadata.errors import SourceCaptureControlConflict
+from backend.metadata.mirrors.status_projection import refresh_source_status
 from backend.metadata.models import SourceCaptureBindingRow, SourceCaptureOperationRow
 from backend.metadata.sources.store import get_source_store
 
@@ -57,6 +58,7 @@ def _write_binding(session: Session | None, state: dict) -> None:
     else:
         row.state = deepcopy(state)
     session.flush()
+    refresh_source_status(session, state["source_id"])
 
 
 def load_operation(session: Session | None, operation_id: str) -> dict | None:

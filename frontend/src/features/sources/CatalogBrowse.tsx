@@ -16,10 +16,11 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { RecordPicker } from "@/components/form/RecordPicker";
-import { RECORD_PICKER_LIMIT, type RecordPickerAdapter } from "@/components/form/recordPickerAdapters";
+import { catalogSourceAdapter } from "@/components/form/recordPickerAdapters";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { listCatalogObjects, listCatalogSources } from "@/features/sources/api/catalog";
+import { MirrorTableDrawer } from "@/features/mirrors/MirrorTableDrawer";
 import { listSourceSchedules, runSchedule } from "@/features/schedules/api";
 import { ApiError } from "@/lib/api";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
@@ -31,16 +32,6 @@ import type { CatalogObject } from "@/features/sources/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
-
-const catalogSourceAdapter: RecordPickerAdapter = {
-  async search(q, signal) {
-    return (await listCatalogSources({ q, limit: RECORD_PICKER_LIMIT, signal })).items;
-  },
-  async resolve(ids, signal) {
-    const pages = await Promise.all(ids.map(source_id => listCatalogSources({ source_id, signal })));
-    return pages.flatMap(page => page.items);
-  },
-};
 
 function CollectStructure({ sourceId }: { sourceId: string }) {
   const t = useTranslate();
@@ -227,7 +218,10 @@ export function CatalogBrowse() {
     <PageChrome
       title={t("catalog.title")}
       description={t("catalog.description")}
-      actions={refreshAction}
+      actions={<Group gap="sm">
+        <MirrorTableDrawer sourceId={sourceId ?? undefined} />
+        {refreshAction}
+      </Group>}
       status={phase === "unloaded" ? "unloaded" : undefined}
       onRetry={phase === "unloaded" ? () => void load() : undefined}
       toolbar={

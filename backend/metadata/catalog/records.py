@@ -92,6 +92,8 @@ class CatalogObjectRecord:
     columns: list[CatalogColumnRecord] = field(default_factory=list)
     foreign_keys: list[CatalogForeignKeyRecord] = field(default_factory=list)
     indexes: list[CatalogIndexRecord] = field(default_factory=list)
+    source_size_bytes: int | None = None
+    estimated_rows: int | None = None
 
 
 @dataclass

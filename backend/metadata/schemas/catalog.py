@@ -5,6 +5,7 @@ from __future__ import annotations
 from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from backend.metadata.catalog.object_category import ObjectCategory
+from backend.metadata.mirrors.schemas import SnapshotSlotHolder
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -20,6 +21,7 @@ __all__ = [
     "CatalogForeignKeyOut",
     "CatalogIndexOut",
     "CatalogMirrorSettingResponse",
+    "CatalogMirrorTableListResponse",
     "CatalogObjectListResponse",
     "CatalogObjectOut",
     "CatalogObjectResponse",
@@ -104,6 +106,24 @@ class CatalogMirrorOut(BaseModel):
 class CatalogMirrorSettingResponse(BaseModel):
     mirror: CatalogMirrorOut
     operation_id: str | None
+
+
+class CatalogMirrorTable(BaseModel):
+    object_id: str
+    source_id: str
+    source_key: str
+    source_name: str
+    qualified_table: str
+    storage_destination: str
+    source_size_bytes: int | None
+    estimated_rows: int | None
+    mirror: CatalogMirrorOut | None
+    snapshot_holder: SnapshotSlotHolder | None
+    publication_wait: SnapshotSlotHolder | None = None
+
+
+class CatalogMirrorTableListResponse(OffsetPage[CatalogMirrorTable]):
+    pass
 
 
 class CatalogObjectOut(BaseModel):

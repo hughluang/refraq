@@ -1,7 +1,7 @@
 "use client";
 
 import { Button, Table, TextInput } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
+import { useCan, useTranslate } from "@refinedev/core";
 import { useCallback } from "react";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { ListTable } from "@/components/display/ListTable";
@@ -14,6 +14,7 @@ import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 import { MirrorEvent, MirrorNextAction } from "./MirrorEvidence";
 import { listMirrors } from "./api";
+import { MirrorTableDrawer } from "./MirrorTableDrawer";
 import { MIRROR_STATUSES } from "./types";
 
 const filters = [
@@ -23,6 +24,7 @@ const filters = [
 
 export function MirrorList() {
   const t = useTranslate();
+  const { data: catalog } = useCan({ resource: "catalog", action: "list" });
   const query = useListQuery({ filters });
   const source = query.select("source_id");
   const status = query.select("status");
@@ -31,7 +33,7 @@ export function MirrorList() {
   const list = useConsolePagedList({ pageSize: 50, fetch: fetchPage, page: query.page, onPageChange: query.setPage, filtered: query.isFiltered });
   if (list.accessDenied) return <ForbiddenState reason="mirror:read" />;
   return <PageChrome title={t("mirrors.title")} description={t("mirrors.description")}
-    actions={<HeaderActions navigation={<Button size="sm" variant="light" onClick={() => void list.reload()}>{t("common.refresh")}</Button>} />}
+    actions={<HeaderActions navigation={<>{catalog?.can && <MirrorTableDrawer sourceId={source} onAccepted={() => void list.reload()} />}<Button size="sm" variant="light" onClick={() => void list.reload()}>{t("common.refresh")}</Button></>} />}
     toolbar={<ListToolbar query={query} filters={[{ key: "status", label: t("mirrors.status"), options: MIRROR_STATUSES.map(value => ({ value, label: t(`mirrors.status.${value}`) })) }]}
       extra={<TextInput aria-label={t("mirrors.sourceFilter")} placeholder={t("mirrors.sourceFilter")} value={source} onChange={event => query.setFilter("source_id", event.currentTarget.value)} />} />}>
     <ListTable list={list}

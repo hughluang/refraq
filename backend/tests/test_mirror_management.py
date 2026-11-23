@@ -208,9 +208,9 @@ def test_authorization_requires_active_user_role_and_membership(monkeypatch):
         authorize_source_data(execution_user_id="u", source_id="s")
 
 
-def test_progress_projects_only_current_correlated_notifications(opened, monkeypatch):
+@pytest.fixture
+def snapshotting(opened, monkeypatch):
     from backend.metadata.capture.store import get_source_store
-    from backend.metadata.mirrors.schemas import Mirror
 
     store, mid = opened
     op = next(iter(store.operations.values()))
@@ -228,19 +228,124 @@ def test_progress_projects_only_current_correlated_notifications(opened, monkeyp
                  published_scope=service.read_published_scope(store, "s1"),
                  incremental_snapshots=dict(active="generation", generations={"generation": snapshot}))
     monkeypatch.setitem(get_source_store().capture_bindings, "s1", state)
+    return store, mid, state, snapshot
+
+
+def test_progress_projects_only_current_correlated_notifications(snapshotting):
+    from backend.metadata.mirrors.schemas import Mirror
+
+    store, mid, state, snapshot = snapshotting
+    op = next(iter(store.operations.values()))
 
     assert Mirror.model_validate(service.get_mirror(mid)).progress is None
+    snapshot["progress_sample"] = dict(offset=0, timestamp=1700000000000)
+    progress = Mirror.model_validate(service.get_mirror(mid)).progress
+    assert (progress.stage, progress.scanned_bytes, progress.scan_percent, progress.scan_complete) == ("scan", None, None, False)
+    snapshot["progress_sample"].update(scanned_bytes=12, scan_total_bytes=48)
+    progress = Mirror.model_validate(service.get_mirror(mid)).progress
+    assert (progress.scanned_bytes, progress.scan_percent, progress.scan_complete) == (12, 25, False)
+    assert progress.bytes_observed_at is None and progress.byte_notification_offset is None
+    snapshot["byte_sample"] = dict(scanned_bytes=12, scan_total_bytes=48, offset=0, timestamp=1700000000000)
+    snapshot["progress_sample"] = dict(offset=1, timestamp=1700000000100)
+    progress = Mirror.model_validate(service.get_mirror(mid)).progress
+    assert progress.notification_offset == 1 and progress.byte_notification_offset == 0
+    assert progress.bytes_observed_at.isoformat() == "2023-11-14T22:13:20+00:00"
+    assert progress.observed_at.isoformat() == "2023-11-14T22:13:20.100000+00:00"
     snapshot["scan"] = dict(offset=1, timestamp=1700000000123)
     progress = Mirror.model_validate(service.get_mirror(mid)).progress
     assert progress.stage == "scan"
     assert progress.observed_at.isoformat() == "2023-11-14T22:13:20.123000+00:00"
     snapshot.update(state="catching_up", completion=dict(offset=2, timestamp=1700000001456))
+    catching_up = Mirror.model_validate(service.get_mirror(mid))
+    assert catching_up.status == "catching_up" and catching_up.progress.scan_percent == 100
+    assert catching_up.progress.scan_complete and catching_up.published_generation_id is None
+    assert catching_up.operations[0].state == "pending" and catching_up.history_epoch is None
     assert service.list_mirrors()["items"][0]["progress"]["stage"] == "catching_up"
     snapshot["binding"]["allocation_operation_id"] = "unrelated"
     assert service.get_mirror(mid)["progress"] is None
     snapshot["binding"]["allocation_operation_id"] = op["id"]
     state["owner_epoch"] += 1
     assert service.get_mirror(mid)["progress"] is None
+
+
+def test_inventory_filters_the_same_observed_status_as_detail(snapshotting):
+    store, mid, _, snapshot = snapshotting
+    snapshot.update(state="catching_up", scan=dict(offset=1, timestamp=1700000000123),
+                    completion=dict(offset=2, timestamp=1700000001456))
+    assert service.get_mirror_detail(mid)["mirror"]["status"] == "catching_up"
+    listed, = service.list_mirrors()["items"]
+    assert listed["status"] == "catching_up"
+    matching = service.list_mirrors(status="catching_up", source_id="s1", q="orders", limit=1)
+    assert matching["total"] == 1 and matching["items"][0]["id"] == mid
+    assert service.list_mirrors(status="catching_up", offset=1)["total"] == 1
+    assert service.list_mirrors(status="catching_up", offset=1)["items"] == []
+    assert service.list_mirrors(status="waiting")["total"] == 0
+    assert service.list_mirrors(status="catching_up", source_id="hidden")["total"] == 0
+    assert store.mirrors[mid]["status"] == "waiting"
+
+
+@pytest.mark.parametrize("receipt", [False, True])
+def test_current_blocked_snapshot_is_observable_and_keeps_its_slot(snapshotting, receipt):
+    _, mid, state, snapshot = snapshotting
+    snapshot.update(state="blocked", receipt=receipt, fault="snapshot_notification_conflict")
+    detail = service.get_mirror_detail(mid)["mirror"]
+    assert detail["status"] == "needs_attention" and detail["progress"] is None
+    assert {item["key"]: item["result"] for item in detail["readiness"]} == {
+        "capture_admission": "pass", "incremental_snapshot_blocked": "fail",
+    }
+    assert service.list_mirrors(status="needs_attention")["total"] == 1
+    assert state["incremental_snapshots"]["active"] == "generation"
+    snapshot["binding"]["allocation_operation_id"] = "other-request"
+    assert service.get_mirror_detail(mid)["mirror"]["status"] == "waiting"
+    assert service.list_mirrors(status="needs_attention")["total"] == 0
+
+
+def test_retained_published_copy_reports_ready_after_open_confirmation(opened):
+    store, mid = opened
+    mirror = store.mirrors[mid]
+    mirror.update(status="unknown", published_generation_id="published")
+    next(iter(store.operations.values()))["state"] = "applied"
+    assert service.get_mirror_detail(mid)["mirror"]["status"] == "ready"
+    assert service.list_mirrors(status="ready")["total"] == 1
+    assert service.list_mirrors(status="unknown")["total"] == 0
+
+
+@pytest.mark.parametrize("replacement_first", [False, True])
+def test_applied_open_admission_follows_the_replacement_publication(snapshotting, replacement_first):
+    store, mid, _, _ = snapshotting
+    original, = store.operations.values()
+    original.update(state="applied", publication_receipt={"generation_id": "generation"})
+    replacement = dict(original, id="replacement", allocation=dict(original["allocation"], generation_id="new"),
+                       publication_receipt={"generation_id": "new"})
+    operations = (replacement, original) if replacement_first else (original, replacement)
+    store.operations = {op["id"]: op for op in operations}
+    store.mirrors[mid]["published_generation_id"] = "new"
+
+    detail = service.get_mirror_detail(mid)["mirror"]
+    assert detail["profile"]["qualification"] == "qualified"
+    assert [(item["key"], item["result"]) for item in detail["readiness"]] == [("capture_admission", "pass")]
+
+
+def test_filtered_inventory_uses_one_candidate_snapshot_during_enrollment(opened, monkeypatch):
+    store, mid = opened
+    original = store.mirrors.pop(mid)
+    store.operations.clear()
+    for index in range(1, 102):
+        mirror = dict(original, id=f"mirror-{index:03}", qualified_table=f"public.table_{index:03}",
+                      status="ready", published_generation_id=f"copy-{index}")
+        store.mirrors[mirror["id"]] = mirror
+    page = store.page
+
+    def enroll_after_read(session, **query):
+        result = page(session, **query)
+        store.mirrors["new"] = dict(original, id="new", qualified_table="public.table_000", status="ready",
+                                    published_generation_id="new-copy")
+        return result
+
+    monkeypatch.setattr(store, "page", enroll_after_read)
+    result = service.list_mirrors(status="ready", limit=500)
+    identities = [item["id"] for item in result["items"]]
+    assert result["total"] == len(identities) == len(set(identities)) == 101
 
 
 def test_same_intent_keeps_revision_and_real_enable_creates_a_consumable_open(opened):
@@ -278,3 +383,30 @@ def test_catalog_enable_reuses_operator_request_after_runtime_reallocates(opened
     assert repeated["operation_id"] == original["id"]
     assert repeated["mirror"]["id"] == mid
     assert len(repeated["mirror"]["operations"]) == 2
+
+
+def test_partial_table_preparation_keeps_sibling_admission_unknown(snapshotting):
+    store, mid, state, _ = snapshotting
+    store.bindings["items"] = dict(store.bindings["o1"], object_id="items", table_identity="items",
+                                   qualified_table="public.items")
+    sibling = service.enable_for_object("items", actor_user_id="u")
+    state["published_scope"] = service.read_published_scope(store, "s1")
+    orders = service.get_mirror(mid)
+    items = service.get_mirror(sibling["mirror"]["id"])
+    assert orders["profile"]["qualification"] == "qualified"
+    assert items["profile"]["qualification"] == "unverified"
+    assert all(item["result"] != "pass" for item in items["readiness"])
+
+
+def test_catching_up_sibling_waits_for_publication_after_slot_release(snapshotting):
+    store, mid, state, scan = snapshotting
+    store.bindings["items"] = dict(store.bindings["o1"], object_id="items", table_identity="items",
+                                   qualified_table="public.items")
+    sibling = service.enable_for_object("items", actor_user_id="u")
+    state["incremental_snapshots"]["active"] = None
+    scan.update(state="catching_up", scan=dict(offset=1, timestamp=1), completion=dict(offset=2, timestamp=2))
+    detail = service.get_mirror(sibling["mirror"]["id"])
+    assert detail["snapshot_slot_holder"] is None
+    assert detail["publication_wait"] == dict(mirror_id=mid, qualified_table="public.orders")
+    assert [item["key"] for item in detail["readiness"]] == ["publication_pending"]
+    assert service.get_mirror(mid)["publication_wait"] is None

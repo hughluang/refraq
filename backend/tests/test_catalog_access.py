@@ -811,6 +811,7 @@ def test_catalog_mirror_setting_permissions_and_idempotency(world):
     assert first["mirror"] == {"enabled": True, "can_enable": False, "can_disable": True, "mirror_id": None}
     assert first["operation_id"]
     assert world.client.put(path, json={"enabled": True}).json() == first
+    assert world.client.post(path).json() == {"operation_id": first["operation_id"], "enabled": True}
     off = world.client.put(path, json={"enabled": False}).json()
     assert off["operation_id"] != first["operation_id"]
     assert world.client.put(path, json={"enabled": False}).json() == off
@@ -852,3 +853,117 @@ def test_mirror_reports_current_wait_reason_without_changing_its_setting(world, 
         owner, allocation={"command": owner, "scope": {"profile": {"tables": ["public.other_table"]}}},
     ))
     assert reasons() == ["table_unqualified"]
+
+
+def test_mirror_table_picker_filters_visible_catalog_before_paging(world, monkeypatch):
+    from backend.metadata.mirrors import service
+    from backend.metadata.mirrors.store import MemoryMirrorStore
+
+    monkeypatch.setattr(service, "_store", MemoryMirrorStore())
+    world.login("viewer")
+    path = "/catalog/mirror-tables"
+    page = world.client.get(path, params={"source_id": world.source_a, "q": "PUBLIC.", "limit": 1, "offset": 1})
+    assert page.status_code == 200, page.text
+    data = page.json()
+    assert (data["total"], data["limit"], data["offset"]) == (2, 1, 1)
+    orders, = data["items"]
+    assert orders["object_id"] == world.object_a
+    assert orders["qualified_table"] == "public.orders"
+    assert orders["source_size_bytes"] is None and orders["estimated_rows"] is None
+    assert orders["storage_destination"] == "source_mirror"
+    assert world.client.get(path, params={"source_id": world.source_b}).json()["total"] == 0
+    assert world.client.get(path, params={"q": "%"}).json()["total"] == 0
+    assert world.client.get(path, params={"object_id": world.procedure_a}).json()["total"] == 0
+
+    enabled = world.client.put(f"/objects/{world.object_a}/mirror", json={"enabled": True}).json()
+    world.client.put(f"/objects/{world.object_a}/mirror", json={"enabled": False}).raise_for_status()
+    apply_structure_snapshot(source=require_source(world.source_a), job_id="table_dropped",
+                             collected=[], schema_scope="public")
+    rows = world.client.get(path).json()
+    retained, = rows["items"]
+    assert retained["mirror"] == dict(enabled=False, can_enable=False, can_disable=False,
+                                     mirror_id=enabled["mirror"]["mirror_id"])
+    world.login("reader")
+    assert world.client.get(path).json()["total"] == 0
+    world.login("hidden")
+    assert world.client.get(path).json()["total"] == 0
+
+
+def test_mirror_table_picker_keeps_an_existing_binding_after_source_engine_change(world, monkeypatch):
+    from backend.metadata.mirrors import service
+    from backend.metadata.mirrors.store import MemoryMirrorStore
+    from backend.metadata.sources.service import update_source
+
+    monkeypatch.setattr(service, "_store", MemoryMirrorStore())
+    world.login("viewer")
+    path = f"/objects/{world.object_a}/mirror"
+    setting = world.client.put(path, json={"enabled": True}).json()["mirror"]
+    update_source(world.source_a, engine="mysql", access={
+        "host": "fixture", "port": 3306, "database": "sales", "username": "reader", "password": "fixture",
+        "ssl_mode": "disable",
+    })
+    page = world.client.get("/catalog/mirror-tables", params={"source_id": world.source_a}).json()
+    table, = page["items"]
+    assert page["total"] == 1 and table["object_id"] == world.object_a
+    assert table["mirror"] == setting
+    disabled = world.client.put(path, json={"enabled": False})
+    assert disabled.status_code == 200 and not disabled.json()["mirror"]["enabled"]
+    world.login("reader")
+    assert world.client.get("/catalog/mirror-tables").json()["total"] == 0
+    world.login("hidden")
+    assert world.client.get("/catalog/mirror-tables").json()["total"] == 0
+
+
+def test_catalog_mirror_routes_use_the_request_role_store(world):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    world.login("viewer")
+    roles = get_role_store()
+    viewer = get_user_store().get_by_id(world.users["viewer"])
+    role = roles.get_by_id(viewer.role_id)
+    writer = replace(role, permissions=["console:access", "metadata:read", "mirror:write"])
+    app.dependency_overrides[get_role_store] = lambda: SimpleNamespace(get_by_id=lambda _: writer)
+    try:
+        path = f"/objects/{world.object_a}/mirror"
+        accepted = world.client.post(path)
+        assert accepted.status_code == 202, accepted.text
+        assert set(accepted.json()) == {"enabled", "operation_id"}
+        table, = world.client.get("/catalog/mirror-tables", params={"object_id": world.object_a}).json()["items"]
+        assert table["mirror"]["enabled"] and table["mirror"]["mirror_id"] is None
+        assert table["snapshot_holder"] is None
+        detail = world.client.get(f"/objects/{world.object_a}").json()["object"]
+        assert detail["mirror"] == table["mirror"]
+        stopped = world.client.put(path, json={"enabled": False})
+        assert stopped.status_code == 200 and stopped.json()["mirror"]["mirror_id"] is None
+    finally:
+        app.dependency_overrides.pop(get_role_store)
+
+
+def test_catalog_names_the_snapshot_holder_for_a_reopened_retained_copy(world, monkeypatch):
+    from backend.metadata.mirrors import service
+    from backend.metadata.mirrors.store import MemoryMirrorStore
+
+    store = MemoryMirrorStore()
+    monkeypatch.setattr(service, "_store", store)
+    world.login("viewer")
+    holder = world.client.put(f"/objects/{world.object_a}/mirror", json={"enabled": True}).json()["mirror"]
+    path = f"/objects/{world.object_a2}/mirror"
+    retained = world.client.put(path, json={"enabled": True}).json()["mirror"]
+    store.mirrors[retained["mirror_id"]]["published_generation_id"] = "retained-copy"
+    world.client.put(path, json={"enabled": False}).raise_for_status()
+    world.client.put(path, json={"enabled": True}).raise_for_status()
+    holder_row = store.mirrors[holder["mirror_id"]]
+    holder_operation = next(op for op in store.operations.values() if op["mirror_id"] == holder_row["id"])
+    get_source_store().capture_bindings[world.source_a] = dict(incremental_snapshots=dict(
+        active="active-copy", generations={"active-copy": dict(binding=dict(
+            allocation_operation_id=holder_operation["id"], generation_id="active-copy",
+            authority=dict(source_id=world.source_a), mirror_id=holder_row["id"],
+            table_identity=holder_row["table_identity"], qualified_table=holder_row["qualified_table"],
+        ))},
+    ))
+    table, = world.client.get("/catalog/mirror-tables", params={"object_id": world.object_a2}).json()["items"]
+    expected = dict(mirror_id=holder_row["id"], qualified_table=holder_row["qualified_table"])
+    assert table["snapshot_holder"] == expected
+    detail = world.client.get(f"/mirrors/{retained['mirror_id']}").json()["mirror"]
+    assert detail["snapshot_slot_holder"] == expected

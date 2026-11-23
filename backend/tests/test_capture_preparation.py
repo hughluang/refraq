@@ -35,8 +35,11 @@ from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 from backend.metadata.models import SourceMembershipRow, SourceRow
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
-from backend.metadata.capture.test_published_scope import SOURCE, management as management
-from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, TRUST, allocation_observation, observation
+from backend.metadata.capture.test_published_scope import SOURCE, management as management, pending_capture_commands
+from backend.metadata.capture.test_runtime import (
+    CHECKS, SIGNING_KEY, TRUST, allocation_observation, managed_command as managed_command, observation,
+)
+from backend.metadata.capture.test_start import exercise_takeover_retry, scanning_source as scanning_source
 from backend.metadata.mirrors import bootstrap, service
 from backend.metadata.mirrors.application import Application
 from backend.metadata.mirrors.errors import MirrorError
@@ -125,6 +128,41 @@ def native_target(target_dsn):
         with psycopg.connect(dsn, autocommit=True) as connection:
             bootstrap.install(connection)
         yield dsn
+
+
+@pytest.mark.integration
+def test_owner_retry_recovers_the_same_committed_target_fence(native_target, scanning_source):
+    source_id, registry, previous = scanning_source
+    mid, = registry.mirrors
+    table = registry.mirrors[mid]["table_identity"]
+    previous_target = Authority(**delivery_composition._target_authority(previous))
+    epoch = service.initial_history_epoch(mid)
+    with psycopg.connect(native_target) as connection:
+        bootstrap.prepare_authority(connection, mirror_id=mid, table_identity=table, history_epoch=epoch,
+                                    operation_id="initial", expected_authority=None, authority=previous_target,
+                                    exclusion_proof="initial absence", verify_exclusion=lambda old, *_: old is None)
+
+    def observe_fence(payload):
+        observed = allocation_observation(payload)
+        command = payload["command"]
+        authority = Authority(**delivery_composition._target_authority(command))
+        with psycopg.connect(native_target) as connection:
+            receipt = bootstrap.prepare_authority(
+                connection, mirror_id=mid, table_identity=table, history_epoch=epoch,
+                operation_id=command["operation_id"], expected_authority=previous_target, authority=authority,
+                exclusion_proof=observed["exclusion"], verify_exclusion=lambda old, new, proof: (
+                    old == previous_target and new == authority and proof["method"] == "terminated"
+                ),
+            )
+        observed["target_fence"]["mirror_receipts"][mid] = receipt
+        return observed
+
+    exercise_takeover_retry(scanning_source, "enroll", observe_fence)
+    with psycopg.connect(native_target) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM source_mirror_state.fence_receipts WHERE mirror_id = %s AND operation_id = 'cop_new'",
+            (mid,),
+        ).fetchone() == (1,)
 
 
 @pytest.fixture
@@ -395,8 +433,9 @@ def reconcile_open_publication_observation(transaction, target_dsn, restricted, 
     assert after["published_generation_id"] == generation_id
     assert after["capture_generation"] == authority.capture_generation
     assert after["history_epoch"] == binding["history_epoch"]
-    assert after["operations"] == [dict(before["operations"][0], state="applied")]
-    assert after["status"] == before["status"]
+    assert after["operations"] == [dict(before["operations"][0], state="applied", observed_evidence_refs=[expected.certificate_ref])]
+    assert before["status"] == "catching_up" and before["progress"]["scan_percent"] == 100
+    assert after["status"] == "ready"
     assert after["readiness"] == before["readiness"]
     assert after["progress"] is None
     lower = dict(mirror_id=mirror_id, history_epoch=expected.history_epoch, commit_seq=1, entry_seq=0)
@@ -936,6 +975,17 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
         elif snapshots:
             assert runtime.main() == 0
             assert mutations == ["configure", "resume"] and len(submissions) == 1
+            if case == "snapshot_loss_open_publication_observation":
+                sibling = service.enable_for_object("orders", actor_user_id="operator")
+                holder = dict(mirror_id=mirror_id, qualified_table="public.items")
+                assert sibling["mirror"]["snapshot_slot_holder"] == holder
+                page = service.list_catalog_mirror_tables(visible_ids={SOURCE}, object_id="orders", q=None,
+                                                          can_read=True, can_write=False, limit=1, offset=0)
+                assert page["items"][0]["snapshot_holder"] == holder
+                with transaction() as session:
+                    assert len(service.read_published_scope(session, SOURCE)) == 2
+                    state = control.load_binding(session, SOURCE)
+                    assert len(service.read_dispatch_scope(session, SOURCE, state=state)) == 1
             owner_file = entry.pop("owner_allocation_file")
             private("runtime.json", config)
             if case == "snapshot_replaced_relation":
@@ -1116,9 +1166,24 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                             assert mutations == ["configure", "resume", "stop"] and snapshot_reads == reads_before_stop
                             assert control.capture_status(SOURCE)["control"]["stop_ack"] is not None
 
+                    if case == "snapshot_loss_open_publication_observation":
+                        waiting = service.get_mirror_detail(sibling["mirror"]["id"])["mirror"]
+                        assert waiting["snapshot_slot_holder"] is None and waiting["publication_wait"] == holder
+                        page = service.list_catalog_mirror_tables(visible_ids={SOURCE}, object_id="orders", q=None,
+                                                                  can_read=True, can_write=False, limit=1, offset=0)
+                        assert page["items"][0]["publication_wait"] == holder
                     reconcile_open_publication_observation(transaction, target_dsn, restricted, tmp_path, mirror_id,
                                                            attempts[-1], wrong_terminal=case.endswith("wrong_terminal"),
                                                            rehydrate=recover, checkpoint_fault=checkpoint_fault)
+                    if case == "snapshot_loss_open_publication_observation":
+                        waiting = service.get_mirror_detail(sibling["mirror"]["id"])["mirror"]
+                        assert waiting["snapshot_slot_holder"] is None and waiting["publication_wait"] is None
+                        control.reconcile_published_scope(SOURCE)
+                        next_command, = pending_capture_commands()
+                        assert {entry["mirror_id"] for entry in next_command["published_scope"]} == {
+                            mirror_id, sibling["mirror"]["id"],
+                        }
+                        assert service.enable_for_object("orders", actor_user_id="operator")["operation_id"] == sibling["operation_id"]
                 return
             reads_before_stop = list(snapshot_reads)
             withdraw()

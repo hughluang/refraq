@@ -29,8 +29,8 @@ import {
   ModuleAction,
   ModuleId,
 } from "@/features/console/module-identity";
-import { MirrorSwitch } from "@/features/mirrors/MirrorSwitch";
-import { resolveCatalogObject, setCatalogMirrorEnabled } from "@/features/sources/api/catalog";
+import { MirrorTableDrawer } from "@/features/mirrors/MirrorTableDrawer";
+import { resolveCatalogObject } from "@/features/sources/api/catalog";
 import { ColumnsTab } from "@/features/sources/catalog-detail/ColumnsTab";
 import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
 import { HistoryTab } from "@/features/sources/catalog-detail/HistoryTab";
@@ -76,11 +76,8 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
   const writable = Boolean(canWrite?.can);
 
   const [object, setObject] = useState<CatalogObject | null>(null);
-  // Semantics edits replace the object with a response that lacks this projection.
-  const [mirror, setMirror] = useState<CatalogObject["mirror"]>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [savingMirror, setSavingMirror] = useState(false);
   const [failed, setFailed] = useState(false);
   const [reloadEpoch, setReloadEpoch] = useState(0);
   const [joinsVisited, setJoinsVisited] = useState(false);
@@ -99,12 +96,9 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
   const { value: activeTab, setTab } = useConsoleTab(catalogTabs);
 
   const request = useRef<AbortController | null>(null);
-  const mirrorRequest = useRef<AbortSignal | null>(null);
   const load = useCallback(
     async (opts?: { refresh?: boolean }) => {
       request.current?.abort();
-      mirrorRequest.current = null;
-      setSavingMirror(false);
       const controller = new AbortController();
       request.current = controller;
       const refresh = Boolean(opts?.refresh);
@@ -117,7 +111,6 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
         const objRes = await resolveCatalogObject(objectId, controller.signal);
         if (controller.signal.aborted) return;
         setObject(objRes.object);
-        setMirror(objRes.object?.mirror);
         if (refresh) {
           setReloadEpoch((n) => n + 1);
         }
@@ -181,31 +174,6 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
     }
   };
 
-  const saveMirror = async (enabled: boolean) => {
-    const signal = request.current?.signal;
-    if (
-      !object || !mirror || !(enabled ? mirror.can_enable : mirror.can_disable) || !canWriteMirror?.can || refreshing ||
-      !signal || signal.aborted || mirrorRequest.current
-    ) return;
-    mirrorRequest.current = signal;
-    setSavingMirror(true);
-    try {
-      const accepted = await setCatalogMirrorEnabled(object.id, enabled, signal);
-      if (signal.aborted) return;
-      setMirror(accepted.mirror);
-      open?.({ type: "success", message: t("catalog.mirror.accepted") });
-    } catch (err) {
-      if (signal.aborted) return;
-      presentProblemNotification(t, err);
-      void load({ refresh: true });
-    } finally {
-      if (mirrorRequest.current === signal) {
-        mirrorRequest.current = null;
-        setSavingMirror(false);
-      }
-    }
-  };
-
   if (loading || failed || !object) {
     return (
       <PageChrome
@@ -228,7 +196,12 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
         <OverviewTab
           object={object}
           writable={writable}
-          onSaved={(next) => setObject(next)}
+          onSaved={setObject}
+          mirrorControls={
+            object.mirror && (canReadMirror?.can || canWriteMirror?.can) ? (
+              <MirrorTableDrawer objectId={object.id} disabled={refreshing} />
+            ) : null
+          }
         />
       ),
     },
@@ -240,7 +213,7 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
           object={object}
           writable={writable}
           reloadEpoch={reloadEpoch}
-          onSaved={(next) => setObject(next)}
+          onSaved={setObject}
         />
       ),
     },
@@ -285,24 +258,6 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
           tabs={list}
           actions={
             <Group gap="xs">
-              {mirror && (canReadMirror?.can || canWriteMirror?.can) ? (
-                <MirrorSwitch
-                  enabled={mirror.enabled}
-                  disabled={savingMirror || refreshing || !canWriteMirror?.can || !(mirror.enabled ? mirror.can_disable : mirror.can_enable)}
-                  table={title}
-                  onChange={enabled => void saveMirror(enabled)}
-                />
-              ) : null}
-              {!refreshing && canReadMirror?.can && mirror?.mirror_id ? (
-                <Button
-                  component={ConsoleLink}
-                  href={`/console/mirrors/${encodeURIComponent(mirror.mirror_id)}`}
-                  size="sm"
-                  variant="light"
-                >
-                  {t("catalog.mirror.view")}
-                </Button>
-              ) : null}
               <Button
                 component={ConsoleLink}
                 href="/console/catalog"
@@ -316,10 +271,8 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
               <Button
                 size="sm"
                 variant="light"
-                disabled={savingMirror}
-                onClick={() => {
-                  if (!mirrorRequest.current) void load({ refresh: true });
-                }}
+                disabled={refreshing}
+                onClick={() => void load({ refresh: true })}
                 aria-label={t("catalog.refresh")}
               >
                 <Text component="span" visibleFrom="sm">{t("catalog.refresh")}</Text>

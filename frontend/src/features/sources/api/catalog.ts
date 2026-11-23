@@ -1,6 +1,7 @@
 import { apiClient } from "@/lib/api";
 import type { CatalogObject, SemanticsChange } from "@/features/sources/types";
 import type { OffsetPage } from "@/lib/pagination";
+import type { MirrorReference } from "@/features/mirrors/types";
 
 type CatalogSource = { id: string; key: string; name: string; engine: string | null };
 
@@ -45,6 +46,31 @@ export function listCatalogObjects(
     limit: number;
     offset: number;
   }>(`/sources/${encodeURIComponent(sourceId)}/objects${query}`, { signal: opts?.signal });
+}
+
+export type MirrorTable = {
+  object_id: string;
+  source_id: string;
+  source_key: string;
+  source_name: string;
+  qualified_table: string;
+  storage_destination: string;
+  source_size_bytes: number | null;
+  estimated_rows: number | null;
+  mirror: CatalogObject["mirror"];
+  snapshot_holder: MirrorReference | null;
+  publication_wait: MirrorReference | null;
+};
+
+export function listMirrorTables(
+  options: { source_id?: string; q?: string; object_id?: string; limit: number; offset: number },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  return apiClient<OffsetPage<MirrorTable>>(`/catalog/mirror-tables?${params}`, { signal });
 }
 
 export function getCatalogObject(objectId: string, signal?: AbortSignal) {

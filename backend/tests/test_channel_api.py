@@ -3128,3 +3128,36 @@ def test_draft_rejects_withdrawn_execution_identity(client):
     })
     rejected = client.put(path, json={"base_revision": 1, "graph": graph})
     assert rejected.status_code == 422, rejected.text
+
+
+def test_publishing_source_query_leaves_catalog_table_outside_capture(client, monkeypatch):
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.connectors.base import CollectedObject, CollectedStructure
+    from backend.metadata.mirrors import service as mirrors
+    from backend.metadata.mirrors.store import MemoryMirrorStore
+    from backend.metadata.sources.service import require_source
+    from backend.metadata.structure_jobs.service import _to_catalog_records
+
+    registry = MemoryMirrorStore()
+    monkeypatch.setattr(mirrors, "_store", registry)
+    source = _registered_source(client, key="orders-publish", name="Orders")
+    source_id = source["id"]
+
+    def assert_outside_scope():
+        with registry.transaction() as session:
+            assert mirrors.read_published_scope(session, source_id) == []
+
+    collected = CollectedStructure(objects=[CollectedObject("public", "orders", "table")])
+    records = _to_catalog_records(source_id=source_id, source_key=source["key"], engine="postgresql",
+                                  kind="database", collected=collected, job_id="structure")
+    apply_structure_snapshot(source=require_source(source_id), job_id="structure", collected=records, schema_scope="public")
+    assert_outside_scope()
+    response = client.patch(f"/sources/{source_id}", json={"capture_credential": {"username": "capture", "password": "fixture"}})
+    assert response.status_code == 200, response.text
+    assert_outside_scope()
+    channel = _channel(client, "Read discovered orders")
+    graph = _guarded_graph("read.source_query", {"source_id": source_id, "sql": "SELECT id FROM public.orders"})
+    revision = _save_draft(client, channel, graph)
+    published = client.post(f"/channels/{channel}/publish", json={"draft_revision": revision})
+    assert published.status_code == 201, published.text
+    assert_outside_scope()

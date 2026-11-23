@@ -29,7 +29,7 @@ from backend.metadata.capture.snapshot import SnapshotCoordinator
 from backend.metadata.capture.store import list_operations, load_binding, save_binding
 from backend.metadata.errors import SourceCaptureControlConflict
 from backend.metadata.mirrors.service import (
-    MirrorError, ObserveCommittedOpenPublication, OpenPublicationIdentity, read_published_scope,
+    MirrorError, ObserveCommittedOpenPublication, OpenPublicationIdentity, read_dispatch_scope,
     reconcile_open_publication,
 )
 from backend.metadata.mirrors.types import Authority
@@ -184,7 +184,7 @@ class CaptureRuntime:
         if (command["owner_epoch"] <= 0 or command["runtime_instance_id"] != self.signals.runtime_instance_id):
             raise RuntimeBlocked("owner_assignment_unproven")
         if source.status == "active" and source.capture_credential_ciphertext:
-            scope = read_published_scope(session, source.id)
+            scope = read_dispatch_scope(session, source.id, state=state)
             if command.get("published_scope", []) != scope or state.get("published_scope", []) != scope:
                 raise RuntimeBlocked("published_scope_changed")
         return command

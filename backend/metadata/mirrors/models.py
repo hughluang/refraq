@@ -15,6 +15,7 @@ class MirrorRow(Base):
     table_identity: Mapped[str] = mapped_column(String(64), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     state: Mapped[dict] = mapped_column(JSON, nullable=False)
+    effective_status: Mapped[str] = mapped_column(String(32), nullable=False, default="waiting", index=True)
 
 
 class MirrorOperationRow(Base):
