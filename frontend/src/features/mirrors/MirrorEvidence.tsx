@@ -3,13 +3,17 @@ import { Instant } from "@/components/display/Instant";
 import { getMirrorStopEvidence } from "./stopEvidence";
 import type { Mirror } from "./types";
 
-const waitReasons = new Set(["source_disabled", "capture_credential_missing", "table_unqualified", "snapshot_window_closed", "snapshot_slot_busy", "publication_pending", "incremental_snapshot_blocked"]);
+const waitReasons = new Set(["source_disabled", "capture_credential_missing", "table_unqualified", "snapshot_window_closed", "snapshot_slot_busy", "own_snapshot_slot_busy", "publication_pending", "incremental_snapshot_blocked"]);
 
 export function readinessLabel(key: string, t: ReturnType<typeof useTranslate>) {
+  const cause = /^mirror_(permission|schema|continuity)_blocked$/.exec(key)?.[1];
+  if (cause) return t(`mirrors.blocker.${cause}`);
   return waitReasons.has(key) ? t(`mirrors.wait.${key}`) : key;
 }
 
 export function readinessAction(item: Mirror["readiness"][number], t: ReturnType<typeof useTranslate>) {
+  const cause = /^mirror_(permission|schema|continuity)_blocked$/.exec(item.key)?.[1];
+  if (cause) return t(`mirrors.next.${cause}`);
   return waitReasons.has(item.key) ? t(`mirrors.action.${item.key}`) : item.action;
 }
 
@@ -42,7 +46,7 @@ export function MirrorEvent({ mirror }: { mirror: Mirror }) {
     {stop?.state === "confirmed" && <div>{t("mirrors.event.stopConfirmed")} · <Instant value={stop.observedAt} /></div>}
     {published && <div>{t("mirrors.event.published")}</div>}
     {published && <div>{t("mirrors.freshnessUnknown")}</div>}
-    {published && op && <div>{t("mirrors.event.replacement")}</div>}
+    {published && op && <div>{t("mirrors.event.retained")}</div>}
     {blocker && <div>{readinessLabel(blocker.key, t)} · {t(`mirrors.result.${blocker.result}`)} {blocker.observed_at && <Instant value={blocker.observed_at} />}</div>}
     {progress && <div>{t(`mirrors.event.${progress.stage}`)} {progress.observed_at && <Instant value={progress.observed_at} />}</div>}
     {!progress && op && <div>{t(`mirrors.event.${request}`)} · {t("mirrors.requestedAt")} <Instant value={op.requested_at} /></div>}

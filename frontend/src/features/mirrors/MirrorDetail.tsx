@@ -1,7 +1,7 @@
 "use client";
 
 import { Button, Stack, Text } from "@mantine/core";
-import { useConsoleLocation } from "@/components/navigation/useConsoleNavigation";
+import { useConsoleLocation, useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { useCan, useTranslate } from "@refinedev/core";
 import { useEffect, useRef, useState } from "react";
 import { DisplayField } from "@/components/display/DisplayField";
@@ -20,7 +20,9 @@ import { HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { presentConsoleNotification } from "@/providers/notification-provider";
-import { requestRecovery, setMirrorEnabled } from "./api";
+import { deleteMirror, requestRecovery, setMirrorEnabled } from "./api";
+import { MirrorDelete } from "./MirrorDelete";
+import { MirrorJournal, Receipt } from "./MirrorJournal";
 import type { PendingOperation, RecoveryAction } from "./types";
 
 function Evidence({ value }: { value: unknown }) {
@@ -37,6 +39,7 @@ export function MirrorDetail({ id }: { id: string }) {
 
 function MirrorRecord({ id }: { id: string }) {
   const t = useTranslate();
+  const navigation = useConsoleNavigation();
   const { href: current, search } = useConsoleLocation();
   const origin = mirrorReturnHref(search?.get("from") ?? null);
   const originPath = new URL(origin, "http://console.local");
@@ -50,6 +53,10 @@ function MirrorRecord({ id }: { id: string }) {
   const [recovery, setRecovery] = useState<{ action: RecoveryAction; epoch: string | number; revision: number } | null>(null);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [acceptedSetting, setAcceptedSetting] = useState<{ enabled: boolean; revision: number } | null>(null);
+  const enabled = acceptedSetting?.enabled ?? mirror?.enabled ?? false;
+  const deleting = useRef(false);
+  const deletePending = Boolean(mirror?.deletion_operation_id);
   const writePending = useRef(false);
   const pageRequest = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -61,20 +68,28 @@ function MirrorRecord({ id }: { id: string }) {
     if (status === "ready") restoreMirrorPosition(current);
   }, [status, current]);
   useEffect(() => {
-    if (!mirror) setPending(null);
-    if (!mirror || (recovery && (recovery.epoch !== mirror.history_epoch ||
+    if (deletePending) deleting.current = true;
+    if (deleting.current && status === "notFound") navigation.replace(origin);
+  }, [deletePending, status, navigation, origin]);
+  useEffect(() => {
+    if (!mirror || (pending && (mirror.latest_request?.operation_id === pending.operation_id ||
+        mirror.operations.some(operation => operation.id === pending.operation_id)))) setPending(null);
+    if (!mirror || (acceptedSetting && mirror.control.control_revision >= acceptedSetting.revision)) setAcceptedSetting(null);
+    if (!mirror || mirror.deletion_operation_id || (recovery && (
+        (recovery.action === "retry" && !mirror.can_retry) || recovery.epoch !== mirror.history_epoch ||
         recovery.revision !== mirror.control.control_revision))) setRecovery(null);
-  }, [mirror, recovery]);
+  }, [mirror, pending, recovery, acceptedSetting]);
   const scope = mirror ? t("mirrors.scope", { source: mirror.source_name, table: mirror.qualified_table }) : "";
   const stopPending = mirror !== null && getMirrorStopEvidence(mirror)?.state === "pending";
   async function toggle(enabled: boolean) {
     const signal = pageRequest.current?.signal;
-    if (!mirror || !canWrite?.can || (enabled && !canEnable) || submitting || writePending.current || !signal || signal.aborted) return;
+    if (!mirror || deletePending || !canWrite?.can || (enabled && !canEnable) || submitting || writePending.current || !signal || signal.aborted) return;
     writePending.current = true;
     setSubmitting(true);
     try {
-      await setMirrorEnabled(id, enabled, signal);
+      const accepted = await setMirrorEnabled(id, enabled, signal);
       if (signal.aborted) return;
+      if ("mirror" in accepted) setAcceptedSetting({ enabled: accepted.mirror.enabled, revision: accepted.mirror.control.control_revision });
       presentConsoleNotification({ type: "success", title: t("mirrors.acceptedForTable", { table: mirror.qualified_table }) });
       setPending(null);
     } catch (error) {
@@ -90,12 +105,14 @@ function MirrorRecord({ id }: { id: string }) {
   }
   async function recover() {
     const signal = pageRequest.current?.signal;
-    if (!signal || signal.aborted || !mirror || !recovery || !canWrite?.can || submitting || writePending.current || (recovery.action !== "retry" && !reason.trim())) return;
+    if (!signal || signal.aborted || !mirror || deletePending || !recovery || !canWrite?.can || submitting || writePending.current ||
+      (recovery.action === "retry" ? !mirror.can_retry : !reason.trim())) return;
     writePending.current = true;
     setSubmitting(true);
     try {
       const result = await requestRecovery(id, {
         action: recovery.action, expected_history_epoch: recovery.epoch, ...(reason.trim() ? { reason: reason.trim() } : {}),
+        ...(recovery.action === "retry" ? { expected_control_revision: recovery.revision } : {}),
       });
       if (signal.aborted) return;
       setPending(result);
@@ -124,16 +141,40 @@ function MirrorRecord({ id }: { id: string }) {
     actions={<HeaderActions navigation={<>
       <Button component={ConsoleLink} href={origin} size="sm" variant="light">{t(backKey)}</Button>
       <Button size="sm" variant="light" disabled={submitting} onClick={() => void refresh()}>{t("common.refresh")}</Button>
-    </>} lifecycle={mirror && <MirrorSwitch enabled={mirror.enabled}
-      disabled={submitting || !canWrite?.can || (!mirror.enabled && !canEnable)}
-      table={mirror.qualified_table} onChange={enabled => void toggle(enabled)} />} />}>
+    </>}
+      standard={mirror && canWrite?.can && <MirrorDelete key={mirror.control.control_revision} table={mirror.qualified_table}
+        source={mirror.source_name} generation={mirror.published_generation_id} enabled={enabled}
+        pending={deletePending} disabled={submitting || acceptedSetting !== null}
+        remove={signal => deleteMirror(id, mirror.control.control_revision, signal)}
+        onResult={stillPending => {
+          if (stillPending) { deleting.current = true; void refresh(); }
+          else navigation.replace(origin);
+        }} />} />}>
     {mirror ? <Stack gap="lg">
       <MirrorStatusFreshness {...live} />
+      {deletePending && <Text role="status">{t("mirrors.deletePending", { table: mirror.qualified_table })}</Text>}
+      <FormSection title={t("mirrors.synchronization")} columns={1}>
+        <MirrorSwitch enabled={enabled}
+          disabled={deletePending || submitting || !canWrite?.can || (!enabled && !canEnable)}
+          table={mirror.qualified_table} onChange={enabled => void toggle(enabled)} />
+        {!deletePending && !enabled && canWrite?.can && <Text size="sm">{t("mirrors.resumePlan")}</Text>}
+      </FormSection>
       <MirrorCopySummary mirror={mirror} origin={current} />
-      {pending && <DisplayField label={t("mirrors.operation")} value={`${pending.operation_id}: ${t("mirrors.pending")}`} />}
+      {pending && mirror.latest_request?.operation_id !== pending.operation_id &&
+        <DisplayField label={t("mirrors.operation")} value={`${pending.operation_id}: ${t("mirrors.pending")}`} />}
+      <MirrorJournal key={mirror.journal?.next_cursor} mirror={mirror} />
       <details>
         <summary>{t("mirrors.requestsAndReceipts")}</summary>
         <Stack gap="md" mt="md">
+          <FormSection title={t("mirrors.receiptSummary")}>
+            <DisplayField label={t("mirrors.latestRequest")} value={<Receipt event={mirror.latest_request} />} />
+            <DisplayField label={t("mirrors.latestObservation")} value={<Receipt event={mirror.latest_observation} />} />
+            <DisplayField label={t("mirrors.continuity")} value={<Receipt event={mirror.continuity_check} />} />
+            <DisplayField label={t("mirrors.allocatedGeneration")} value={mirror.allocated_generation_id} />
+            <DisplayField label={t("mirrors.publishedAt")} value={<Instant value={mirror.published_at} />} />
+            {mirror.snapshot_slot_holder && <DisplayField label={t("mirrors.wait.snapshot_slot_busy")} value={mirror.snapshot_slot_holder.qualified_table} />}
+            {mirror.publication_wait && <DisplayField label={t("mirrors.wait.publication_pending")} value={mirror.publication_wait.qualified_table} />}
+          </FormSection>
           <FormSection title={t("mirrors.identity")}>
             <DisplayField label={t("mirrors.rowEstimate")} value={mirror.estimated_rows?.toLocaleString() ?? t("mirrors.unmeasured")} />
             <DisplayField label={t("mirrors.generation")} value={mirror.published_generation_id} />
@@ -154,8 +195,9 @@ function MirrorRecord({ id }: { id: string }) {
           <FormSection title={t("mirrors.bounds")}><DisplayField label={t("mirrors.lower")} value={<Evidence value={mirror.retained_lower_bound} />} /><DisplayField label={t("mirrors.upper")} value={<Evidence value={mirror.committed_upper_bound} />} /></FormSection>
         </Stack>
       </details>
-      {canWrite?.can && <FormSection title={t("mirrors.controls")}>
-        {(["retry", "run_now", "postpone", "manual"] as const).map(action => <Button key={action} size="sm" variant="light" disabled={submitting || mirror.history_epoch == null} onClick={() => { if (mirror.history_epoch == null) return; setReason(""); setRecovery({ action, epoch: mirror.history_epoch, revision: mirror.control.control_revision }); }}>{t(`mirrors.recovery.${action}`)}</Button>)}
+      {canWrite?.can && !deletePending && <FormSection title={t("mirrors.controls")}>
+        {(["retry", "run_now", "postpone", "manual"] as const).filter(action => action !== "retry" || mirror.can_retry)
+          .map(action => <Button key={action} size="sm" variant="light" disabled={submitting || mirror.history_epoch == null} onClick={() => { if (mirror.history_epoch == null) return; setReason(""); setRecovery({ action, epoch: mirror.history_epoch, revision: mirror.control.control_revision }); }}>{t(`mirrors.recovery.${action}`)}</Button>)}
       </FormSection>}
     </Stack> : null}
     <ConfirmActionModal opened={!!mirror && !!canWrite?.can && recovery !== null} onClose={() => { if (!submitting) setRecovery(null); }} title={t(`mirrors.recovery.${recovery?.action ?? "retry"}`)} body={`${scope} ${t(`mirrors.impact.${recovery?.action ?? "retry"}`)}`} loading={submitting}

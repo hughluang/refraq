@@ -17,6 +17,7 @@ from backend.metadata.capture.control import (
 )
 from backend.metadata.capture.decoder import PostgreSQLDecoder
 from backend.metadata.capture.delivery import DeliveryBinding, DeliveryLimits, open_delivery
+from backend.metadata.capture.postgresql import TablePrerequisiteFailed
 from backend.metadata.capture.runtime_store import RuntimeBlocked, protected_json, protected_read
 from backend.metadata.capture.snapshot import SnapshotBinding
 from backend.metadata.capture.store import load_binding
@@ -26,7 +27,7 @@ from backend.metadata.mirrors.publication import Publication
 from backend.metadata.mirrors.service import (
     MirrorError, OpenGenerationBinding, confirm_retained_opens, current_open_preparations, initial_history_epoch, read_dispatch_scope,
     reconcile_open_generation, request_reopen_baseline, require_current_open_allocations,
-    require_current_retained_opens,
+    require_current_retained_opens, lifecycle_checks, record_continuity_receipt, table_prerequisite_check,
 )
 from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity
 
@@ -167,7 +168,8 @@ def _canonical_coverage(coverage, *, authority, leader_epoch, earliest, end, sea
 def _retained_coverage(metadata, seal, publisher, leader_epoch, seek):
     coverage = metadata.get("anchored_coverage")
     if seek == seal["eof"]:
-        return coverage == seal
+        return (coverage == seal and _canonical_coverage(coverage, authority=publisher, leader_epoch=leader_epoch,
+                                                        earliest=seal["start"], end=seek, sealed=True))
     if not isinstance(coverage, dict):
         return False
     authority = coverage.get("authority")
@@ -273,7 +275,10 @@ class SourceDelivery:
         partitions = tuple(PartitionIdentity(**table["partition_identity"]) for table in tables)
         installed, retained = [], {}
         failures = []
+        checks = lifecycle_checks(command["source_id"], scope)
         for table in tables:
+            entry = next(item for item in scope if item["included"] and item["table_identity"] == table["decoder"]["table_identity"])
+            check_id = checks.get(entry["mirror_id"])
             try:
                 identity = table["decoder"]["table_identity"]
                 pending, applied = current_open_preparations(
@@ -299,6 +304,14 @@ class SourceDelivery:
                     prepared = (cached if self.prepared_command == command and cached is not None
                                 else self._prepare_table(command, authority, table, opened))
                 installed.append(prepared)
+                if check_id:
+                    table_prerequisite_check(command, table=entry["qualified_table"], cause="schema", passed=True,
+                                             request_id=check_id)
+            except TablePrerequisiteFailed as failure:
+                if check_id:
+                    table_prerequisite_check(command, table=entry["qualified_table"], cause="schema", passed=False,
+                                             request_id=check_id)
+                failures.append(failure)
             except (MirrorError, KeyError, TypeError, ValueError):
                 failures.append(RuntimeBlocked("open_generation_preparation_blocked"))
             except RuntimeBlocked as failure:
@@ -332,6 +345,9 @@ class SourceDelivery:
         identity = dict(authority=authority, **scope)
         identity["candidates"] = [{key: value for key, value in item.items() if key != "target_seek_offset"}
                                   for item in scope["candidates"]]
+        checks = lifecycle_checks(command["source_id"], command["published_scope"])
+        if checks:
+            identity["lifecycle_checks"] = checks
         operation_id = sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         decisions = self.signals.resume_retained(command, dict(operation_id=operation_id, authority=authority, scope=scope))
         current = Authority(**_target_authority(command))
@@ -343,17 +359,28 @@ class SourceDelivery:
             decision = (decisions or {}).get(item.mirror_id)
             if not decision:
                 raise RuntimeBlocked("retained_position_resume_unconfirmed")
+            check = checks.get(item.mirror_id)
+            consumed = check and record_continuity_receipt(
+                authority=current, scope=command["published_scope"], mirror_id=item.mirror_id,
+                check_id=check, decision=decision, published_operation_id=item.operation_id,
+            )
+            if consumed:
+                if consumed == "retained":
+                    admitted.append(item)
+                continue
             if decision["result"] == "gap":
                 entry = next(entry for entry in command["published_scope"] if entry["mirror_id"] == item.mirror_id)
                 request_reopen_baseline(authority=current, published_scope=command["published_scope"],
                                         mirror_id=item.mirror_id, mirror_revision=entry["mirror_revision"],
                                         operation_id=item.operation_id, evidence_ref=decision["evidence_ref"],
                                         partition_identity=decision["partition_identity"], start_offset=decision["start_offset"],
-                                        history=self.history)
+                                        history=self.history, check_id=checks.get(item.mirror_id),
+                                        observed_at=decision.get("observed_at"))
             elif decision["result"] == "continuous":
                 admitted.append(item)
         if admitted:
-            confirm_retained_opens(authority=current, published_scope=command["published_scope"], candidates=admitted)
+            confirm_retained_opens(authority=current, published_scope=command["published_scope"], candidates=admitted,
+                                   decisions=decisions, checks=checks)
         approved_ids = {item.generation_id for item in admitted}
         if operation_id != self.resume_operation_id or approved_ids != self.admitted_generations:
             self.retire()
@@ -407,8 +434,11 @@ class SourceDelivery:
             binding.authority, table, table_identity=binding.table_identity,
             qualified_table=binding.qualified_table, history_epoch=binding.history_epoch,
         )
-        if (manifest_binding != binding or tuple(manifest_binding.columns) != tuple(binding.columns)
+        if (manifest_binding.schema_fingerprint != binding.schema_fingerprint
+                or manifest_binding.key_columns != binding.key_columns or manifest_binding.columns != binding.columns
                 or observed.allocation["native_types"] != table["native_types"]):
+            raise TablePrerequisiteFailed(binding.qualified_table, "schema")
+        if manifest_binding != binding or tuple(manifest_binding.columns) != tuple(binding.columns):
             raise RuntimeBlocked("published_open_manifest_mismatch")
         evidence = observed.certificate["evidence"]
         profile = observed.allocation.get("anchored_profile")
@@ -551,15 +581,16 @@ class SourceDelivery:
         except Exception:
             raise RuntimeBlocked("delivery_installation_unconfirmed") from None
         opened = table.get("open")
+        if (metadata and metadata["generation_id"] == binding.generation_id and metadata["authority"] == expected
+                and metadata["table_identity"] == decoder.table_identity and (
+                    metadata["schema_fingerprint"] != table["schema_fingerprint"] or metadata["key_columns"] != list(decoder.key_fields)
+                    or metadata["column_names"] != list(decoder.columns) or metadata["native_types"] != table["native_types"])):
+            raise TablePrerequisiteFailed(f"{decoder.source['schema']}.{decoder.source['table']}", "schema")
         if (metadata is None or metadata["authority"] != expected
                 or metadata["generation_id"] != binding.generation_id
                 or metadata["capture_generation"] != binding.authority.capture_generation
                 or metadata["partition_identity"] != asdict(binding.partition_identity)
                 or metadata["table_identity"] != decoder.table_identity
-                or metadata["schema_fingerprint"] != table["schema_fingerprint"]
-                or metadata["key_columns"] != list(decoder.key_fields)
-                or metadata["column_names"] != list(decoder.columns)
-                or metadata["native_types"] != table["native_types"]
                 or (opened is not None and (
                     metadata.get("fence_receipt") != table["fence_receipt"]
                     or metadata.get("start_offset") != table["start_offset"]

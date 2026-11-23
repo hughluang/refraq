@@ -97,6 +97,8 @@ class CatalogIndexOut(BaseModel):
 
 
 class CatalogMirrorOut(BaseModel):
+    delete_token: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    deletion_pending: bool = Field(default=False, exclude_if=lambda value: not value)
     enabled: bool
     can_enable: bool
     can_disable: bool

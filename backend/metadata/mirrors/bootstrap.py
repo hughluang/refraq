@@ -26,6 +26,8 @@ FUNCTIONS = {
     "publish_generation(text,jsonb,text,jsonb)": "refraq_mirror_applier",
     "observe_committed_publication(text,text,text,jsonb,text,jsonb,text)": "refraq_mirror_applier",
     "observe_committed_publication(text,text,text,jsonb,text)": "refraq_mirror_applier",
+    "seal_deletion(text,text,jsonb)": "refraq_mirror_applier",
+    "purge_mirror(text,text,jsonb)": "refraq_mirror_applier",
     "acquire_pin(text,text)": "refraq_mirror_gateway",
     "resolve_source(text)": "refraq_mirror_gateway",
     "read_page(text,text,jsonb,integer)": "refraq_mirror_gateway",
@@ -68,6 +70,7 @@ def install(connection):
             raise ValueError("Mirror target version mismatch")
         connection.execute(Path(__file__).with_name("target.sql").read_text())
         connection.execute(Path(__file__).with_name("history.sql").read_text())
+        connection.execute(Path(__file__).with_name("deletion.sql").read_text())
         connection.execute("REVOKE ALL ON ALL TABLES IN SCHEMA source_mirror, source_mirror_state FROM PUBLIC, refraq_mirror_applier, refraq_mirror_gateway")
         connection.execute("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA source_mirror_state FROM PUBLIC, refraq_mirror_applier, refraq_mirror_gateway")
         connection.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA source_mirror_state REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC")

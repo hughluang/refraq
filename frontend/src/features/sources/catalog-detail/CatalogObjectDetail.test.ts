@@ -2,7 +2,7 @@
 
 import { MantineProvider } from "@mantine/core";
 import { notifications, notificationsStore } from "@mantine/notifications";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -272,7 +272,7 @@ describe("CatalogObjectDetail load", () => {
     await screen.findByText(en["mirrors.event.stopConfirmed"], { exact: false });
 
     fireEvent.click(control);
-    expect(await screen.findByText(en["mirrors.event.replacement"])).toBeTruthy();
+    expect(await screen.findByText(en["mirrors.event.retained"])).toBeTruthy();
     fireEvent.click(control);
     fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
     expect(await screen.findByText(en["mirrors.event.disableRequested"])).toBeTruthy();
@@ -319,6 +319,31 @@ describe("CatalogObjectDetail load", () => {
     expect(submit.mock.calls[0][0].body).toBe('{"enabled":false}');
     expect(screen.queryByRole("link", { name: "View mirror" })).toBeNull();
     expect(await screen.findByRole("alert")).toBeTruthy();
+  });
+
+  it("lets a writer cancel or delete a mistakenly enrolled Mirror without reading management detail", async () => {
+    mirrorGrants.add("edit");
+    const token = "c".repeat(32);
+    listMirrorTables.mockResolvedValueOnce({ items: [{ ...table, mirror: { ...orders.mirror, delete_token: token } }] })
+      .mockResolvedValue({ items: [table] });
+    const remove = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", (path: string, options: RequestInit) => {
+      if (path === `/api/objects/obj_1/mirror?delete_token=${token}` && options.method === "DELETE") return remove();
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(shell(createElement(MirrorTableDrawer, { objectId: orders.id })));
+    await openTableSetting();
+    const button = await screen.findByRole("button", { name: "Delete Mirror" });
+    fireEvent.click(button);
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(remove).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    const dialog = await screen.findByRole("dialog", { name: "Delete Mirror" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete Mirror" }));
+    await waitFor(() => expect(listMirrorTables).toHaveBeenCalledTimes(2));
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("link", { name: "View mirror" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete Mirror" })).toBeNull());
   });
 
   it("disables the setting while enable acceptance is pending", async () => {

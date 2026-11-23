@@ -22,7 +22,9 @@ All paths are API-relative, authenticated by Session or User PAT. Failures use P
 | `GET /mirrors` | `mirror:read` | Offset Page, `limit` default 100/max 500, `offset` default 0; optional `source_id`, `status`, `q` literal Source/object-name substring; order Source key, qualified table, mirror id |
 | `GET /mirrors/{id}` | `mirror:read` | `{mirror: Mirror}` including redacted evidence, and a top-level `can_enable` flag reflecting current table eligibility |
 | `PATCH /mirrors/{id}` | `mirror:write` | `{enabled: boolean}` durable intent. Returns `{mirror: Mirror, operation_id}` to a reader or `{enabled, operation_id}` to a write-only caller |
-| `DELETE /mirrors/{id}` | `mirror:write` | Requires disabled desired state and successful close through a configured target lifecycle adapter that verifies stop and excludes active or resumable pins. Returns 204 when deleted. Retains Source capture resources. Returns 503 when the target lifecycle adapter is unbound |
+| `GET /mirrors/{id}/journal` | `mirror:read` | Newest first. Pass `before` from `next_cursor` and an optional `limit` (1 to 100, default 20). Returns `{items, next_cursor}`. |
+| `DELETE /mirrors/{id}` | `mirror:write` | Delete a disabled Mirror. An optional `expected_control_revision` guards an earlier confirmation. Returns 204 after cleanup or 202 with the pending operation. |
+| `DELETE /objects/{object_id}/mirror` | `metadata:read` on Source and global `mirror:write` | Supply the disabled Catalog setting's opaque `delete_token` as a query parameter. It binds confirmation to the selected enrollment and revision. Returns the same deletion outcome as Mirror detail. |
 | `POST /mirrors/{id}/recovery-requests` | `mirror:write` | `{action: retry\|run_now\|postpone\|manual, expected_history_epoch, reason?}` scoped to the path Mirror. Run now, postpone and manual require a nonblank reason. Returns 202 `{operation_id, state: pending}` |
 | `GET /sources/{id}/capture-status` | `sources:read` on Source | `{source_id, profile_id, availability, control, readiness, operations}`; no secrets; availability `disabled\|available\|degraded\|unknown` distinct from Source configuration `capture_state` |
 
@@ -35,6 +37,10 @@ Detail, list items and the list's status filter use the same current lifecycle e
 The Catalog PUT and the compatible enable-only POST each accept one table. The global `mirror:write` check runs before Catalog object lookup. A missing permission returns `403 AUTH_FORBIDDEN`. An unknown or inaccessible Catalog object returns `404 CATALOG_OBJECT_NOT_FOUND`. A visible object that fails Mirror table eligibility returns `404 MIRROR_NOT_FOUND`. Concurrent or repeated enables of the same table converge on the same Mirror and accepted Open operation. Reopening a disabled Mirror retains its identity. A 202 records desired state. Snapshot progress and the published pointer depend on subsequent runtime evidence.
 
 `control` exposes `control_revision`, `credential_revision`, `owner_epoch`, `runtime_instance_id`, `applied_revision`, `observed_at` and nullable `stop_ack`. The redacted acknowledgment contains `operation_id` for the Mirror disable, `source_operation_id` for the observed Source stop, and `observed_at`. Confirmation requires a disabled Mirror, matching current and applied revisions and the matching applied disable journal entry. Until current stop evidence is accepted, a requested disable reports `disable_pending`. A qualified runtime may acknowledge the exclusion of an individual table while other tables are active. It binds independent connector exclusion, drained delivery and target fence evidence to the exact table revision. The published generation is retained.
+
+Detail embeds the latest three journal events. Each records its category (request or observation), operation, revision, UTC time and applicable epoch and generation. Request outcomes can refer to a superseding request or the operation that supplied conclusive evidence. Detail exposes `latest_request`, `latest_observation`, `continuity_check`, `blocker`, `can_retry`, `allocated_generation_id` and `published_at`. Unmeasured timestamps are null. A Console Retry supplies both the expected control revision and History epoch. An inconclusive recheck completes that Retry and leaves its Open awaiting evidence.
+
+A never-dispatched Mirror can be removed using durable Management evidence alone. Once a command or allocation may have reached the runtime, deletion requires the matching stop, released snapshot reservation and an available restricted target that can exclude all reader pins. Reapply the administrative Mirror target bootstrap to install the cleanup functions on existing targets. An accepted deletion exposes `deletion_operation_id` until cleanup is complete. Repeating the request resumes the same operation.
 
 Operations include durable id, kind, revision, state (`pending|applied|superseded`), request time, evidence references and safe fault code. Recovery admission compares the expected History epoch and audits accepted intent transactionally. A retry cannot authorize destructive change. Reopening a published generation requires current target pointer, owner, fence, certificate and history observations before its open is applied.
 
@@ -78,6 +84,8 @@ The internal signed `published_scope` contains each registered Mirror’s immuta
 
 The private scope-fence observation binds the current Source command, scope and per-table target fence receipts. A running observation may carry `table_exclusions` with the excluded scope entry and the connector exclusion, delivery drain and target fence references. The runtime verifies signatures, freshness and the exact revisions before recording exclusions.
 
+An interrupted first-copy scope fence may carry `inconclusive_tables`, keyed by Mirror ID with a signed evidence reference per table. This holds the first Open at its current revision until the observer supplies a verified partition in `table_boundaries`. A new Open also waits for an abandoned snapshot reservation on the same Source. The runtime accepts the original scan's authenticated terminal notifications, a matching terminal Source stop, or proven takeover exclusion as release evidence.
+
 Retained resume decisions bind the original published generation and current Source scope. A continuous decision requires authorization for the current target fence. A gap decision identifies the qualified data partition and last skipped offset for an empty replacement. Unknown continuity leaves that table pending. Table-gap invalidation advances only the affected history epoch and retires its old writers before the new generation receives records. The normal capture loop reconciles publication after the independent deployment verifier stores a completion certificate in the target.
 
 ## 5. Foundation Notification HTTP
@@ -100,7 +108,10 @@ Credential is `{header_name, secret}` used only for authenticated HTTPS delivery
 | `MIRROR_HISTORY_INVALID` | 409 | Epoch, retained bound or management/target gate mismatch; no implicit reset |
 | `MIRROR_CONTROL_CONFLICT` | 409 | Stale expected epoch/control, contradictory command or unproven owner exclusion |
 | `MIRROR_PUBLICATION_BLOCKED` | 409 | Missing/invalid completion certificate, schema/key or coverage proof |
-| `MIRROR_IN_USE` | 409 | Unconfirmed stop or active/resumable pins prevent deletion |
+| `MIRROR_IN_USE` | 409 | Disable synchronization before deleting the Mirror |
+| `MIRROR_STOP_UNCONFIRMED` | 409 | The current stop or target fence remains unverified |
+| `MIRROR_SNAPSHOT_IN_USE` | 409 | The snapshot reservation still needs to be released |
+| `MIRROR_READERS_IN_USE` | 409 | A reader retains a pin on this Mirror |
 | `MIRROR_RECOVERY_AUTHORIZATION_REQUIRED` | 409 | Unsafe/unknown schema or non-allowlisted recovery requires explicit decision |
 | `SOURCE_CAPTURE_RESOURCES_RETAINED` | 409 | Source has retained capture binding; delete refused before cascades |
 

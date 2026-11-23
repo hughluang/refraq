@@ -84,6 +84,13 @@ export function setCatalogMirrorEnabled(objectId: string, enabled: boolean, sign
   );
 }
 
+export function deleteCatalogMirror(objectId: string, token: string, signal: AbortSignal) {
+  const query = new URLSearchParams({ delete_token: token });
+  return apiClient<{ operation_id: string; state: "pending" } | undefined>(
+    `/objects/${encodeURIComponent(objectId)}/mirror?${query}`, { method: "DELETE", signal },
+  );
+}
+
 export async function resolveCatalogObject(objectRef: string, signal?: AbortSignal): Promise<{ object: CatalogObject | null }> {
   if (!objectRef.startsWith("obj/")) return getCatalogObject(objectRef, signal);
   const parts = objectRef.split("/");

@@ -96,6 +96,7 @@ class SnapshotCoordinator:
                     if operation["state"] not in {"awaiting_dispatch", "waiting_window"}:
                         return self._observe(session, state, binding, operation)
                 if ledger["active"] not in (None, binding.generation_id):
+                    self._observe_abandoned_slot(session, state, ledger["active"])
                     return SnapshotResult(None, "source_busy")
                 if not self._window_open(source, mode):
                     return SnapshotResult(operation["id"] if operation else None, "waiting_window")
@@ -148,7 +149,39 @@ class SnapshotCoordinator:
                 raise dispatch_error
             return SnapshotResult(operation_id, "waiting_window")
 
-    def _observe(self, session, state, binding, operation):
+    def _observe_abandoned_slot(self, session, state, generation):
+        # A new Open cannot dispatch the old allocation. It can still collect
+        # its signed terminal notifications to release the Source reservation.
+        operation = state["incremental_snapshots"]["generations"].get(generation)
+        if not operation or operation.get("state") not in {"submission_uncertain", "snapshotting"}:
+            return
+        previous = operation["binding"]
+        current = next((entry for entry in state["published_scope"]
+                        if entry["mirror_id"] == previous["mirror_id"]), None)
+        if (not current or current["mirror_revision"] <= previous["mirror_revision"]
+                or previous["generation_id"] != generation
+                or previous["authority"]["source_id"] != state["source_id"]):
+            return
+        binding = SnapshotBinding(**{**previous, "authority": Authority(**previous["authority"]),
+                                     "data_partition": PartitionIdentity(**previous["data_partition"]),
+                                     "notification_partition": PartitionIdentity(**previous["notification_partition"])})
+        try:
+            self._observe(session, state, binding, operation, abandoned=True)
+        except RuntimeBlocked:
+            # An unavailable old receipt keeps this reservation. Other published
+            # tables on the Source can continue processing their own records.
+            return
+
+    def poll_abandoned_slot(self, source_id):
+        """Collect terminal evidence even when all other tables already have copies."""
+        with self.journal.source_lock(source_id):
+            with source_control_transaction(source_id) as (session, _):
+                state = load_binding(session, source_id)
+                active = state.get("incremental_snapshots", {}).get("active") if state else None
+                if active:
+                    self._observe_abandoned_slot(session, state, active)
+
+    def _observe(self, session, state, binding, operation, *, abandoned=False):
         operation_id = operation["id"]
         if operation["state"] in {"submission_uncertain", "snapshotting"}:
             if not operation.get("receipt"):
@@ -169,7 +202,9 @@ class SnapshotCoordinator:
                     current_observation = self._notifications(binding, operation, batch)
             if (current_observation and operation.get("receipt")
                     and "scan" in operation and "completion" in operation):
-                operation["state"] = "catching_up"
+                operation["state"] = "abandoned" if abandoned else "catching_up"
+                if abandoned:
+                    operation["released_at"] = utc_now().isoformat()
                 state["incremental_snapshots"]["active"] = None
             save_binding(session, state)
         if operation["state"] == "catching_up":

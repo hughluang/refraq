@@ -24,42 +24,66 @@ def opened():
     service.bind_management()
 
 
-def test_control_and_deletion_are_fail_closed(opened):
-    store, mid = opened
-    result = service.set_enabled(mid, enabled=False, actor_user_id="u")
-    assert result["mirror"]["status"] == "disable_pending"
-    assert result["mirror"]["control"]["stop_ack"] is None
-    assert result["mirror"]["published_generation_id"] is None
-    assert {op["kind"]: op["state"] for op in result["mirror"]["operations"]} == {
-        "open": "superseded",
-        "disable": "pending",
-    }
-    with pytest.raises(AppError, match="MIRROR_READ_UNAVAILABLE"):
-        service.delete_mirror(mid, actor_user_id="u")
-
-    class Pinned:
-        def close_for_delete(self, **kwargs):
-            raise service.MirrorError("MIRROR_IN_USE", 409)
-
-    service.bind_management(store=store, target=Pinned())
+def test_never_dispatched_mirror_can_be_deleted_and_reenrolled(opened):
+    _, mid = opened
     with pytest.raises(AppError, match="MIRROR_IN_USE"):
         service.delete_mirror(mid, actor_user_id="u")
-    assert service.get_mirror(mid)["enabled"] is False
-
-    calls = []
-
-    class Closed:
-        def close_for_delete(self, **kwargs):
-            calls.append(kwargs)
-
-    service.bind_management(store=store, target=Closed())
-    service.delete_mirror(mid, actor_user_id="u")
-    assert calls == [dict(mirror_id=mid, source_id="s1", control_revision=2)]
+    stopped = service.set_enabled(mid, enabled=False, actor_user_id="u")
+    assert stopped["mirror"]["status"] == "disable_pending"
+    assert service.delete_mirror(mid, actor_user_id="u") is None
     assert service.list_mirrors()["total"] == 0
+    new = service.enable_for_object("o1", actor_user_id="u")["mirror"]
+    assert new["id"] != mid and new["history_epoch"] is None
     from backend.admin.audit_store import get_audit_store
 
     events, _ = get_audit_store().list_events(limit=100)
-    assert any(event.action == "mirror.delete" for event in events)
+    assert any(event.action == "mirror.delete" and event.resource_id == mid for event in events)
+
+
+def test_unobserved_allocation_requires_a_stop_before_delete(opened):
+    store, mid = opened
+    with store.transaction() as session:
+        op, = store.ops(session, mid)
+        store.save_op(session, dict(op, allocation={"generation_id": "possibly-committed", "observed": False}))
+    service.set_enabled(mid, enabled=False, actor_user_id="u")
+    with pytest.raises(AppError, match="MIRROR_STOP_UNCONFIRMED"):
+        service.delete_mirror(mid, actor_user_id="u")
+    assert service.get_mirror(mid)["enabled"] is False
+
+
+@pytest.mark.parametrize("transition", ["reopen", "retire"])
+def test_pre_journal_stop_receipt_survives_authority_change(opened, transition):
+    from backend.core.time import utc_now
+
+    store, mid = opened
+    stop_id = service.set_enabled(mid, enabled=False, actor_user_id="u")["operation_id"]
+    at = utc_now().isoformat()
+    source_op = "source-stop"
+    with store.transaction() as session:
+        mirror = store.get(session, mid)
+        mirror.update(status="disabled", published_generation_id="published", history_epoch="epoch")
+        revision = mirror["control"]["control_revision"]
+        mirror["control"].update(applied_revision=revision, observed_at=at,
+                                 stop_ack=dict(operation_id=stop_id, source_operation_id=source_op, observed_at=at))
+        store.save(session, mirror)
+        operation = next(op for op in store.ops(session, mid) if op["id"] == stop_id)
+        store.save_op(session, dict(operation, state="applied", observed_evidence_refs=["unrelated"]))
+    assert service.get_mirror_detail(mid)["mirror"]["latest_observation"] is None
+    with store.transaction() as session:
+        store.save_op(session, dict(operation, state="applied", observed_evidence_refs=[source_op]))
+    detail = service.get_mirror_detail(mid)["mirror"]
+    assert detail["latest_request"]["outcome_at"] == at
+    receipt = detail["latest_observation"]
+    assert (receipt["kind"], receipt["at"], receipt["operation_id"], receipt["generation_id"]) == (
+        "stop_confirmed", at, stop_id, "published")
+    if transition == "reopen":
+        service.set_enabled(mid, enabled=True, actor_user_id="u")
+    else:
+        service.clear_mirror_stop_evidence(None, [{"mirror_id": mid}], source_op)
+    events = service.get_mirror_journal(mid)["items"]
+    assert [event for event in events if event["kind"] == "stop_confirmed"] == [receipt]
+    stop = next(event for event in events if event["id"] == stop_id)
+    assert stop["outcome"] == ("stop_confirmed" if transition == "reopen" else "awaiting_stop")
 
 
 def test_recovery_requires_authoritative_binding(opened, monkeypatch):

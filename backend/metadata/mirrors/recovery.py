@@ -94,6 +94,8 @@ class Recovery:
             raise MirrorError("MIRROR_NOT_FOUND", 404)
         source = lock_source(session, mirror.source_id)
         session.refresh(mirror)
+        if mirror.state.get("deletion_operation_id") or mirror.state.get("deletion_reservation"):
+            raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
         return mirror, source
 
     def _gate(self, session, mirror_id):

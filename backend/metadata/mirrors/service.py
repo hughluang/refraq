@@ -10,12 +10,18 @@ import re
 from typing import Literal, Protocol
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
+
 from backend.admin.audit import persist_audit_event
 from backend.core.config import get_settings
+from backend.core.errors import AppError
 from backend.core.time import utc_now
 from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.capture.configuration import SnapshotWindow, snapshot_dispatch_allowed
 from backend.metadata.capture.store import load_binding, load_operation
+from backend.metadata.mirrors import journal
+from backend.metadata.mirrors.deletion import deletion_proof, retire_replacement
 from backend.metadata.mirrors.errors import MirrorError
 from backend.metadata.mirrors.lifecycle import current_authority as _current_open_authority
 from backend.metadata.mirrors.lifecycle import current_open, dispatch_scope, open_evidence
@@ -47,20 +53,19 @@ __all__ = [
     "list_mirrors",
     "set_enabled",
     "delete_mirror",
+    "delete_mirror_for_object",
+    "resume_pending_deletions",
     "TargetLifecycle",
 ]
 
 
 class TargetLifecycle(Protocol):
-    def close_for_delete(
-        self, *, mirror_id: str, source_id: str, control_revision: int
-    ) -> None:
-        """Atomically close all target generations to new pins or reject.
+    def seal(self, mirror_id: str, operation_id: str, proof: dict) -> None:
+        """Durably retire the identity and close all generations to new pins and writes."""
+        ...
 
-        Must prove the matching stopped authority and absence of all durable pins,
-        including retired generations. Idempotent after management rollback; never
-        drops Source resources. Raise on unknown/unreachable evidence.
-        """
+    def purge(self, mirror_id: str, operation_id: str, proof: dict) -> None:
+        """Drop the sealed copies and preserve the retirement receipt."""
         ...
 
 
@@ -116,15 +121,21 @@ def list_catalog_mirror_tables(*, visible_ids, object_id, q, can_read, can_write
         return dict(items=items, total=total, limit=limit, offset=offset)
 
 
+def _delete_token(mirror):
+    return uuid5(NAMESPACE_URL, f"delete:{mirror['id']}:{mirror['control']['control_revision']}").hex
+
+
 def _catalog_setting(binding, mirror, *, can_read, can_write):
     if binding is None and mirror is None:
         return None
     enabled = bool(mirror and mirror["enabled"])
     return dict(
         enabled=enabled,
-        can_enable=can_write and not enabled and _eligible_binding(binding, mirror),
+        can_enable=can_write and not enabled and not (mirror or {}).get("deletion_operation_id") and not (mirror or {}).get("deletion_reservation") and _eligible_binding(binding, mirror),
         can_disable=can_write and enabled,
         mirror_id=mirror["id"] if mirror and can_read else None,
+        **({"delete_token": _delete_token(mirror)} if mirror and not enabled and can_write else {}),
+        **({"deletion_pending": True} if mirror and mirror.get("deletion_operation_id") else {}),
     )
 
 
@@ -183,17 +194,10 @@ def read_dispatch_scope(session, source_id, *, state):
     return dispatch_scope(desired, state, operations)
 
 
-def _mirror_id(binding):
-    return "mir_" + uuid5(
-        NAMESPACE_URL,
-        repr(("refraq:mirror", binding["source_id"], binding["table_identity"])),
-    ).hex
-
-
 def _new(binding):
     return dict(
         binding,
-        id=_mirror_id(binding),
+        id="mir_" + uuid4().hex,
         enabled=True,
         status="waiting",
         published_generation_id=None,
@@ -229,12 +233,14 @@ def _new(binding):
 
 def _operation(session, mirror, kind, operation_id, **extra):
     store = _storage()
+    requested_at = utc_now().isoformat()
     for previous in store.ops(session, mirror["id"]):
         if (
             previous["state"] == "pending"
             and previous["control_revision"] < mirror["control"]["control_revision"]
         ):
             previous["state"] = "superseded"
+            journal.result(previous, "superseded", requested_at, operation_id)
             store.save_op(session, previous)
     op = dict(
         id=operation_id,
@@ -244,7 +250,9 @@ def _operation(session, mirror, kind, operation_id, **extra):
         control_revision=mirror["control"]["control_revision"],
         observed_evidence_refs=[],
         fault_code=None,
-        requested_at=utc_now().isoformat(),
+        requested_at=requested_at,
+        requested_epoch=mirror.get("history_epoch"),
+        requested_generation=mirror.get("published_generation_id"),
         **extra,
     )
     store.save_op(session, op)
@@ -370,8 +378,96 @@ def _superseded_scope_partition(operation, authority):
     return None
 
 
+def lifecycle_checks(source_id, scope):
+    """Bind each check to an operator request before interacting with the observer."""
+    store = _storage()
+    checks = {}
+    with store.transaction() as session:
+        store.lock_sources(session, {source_id})
+        for entry in scope:
+            if not entry["included"]:
+                continue
+            mirror = store.get(session, entry["mirror_id"])
+            if not mirror or mirror["source_id"] != source_id or mirror["control"]["control_revision"] != entry["mirror_revision"]:
+                continue
+            request = journal.recheck_request(store.ops(session, mirror["id"]), mirror)
+            if request:
+                checks[mirror["id"]] = request["id"]
+    return checks
+
+
+def table_prerequisite_check(command, *, table, cause, passed, request_id=None):
+    """Keep the table result only while its checked Source authority and revision remain current."""
+    store = _storage()
+    with store.transaction() as session:
+        source_id = command["source_id"]
+        store.lock_sources(session, {source_id})
+        state = load_binding(None if isinstance(store, MemoryMirrorStore) else session, source_id) or {}
+        if (any(command.get(key) != state.get(key) for key in (
+                "binding_id", "control_revision", "credential_revision", "owner_epoch", "runtime_instance_id", "capture_generation"))
+                or state.get("published_scope") != command["published_scope"]):
+            return
+        for entry in command["published_scope"]:
+            if not entry["included"] or entry["qualified_table"] != table:
+                continue
+            mirror = store.get(session, entry["mirror_id"])
+            if not mirror or not mirror["enabled"] or mirror["control"]["control_revision"] != entry["mirror_revision"]:
+                continue
+            ops = store.ops(session, mirror["id"])
+            request = next((op for op in ops if op["id"] == request_id), None)
+            if not request:
+                continue
+            blocker = mirror.get("blocker") or {}
+            if passed and blocker.get("cause") != cause:
+                continue
+            at = utc_now().isoformat()
+            pending_retry = request["kind"] == "retry" and request["state"] == "pending"
+            if not passed and blocker.get("cause") == cause and not pending_retry:
+                mirror["blocker"]["last_checked_at"] = at
+                store.save(session, mirror)
+                continue
+            kind = cause + ("_verified" if passed else "_blocked")
+            journal.note_check(store, session, mirror, request_id, kind, at=at, reference=at,
+                               epoch=mirror.get("history_epoch"), generation=mirror["published_generation_id"])
+
+
+def record_continuity_receipt(*, authority, scope, mirror_id, check_id, decision, published_operation_id=None):
+    """Persist uncertain or superseded checks. A current conclusive check continues to its fenced transition."""
+    store = _storage()
+    with store.transaction() as session:
+        mirror = _lock_mirror_source(session, mirror_id)
+        state = load_binding(session, authority.source_id)
+        entry = next((item for item in scope if item["mirror_id"] == mirror_id and item["included"]), None)
+        if (not entry or not _current_open_authority(state, authority, scope)
+                or read_dispatch_scope(session, authority.source_id, state=state) != scope
+                or mirror["control"]["control_revision"] != entry["mirror_revision"]):
+            _error("MIRROR_CONTROL_CONFLICT")
+        operations = store.ops(session, mirror_id)
+        current = current_open(mirror, operations)
+        if not current:
+            return "recorded"
+        request = next((op for op in operations if op["id"] == check_id), None)
+        historical = (bool(current.get("reopen_baseline")) or current["state"] == "applied"
+                      or (request or {}).get("result", {}).get("outcome") == "resolved_by_evidence")
+        if not historical and decision["result"] != "unknown":
+            return None
+        allow_retained = (historical and current["state"] == "applied" and not current.get("reopen_baseline")
+                          and published_operation_id is not None
+                          and published_operation_id in {current["id"], current.get("retained_open_id")})
+        kind = {"gap": "continuity_gap", "continuous": "continuity_verified", "unknown": "continuity_unknown"}[decision["result"]]
+        if allow_retained and decision["result"] == "continuous" and check_id == current["id"]:
+            # Steady-state delivery repeats retained-position validation on each poll.
+            return "retained"
+        journal.note_check(store, session, mirror, check_id, kind, at=decision["observed_at"],
+                           reference=decision["evidence_ref"], epoch=mirror["history_epoch"],
+                           generation=mirror["published_generation_id"], historical=historical)
+        if allow_retained:
+            return "retained"
+        return "recorded"
+
+
 def request_reopen_baseline(*, authority, published_scope, mirror_id, mirror_revision, operation_id, evidence_ref,
-                            partition_identity, start_offset, history):
+                            partition_identity, start_offset, history, check_id=None, observed_at=None):
     """Consume the deployment's authenticated, table-specific historical discontinuity decision."""
     store = _storage()
     if not isinstance(store, SqlMirrorStore) or not isinstance(evidence_ref, str) or not re.fullmatch(r"sha256:[a-f0-9]{64}", evidence_ref):
@@ -438,6 +534,11 @@ def request_reopen_baseline(*, authority, published_scope, mirror_id, mirror_rev
         if reopen.get("reopen_baseline") not in (None, baseline):
             _error("MIRROR_CONTROL_CONFLICT")
         store.save_op(session, dict(reopen, reopen_baseline=baseline, observed_evidence_refs=[evidence_ref]))
+        check = check_id or next((op["id"] for op in operations if op.get("operator_intent")
+                                  and op["kind"] == "open" and op["control_revision"] == mirror_revision), None)
+        journal.note_check(store, session, mirror, check, "continuity_gap", at=observed_at or utc_now().isoformat(),
+                           reference=evidence_ref, epoch=transition["history_epoch"] if mirror["published_generation_id"] else None,
+                           generation=mirror["published_generation_id"])
     history.consume_invalidation(operation_id=invalidation_id)
 
 
@@ -509,6 +610,8 @@ def current_open_preparations(*, authority: Authority, published_scope, observe_
         included = _included_scope(scope, selected_table_ids)
         pending, applied, preparations = [], [], []
         for entry in included:
+            if scope_fence and entry["mirror_id"] in scope_fence.get("inconclusive_tables", {}):
+                _error("MIRROR_CONTROL_CONFLICT")
             history = [op for op in store.ops(session, entry["mirror_id"]) if op["kind"] == "open"]
             if allocation.get("command", {}).get("kind") == "replace_owner":
                 if len(included) != 1 or not isinstance(store, SqlMirrorStore):
@@ -627,7 +730,7 @@ def require_current_open_allocations(session, *, authority: Authority, allocatio
     return snapshot_mode
 
 
-def confirm_retained_opens(*, authority: Authority, published_scope, candidates):
+def confirm_retained_opens(*, authority: Authority, published_scope, candidates, decisions=None, checks=None):
     """Accept a reopen only after the deployment confirms stream continuity under this authority."""
     store = _storage()
     candidates = tuple(candidates)
@@ -635,14 +738,15 @@ def confirm_retained_opens(*, authority: Authority, published_scope, candidates)
         store.lock_registry(session)
         store.lock_sources(session, {authority.source_id})
         _check_retained_opens(session, authority, published_scope, candidates,
-                              {item.binding.table_identity for item in candidates}, confirm=True)
+                              {item.binding.table_identity for item in candidates}, confirm=True,
+                              decisions=decisions or {}, checks=checks or {})
 
 
 def require_current_retained_opens(session, *, authority: Authority, published_scope, candidates, selected_table_ids=None):
     _check_retained_opens(session, authority, published_scope, candidates, selected_table_ids, confirm=False)
 
 
-def _check_retained_opens(session, authority, published_scope, candidates, selected_table_ids, *, confirm):
+def _check_retained_opens(session, authority, published_scope, candidates, selected_table_ids, *, confirm, decisions=None, checks=None):
     """Recheck all applied opens under the caller's Source lock before live delivery."""
     store = _storage()
     state = load_binding(session, authority.source_id)
@@ -682,6 +786,16 @@ def _check_retained_opens(session, authority, published_scope, candidates, selec
         if intent["state"] == "pending":
             if not confirm or intent.get("allocation") or not intent.get("operator_intent"):
                 _error("MIRROR_CONTROL_CONFLICT")
+            decision = (decisions or {}).get(mirror_id, {})
+            at = decision.get("observed_at") or utc_now().isoformat()
+            check = (checks or {}).get(mirror_id, intent["id"])
+            if (mirror.state.get("blocker") or {}).get("cause") in {"permission", "schema"}:
+                _error("MIRROR_CONTROL_CONFLICT")
+            journal.note_check(store, session, deepcopy(mirror.state), check, "continuity_verified",
+                               at=at, reference=decision.get("evidence_ref") or candidate.certificate_ref,
+                               epoch=epoch, generation=candidate.generation_id)
+            intent = next(op for op in store.ops(session, mirror_id) if op["id"] == intent["id"])
+            journal.result(intent, "continuity_verified", at, check if check != intent["id"] else None)
             store.save_op(session, dict(intent, state="applied", retained_open_id=opened["id"]))
         elif intent["id"] != opened["id"] and intent.get("retained_open_id") != opened["id"]:
             _error("MIRROR_CONTROL_CONFLICT")
@@ -996,7 +1110,15 @@ def record_replacement_publication(session, *, allocation, observed):
     operation, binding, expected, snapshot = allocation
     _validate_observed_publication(observed, mirror_id=operation["mirror_id"], operation_id=operation["id"],
                                    binding=binding, expected=expected, snapshot=snapshot)
-    _storage().save_op(session, dict(operation, state="applied", publication_receipt=asdict(expected)))
+    _record_publication(session, operation, asdict(expected))
+
+
+def _record_publication(session, operation, receipt):
+    at = utc_now().isoformat()
+    journal.observation(operation, "published", at=at, reference=receipt["certificate_ref"],
+                        epoch=receipt["history_epoch"], generation=receipt["generation_id"])
+    journal.result(operation, "published", at)
+    _storage().save_op(session, dict(operation, state="applied", publication_receipt=receipt))
 
 
 def reconcile_open_publication(
@@ -1058,7 +1180,7 @@ def reconcile_open_publication(
                                  capture_generation=binding.authority.capture_generation,
                                  history_epoch=bound["history_epoch"], retained_lower_bound=lower,
                                  committed_upper_bound=upper))
-        store.save_op(session, dict(operation, state="applied", publication_receipt=receipt))
+        _record_publication(session, operation, receipt)
         return "applied"
 
 
@@ -1097,7 +1219,9 @@ def record_mirror_stop_evidence(session, command, evidence, *, exclusions=None):
             refs = [command["operation_id"]]
             if exclusions is not None:
                 refs.extend(exclusions[entry["mirror_id"]])
-            store.save_op(session, dict(operation, state="applied", observed_evidence_refs=refs))
+            operation.update(state="applied", observed_evidence_refs=refs)
+            journal.project_stop_receipt(mirror, operation)
+            store.save_op(session, operation)
 
 
 def clear_mirror_stop_evidence(session, published_scope, source_operation_id):
@@ -1114,12 +1238,16 @@ def clear_mirror_stop_evidence(session, published_scope, source_operation_id):
         acknowledgment = mirror["control"].get("stop_ack")
         if acknowledgment is None or acknowledgment["source_operation_id"] != source_operation_id:
             continue
+        for operation in store.ops(session, mirror["id"]):
+            if operation["id"] == acknowledgment["operation_id"]:
+                journal.project_stop_receipt(mirror, operation)
+                journal.observation(operation, "stop_retired", at=utc_now().isoformat(), reference=source_operation_id,
+                                    epoch=mirror.get("history_epoch"), generation=mirror["published_generation_id"])
+                operation.pop("result", None)
+                store.save_op(session, dict(operation, state="pending", observed_evidence_refs=[]))
         _clear_stop_control(mirror["control"])
         mirror["status"] = "disable_pending"
         store.save(session, mirror)
-        for operation in store.ops(session, mirror["id"]):
-            if operation["id"] == acknowledgment["operation_id"]:
-                store.save_op(session, dict(operation, state="pending", observed_evidence_refs=[]))
 
 
 def _clear_stop_control(control):
@@ -1234,12 +1362,15 @@ def _lifecycle_view(session, mirror, operations, context):
         if binding and binding["allocation_operation_id"] != pending["id"]:
             holder = dict(mirror_id=binding["mirror_id"], qualified_table=binding["qualified_table"])
             if reason is None:
-                reason = "snapshot_slot_busy", "Wait for the current Source snapshot to finish."
+                if holder["mirror_id"] == mirror["id"]:
+                    reason = "own_snapshot_slot_busy", "Wait for the runtime to release this table's abandoned scan."
+                else:
+                    reason = "snapshot_slot_busy", "Wait for the current Source snapshot to finish."
     queued = pending and mirror["id"] not in context.included
     publication_wait = context.publication_wait if queued else None
     if reason is None and publication_wait:
         reason = "publication_pending", "Wait for the preceding table's verified publication."
-    eligible = reason is None or reason[0] in {"snapshot_window_closed", "snapshot_slot_busy", "publication_pending"}
+    eligible = reason is None or reason[0] in {"snapshot_window_closed", "snapshot_slot_busy", "own_snapshot_slot_busy", "publication_pending"}
     admitted = eligible and evidence.admitted
     profile = deepcopy(mirror["profile"])
     readiness = deepcopy(mirror["readiness"])
@@ -1254,6 +1385,13 @@ def _lifecycle_view(session, mirror, operations, context):
             readiness = [item for item in readiness if item["key"] != "capture_admission"]
         readiness.append(dict(key=key, result="fail", expected=None, observed=None, observed_at=None,
                               owner="deployer", action=action))
+    blocker = mirror.get("blocker") if mirror["enabled"] else None
+    if blocker:
+        cause = blocker["cause"]
+        action = {"permission": "Restore the table read permission.", "schema": "Verify the table schema and key.",
+                  "continuity": "Verify log coverage across the interrupted interval."}[cause]
+        readiness.append(dict(key=f"mirror_{cause}_blocked", result="fail", expected=None, observed=None,
+                              observed_at=blocker["last_checked_at"], owner="runtime", action=action))
     if evidence.snapshot is not None and evidence.snapshot["state"] == "blocked":
         readiness.append(dict(key="incremental_snapshot_blocked", result="fail", expected=None,
                               observed="The current snapshot could not be verified.", observed_at=None,
@@ -1281,8 +1419,13 @@ def _source_lifecycle(session, source_id):
 def _present(session, mirror, context):
     operations = _storage().ops(session, mirror["id"])
     result = deepcopy(mirror)
+    result.pop("blocker", None)
+    result.pop("deletion_reservation", None)
     gate = None if isinstance(session, MemoryMirrorStore) else session.get(HistoryGateRow, mirror["id"])
-    result["history_epoch"] = gate.history_epoch if gate is not None and mirror["published_generation_id"] else None
+    if isinstance(session, MemoryMirrorStore):
+        result["history_epoch"] = mirror.get("history_epoch") if mirror["published_generation_id"] else None
+    else:
+        result["history_epoch"] = gate.history_epoch if gate is not None and mirror["published_generation_id"] else None
     if gate is None or gate.status != "available" or gate.history_epoch != mirror.get("history_epoch"):
         result["retained_lower_bound"] = result["committed_upper_bound"] = None
     result.update(_lifecycle_view(session, mirror, operations, context))
@@ -1302,6 +1445,15 @@ def get_mirror(mirror_id):
         return _present(session, mirror, _source_lifecycle(session, mirror["source_id"]))
 
 
+def get_mirror_journal(mirror_id, *, before=None, limit=20):
+    store = _storage()
+    with store.transaction() as session:
+        mirror = _find(session, mirror_id)
+        context = _source_lifecycle(session, mirror["source_id"])
+        events = journal.timeline(store.ops(session, mirror_id), context.state.get("incremental_snapshots", {}), mirror)
+        return journal.page(events, before, limit)
+
+
 def get_mirror_detail(mirror_id):
     store = _storage()
     with store.transaction() as session:
@@ -1309,10 +1461,29 @@ def get_mirror_detail(mirror_id):
         binding = store.preview_binding(session, mirror["object_id"])
         obj = (get_catalog_store().get_object(mirror["object_id"]) if isinstance(session, MemoryMirrorStore)
                else session.get(CatalogObjectRow, mirror["object_id"]))
-        detail = _present(session, mirror, _source_lifecycle(session, mirror["source_id"]))
+        context = _source_lifecycle(session, mirror["source_id"])
+        detail = _present(session, mirror, context)
+        operations = store.ops(session, mirror_id)
+        events = journal.timeline(operations, context.state.get("incremental_snapshots", {}), mirror)
+        latest_request = next((event for event in events if event["category"] == "request"), None)
+        observation = next((event for event in events if event["category"] == "observation"), None)
+        continuity = next((event for event in events if event["kind"].startswith("continuity_")), None)
+        publication = next((event for event in events if event["kind"] == "published" and
+                            event["generation_id"] == mirror["published_generation_id"]), None)
+        opened = current_open(mirror, operations)
+        allocated = opened.get("allocation") if opened and opened["state"] == "pending" else None
+        blocker = mirror.get("blocker") if mirror["enabled"] else None
+        open_request = next((event for event in events if event["category"] == "request" and event["kind"] in {"open", "resume"}
+                             and event["control_revision"] == mirror["control"]["control_revision"]), None)
+        detail.update(journal=journal.page(events, None, 3), latest_request=latest_request, open_request=open_request,
+                      latest_observation=observation, continuity_check=continuity, blocker=blocker,
+                      allocated_generation_id=allocated["generation_id"] if allocated else None,
+                      published_at=publication["at"] if publication else None,
+                      can_retry=bool(blocker and detail["history_epoch"] is not None and not any(
+                          op["kind"] == "retry" and op["state"] == "pending" for op in operations)))
         detail.update(storage_destination="source_mirror", source_size_bytes=obj.source_size_bytes if obj else None,
                       estimated_rows=obj.estimated_rows if obj else None)
-        return dict(mirror=detail, can_enable=not mirror["enabled"] and _eligible_binding(binding, mirror))
+        return dict(mirror=detail, can_enable=not mirror["enabled"] and not mirror.get("deletion_operation_id") and not mirror.get("deletion_reservation") and _eligible_binding(binding, mirror))
 
 
 def list_mirrors(*, limit=100, offset=0, source_id=None, status=None, q=None):
@@ -1342,6 +1513,11 @@ def _audit(
 
 
 def _change_enabled(session, mirror, enabled):
+    if mirror["control"].get("stop_ack"):
+        store = _storage()
+        for operation in store.ops(session, mirror["id"]):
+            if journal.project_stop_receipt(mirror, operation):
+                store.save_op(session, operation)
     mirror["enabled"] = enabled
     _clear_stop_control(mirror["control"])
     mirror["control"]["control_revision"] += 1
@@ -1368,6 +1544,28 @@ def _change_enabled(session, mirror, enabled):
     return operation_id
 
 
+def request_recheck(mirror_id, *, expected_epoch, expected_revision, actor_user_id, actor_token_id=None, reason=None):
+    store = _storage()
+    with store.transaction() as session:
+        mirror = _lock_mirror_source(session, mirror_id)
+        epoch = mirror["history_epoch"]
+        if not isinstance(session, MemoryMirrorStore):
+            gate = session.get(HistoryGateRow, mirror_id, with_for_update=True)
+            epoch = gate.history_epoch if gate and gate.status == "available" else None
+        revision = mirror["control"]["control_revision"]
+        if (not mirror["enabled"] or not mirror.get("blocker") or not mirror["published_generation_id"]
+                or epoch is None or str(epoch) != str(expected_epoch)
+                or (expected_revision is not None and expected_revision != revision)):
+            _error("MIRROR_CONTROL_CONFLICT")
+        current = journal.recheck_request(store.ops(session, mirror_id), mirror)
+        if current and current["kind"] == "retry" and current["state"] == "pending":
+            return dict(operation_id=current["id"], state="pending")
+        op = _operation(session, mirror, "retry", _id(), operator_intent=True)
+        _audit(session, mirror, "recovery_request", op["id"], actor_user_id, actor_token_id,
+               action="retry", expected_history_epoch=str(epoch), reason=reason)
+        return dict(operation_id=op["id"], state="pending")
+
+
 def set_enabled(mirror_id, *, enabled, actor_user_id, actor_token_id=None, can_read=True):
     store = _storage()
     with store.transaction() as session:
@@ -1382,6 +1580,8 @@ def set_enabled(mirror_id, *, enabled, actor_user_id, actor_token_id=None, can_r
 
 
 def _apply_enabled(session, mirror, enabled, actor_user_id, actor_token_id):
+    if mirror.get("deletion_operation_id") or mirror.get("deletion_reservation"):
+        _error("MIRROR_CONTROL_CONFLICT")
     store = _storage()
     mirror_id = mirror["id"]
     if mirror["enabled"] == enabled:
@@ -1406,18 +1606,122 @@ def _apply_enabled(session, mirror, enabled, actor_user_id, actor_token_id):
     return operation_id
 
 
-def delete_mirror(mirror_id, *, actor_user_id, actor_token_id=None):
+def delete_mirror_for_object(object_id, *, source_id, delete_token, actor_user_id, actor_token_id=None):
     store = _storage()
     with store.transaction() as session:
+        store.lock_registry(session)
+        store.lock_sources(session, {source_id})
+        mirror = store.get_by_object(session, source_id, object_id)
+        if mirror is None or _delete_token(mirror) != delete_token:
+            _error("MIRROR_CONTROL_CONFLICT")
+        revision = mirror["control"]["control_revision"]
+    return delete_mirror(mirror["id"], expected_control_revision=revision,
+                         actor_user_id=actor_user_id, actor_token_id=actor_token_id)
+
+
+def delete_mirror(mirror_id, *, actor_user_id, actor_token_id=None, expected_control_revision=None):
+    store = _storage()
+    # Commit the request identity before sealing. Recovery can inspect the same
+    # target receipt even if either database lost its transaction reply.
+    with store.transaction() as session:
         mirror = _lock_mirror_source(session, mirror_id)
+        if expected_control_revision is not None and mirror["control"]["control_revision"] != expected_control_revision:
+            _error("MIRROR_CONTROL_CONFLICT")
         if mirror["enabled"]:
             _error("MIRROR_IN_USE")
+        accepted = mirror.get("deletion_operation_id")
+        reservation = mirror.get("deletion_reservation")
+        if not accepted and not reservation:
+            proof = deletion_proof(session, mirror, store.ops(session, mirror_id))
+            if proof is None:
+                _audit(session, mirror, "delete", _id(), actor_user_id, actor_token_id)
+                store.delete(session, mirror_id)
+                return None
+            if _target is None:
+                _error("MIRROR_READ_UNAVAILABLE", 503)
+            gate = (None if isinstance(session, MemoryMirrorStore)
+                    else session.get(HistoryGateRow, mirror_id, with_for_update=True))
+            if gate is not None and gate.status != "available":
+                _error("MIRROR_HISTORY_INVALID")
+            reservation = dict(id=_id(), proof=proof, actor_user_id=actor_user_id, actor_token_id=actor_token_id)
+            store.save(session, dict(mirror, deletion_reservation=reservation))
+
+    try:
+        rejection = None
+        with store.transaction() as session:
+            store.lock_registry(session)
+            store.lock_sources(session, {mirror["source_id"]})
+            current = store.get(session, mirror_id)
+            if current is None:
+                return None
+            accepted = current.get("deletion_operation_id")
+            if accepted:
+                command = next(op for op in store.ops(session, mirror_id) if op["id"] == accepted)
+                proof = command["purge_proof"]
+            elif not reservation or current.get("deletion_reservation") != reservation:
+                _error("MIRROR_CONTROL_CONFLICT")
+            else:
+                if _target is None:
+                    _error("MIRROR_READ_UNAVAILABLE", 503)
+                gate = (None if isinstance(session, MemoryMirrorStore)
+                        else session.get(HistoryGateRow, mirror_id, with_for_update=True))
+                proof = reservation["proof"]
+                try:
+                    _target.seal(mirror_id, reservation["id"], proof)
+                except MirrorError as exc:
+                    if exc.code not in {"MIRROR_READERS_IN_USE", "MIRROR_STOP_UNCONFIRMED"}:
+                        raise
+                    rejection = exc
+                current.pop("deletion_reservation")
+                if rejection is None:
+                    if gate is not None:
+                        gate.history_epoch = uuid4().hex
+                        gate.lower_commit_seq = gate.lower_entry_seq = 0
+                        gate.status = "invalidating"
+                    current["deletion_operation_id"] = reservation["id"]
+                    _operation(session, current, "delete", reservation["id"], purge_proof=proof,
+                               actor_user_id=reservation["actor_user_id"], actor_token_id=reservation["actor_token_id"])
+                store.save(session, current)
+        if rejection:
+            raise rejection
+        accepted = current["deletion_operation_id"]
         if _target is None:
             _error("MIRROR_READ_UNAVAILABLE", 503)
-        _target.close_for_delete(
-            mirror_id=mirror_id,
-            source_id=mirror["source_id"],
-            control_revision=mirror["control"]["control_revision"],
-        )
-        _audit(session, mirror, "delete", _id(), actor_user_id, actor_token_id)
-        store.delete(session, mirror_id)
+        _target.purge(mirror_id, accepted, proof)
+
+        with store.transaction() as session:
+            store.lock_registry(session)
+            store.lock_sources(session, {mirror["source_id"]})
+            current = store.get(session, mirror_id)
+            if current is not None:
+                if current.get("deletion_operation_id") != accepted:
+                    _error("MIRROR_CONTROL_CONFLICT")
+                operation = next(op for op in store.ops(session, mirror_id) if op["id"] == accepted)
+                retire_replacement(session, current)
+                _audit(session, current, "delete", accepted, operation["actor_user_id"], operation["actor_token_id"])
+                store.delete(session, mirror_id)
+        return None
+    except DBAPIError:
+        if accepted:
+            return dict(operation_id=accepted, state="pending")
+        raise
+    except AppError as exc:
+        if accepted and exc.http_status in (409, 503):
+            return dict(operation_id=accepted, state="pending")
+        raise
+
+
+def resume_pending_deletions():
+    store = _storage()
+    if _target is None or not isinstance(store, SqlMirrorStore):
+        return
+    with store.transaction() as session:
+        pending = session.scalars(select(MirrorRow.id).where(
+            (MirrorRow.state["deletion_operation_id"].as_string().is_not(None)
+             | MirrorRow.state["deletion_reservation"]["id"].as_string().is_not(None)))).all()
+    for mirror_id in pending:
+        try:
+            delete_mirror(mirror_id, actor_user_id=None)
+        except MirrorError as exc:
+            if exc.code not in {"MIRROR_NOT_FOUND", "MIRROR_READERS_IN_USE", "MIRROR_STOP_UNCONFIRMED", "MIRROR_CONTROL_CONFLICT"}:
+                raise

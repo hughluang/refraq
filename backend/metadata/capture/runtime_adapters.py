@@ -248,6 +248,16 @@ class ReadinessSignals:
                         any(not isinstance(part[k], str) or not part[k] for k in ("runtime_cluster_id","topic_incarnation_id"))):
                     raise RuntimeBlocked("scope_fence_unconfirmed")
             result["table_boundaries"] = boundaries
+        if "inconclusive_tables" in proof:
+            inconclusive = proof["inconclusive_tables"]
+            included = {entry["mirror_id"] for entry in command["published_scope"]
+                        if entry["included"] and entry["mirror_id"] in required}
+            if (not isinstance(inconclusive, dict) or not inconclusive.keys() <= included
+                    or inconclusive.keys() & result.get("table_boundaries", {}).keys()
+                    or any(not _digest_ref(ref) for ref in inconclusive.values())):
+                raise RuntimeBlocked("scope_fence_unconfirmed")
+            result["inconclusive_tables"] = inconclusive
+            result["observed_at"] = proof["observed_at"]
         return result
 
     def replacement_observation(self, command, authorization):
@@ -326,7 +336,8 @@ class ReadinessSignals:
                         raise RuntimeBlocked("retained_position_resume_unconfirmed")
                 elif value.get("result") not in {"continuous", "unknown"} or set(value) != {"result", "evidence_ref"}:
                     raise RuntimeBlocked("retained_position_resume_unconfirmed")
-        return decisions
+            return {mid: {**value, "observed_at": proof["observed_at"]} for mid, value in decisions.items()}
+        return None
 
     def allocate_generation(self, command, request, proof, fence, generation_id):
         request = {**request, "scope": {**request["scope"], "generation_id": generation_id}}

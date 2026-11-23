@@ -35,7 +35,8 @@ export function useMirrorStatus(id: string) {
     isTerminal: data => {
       if (data.status !== "ready") return true;
       const { mirror } = data.result;
-      return currentOpen(mirror)?.state !== "pending" && getMirrorStopEvidence(mirror)?.state !== "pending";
+      return !mirror.deletion_operation_id && !mirror.blocker && mirror.latest_request?.outcome !== "awaiting_recheck"
+        && currentOpen(mirror)?.state !== "pending" && getMirrorStopEvidence(mirror)?.state !== "pending";
     },
   });
   retry.current = live.refresh;

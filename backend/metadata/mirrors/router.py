@@ -1,6 +1,7 @@
 """Authenticated global mirror Operations; no data-plane HTTP surface."""
 
 from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.responses import JSONResponse
 
 from backend.admin.deps import get_actor_token_id, require_permission, resolve_user_permissions
 from backend.admin.permissions import permissions_include
@@ -9,6 +10,7 @@ from backend.admin.user_store import UserRecord
 from backend.metadata.mirrors import recovery, service
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
 from backend.metadata.mirrors.schemas import (
+    JournalPage,
     MirrorListResponse,
     MirrorDetailResponse,
     MirrorActionReceipt,
@@ -42,6 +44,14 @@ def get_mirror(
     return service.get_mirror_detail(mirror_id)
 
 
+@router.get("/mirrors/{mirror_id}/journal", response_model=JournalPage)
+def mirror_journal(
+    mirror_id: str, before: str | None = None, limit: int = Query(default=20, ge=1, le=100),
+    _: UserRecord = Depends(require_permission("mirror:read")),
+):
+    return service.get_mirror_journal(mirror_id, before=before, limit=limit)
+
+
 @router.patch("/mirrors/{mirror_id}", response_model=PatchMirrorResponse | MirrorActionReceipt)
 def patch_mirror(
     mirror_id: str,
@@ -59,15 +69,18 @@ def patch_mirror(
     )
 
 
-@router.delete("/mirrors/{mirror_id}", status_code=204)
+@router.delete("/mirrors/{mirror_id}", status_code=204, responses={202: {"model": RecoveryResponse}})
 def delete_mirror(
     mirror_id: str,
     request: Request,
+    expected_control_revision: int | None = Query(default=None, ge=1),
     user: UserRecord = Depends(require_permission("mirror:write")),
 ):
-    service.delete_mirror(
-        mirror_id, actor_user_id=user.id, actor_token_id=get_actor_token_id(request)
+    pending = service.delete_mirror(
+        mirror_id, actor_user_id=user.id, actor_token_id=get_actor_token_id(request), expected_control_revision=expected_control_revision
     )
+    if pending:
+        return JSONResponse(pending, status_code=202)
     return Response(status_code=204)
 
 
@@ -82,9 +95,13 @@ def recovery_request(
     request: Request,
     user: UserRecord = Depends(require_permission("mirror:write")),
 ):
+    if payload.action == "retry" and payload.expected_control_revision is not None:
+        return service.request_recheck(mirror_id, expected_epoch=payload.expected_history_epoch,
+                                       expected_revision=payload.expected_control_revision, actor_user_id=user.id,
+                                       actor_token_id=get_actor_token_id(request), reason=payload.reason)
     return recovery.request_recovery(
         mirror_id,
-        **payload.model_dump(),
+        **payload.model_dump(exclude={"expected_control_revision"}),
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
     )

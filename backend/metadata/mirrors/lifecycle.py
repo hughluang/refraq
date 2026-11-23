@@ -14,7 +14,8 @@ def current_open(mirror, operations):
             continue
         if op["state"] == "pending":
             return op
-        if op["state"] == "applied" and published and op.get("publication_receipt", {}).get("generation_id") == published:
+        if op["state"] == "applied" and published and (op.get("retained_open_id")
+                or op.get("publication_receipt", {}).get("generation_id") == published):
             applied = op
     return applied
 
@@ -124,7 +125,9 @@ def open_evidence(mirror, operations, state, scope):
     snapshot = _correlated_snapshot(mirror, pending, allocation, ledger) if pending and allocation else None
     stage = _snapshot_stage(snapshot, ledger)
     status = mirror["status"]
-    if snapshot is not None and snapshot["state"] == "blocked":
+    if mirror["enabled"] and mirror.get("blocker"):
+        status = "needs_attention"
+    elif snapshot is not None and snapshot["state"] == "blocked":
         status = "needs_attention"
     elif stage:
         status = "snapshotting" if stage == "scan" else "catching_up"

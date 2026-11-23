@@ -14,7 +14,7 @@ import { presentProblemNotification } from "@/components/feedback/presentProblem
 import { RecordPicker } from "@/components/form/RecordPicker";
 import { catalogSourceAdapter } from "@/components/form/recordPickerAdapters";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
-import { listMirrorTables, setCatalogMirrorEnabled, type MirrorTable } from "@/features/sources/api/catalog";
+import { deleteCatalogMirror, listMirrorTables, setCatalogMirrorEnabled, type MirrorTable } from "@/features/sources/api/catalog";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import { SEARCH_DEBOUNCE_MS } from "@/hooks/useSearchDebounce";
@@ -22,6 +22,7 @@ import type { PageQuery } from "@/lib/pagination";
 import { presentConsoleNotification } from "@/providers/notification-provider";
 import { MirrorCopySummary, MirrorWaitDependency, MirrorStatusFreshness } from "./MirrorCopySummary";
 import { MirrorSwitch } from "./MirrorSwitch";
+import { MirrorDelete } from "./MirrorDelete";
 import { mirrorDetailHref, rememberMirrorPosition, restoreMirrorPosition } from "./mirrorNavigation";
 import { useMirrorStatus } from "./useMirrorStatus";
 
@@ -146,7 +147,6 @@ function TableSetting({ objectId, canRead, canWrite, onAccepted }: {
   });
   useEffect(() => {
     const controller = new AbortController();
-    setStatus("loading");
     void listMirrorTables({ object_id: objectId, limit: 1, offset: 0 }, controller.signal).then(result => {
       if (!controller.signal.aborted) {
         setTable(result.items[0] ?? null);
@@ -161,6 +161,14 @@ function TableSetting({ objectId, canRead, canWrite, onAccepted }: {
     });
     return () => controller.abort();
   }, [objectId, reload]);
+
+  useEffect(() => {
+    if (!table?.mirror?.deletion_pending) return;
+    const timer = window.setInterval(() => {
+      if (!document.hidden) setReload(value => value + 1);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [table?.mirror?.deletion_pending]);
 
   useEffect(() => {
     if (status === "ready") restoreMirrorPosition(origin);
@@ -197,6 +205,7 @@ function TableSetting({ objectId, canRead, canWrite, onAccepted }: {
   </UnstyledButton>;
   if (!table) return <Text>{t("mirrors.tableUnavailable")}</Text>;
   const setting = table.mirror;
+  const existing = Boolean(setting?.mirror_id || setting?.delete_token);
   const holder = canRead ? table.snapshot_holder : null;
   const publicationWait = canRead ? table.publication_wait : null;
   const unavailable = t("mirrors.unmeasured");
@@ -209,15 +218,25 @@ function TableSetting({ objectId, canRead, canWrite, onAccepted }: {
       <DisplayField label={t("mirrors.rowEstimate")} value={table.estimated_rows?.toLocaleString() ?? unavailable} />
     </SimpleGrid>
     {setting && (canRead || canWrite) && <>
-      {!setting.enabled && <Callout tone="info" title={t("mirrors.beforeEnable")}>
-        <Text size="sm">{t("mirrors.enablePlan")}</Text>
+      {setting.deletion_pending && <Text role="status">{t("mirrors.deletePending", { table: table.qualified_table })}</Text>}
+      {!setting.enabled && !setting.deletion_pending && <Callout tone="info" title={t(existing ? "mirrors.beforeResume" : "mirrors.beforeEnable")}>
+        <Text size="sm">{t(existing ? "mirrors.resumePlan" : "mirrors.enablePlan")}</Text>
         <Text size="sm" mt="xs">{t("mirrors.admissionPlan")}</Text>
       </Callout>}
       {holder && !setting.mirror_id && <MirrorWaitDependency kind="slot" dependency={holder} origin={origin} />}
       {publicationWait && !setting.mirror_id && <MirrorWaitDependency kind="publication" dependency={publicationWait} origin={origin} />}
       <MirrorSwitch enabled={setting.enabled}
-        disabled={saving || !canWrite || !(setting.enabled ? setting.can_disable : setting.can_enable)}
+        disabled={Boolean(setting.deletion_pending) || saving || !canWrite || !(setting.enabled ? setting.can_disable : setting.can_enable)}
         table={table.qualified_table} onChange={enabled => void save(enabled)} />
+      {canWrite && (setting.delete_token || setting.enabled) && <MirrorDelete key={setting.delete_token ?? "enabled"}
+        source={table.source_name} table={table.qualified_table} enabled={setting.enabled} disabled={saving}
+        pending={Boolean(setting.deletion_pending)}
+        remove={signal => deleteCatalogMirror(objectId, setting.delete_token!, signal)}
+        onResult={() => {
+          setReceipt(null);
+          setReload(value => value + 1);
+          onAccepted?.();
+        }} />}
       {receipt && !saving && <div role="status"><Text fw={600}>{t("mirrors.accepted")}</Text><Text size="sm">{receipt}</Text></div>}
       {canRead && setting.mirror_id && <TableCopyState key={receipt} id={setting.mirror_id} origin={origin}
         initialHolder={holder} initialPublicationWait={publicationWait} />}

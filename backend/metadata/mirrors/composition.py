@@ -9,6 +9,7 @@ from sqlalchemy.pool import NullPool
 
 from backend.core.config import Settings, _database_target
 from backend.metadata.mirrors.bootstrap import validate_target
+from backend.metadata.mirrors.deletion import TargetDeletion
 from backend.metadata.mirrors.history import SqlHistoryTarget
 from backend.metadata.mirrors.service import MirrorError
 
@@ -41,6 +42,7 @@ class _ServingEngine:
 
 @dataclass
 class MirrorAdapters:
+    deletion: TargetDeletion
     history_target: SqlHistoryTarget
     gateway: _ServingEngine
     applier: _ServingEngine
@@ -74,7 +76,7 @@ def compose_mirrors(settings: Settings) -> MirrorAdapters | None:
         gateway, applier = (_ServingEngine(engine) for engine in engines)
         target = SqlHistoryTarget(engine=gateway, invalidation_engine=applier, timeout_ms=policy.timeout_ms)
         target.validate()
-        return MirrorAdapters(history_target=target, gateway=gateway, applier=applier)
+        return MirrorAdapters(deletion=TargetDeletion(applier), history_target=target, gateway=gateway, applier=applier)
     except Exception:
         for engine in engines:
             engine.dispose()

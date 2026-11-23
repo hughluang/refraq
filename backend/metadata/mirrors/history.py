@@ -217,6 +217,10 @@ class History:
             return receipt.transitions
         if any(gate.status != "available" for gate in gates):
             _invalid()
+        for gate in gates:
+            mirror = session.get(MirrorRow, gate.mirror_id, populate_existing=True)
+            if mirror is not None and mirror.state.get("deletion_reservation"):
+                _invalid()
         transitions = []
         for gate in gates:
             old_epoch = gate.history_epoch

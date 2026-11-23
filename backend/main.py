@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -80,6 +81,7 @@ from backend.metadata.routers.source_memberships import (
 )
 from backend.metadata.mirrors.router import router as mirrors_router
 from backend.metadata.mirrors.composition import compose_mirrors
+from backend.metadata.mirrors.service import bind_management, resume_pending_deletions
 from backend.metadata.mirrors.history import History, bind_history
 from backend.metadata.mirrors.recovery import Recovery, bind_recovery
 from backend.core.db import get_session_factory
@@ -181,14 +183,30 @@ def _bootstrap_site(target_settings: Settings) -> None:
     ensure_system_user(users)
 
 
+async def _resume_mirror_deletions(stop: asyncio.Event):
+    while not stop.is_set():
+        try:
+            await asyncio.to_thread(resume_pending_deletions)
+        except Exception:
+            logger.exception("Pending Mirror deletion reconciliation failed")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=15)
+        except TimeoutError:
+            continue
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     bind_history(None)
     bind_recovery(None)
     adapters = None
+    stop = asyncio.Event()
+    deletion_task = None
     try:
         adapters = compose_mirrors(settings)
         if adapters is not None:
+            bind_management(target=adapters.deletion)
+            deletion_task = asyncio.create_task(_resume_mirror_deletions(stop))
             session_factory = get_session_factory()
             history = History(session_factory=session_factory, target=adapters.history_target)
             bind_history(history)
@@ -209,6 +227,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         bind_history(None)
         bind_recovery(None)
+        if deletion_task is not None:
+            stop.set()
+            await deletion_task
+            bind_management()
         if adapters is not None:
             adapters.close()
         reset_entity_engine()

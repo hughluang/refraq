@@ -786,7 +786,8 @@ def test_catalog_enable_mirror_is_scoped_and_idempotent(world):
 
     off = world.client.put(f"{path}/mirror", json={"enabled": False})
     assert off.status_code == 200
-    assert off.json()["mirror"] == {"enabled": False, "can_enable": False, "can_disable": False, "mirror_id": mirror["id"]}
+    assert off.json()["mirror"] == {"enabled": False, "can_enable": False, "can_disable": False,
+                                   "mirror_id": mirror["id"], "delete_token": off.json()["mirror"]["delete_token"]}
     assert world.client.put(f"{path}/mirror", json={"enabled": False}).json() == off.json()
     assert world.client.get(f"/mirrors/{mirror['id']}").json()["can_enable"] is False
     assert_problem(world.client.put(f"{path}/mirror", json={"enabled": True}), status=404, code="MIRROR_NOT_FOUND")
@@ -823,6 +824,14 @@ def test_catalog_mirror_setting_permissions_and_idempotency(world):
     assert reopened["mirror"]["mirror_id"] == saved["mirror_id"]
     assert reopened["operation_id"] not in {first["operation_id"], off["operation_id"]}
     assert world.client.post(path).json()["operation_id"] == reopened["operation_id"]
+
+    world.login("mirror_writer")
+    second_stop = world.client.put(path, json={"enabled": False}).json()["mirror"]
+    assert second_stop["mirror_id"] is None
+    assert_problem(world.client.delete(path, params={"delete_token": off["mirror"]["delete_token"]}),
+                   status=409, code="MIRROR_CONTROL_CONFLICT")
+    assert world.client.delete(path, params={"delete_token": second_stop["delete_token"]}).status_code == 204
+    assert "delete_token" not in world.client.get(f"/objects/{world.object_a2}").json()["object"]["mirror"]
 
 
 def test_mirror_reports_current_wait_reason_without_changing_its_setting(world, monkeypatch):

@@ -10,6 +10,7 @@ from backend.metadata.mirrors.schemas import StrictModel
 class RecoveryRequest(StrictModel):
     action: Literal["retry", "run_now", "postpone", "manual"]
     expected_history_epoch: Annotated[str, Field(strict=True, min_length=1, max_length=64)] | Annotated[int, Field(strict=True, ge=1)]
+    expected_control_revision: int | None = Field(default=None, strict=True, ge=1)
     reason: str | None = Field(default=None, max_length=1000)
 
     @model_validator(mode="after")

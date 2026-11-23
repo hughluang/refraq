@@ -6,11 +6,15 @@ import { MirrorDetail } from "./MirrorDetail";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { ApiError } from "@/lib/api";
 
-const state = vi.hoisted(() => ({ write: true, get: vi.fn(), recover: vi.fn(), enabled: vi.fn(), translate: (key: string) => key }));
-vi.mock("./api", () => ({ getMirror: state.get, requestRecovery: state.recover, setMirrorEnabled: state.enabled }));
+const state = vi.hoisted(() => ({ write: true, get: vi.fn(), recover: vi.fn(), enabled: vi.fn(), remove: vi.fn(), older: vi.fn(), replace: vi.fn(), translate: (key: string) => key }));
+vi.mock("./api", () => ({ getMirror: state.get, requestRecovery: state.recover, setMirrorEnabled: state.enabled, deleteMirror: state.remove, getJournalPage: state.older }));
+vi.mock("@/components/navigation/useConsoleNavigation", () => ({
+  useConsoleLocation: () => ({ href: "/console/mirrors/m1", search: new URLSearchParams() }),
+  useConsoleNavigation: () => ({ replace: state.replace }),
+}));
 vi.mock("@refinedev/core", () => ({ useTranslate: () => state.translate, useCan: () => ({ data: { can: state.write } }) }));
 vi.mock("@/components/layout/PageChrome", () => ({ PageChrome: ({ children, actions, title, titleExtra }: { children: ReactNode; actions: ReactNode; title: string; titleExtra: ReactNode }) => createElement("main", null, createElement("h1", null, title), titleExtra, actions, children) }));
-vi.mock("@/components/layout/HeaderActions", () => ({ HeaderActions: ({ navigation, lifecycle }: { navigation: ReactNode; lifecycle: ReactNode }) => createElement("div", null, navigation, lifecycle) }));
+vi.mock("@/components/layout/HeaderActions", () => ({ HeaderActions: ({ navigation, lifecycle, standard }: { navigation: ReactNode; lifecycle: ReactNode; standard: ReactNode }) => createElement("div", null, navigation, lifecycle, standard) }));
 vi.mock("@/components/navigation/ConsoleLink", () => ({ ConsoleLink: ({ children, href }: { children: ReactNode; href: string }) => createElement("a", { href }, children) }));
 vi.mock("@/components/display/StatusBadge", () => ({ StatusBadge: ({ labelKey, freshness }: { labelKey: string; freshness: { onRefresh: () => void; updatedAt: string } }) =>
   createElement("button", { onClick: freshness.onRefresh, title: freshness.updatedAt }, labelKey) }));
@@ -106,7 +110,7 @@ it("leads a waiting mirror with its published copy and unknown freshness", async
 });
 
 it("removes private detail and an open recovery confirmation after access is revoked", async () => {
-  state.get.mockResolvedValueOnce({ mirror }).mockRejectedValueOnce(new ApiError(403, "AUTH_FORBIDDEN", ""));
+  state.get.mockResolvedValueOnce({ mirror: { ...mirror, enabled: true, can_retry: true, status: "needs_attention" } }).mockRejectedValueOnce(new ApiError(403, "AUTH_FORBIDDEN", ""));
   render(createElement(MirrorDetail, { id: "m1" }));
   fireEvent.click(await screen.findByRole("button", { name: "mirrors.recovery.retry" }));
   expect(screen.getByRole("dialog")).toBeTruthy();
@@ -234,4 +238,113 @@ it("keeps requests and technical receipts collapsed when polling updates detail"
   fireEvent.click(screen.getByRole("button", { name: "common.refresh" }));
   await waitFor(() => expect(state.get).toHaveBeenCalledTimes(2));
   expect(disclosure.open).toBe(true);
+});
+
+it("keeps the Open waiting for continuity after an inconclusive Retry and pages the UTC journal", async () => {
+  const event = (kind: string, category: string, at: string, id: string, op: string) => ({
+    kind, category, at, id, operation_id: op, control_revision: 3, history_epoch: "h1", generation_id: "g1",
+    outcome: null, outcome_at: null, related_operation_id: null,
+  });
+  const unknown = event("continuity_unknown", "observation", "2026-03-02T00:03:00Z", "ev-1", "retry-1");
+  const retry = { ...event("retry", "request", "2026-03-01T23:58:00Z", "retry-1", "retry-1"),
+    outcome: "continuity_unknown", outcome_at: unknown.at };
+  const open = { ...event("resume", "request", "2026-03-01T22:00:00Z", "open", "open"),
+    outcome: "awaiting_continuity" };
+  const record = {
+    ...mirror, enabled: true, published_generation_id: "g1", control: { control_revision: 3 },
+    operations: [{ id: "open", control_revision: 3, kind: "open", state: "pending" }], open_request: open,
+    journal: { items: [unknown, retry, open], next_cursor: open.id }, can_retry: true, latest_request: retry,
+    blocker: { cause: "continuity", since: retry.at, last_checked_at: unknown.at },
+  };
+  state.get.mockResolvedValue({ mirror: record });
+  state.older.mockResolvedValue({ items: [event("disable", "request", "2026-02-28T22:00:00Z", "stop", "stop")], next_cursor: null });
+  render(createElement(MirrorDetail, { id: "m1" }));
+  const journal = await screen.findByRole("region", { name: "mirrors.journalTitle" });
+  expect(within(journal).getAllByRole("listitem")).toHaveLength(3);
+  expect(within(journal).getAllByRole("heading", { level: 3 }).map(title => title.textContent))
+    .toEqual(["2026-03-02 UTC", "2026-03-01 UTC"]);
+  expect(within(journal).getAllByRole("listitem")[2].textContent).toContain("mirrors.journal.awaiting_continuity");
+  expect(screen.getByRole("button", { name: "mirrors.recovery.retry" })).toBeTruthy();
+  fireEvent.click(within(journal).getByRole("button", { name: "mirrors.journal.older" }));
+  await within(journal).findByRole("heading", { name: "2026-02-28 UTC" });
+  expect(state.older).toHaveBeenCalledWith("m1", "open", expect.any(AbortSignal));
+  const late = event("continuity_verified", "observation", "2026-03-01T23:57:00Z", "late", "retry-1");
+  state.get.mockResolvedValue({ mirror: { ...record, journal: { items: [unknown, retry, late], next_cursor: late.id } } });
+  fireEvent.click(screen.getByRole("button", { name: "common.refresh" }));
+  await waitFor(() => expect(screen.getByRole("region", { name: "mirrors.journalTitle" }).querySelectorAll("li")).toHaveLength(3));
+  state.older.mockResolvedValue({ items: [open], next_cursor: null });
+  fireEvent.click(screen.getByRole("button", { name: "mirrors.journal.older" }));
+  await waitFor(() => expect(state.older).toHaveBeenLastCalledWith("m1", "late", expect.any(AbortSignal)));
+  expect(await within(screen.getByRole("region", { name: "mirrors.journalTitle" })).findByText("mirrors.journal.awaiting_continuity")).toBeTruthy();
+});
+
+it("deletes the confirmed revision and returns to the originating view on completion", async () => {
+  state.get.mockResolvedValue({ mirror: { ...mirror, control: { control_revision: 4 }, status: "disabled" } });
+  state.remove.mockResolvedValue(undefined);
+  render(createElement(MirrorDetail, { id: "m1" }));
+  fireEvent.click(await screen.findByRole("button", { name: "mirrors.delete" }));
+  expect(state.remove).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "confirm" }));
+  await waitFor(() => expect(state.replace).toHaveBeenCalledWith("/console/mirrors"));
+  expect(state.remove).toHaveBeenCalledWith("m1", 4, expect.any(AbortSignal));
+});
+
+it.each([true, false])("uses accepted synchronization state after a failed refresh (enabled=%s)", async (enabled) => {
+  const previous = { ...mirror, enabled: !enabled, control: { control_revision: 4 } };
+  state.get.mockResolvedValueOnce({ mirror: previous, can_enable: enabled }).mockRejectedValue(new Error("outage"));
+  state.enabled.mockResolvedValue({ mirror: { ...previous, enabled, control: { control_revision: 5 } }, operation_id: "toggle-5" });
+  render(createElement(MirrorDetail, { id: "m1" }));
+  const toggle = await screen.findByRole("switch", { name: "mirrors.synchronization" });
+  fireEvent.click(toggle);
+  if (!enabled) fireEvent.click(screen.getByRole("button", { name: "confirm" }));
+  await waitFor(() => expect(state.enabled).toHaveBeenCalledWith("m1", enabled, expect.any(AbortSignal)));
+  await screen.findByRole("button", { name: "mirrors.refreshStale" });
+  expect(toggle).toHaveProperty("checked", enabled);
+  expect(toggle.hasAttribute("disabled")).toBe(!enabled);
+  expect(screen.getByRole("button", { name: "mirrors.delete" }).hasAttribute("disabled")).toBe(true);
+  expect(Boolean(screen.queryByText("mirrors.resumePlan"))).toBe(!enabled);
+  expect(state.remove).not.toHaveBeenCalled();
+
+  state.get.mockResolvedValue({ mirror: { ...previous, enabled, control: { control_revision: 5 } }, can_enable: !enabled });
+  fireEvent.click(screen.getByRole("button", { name: "common.refresh" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "mirrors.delete" }).hasAttribute("disabled")).toBe(false));
+  expect(toggle.hasAttribute("disabled")).toBe(false);
+});
+
+it.each([
+  { can_retry: false },
+  { deletion_operation_id: "delete-3" },
+])("closes a Retry confirmation when a refresh disallows it (%j)", async (change) => {
+  const blocked = { ...mirror, enabled: true, can_retry: true, control: { control_revision: 3 } };
+  state.get.mockResolvedValueOnce({ mirror: blocked }).mockResolvedValue({ mirror: { ...blocked, ...change } });
+  render(createElement(MirrorDetail, { id: "m1" }));
+  fireEvent.click(await screen.findByRole("button", { name: "mirrors.recovery.retry" }));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "common.refresh" }));
+  await waitFor(() => expect(state.get).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(state.recover).not.toHaveBeenCalled();
+});
+
+it.each(["latest_request", "operations"])("retires the local pending receipt once %s observes it", async (observedIn) => {
+  const blocked = { ...mirror, enabled: true, can_retry: true, control: { control_revision: 3 } };
+  const request = { id: "retry-3", operation_id: "retry-3", kind: "retry", at: "2026-03-01T23:58:00Z",
+    outcome: "continuity_unknown", outcome_at: null };
+  state.get.mockResolvedValueOnce({ mirror: blocked }).mockResolvedValue({
+    mirror: { ...blocked,
+      latest_request: observedIn === "latest_request" ? request : { ...request, id: "retry-other", operation_id: "retry-other" },
+      operations: observedIn === "operations" ? [{ id: request.operation_id, kind: "retry", state: "applied", control_revision: 3 }] : [],
+    },
+  });
+  state.recover.mockResolvedValue({ operation_id: request.operation_id, state: "pending" });
+  render(createElement(MirrorDetail, { id: "m1" }));
+  fireEvent.click(await screen.findByRole("button", { name: "mirrors.recovery.retry" }));
+  fireEvent.click(screen.getByRole("button", { name: "confirm" }));
+  await screen.findByText("mirrors.journal.continuity_unknown");
+  await waitFor(() => expect(screen.queryByText("retry-3: mirrors.pending")).toBeNull());
+
+  state.get.mockResolvedValue({ mirror: { ...blocked, latest_request: { ...request, id: "disable-4", operation_id: "disable-4", kind: "disable" } } });
+  fireEvent.click(screen.getByRole("button", { name: "common.refresh" }));
+  await screen.findByText("mirrors.journal.disable", { exact: false });
+  expect(screen.queryByText("retry-3: mirrors.pending")).toBeNull();
 });

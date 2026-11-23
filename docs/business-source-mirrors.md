@@ -85,6 +85,12 @@ Disable excludes the Mirror from desired scope and records a pending disable ope
 
 Reopening restores the current source rows. Verified continuous table coverage permits a retained resume. A proven interval of missed capture starts a new History epoch and an empty replacement at the qualified partition boundary. The previous published copy remains available while the replacement builds. Snapshot rows carry baseline origin. Unknown coverage requires more evidence. Switching one table preserves other tables' identities and history.
 
+Open the Mirror journal to follow a request across runtime checks. It groups entries by UTC day with the latest three visible. **Requests and receipts** shows the latest observation, continuity check, slot or window wait and available generation identifiers. A superseding enable or disable identifies the preceding request it replaced. If a reopened table still owns the slot through its abandoned scan, wait for the runtime to verify release before starting another copy.
+
+An operator with `mirror:write` can retry a blocked check once a published History epoch exists. Each Retry records the result of its own check at the current control revision. An inconclusive result permits another Retry. Later proof for the same interrupted interval can resolve that check and a subsequent outstanding Retry. The Open completes when the retained copy is verified for resume or the replacement is published. An unpublished table can receive prerequisite rechecks directly. Its first Open awaits verified publication throughout.
+
+To remove an incorrect or obsolete Mirror, turn off synchronization and select **Delete Mirror** in Catalog or Mirror detail. Review the Source and table before confirming. A Mirror proven never dispatched or allocated can be removed immediately. For a dispatched Mirror, wait for the matching stop receipt and release of its snapshot reservation and reader pins. A reader pin can refer to a retired generation. Deletion removes the Mirror's copies, change history and registration and records a deletion audit event. The upstream table and shared Source capture remain available. A new enrollment of the same table receives a new Mirror identity and first-copy Open.
+
 ## 7. History Gates
 
 Mirror position is `(mirror_id, history_epoch, commit_seq, entry_seq)` with retained lower and committed upper bounds. Capture lineage and reader target generation are separate metadata.

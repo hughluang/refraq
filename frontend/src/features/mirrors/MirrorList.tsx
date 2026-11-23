@@ -2,13 +2,14 @@
 
 import { Button, Table, TextInput } from "@mantine/core";
 import { useCan, useTranslate } from "@refinedev/core";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { ListTable } from "@/components/display/ListTable";
 import { ListToolbar } from "@/components/display/ListToolbar";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { HeaderActions } from "@/components/layout/HeaderActions";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { useConsoleLocation } from "@/components/navigation/useConsoleNavigation";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
@@ -16,6 +17,7 @@ import { MirrorEvent, MirrorNextAction } from "./MirrorEvidence";
 import { listMirrors } from "./api";
 import { MirrorTableDrawer } from "./MirrorTableDrawer";
 import { MIRROR_STATUSES } from "./types";
+import { mirrorDetailHref, rememberMirrorPosition, restoreMirrorPosition } from "./mirrorNavigation";
 
 const filters = [
   { key: "source_id", type: "select", defaultValue: "" },
@@ -24,6 +26,7 @@ const filters = [
 
 export function MirrorList() {
   const t = useTranslate();
+  const { href } = useConsoleLocation();
   const { data: catalog } = useCan({ resource: "catalog", action: "list" });
   const query = useListQuery({ filters });
   const source = query.select("source_id");
@@ -31,6 +34,9 @@ export function MirrorList() {
   const search = query.search;
   const fetchPage = useCallback((page: PageQuery) => listMirrors({ ...page, source_id: source, status, q: search }), [source, status, search]);
   const list = useConsolePagedList({ pageSize: 50, fetch: fetchPage, page: query.page, onPageChange: query.setPage, filtered: query.isFiltered });
+  useEffect(() => {
+    if (!list.loading) restoreMirrorPosition(href);
+  }, [href, list.loading]);
   if (list.accessDenied) return <ForbiddenState reason="mirror:read" />;
   return <PageChrome title={t("mirrors.title")} description={t("mirrors.description")}
     actions={<HeaderActions navigation={<>{catalog?.can && <MirrorTableDrawer sourceId={source} onAccepted={() => void list.reload()} />}<Button size="sm" variant="light" onClick={() => void list.reload()}>{t("common.refresh")}</Button></>} />}
@@ -42,7 +48,8 @@ export function MirrorList() {
       head={<Table.Tr>{["source", "object", "desiredState", "lastEvent", "nextAction"].map(key => <Table.Th key={key}>{t(`mirrors.${key}`)}</Table.Th>)}</Table.Tr>}>
       {list.items.map(mirror => <Table.Tr key={mirror.id}>
         <Table.Td>{mirror.source_name ?? mirror.source_key ?? mirror.source_id}</Table.Td>
-        <Table.Td><ConsoleLink href={`/console/mirrors/${encodeURIComponent(mirror.id)}`}>{mirror.qualified_table}</ConsoleLink></Table.Td>
+        <Table.Td><ConsoleLink href={mirrorDetailHref(mirror.id, href)} data-mirror-return={mirror.id}
+          onClick={event => rememberMirrorPosition(href, event.currentTarget)}>{mirror.qualified_table}</ConsoleLink></Table.Td>
         <Table.Td>{t(mirror.enabled ? "mirrors.desiredEnabled" : "mirrors.desiredDisabled")}</Table.Td>
         <Table.Td><MirrorEvent mirror={mirror} /></Table.Td>
         <Table.Td><MirrorNextAction mirror={mirror} /></Table.Td>

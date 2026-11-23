@@ -297,6 +297,7 @@ def allocate_owner(*, source_id, operation_id, signed_proof, signals):
             del snapshot_authority["binding_id"]
             if (binding["generation_id"] == active and binding["authority"] == snapshot_authority
                     and binding["mirror_id"] in evidence["target_fence"]["mirror_receipts"]):
+                ledger["generations"][active].update(state="abandoned", released_at=utc_now().isoformat())
                 ledger["active"] = None
         state.update(authority, applied_revision=None, observed_at=None, stop_ack=None,
                      published_scope=scope["published_scope"], desired="stopped" if command["kind"] == "stop" else "configured",
@@ -314,6 +315,10 @@ def replacement_blocks_lifecycle(session, state):
         return True
     command = state.get("allocation", {}).get("command", {})
     if command.get("kind") != "replace_owner":
+        return False
+    retired = state["allocation"].get("deleted_replacement")
+    if (retired and retired["operation_id"] == command["operation_id"]
+            and retired["mirror_id"] == command["replacement"]["scope"]["submission"]["mirror_id"]):
         return False
     recovery = session.get(RecoveryRow, command["operation_id"])
     if recovery is None or recovery.journal.get("state") != "applied":
@@ -576,6 +581,19 @@ def record_applied_evidence(
         state["applied_revision"] = state["control_revision"]
         state["observed_at"] = evidence["observed_at"]
         state["stop_ack"] = evidence if command["kind"] == "stop" else None
+        if state["stop_ack"] and state["owner_epoch"] > 0 and state["runtime_instance_id"]:
+            ledger = state.get("incremental_snapshots", {})
+            active = ledger.get("active")
+            scan = ledger.get("generations", {}).get(active)
+            if scan:
+                old = scan["binding"]
+                excluded = any(not entry["included"] and entry["mirror_id"] == old["mirror_id"]
+                               and entry["table_identity"] == old["table_identity"]
+                               and entry["mirror_revision"] > old["mirror_revision"]
+                               for entry in command.get("published_scope", []))
+                if excluded and old["generation_id"] == active and old["authority"]["source_id"] == source_id:
+                    scan.update(state="abandoned", released_at=evidence["observed_at"])
+                    ledger["active"] = None
         save_binding(session, state)
         projected_scope = command.get("published_scope")
         if (command["kind"] == "stop" and state["desired"] == "stopped"

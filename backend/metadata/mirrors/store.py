@@ -5,12 +5,14 @@ from contextlib import contextmanager
 from copy import deepcopy
 from threading import RLock
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.orm import load_only
 
 from backend.core.db import session_scope
 from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.models import CatalogObjectRow, SourceRow
+from backend.metadata.mirrors.history_models import HistoryGateRow
+from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.lifecycle import dispatch_scope, open_evidence, registry_scope
 from backend.metadata.mirrors.status_projection import pending_opens, refresh_source_status
 from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
@@ -257,9 +259,8 @@ class SqlMirrorStore:
         refresh_source_status(session, mirror.source_id)
 
     def delete(self, session, mirror_id):
-        for row in session.scalars(select(MirrorOperationRow).where(MirrorOperationRow.mirror_id == mirror_id)):
-            session.delete(row)
-        session.flush()
+        for model in (RecoveryRow, HistoryGateRow, MirrorOperationRow):
+            session.execute(delete(model).where(model.mirror_id == mirror_id))
         mirror = session.get(MirrorRow, mirror_id)
         source_id = mirror.source_id
         session.delete(mirror)

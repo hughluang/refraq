@@ -13,7 +13,6 @@ from sqlalchemy.exc import DBAPIError
 from backend.metadata.capture.authority import SignedAuthority
 from backend.metadata.capture.delivery_composition import SourceDelivery
 from backend.metadata.capture.credentials import CredentialFiles
-from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 
 from backend.core.config import get_settings
 from backend.core.db import get_session_factory
@@ -24,13 +23,14 @@ from backend.metadata.capture.control import (
 )
 from backend.metadata.capture.runtime_adapters import ConnectLifecycle, PrivateHTTP, ReadinessSignals, SnapshotGateway
 from backend.metadata.capture.recovery_dispatch import dispatch_recovery
+from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile, TablePrerequisiteFailed
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked, protected_json, protected_read
 from backend.metadata.capture.snapshot import SnapshotCoordinator
 from backend.metadata.capture.store import list_operations, load_binding, save_binding
 from backend.metadata.errors import SourceCaptureControlConflict
 from backend.metadata.mirrors.service import (
     MirrorError, ObserveCommittedOpenPublication, OpenPublicationIdentity, read_dispatch_scope,
-    reconcile_open_publication,
+    reconcile_open_publication, lifecycle_checks, table_prerequisite_check, record_continuity_receipt,
 )
 from backend.metadata.mirrors.types import Authority
 from backend.metadata.mirrors.recovery_store import RecoveryRow
@@ -194,7 +194,14 @@ class CaptureRuntime:
         if result == "idle" and prepared is not None and prepared["kind"] == "reconcile":
             self._refresh_table_stops(prepared)
         if self.snapshot is not None and prepared is not None:
-            for binding in self.delivery.snapshot_bindings(prepared):
+            bindings = self.delivery.snapshot_bindings(prepared)
+            if not bindings:
+                with source_control_transaction(source_id) as (session, _):
+                    state = load_binding(session, source_id)
+                    active = (state or {}).get("incremental_snapshots", {}).get("active")
+                if active:
+                    self.snapshot.poll_abandoned_slot(source_id)
+            for binding in bindings:
                 try:
                     snapshot = self.snapshot.reconcile(binding)
                     state = snapshot.state
@@ -263,6 +270,8 @@ class CaptureRuntime:
                         candidate = self._current_command(session, source, include_applied=True,
                                                           allow_replacement=self.snapshot is not None)
                     if candidate and candidate["kind"] in {"reconcile", "replace_owner"}:
+                        if getattr(self.profile, "snapshot", None) is not None and candidate["kind"] == "reconcile":
+                            self._check_table_access(candidate, source)
                         if self.profile is not None and candidate["kind"] == "reconcile":
                             self._ensure_scope_fence(candidate)
                         retained = self.prepare_delivery(candidate)
@@ -331,20 +340,53 @@ class CaptureRuntime:
                 self.resume_retained(command, retained)
             return "applied", prepared if command["kind"] == "reconcile" else None
 
+    def _check_table_access(self, command, source):
+        checks = lifecycle_checks(source.id, command["published_scope"])
+        try:
+            self.profile.validate_source(source)
+        except TablePrerequisiteFailed as exc:
+            entry = next((entry for entry in command["published_scope"] if entry["qualified_table"] == exc.table), None)
+            if entry and entry["mirror_id"] in checks:
+                table_prerequisite_check(command, table=exc.table, cause=exc.cause, passed=False,
+                                         request_id=checks[entry["mirror_id"]])
+            raise
+        for entry in command["published_scope"]:
+            if entry["mirror_id"] in checks:
+                table_prerequisite_check(command, table=entry["qualified_table"], cause="permission", passed=True,
+                                         request_id=checks[entry["mirror_id"]])
+
     def _ensure_scope_fence(self, command):
         source_id = command["source_id"]
         with source_control_transaction(source_id) as (session, _):
             state = load_binding(session, source_id)
             allocation = state.get("allocation", {})
-            if allocation.get("command") == command or state.get("scope_fence", {}).get("operation_id") == command["operation_id"]:
+            cached = state.get("scope_fence", {})
+            if allocation.get("command") == command or (
+                    cached.get("operation_id") == command["operation_id"] and not cached.get("inconclusive_tables")):
                 return
+        checks = lifecycle_checks(source_id, command["published_scope"])
         fence = self.signals.scope_fence(command)
         with source_control_transaction(source_id) as (session, source):
             if self._current_command(session, source, include_applied=True) != command:
                 raise RuntimeBlocked("capture_preparation_superseded")
             state = load_binding(session, source_id)
+            if cached.get("operation_id") == command["operation_id"]:
+                boundaries = fence.get("table_boundaries", {})
+                unchecked = cached.get("inconclusive_tables", {}).keys() - boundaries.keys() - fence.get("inconclusive_tables", {}).keys()
+                if (unchecked or cached["mirror_receipts"] != fence["mirror_receipts"]
+                        or any(boundaries.get(mid) != boundary for mid, boundary in cached.get("table_boundaries", {}).items())):
+                    raise RuntimeBlocked("scope_fence_unconfirmed")
             state["scope_fence"] = fence
             save_binding(session, state)
+        if fence.get("inconclusive_tables"):
+            authority = Authority(source_id, command["binding_id"], command["owner_epoch"], command["runtime_instance_id"],
+                                  command["control_revision"], command["credential_revision"], str(command["capture_generation"]))
+            for mid, ref in fence["inconclusive_tables"].items():
+                if mid in checks:
+                    record_continuity_receipt(authority=authority, scope=command["published_scope"], mirror_id=mid,
+                                              check_id=checks[mid], decision=dict(result="unknown", evidence_ref=ref,
+                                                                                  observed_at=fence["observed_at"]))
+
 
 
 # Only these operator-actionable codes may cross the process diagnostics boundary.

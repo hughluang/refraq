@@ -74,3 +74,12 @@
   .path li::before { position: absolute; top: .28rem; inset-inline-start: 0; }
   .path li:not(:last-child)::after { inset-inline: .25rem auto; top: .8rem; bottom: -.65rem; border-inline-start: 1px solid var(--mantine-color-default-border); }
 }
+
+.journal { min-width: 0; overflow-wrap: anywhere; }
+.journal h2 { margin: 0 0 var(--mantine-spacing-md); font-size: var(--mantine-font-size-lg); }
+.journal h3 { margin: var(--mantine-spacing-md) 0 var(--mantine-spacing-xs); font-size: var(--mantine-font-size-sm); }
+.journal ol { list-style: none; padding: 0; margin: 0; }
+.journal li { padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm); border-inline-start: 2px solid var(--mantine-color-default-border); }
+.journal details { margin-top: var(--mantine-spacing-sm); }
+.identifiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--mantine-spacing-sm); margin-block: var(--mantine-spacing-sm); }
+.eventIds { border-top: 1px solid var(--mantine-color-default-border); padding-top: var(--mantine-spacing-xs); font-size: var(--mantine-font-size-sm); }

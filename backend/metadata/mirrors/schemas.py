@@ -42,7 +42,7 @@ class Readiness(StrictModel):
 class Operation(StrictModel):
     id: str
     mirror_id: str
-    kind: Literal["open", "enable", "disable", "recovery"]
+    kind: Literal["open", "enable", "disable", "delete", "recovery", "retry"]
     state: Literal["pending", "applied", "superseded"]
     control_revision: int
     observed_evidence_refs: list[str]
@@ -87,6 +87,7 @@ class Mirror(StrictModel):
     table_identity: str
     qualified_table: str
     enabled: bool
+    deletion_operation_id: str | None = None
     status: MirrorStatus
     published_generation_id: str | None
     capture_generation: str | None
@@ -107,7 +108,41 @@ class MirrorResponse(StrictModel):
     mirror: Mirror
 
 
+class JournalEvent(StrictModel):
+    id: str
+    category: Literal["request", "observation"]
+    kind: str
+    at: Instant
+    operation_id: str
+    control_revision: int
+    history_epoch: str | int | None
+    generation_id: str | None
+    outcome: str | None
+    outcome_at: Instant | None
+    related_operation_id: str | None
+
+
+class JournalPage(StrictModel):
+    items: list[JournalEvent]
+    next_cursor: str | None
+
+
+class MirrorBlocker(StrictModel):
+    cause: Literal["continuity", "permission", "schema"]
+    since: Instant
+    last_checked_at: Instant
+
+
 class MirrorDetail(Mirror):
+    journal: JournalPage
+    open_request: JournalEvent | None
+    latest_request: JournalEvent | None
+    latest_observation: JournalEvent | None
+    continuity_check: JournalEvent | None
+    can_retry: bool
+    blocker: MirrorBlocker | None
+    published_at: Instant | None
+    allocated_generation_id: str | None
     source_size_bytes: int | None = Field(ge=0)
     estimated_rows: int | None = Field(ge=0)
     storage_destination: str

@@ -6,8 +6,10 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
-from backend.metadata.mirrors.service import catalog_mirror, enable_for_object, list_catalog_mirror_tables, set_enabled_for_object
-from backend.metadata.mirrors.schemas import MirrorActionReceipt, PatchMirrorRequest, PatchMirrorResponse
+from fastapi.responses import JSONResponse
+
+from backend.metadata.mirrors.service import catalog_mirror, delete_mirror_for_object, enable_for_object, list_catalog_mirror_tables, set_enabled_for_object
+from backend.metadata.mirrors.schemas import MirrorActionReceipt, PatchMirrorRequest, PatchMirrorResponse, RecoveryResponse
 from backend.admin.deps import get_actor_token_id, require_permission, resolve_user_permissions
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.permissions import permissions_include
@@ -328,6 +330,23 @@ def set_object_mirror(
         can_read=permissions_include(permissions, "mirror:read"),
         actor_user_id=user.id, actor_token_id=get_actor_token_id(request),
     )
+
+
+@router.delete("/objects/{object_id}/mirror", status_code=204, responses={202: {"model": RecoveryResponse}})
+def delete_object_mirror(
+    object_id: str,
+    request: Request,
+    delete_token: str = Query(min_length=32, max_length=32),
+    user: UserRecord = Depends(require_permission("mirror:write")),
+):
+    record = _require_object_permission(user.id, object_id, "metadata:read")
+    pending = delete_mirror_for_object(
+        record.id, source_id=record.source_id, delete_token=delete_token,
+        actor_user_id=user.id, actor_token_id=get_actor_token_id(request),
+    )
+    if pending:
+        return JSONResponse(pending, status_code=202)
+    return Response(status_code=204)
 
 
 @router.get("/objects/{object_id}/ddl", response_model=CatalogDdlResponse)

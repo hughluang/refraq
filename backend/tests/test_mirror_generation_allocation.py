@@ -5,6 +5,7 @@ from dataclasses import asdict, replace
 from importlib import import_module
 import os
 from threading import Barrier
+from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg
@@ -627,6 +628,10 @@ def test_pending_allocation_recovers_after_a_sibling_switch(opened):
     prepare = dict(authority=current, published_scope=scope, observe_committed=pytest.fail, history=history)
     with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
         service.current_open_preparations(**prepare, selected_table_ids={"orders"})
+    # A checked interval may lack conclusive coverage before any first publication.
+    service.record_continuity_receipt(authority=current, scope=scope, mirror_id=mirror_id, check_id=original_operation,
+                                      decision=dict(result="unknown", observed_at=utc_now().isoformat(),
+                                                    evidence_ref="sha256:" + "b" * 64))
     boundary = dict(start_offset=9, partition_identity=partition, mirror_revision=1, evidence_ref="sha256:" + "c" * 64)
     with store.transaction() as session:
         save_binding(session, dict(state, scope_fence=dict(fence, table_boundaries={mirror_id: boundary})))
@@ -638,3 +643,96 @@ def test_pending_allocation_recovers_after_a_sibling_switch(opened):
     assert items["operation_id"] == sibling["operation_id"] and not items.get("reopen_baseline")
     assert service.current_open_preparations(**prepare) == (pending, retained)
     assert service.set_enabled(mirror_id, enabled=True, actor_user_id="operator")["operation_id"] == original_operation
+    detail = service.get_mirror_detail(mirror_id)["mirror"]
+    assert detail["open_request"]["operation_id"] == original_operation
+    assert detail["open_request"]["outcome"] == "awaiting_publication"
+    assert detail["blocker"] is None and detail["history_epoch"] is None
+    assert [e["kind"] for e in service.get_mirror_journal(mirror_id)["items"]] == [
+        "continuity_gap", "continuity_unknown", "open",
+    ]
+
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("outcome", ["continuous", "gap"])
+def test_recheck_keeps_open_and_attributes_later_proof(opened, outcome):
+    store, mid, published_open, authority = opened
+    generation, epoch, certificate = "published-copy", "established-epoch", "certificate-ref"
+    partition = asdict(PartitionIdentity("cluster", "orders", 0))
+    with store.transaction() as session:
+        published, = store.ops(session, mid)
+        receipt = dict(generation_id=generation, history_epoch=epoch, certificate_ref=certificate, authority=asdict(authority))
+        store.save_op(session, dict(published, state="applied", publication_receipt=receipt,
+                                    allocation=dict(binding=dict(partition_identity=partition))))
+        store.save(session, dict(store.get(session, mid), published_generation_id=generation, history_epoch=epoch))
+        session.add(HistoryGateRow(mirror_id=mid, history_epoch=epoch, status="available", lower_commit_seq=0, lower_entry_seq=0))
+        factory = sessionmaker(session.get_bind())
+    service.set_enabled(mid, enabled=False, actor_user_id="user")
+    reopen = service.set_enabled(mid, enabled=True, actor_user_id="user")["operation_id"]
+    with store.transaction() as session:
+        scope = service.read_published_scope(session, authority.source_id)
+        state = load_binding(session, authority.source_id)
+        save_binding(session, dict(state, published_scope=scope, applied_revision=authority.control_revision))
+
+    def decision(result, digit):
+        return dict(result=result, observed_at=utc_now().isoformat(), evidence_ref="sha256:" + digit * 64)
+
+    def check(request, result, digit):
+        return service.record_continuity_receipt(authority=authority, scope=scope, mirror_id=mid, check_id=request,
+                                                 decision=decision(result, digit), published_operation_id=published_open)
+
+    opts = dict(expected_epoch=epoch, expected_revision=3, actor_user_id="writer")
+    with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
+        service.request_recheck(mid, **opts)
+    with store.transaction() as session:
+        command = dict(load_binding(session, authority.source_id))
+    service.table_prerequisite_check(command, table="sales.orders", cause="permission", passed=False, request_id=reopen)
+    permission = service.request_recheck(mid, **opts)["operation_id"]
+    for _ in range(2):
+        service.table_prerequisite_check(command, table="sales.orders", cause="permission", passed=False, request_id=permission)
+    service.table_prerequisite_check(command, table="sales.orders", cause="permission", passed=True, request_id=permission)
+    detail = service.get_mirror_detail(mid)["mirror"]
+    assert detail["blocker"] is None
+    assert detail["open_request"]["outcome"] == "awaiting_continuity"
+    permission_events = [e for e in service.get_mirror_journal(mid)["items"]
+                         if e["category"] == "observation" and e["operation_id"] == permission]
+    assert [e["kind"] for e in permission_events] == ["permission_verified", "permission_blocked"]
+    check(reopen, "unknown", "1")
+    first = service.request_recheck(mid, **opts)["operation_id"]
+    assert first == service.request_recheck(mid, **opts)["operation_id"]
+    check(first, "unknown", "2")
+    assert service.get_mirror_detail(mid)["mirror"]["can_retry"]
+    second = service.request_recheck(mid, **opts)["operation_id"]
+    assert first != second
+    conclusive = decision(outcome, "3")
+    assert not service.record_continuity_receipt(authority=authority, scope=scope, mirror_id=mid, check_id=first,
+                                                 decision=conclusive, published_operation_id=published_open)
+    if outcome == "continuous":
+        candidate = SimpleNamespace(mirror_id=mid, operation_id=published_open, certificate_ref=certificate,
+                                    generation_id=generation, binding=SimpleNamespace(authority=authority,
+                                                                                     history_epoch=epoch, table_identity="orders"))
+        service.confirm_retained_opens(authority=authority, published_scope=scope, candidates=[candidate],
+                                       decisions={mid: conclusive}, checks={mid: first})
+    else:
+        history = History(session_factory=factory, target=SimpleNamespace(invalidate=lambda **kwargs: True))
+        service.request_reopen_baseline(authority=authority, published_scope=scope, mirror_id=mid, mirror_revision=3,
+                                        operation_id=published_open, partition_identity=partition, start_offset=10,
+                                        history=history, check_id=first, observed_at=conclusive["observed_at"],
+                                        evidence_ref=conclusive["evidence_ref"])
+    check(second, "unknown", "4")
+    check(second, "unknown", "4")
+    assert check(second, "gap", "5") in {"recorded", "retained"}
+    detail = service.get_mirror_detail(mid)["mirror"]
+    assert detail["published_generation_id"] == generation and detail["blocker"] is None
+    assert detail["open_request"]["outcome"] == ("continuity_verified" if outcome == "continuous" else "awaiting_publication")
+    assert (detail["history_epoch"] == epoch) == (outcome == "continuous")
+    events = service.get_mirror_journal(mid)["items"]
+    requests = {e["operation_id"]: e for e in events if e["category"] == "request"}
+    assert requests[first]["outcome"] == "continuity_unknown"
+    assert requests[second]["outcome"] == "resolved_by_evidence"
+    assert requests[second]["related_operation_id"] == first
+    late = [e for e in events if e["operation_id"] == second and e["category"] == "observation"]
+    assert [e["kind"] for e in late] == ["continuity_gap", "continuity_unknown"]
+    assert len(detail["journal"]["items"]) == 3
+    remaining = service.get_mirror_journal(mid, before=detail["journal"]["next_cursor"])["items"]
+    assert events == detail["journal"]["items"] + remaining

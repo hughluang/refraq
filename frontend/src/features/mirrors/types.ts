@@ -3,6 +3,7 @@ export type RecoveryAction = "retry" | "run_now" | "postpone" | "manual";
 export type RecoveryRequest = {
   action: RecoveryAction;
   expected_history_epoch: string | number;
+  expected_control_revision?: number;
   reason?: string;
 };
 export type ReadinessItem = {
@@ -39,6 +40,20 @@ type MirrorOperation = {
   requested_at: string;
 };
 export type MirrorReference = { mirror_id: string; qualified_table: string };
+export type JournalEvent = {
+  id: string;
+  category: "request" | "observation";
+  kind: string;
+  at: string;
+  operation_id: string;
+  control_revision: number;
+  history_epoch: string | number | null;
+  generation_id: string | null;
+  outcome: string | null;
+  outcome_at: string | null;
+  related_operation_id: string | null;
+};
+export type JournalPage = { items: JournalEvent[]; next_cursor: string | null };
 export type Mirror = {
   id: string;
   source_id: string;
@@ -72,10 +87,20 @@ export type Mirror = {
   readiness: ReadinessItem[];
   fault: Record<string, unknown> | null;
   operations: MirrorOperation[];
+  deletion_operation_id?: string | null;
 };
 export type MirrorDetail = Mirror & {
   storage_destination: string;
   source_size_bytes: number | null;
   estimated_rows: number | null;
+  journal: JournalPage;
+  latest_request: JournalEvent | null;
+  open_request: JournalEvent | null;
+  latest_observation: JournalEvent | null;
+  continuity_check: JournalEvent | null;
+  blocker: { cause: "permission" | "schema" | "continuity"; since: string; last_checked_at: string } | null;
+  can_retry: boolean;
+  allocated_generation_id: string | null;
+  published_at: string | null;
 };
 export type PendingOperation = { operation_id: string; state: "pending" };

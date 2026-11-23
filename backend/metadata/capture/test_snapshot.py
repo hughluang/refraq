@@ -217,6 +217,68 @@ def test_receipt_and_both_native_terminals_are_required_for_catch_up(tmp_path, p
         worker.journal.close()
 
 
+def test_reopened_table_waits_for_terminal_proof_of_its_abandoned_scan(tmp_path, prepared):
+    binding, _ = prepared
+    signals = SignalFixture()
+    worker = coordinator(tmp_path, signals)
+    try:
+        old = worker.reconcile(binding).operation_id
+        reopened = replace(binding, mirror_revision=binding.mirror_revision + 2,
+                           allocation_operation_id="reopened", generation_id="fresh-generation",
+                           authority=replace(binding.authority, control_revision=binding.authority.control_revision + 2))
+        source_id = binding.authority.source_id
+        with source_control_transaction(source_id) as (session, _):
+            state = load_binding(session, source_id)
+            state.update(control_revision=reopened.authority.control_revision, applied_revision=reopened.authority.control_revision)
+            state["published_scope"][0]["mirror_revision"] = reopened.mirror_revision
+            save_binding(session, state)
+        assert worker.reconcile(reopened).state == "source_busy"
+        signals.receipt_visible = True
+        signals.records.extend(signals.beginning(binding, old))
+        signals.records.append(signals.native(binding, old, 11, "TABLE_SCAN_COMPLETED",
+                                             scanned_collection=binding.qualified_table, status="EMPTY", total_rows_scanned="0"))
+        assert worker.reconcile(reopened).state == "source_busy"
+        assert len(signals.signals) == 1
+        signals.records.append(signals.native(binding, old, 12, "COMPLETED"))
+        assert worker.reconcile(reopened).state == "source_busy"
+        with source_control_transaction(source_id) as (session, _):
+            ledger = load_binding(session, source_id)["incremental_snapshots"]
+            assert ledger["active"] is None
+            previous = ledger["generations"][binding.generation_id]
+            assert previous["state"] == "abandoned" and previous["released_at"]
+        assert worker.reconcile(reopened).state == "submission_uncertain"
+        assert len(signals.signals) == 2
+    finally:
+        worker.journal.close()
+
+
+def test_excluded_scan_releases_slot_while_sibling_has_no_snapshot_work(tmp_path, prepared):
+    binding, _ = prepared
+    signals = SignalFixture()
+    worker = coordinator(tmp_path, signals)
+    try:
+        operation = worker.reconcile(binding).operation_id
+        source_id = binding.authority.source_id
+        with source_control_transaction(source_id) as (session, _):
+            state = load_binding(session, source_id)
+            state["published_scope"][0].update(included=False, mirror_revision=binding.mirror_revision + 1)
+            save_binding(session, state)
+        signals.receipt_visible = True
+        signals.records.extend(signals.beginning(binding, operation))
+        signals.records.append(signals.native(binding, operation, 11, "TABLE_SCAN_COMPLETED",
+                                             scanned_collection=binding.qualified_table, status="EMPTY", total_rows_scanned="0"))
+        worker.poll_abandoned_slot(source_id)
+        with source_control_transaction(source_id) as (session, _):
+            assert load_binding(session, source_id)["incremental_snapshots"]["active"] == binding.generation_id
+        signals.records.append(signals.native(binding, operation, 12, "COMPLETED"))
+        worker.poll_abandoned_slot(source_id)
+        with source_control_transaction(source_id) as (session, _):
+            assert load_binding(session, source_id)["incremental_snapshots"]["active"] is None
+        assert len(signals.signals) == 1
+    finally:
+        worker.journal.close()
+
+
 def test_signed_table_progress_keeps_observed_bytes_across_the_terminal(tmp_path, prepared):
     binding, _ = prepared
     signals = SignalFixture()
