@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -33,6 +34,45 @@ def test_absent_config_and_memory_never_construct_engine(monkeypatch):
     monkeypatch.setattr(composition, "create_engine", lambda *a, **k: pytest.fail("Unexpected target connection"))
     assert composition.compose_mirrors(settings()) is None
     assert composition.compose_mirrors(settings(policy(), backend="memory")) is None
+
+
+def test_diagnostics_uses_bound_registry_stores_and_their_locks(monkeypatch):
+    from backend.metadata.mirrors.store import MemoryMirrorStore
+
+    locks = []
+
+    class TrackedLock:
+        def __init__(self, name):
+            self.name = name
+
+        def __enter__(self):
+            locks.append("acquire:" + self.name)
+
+        def __exit__(self, *args):
+            locks.append("release:" + self.name)
+
+    mirror_store = MemoryMirrorStore()
+    mirror_store.lock = TrackedLock("mirror")
+    mirror_store.mirrors["retained"] = dict(id="retained", control={"control_revision": 1})
+    source_store = SimpleNamespace(capture_lock=TrackedLock("source"),
+                                   capture_bindings={"source": {"runtime_instance_id": "retained-runtime"}})
+    monkeypatch.setattr(composition, "_storage", lambda: mirror_store)
+    monkeypatch.setattr(composition, "get_source_store", lambda: source_store)
+    store, read_scope = composition.compose_diagnostics(settings(backend="memory"), transaction=None)
+    monkeypatch.setattr(composition, "_storage", lambda: pytest.fail("Mirror store must already be bound"))
+    monkeypatch.setattr(composition, "get_source_store", lambda: pytest.fail("Source store must already be bound"))
+    monkeypatch.setattr("backend.metadata.mirrors.store.get_source_store", lambda: pytest.fail("Scope must lock its supplied Source store"))
+
+    rows, bindings = read_scope()
+    assert rows[0]["id"] == "retained" and rows[0]["allocated_generation_id"] is None
+    assert bindings["source"]["runtime_instance_id"] == "retained-runtime"
+    assert locks == ["acquire:source", "acquire:mirror", "release:mirror", "release:source"]
+    rows[0]["id"] = "changed"
+    bindings["source"]["runtime_instance_id"] = "changed"
+    assert mirror_store.mirrors["retained"]["id"] == "retained"
+    assert source_store.capture_bindings["source"]["runtime_instance_id"] == "retained-runtime"
+    store.update("source", "source", lambda _: {"checks": {}})
+    assert store.read("source", "source") == {"checks": {}}
 
 
 @pytest.mark.parametrize("changes", [
@@ -133,7 +173,7 @@ def test_bootstrap_and_history_version_checks_are_actually_executed(monkeypatch)
                 return Cursor((self.role,))
             if "FROM pg_roles" in sql:
                 return Cursor((False,) * 5)
-            return Cursor((3 if "target_version()" in sql else 1,))
+            return Cursor((4 if "target_version()" in sql else 1,))
 
     class ValidEngine(Engine):
         def __init__(self, role):
@@ -173,7 +213,8 @@ def test_catalog_matches_frontend_and_permission_filtered_navigation():
     identities = {item.id: item for item in build_module_identities()}
     mirror = identities["mirrors"]
     assert mirror.icon == "database"
-    assert asdict(mirror.routes) == dict(list="/console/mirrors", show="/console/mirrors/:id", create=None, edit=None, aliases=())
+    assert asdict(mirror.routes) == dict(list="/console/mirrors", show="/console/mirrors/:id", create=None, edit=None,
+                                       aliases=({"path": "/console/mirrors/diagnostics", "action": "list"},))
     assert mirror.actions.list == mirror.actions.show == "mirror:read"
     assert mirror.actions.edit == mirror.actions.delete == "mirror:write"
     assert identities["settings"].routes.aliases[0].path == "/console/settings/notification-channel"

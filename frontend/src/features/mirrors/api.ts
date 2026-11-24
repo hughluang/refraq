@@ -38,3 +38,11 @@ export function requestRecovery(id: string, request: RecoveryRequest) {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request),
   });
 }
+
+export function getMirrorMeasurements(id: string, signal: AbortSignal) {
+  return apiClient<import("./diagnosticTypes").Measurements>(`/mirrors/${encodeURIComponent(id)}/measurements`, { signal });
+}
+
+export function getSourceDiagnostics(query: URLSearchParams, signal: AbortSignal) {
+  return apiClient<import("./diagnosticTypes").Diagnostics>(`/mirror-diagnostics?${query}`, { signal });
+}

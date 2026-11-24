@@ -1,7 +1,8 @@
-"""Fail-closed assembly of the restricted Mirror History adapter."""
+"""Assemble restricted Mirror adapters and explicit diagnostic dependencies."""
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -10,8 +11,16 @@ from sqlalchemy.pool import NullPool
 from backend.core.config import Settings, _database_target
 from backend.metadata.mirrors.bootstrap import validate_target
 from backend.metadata.mirrors.deletion import TargetDeletion
+from backend.metadata.mirrors.diagnostic_store import DiagnosticStore
 from backend.metadata.mirrors.history import SqlHistoryTarget
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.service import MirrorError, _storage, diagnostic_scope
+from backend.metadata.sources.store import get_source_store
+
+
+def compose_diagnostics(settings: Settings, *, transaction):
+    store = DiagnosticStore(memory=settings.store_backend == "memory", transaction=transaction)
+    read_scope = partial(diagnostic_scope, mirror_store=_storage(), source_store=get_source_store())
+    return store, read_scope
 
 
 def _unavailable():

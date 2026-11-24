@@ -402,7 +402,7 @@ _REPORTED_FAULTS = frozenset({
 })
 
 
-def poll_sources(runtimes, previous_faults):
+def poll_sources(runtimes, previous_faults, diagnostics=None):
     for source_id, runtime, request_file, replacement_file in runtimes:
         try:
             runtime.poll_once(source_id, owner_allocation_file=request_file, replacement_owner_file=replacement_file)
@@ -416,6 +416,11 @@ def poll_sources(runtimes, previous_faults):
         else:
             if previous_faults.pop(source_id, None) is not None:
                 print(json.dumps({"source_id": source_id, "state": "recovered"}), flush=True)
+        if diagnostics is not None:
+            try:
+                diagnostics.sample_source(source_id, runtime)
+            except Exception:
+                print("capture_diagnostic_sample_unavailable", flush=True)
     return bool(previous_faults)
 
 
@@ -444,6 +449,7 @@ def main():
                 runtime.delivery.stop()
 
     journal = None
+    diagnostics = None
     try:
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous_handlers[signum] = signal.signal(signum, stop)
@@ -528,9 +534,30 @@ def main():
                     max_observation_age_seconds=observers["max_age_seconds"], recheck=runtime.recheck_snapshot,
                 )
                 runtime.publish_completed = publish_completed
+        if "diagnostics" in config:
+            from backend.core.db import session_scope
+            from backend.metadata.capture.diagnostics import RuntimeDiagnostics
+            from backend.metadata.mirrors.composition import compose_diagnostics
+            from backend.metadata.mirrors.diagnostic_schemas import DiagnosticPolicy
+
+            diagnostic_store, diagnostic_scope = compose_diagnostics(get_settings(), transaction=session_scope)
+            diagnostics = RuntimeDiagnostics(policy=DiagnosticPolicy.model_validate(config["diagnostics"]),
+                                             runtimes=runtimes, wait_seconds=interval,
+                                             store=diagnostic_store, read_scope=diagnostic_scope)
+            diagnostics.start()
         previous_faults = {}
         while not stopping.is_set():
-            blocked = poll_sources(runtimes, previous_faults)
+            if diagnostics:
+                try:
+                    diagnostics.begin_round()
+                except Exception:
+                    print("capture_diagnostic_round_unavailable", flush=True)
+            blocked = poll_sources(runtimes, previous_faults, diagnostics)
+            if diagnostics:
+                try:
+                    diagnostics.end_round()
+                except Exception:
+                    print("capture_diagnostic_round_unavailable", flush=True)
             if args.once:
                 return 2 if blocked else 0
             stopping.wait(interval)
@@ -540,6 +567,8 @@ def main():
         print("capture_runtime_blocked")
         return 2
     finally:
+        if diagnostics:
+            diagnostics.close()
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         for _, runtime, _, _ in runtimes:

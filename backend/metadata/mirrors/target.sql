@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS source_mirror_state.version (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL);
-INSERT INTO source_mirror_state.version VALUES (true, 3) ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version;
+INSERT INTO source_mirror_state.version VALUES (true, 4) ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version;
 CREATE TABLE IF NOT EXISTS source_mirror_state.mirrors (
  id text PRIMARY KEY, source_id text NOT NULL, table_identity text NOT NULL,
  authority jsonb NOT NULL, published_generation_id text,
@@ -28,6 +28,12 @@ ALTER TABLE source_mirror_state.generations
  ADD COLUMN IF NOT EXISTS anchored_profile jsonb,
  ADD COLUMN IF NOT EXISTS anchored_coverage jsonb,
  ADD COLUMN IF NOT EXISTS anchored_publication jsonb;
+ALTER TABLE source_mirror_state.generations
+ ADD COLUMN IF NOT EXISTS processed_events bigint NOT NULL DEFAULT 0,
+ ADD COLUMN IF NOT EXISTS processed_batches bigint NOT NULL DEFAULT 0,
+ ADD COLUMN IF NOT EXISTS processed_bytes bigint NOT NULL DEFAULT 0,
+ ADD COLUMN IF NOT EXISTS byte_coverage boolean NOT NULL DEFAULT true,
+ ADD COLUMN IF NOT EXISTS last_target_commit_at timestamptz;
 CREATE TABLE IF NOT EXISTS source_mirror_state.live_log (
  mirror_id text NOT NULL REFERENCES source_mirror_state.mirrors,
  history_epoch text NOT NULL, commit_seq bigint NOT NULL, entry_seq integer NOT NULL,
@@ -108,6 +114,7 @@ DECLARE
  json_columns text[]; typed_projection text; old_null_projection text; typed_record text;
  json_nulls text[]; old_json_nulls text[]; changed boolean;
  entries integer := 0; seq bigint; previous_offset bigint := NULL;
+ events bigint := 0; payload bigint := 0; bytes_known boolean := true;
  scan_end bigint; bounds jsonb; pre_stable bigint; pre_high bigint;
  sealed boolean := coalesce(scan ? 'eof', false);
 BEGIN
@@ -271,6 +278,15 @@ BEGIN
    RAISE EXCEPTION 'MIRROR_ENVELOPE_INVALID';
   END IF;
   IF r->>'operation' IN ('upsert','delete') THEN
+   IF r->>'origin' = 'live' THEN
+    events := events + 1;
+    IF r->'payload_bytes' IS NULL OR r->'payload_bytes' = 'null'::jsonb THEN
+     bytes_known := false;
+    ELSIF jsonb_typeof(r->'payload_bytes') <> 'number' OR r->>'payload_bytes' !~ '^[0-9]+$' THEN
+     RAISE EXCEPTION 'MIRROR_ENVELOPE_INVALID';
+    ELSE payload := payload + (r->>'payload_bytes')::bigint;
+    END IF;
+   END IF;
    IF g.status = 'published' AND r->>'origin' <> 'live' THEN RAISE EXCEPTION 'MIRROR_ENVELOPE_INVALID'; END IF;
    IF jsonb_typeof(r->'key') IS DISTINCT FROM 'object'
     OR (SELECT count(*) FROM jsonb_object_keys(r->'key')) <> cardinality(g.key_columns) THEN
@@ -340,7 +356,13 @@ BEGIN
   RAISE EXCEPTION 'MIRROR_COVERAGE_INVALID';
  END IF;
  UPDATE source_mirror_state.generations SET applied_offset = g.applied_offset,
-  anchored_coverage = scan || jsonb_build_object('authority', a)
+  anchored_coverage = scan || jsonb_build_object('authority', a),
+  processed_events = processed_events + events,
+  processed_batches = processed_batches + CASE WHEN events > 0 THEN 1 ELSE 0 END,
+  processed_bytes = processed_bytes + payload,
+  byte_coverage = byte_coverage AND bytes_known,
+  last_target_commit_at = CASE WHEN g.applied_offset > (SELECT applied_offset FROM source_mirror_state.generations WHERE id = gid)
+                              THEN clock_timestamp() ELSE last_target_commit_at END
  WHERE id = gid;
  IF entries > 0 THEN
   UPDATE source_mirror_state.mirrors SET commit_seq = seq WHERE id = m.id;

@@ -32,8 +32,12 @@ export function restoreMirrorPosition(address: string) {
   const saved = positions.get(address);
   if (!saved) return;
   const target = Array.from(document.querySelectorAll<HTMLElement>("[data-mirror-return]"))
-    .find(node => node.dataset.mirrorReturn === saved.control && node.getClientRects().length > 0);
+    .find(node => node.dataset.mirrorReturn === saved.control);
   if (!target) return;
+  for (let node = target.parentElement; node; node = node.parentElement) {
+    if (node instanceof HTMLDetailsElement) node.open = true;
+  }
+  if (!target.getClientRects().length) return;
   target.focus({ preventScroll: true });
   scrollParents(target).forEach((node, index) => { node.scrollTop = saved.scroll[index] ?? 0; });
 }

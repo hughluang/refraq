@@ -434,3 +434,20 @@ def test_catching_up_sibling_waits_for_publication_after_slot_release(snapshotti
     assert detail["publication_wait"] == dict(mirror_id=mid, qualified_table="public.orders")
     assert [item["key"] for item in detail["readiness"]] == ["publication_pending"]
     assert service.get_mirror(mid)["publication_wait"] is None
+
+
+def test_diagnostics_reads_enrolled_registry_without_capture_or_target(opened):
+    from functools import partial
+    from backend.metadata.mirrors import diagnostics
+    from backend.metadata.mirrors.diagnostic_store import DiagnosticStore
+    from backend.metadata.sources.store import get_source_store
+
+    mirror_store, mid = opened
+    store = DiagnosticStore(memory=True, transaction=None)
+    read_scope = partial(service.diagnostic_scope, mirror_store=mirror_store, source_store=get_source_store())
+    rows, bindings = read_scope()
+    assert rows[0]["id"] == mid and rows[0]["allocated_generation_id"] is None
+    view = diagnostics.read_diagnostics(store=store, read_scope=read_scope, source_id="s1")
+    assert view["mirror_count"] == 1 and view["link_counts"]["unobserved"] == 4
+    detail = diagnostics.mirror_measurements(mid, store=store, read_scope=read_scope, read_detail=service.get_mirror_detail)
+    assert detail["sample"] is None and detail["row_sample"] is None

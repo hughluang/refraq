@@ -22,6 +22,7 @@ import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { presentConsoleNotification } from "@/providers/notification-provider";
 import { deleteMirror, requestRecovery, setMirrorEnabled } from "./api";
 import { MirrorDelete } from "./MirrorDelete";
+import { MirrorMeasurements } from "./MirrorMeasurements";
 import { MirrorJournal, Receipt } from "./MirrorJournal";
 import type { PendingOperation, RecoveryAction } from "./types";
 
@@ -160,6 +161,7 @@ function MirrorRecord({ id }: { id: string }) {
         {!deletePending && !enabled && canWrite?.can && <Text size="sm">{t("mirrors.resumePlan")}</Text>}
       </FormSection>
       <MirrorCopySummary mirror={mirror} origin={current} />
+      <MirrorMeasurements id={id} origin={current} />
       {pending && mirror.latest_request?.operation_id !== pending.operation_id &&
         <DisplayField label={t("mirrors.operation")} value={`${pending.operation_id}: ${t("mirrors.pending")}`} />}
       <MirrorJournal key={mirror.journal?.next_cursor} mirror={mirror} />

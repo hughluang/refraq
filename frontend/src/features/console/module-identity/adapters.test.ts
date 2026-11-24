@@ -290,3 +290,10 @@ describe("matchPath", () => {
     expect(matchPath("/console/sources/src_1/not-a-page", CATALOG)).toBeNull();
   });
 });
+
+it("gates Mirror diagnostics with the same read permission as Mirror details", () => {
+  const matched = matchPath("/console/mirrors/diagnostics", CATALOG);
+  expect(matched).toEqual({ resource: "mirrors", action: "list" });
+  expect(evaluateCan(CATALOG, ["mirror:read"], matched!.resource, matched!.action).can).toBe(true);
+  expect(evaluateCan(CATALOG, [], matched!.resource, matched!.action).can).toBe(false);
+});

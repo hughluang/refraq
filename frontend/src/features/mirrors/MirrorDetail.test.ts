@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { MirrorDetail } from "./MirrorDetail";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { ApiError } from "@/lib/api";
+vi.mock("./MirrorMeasurements", () => ({ MirrorMeasurements: () => null }));
 
 const state = vi.hoisted(() => ({ write: true, get: vi.fn(), recover: vi.fn(), enabled: vi.fn(), remove: vi.fn(), older: vi.fn(), replace: vi.fn(), translate: (key: string) => key }));
 vi.mock("./api", () => ({ getMirror: state.get, requestRecovery: state.recover, setMirrorEnabled: state.enabled, deleteMirror: state.remove, getJournalPage: state.older }));

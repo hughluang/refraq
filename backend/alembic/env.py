@@ -14,6 +14,7 @@ import backend.admin.notifications.models  # noqa: F401 — register notificatio
 import backend.jobs.models  # noqa: F401 — register Job tables
 import backend.metadata.models  # noqa: F401 — register Source/Catalog tables
 import backend.metadata.mirrors.models  # noqa: F401 — register mirror registry
+import backend.metadata.mirrors.diagnostic_store  # noqa: F401
 import backend.metadata.mirrors.history_models  # noqa: F401 — register history gates
 import backend.metadata.mirrors.recovery_store  # noqa: F401 — register recovery journal
 import backend.entity.models  # noqa: F401 — register Business Entity tables

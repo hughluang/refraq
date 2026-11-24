@@ -106,6 +106,8 @@ export function matchPath(
   pathname: string,
   modules: ModuleIdentity[],
 ): MatchedModuleAction | null {
+  const alias = matchAliasPath(pathname, modules);
+  if (alias) return alias;
   const resources = toRefineResources(modules);
   const matched = matchResourceFromRoute(pathname, resources);
   if (matched.found && matched.resource?.name && matched.action) {
@@ -116,7 +118,7 @@ export function matchPath(
     );
     return { resource: matched.resource.name, action };
   }
-  return matchAliasPath(pathname, modules);
+  return null;
 }
 
 /** When edit and show share a path, the page gate is show (read). */

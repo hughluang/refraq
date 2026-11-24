@@ -8,6 +8,8 @@ from backend.admin.permissions import permissions_include
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.user_store import UserRecord
 from backend.metadata.mirrors import recovery, service
+from backend.metadata.mirrors import diagnostics
+from backend.metadata.mirrors.diagnostic_schemas import DiagnosticsResponse, MeasurementResponse
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
 from backend.metadata.mirrors.schemas import (
     JournalPage,
@@ -21,6 +23,21 @@ from backend.metadata.mirrors.schemas import (
 )
 
 router = APIRouter(tags=["mirrors"])
+
+
+@router.get("/mirror-diagnostics", response_model=DiagnosticsResponse)
+def read_diagnostics(
+    request: Request,
+    _: UserRecord = Depends(require_permission("mirror:read")),
+    source_id: str | None = None, runtime_id: str | None = None, q: str | None = Query(default=None, max_length=256),
+    source_offset: int = Query(default=0, ge=0), runtime_offset: int = Query(default=0, ge=0),
+    assignment_offset: int = Query(default=0, ge=0),
+):
+    return diagnostics.read_diagnostics(store=request.app.state.mirror_diagnostics,
+                                        read_scope=request.app.state.mirror_diagnostic_scope,
+                                        source_id=source_id, runtime_id=runtime_id, q=q,
+                                        source_offset=source_offset, runtime_offset=runtime_offset,
+                                        assignment_offset=assignment_offset)
 
 
 @router.get("/mirrors", response_model=MirrorListResponse)
@@ -50,6 +67,14 @@ def mirror_journal(
     _: UserRecord = Depends(require_permission("mirror:read")),
 ):
     return service.get_mirror_journal(mirror_id, before=before, limit=limit)
+
+
+@router.get("/mirrors/{mirror_id}/measurements", response_model=MeasurementResponse)
+def mirror_measurements(mirror_id: str, request: Request,
+                        _: UserRecord = Depends(require_permission("mirror:read"))):
+    return diagnostics.mirror_measurements(mirror_id, store=request.app.state.mirror_diagnostics,
+                                           read_scope=request.app.state.mirror_diagnostic_scope,
+                                           read_detail=service.get_mirror_detail)
 
 
 @router.patch("/mirrors/{mirror_id}", response_model=PatchMirrorResponse | MirrorActionReceipt)

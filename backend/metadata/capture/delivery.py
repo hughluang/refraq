@@ -6,7 +6,7 @@ which retains authority/exclusion locks through target commit and Kafka ack.
 """
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import logging
 import math
@@ -316,7 +316,7 @@ class KafkaDelivery:
             record = self.decoder.decode(offset=offset, key=key, value=value)
             if seal is not None and (type(record.offset) is not int or record.offset != offset):
                 raise RuntimeBlocked("delivery_seal_record_offset_mismatch")
-            records.append(record)
+            records.append(replace(record, payload_bytes=length))
             size += length
         return records, None
 

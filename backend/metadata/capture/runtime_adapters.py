@@ -167,6 +167,19 @@ class ReadinessSignals:
         self.verifier = verifier
         self.scope = scope
 
+    def diagnostic_observation(self, authority, operation_id):
+        """Optional independently measured telemetry; never a readiness proof."""
+        from backend.metadata.mirrors.diagnostic_schemas import SourceReceipt
+
+        request = dict(authority=authority, scope=self.scope, operation_id=operation_id)
+        response = self.http.request("POST", "/v1/capture/diagnostics", request, missing=True)
+        if response is None:
+            return SourceReceipt()
+        if not isinstance(response, dict) or self.verifier is None:
+            raise RuntimeBlocked("diagnostic_observation_unverified")
+        claims = self.verifier.verify(response.get("signature"), purpose="observation:diagnostics", **request)
+        return SourceReceipt.model_validate(claims.get("diagnostics"))
+
     def allocation_observation(self, pending, authorization):
         command = pending["command"]
         authority = {key: command[key] for key in AUTHORITY_KEYS}

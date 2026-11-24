@@ -39,7 +39,7 @@ export function MirrorList() {
   }, [href, list.loading]);
   if (list.accessDenied) return <ForbiddenState reason="mirror:read" />;
   return <PageChrome title={t("mirrors.title")} description={t("mirrors.description")}
-    actions={<HeaderActions navigation={<>{catalog?.can && <MirrorTableDrawer sourceId={source} onAccepted={() => void list.reload()} />}<Button size="sm" variant="light" onClick={() => void list.reload()}>{t("common.refresh")}</Button></>} />}
+    actions={<HeaderActions navigation={<><Button component={ConsoleLink} href={`/console/mirrors/diagnostics${source ? `?source_id=${encodeURIComponent(source)}` : ""}`} size="sm" variant="light">{t("diagnostics.title")}</Button>{catalog?.can && <MirrorTableDrawer sourceId={source} onAccepted={() => void list.reload()} />}<Button size="sm" variant="light" onClick={() => void list.reload()}>{t("common.refresh")}</Button></>} />}
     toolbar={<ListToolbar query={query} filters={[{ key: "status", label: t("mirrors.status"), options: MIRROR_STATUSES.map(value => ({ value, label: t(`mirrors.status.${value}`) })) }]}
       extra={<TextInput aria-label={t("mirrors.sourceFilter")} placeholder={t("mirrors.sourceFilter")} value={source} onChange={event => query.setFilter("source_id", event.currentTarget.value)} />} />}>
     <ListTable list={list}

@@ -80,11 +80,11 @@ from backend.metadata.routers.source_memberships import (
     router as source_memberships_router,
 )
 from backend.metadata.mirrors.router import router as mirrors_router
-from backend.metadata.mirrors.composition import compose_mirrors
+from backend.metadata.mirrors.composition import compose_diagnostics, compose_mirrors
 from backend.metadata.mirrors.service import bind_management, resume_pending_deletions
 from backend.metadata.mirrors.history import History, bind_history
 from backend.metadata.mirrors.recovery import Recovery, bind_recovery
-from backend.core.db import get_session_factory
+from backend.core.db import get_session_factory, session_scope
 from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
@@ -217,6 +217,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     retry_delays=settings.mirror_recovery_retry_delays_seconds,
                 ))
         _bootstrap_site(settings)
+        app.state.mirror_diagnostics, app.state.mirror_diagnostic_scope = compose_diagnostics(
+            settings, transaction=session_scope,
+        )
         apply_http_runtime()
         open_entity_pool_when_persistent()
         try:

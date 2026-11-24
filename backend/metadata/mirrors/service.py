@@ -27,12 +27,12 @@ from backend.metadata.mirrors.lifecycle import current_authority as _current_ope
 from backend.metadata.mirrors.lifecycle import current_open, dispatch_scope, open_evidence
 from backend.metadata.mirrors.history import admit_observed_history
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
-from backend.metadata.mirrors.models import MirrorRow
+from backend.metadata.mirrors.models import MirrorRow, MirrorOperationRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.schemas import Operation
 from backend.metadata.mirrors.store import MemoryMirrorStore, SqlMirrorStore, catalog_binding
 from backend.metadata.mirrors.types import Authority, PartitionIdentity
-from backend.metadata.models import CatalogObjectRow, SourceRow
+from backend.metadata.models import CatalogObjectRow, SourceRow, SourceCaptureBindingRow
 from backend.metadata.sources.store import get_source_store
 
 __all__ = [
@@ -50,6 +50,7 @@ __all__ = [
     "bind_management",
     "get_mirror",
     "get_mirror_detail",
+    "diagnostic_scope",
     "list_mirrors",
     "set_enabled",
     "delete_mirror",
@@ -1495,6 +1496,33 @@ def list_mirrors(*, limit=100, offset=0, source_id=None, status=None, q=None):
         contexts = {sid: _source_lifecycle(session, sid) for sid in {row["source_id"] for row in rows}}
         return dict(items=[_present(session, row, contexts[row["source_id"]]) for row in rows],
                     total=total, limit=limit, offset=offset)
+
+
+def diagnostic_scope(*, mirror_store, source_store):
+    """Read registry and current authority without lifecycle or network operations."""
+    with ExitStack() as stack:
+        if isinstance(mirror_store, MemoryMirrorStore):
+            stack.enter_context(source_store.capture_lock)
+            stack.enter_context(mirror_store.lock)
+            rows = deepcopy(list(mirror_store.mirrors.values()))
+            bindings = deepcopy(source_store.capture_bindings)
+            operations = list(mirror_store.operations.values())
+        else:
+            session = stack.enter_context(mirror_store.transaction())
+            rows = list(session.scalars(select(MirrorRow.state)))
+            bindings = {row.source_id: row.state for row in session.scalars(select(SourceCaptureBindingRow))}
+            operations = list(session.scalars(select(MirrorOperationRow.command).where(
+                MirrorOperationRow.command["kind"].as_string() == "open",
+                MirrorOperationRow.command["state"].as_string() == "pending")))
+        pending = {}
+        for operation in operations:
+            if operation["kind"] == "open" and operation["state"] == "pending":
+                pending.setdefault(operation["mirror_id"], []).append(operation)
+        for mirror in rows:
+            opened = current_open(mirror, pending.get(mirror["id"], []))
+            allocation = opened.get("allocation") if opened and opened["state"] == "pending" else None
+            mirror["allocated_generation_id"] = allocation["generation_id"] if allocation else None
+        return rows, bindings
 
 
 def _audit(
