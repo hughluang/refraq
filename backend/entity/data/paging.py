@@ -2,16 +2,55 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from backend.entity.data.capabilities import PAGE_LIMIT_DEFAULT
-from backend.entity.errors import EntityRequestInvalid
+from backend.entity.data.head import HeadTarget
+from backend.entity.ddl import ROW_ID_COLUMN, ident
+from backend.entity.errors import EntityRequestInvalid, EntityRowInvalid
 
 __all__ = [
+    "RowSort",
     "resolve_limit",
     "resolve_offset_query",
     "resolve_keyset_query",
+    "resolve_sort",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class RowSort:
+    field: str = ROW_ID_COLUMN
+    descending: bool = False
+
+    def order_sql(self) -> str:
+        direction = "DESC" if self.descending else "ASC"
+        column = f"{ident(self.field)} {direction}"
+        if self.field == ROW_ID_COLUMN:
+            return column
+        return f"{column} NULLS LAST, {ident(ROW_ID_COLUMN)} ASC"
+
+
+def resolve_sort(body: dict[str, Any], target: HeadTarget) -> RowSort:
+    if "sort" not in body:
+        return RowSort()
+    raw = body["sort"]
+    if not isinstance(raw, dict) or raw.keys() != {"field", "direction"}:
+        raise EntityRequestInvalid("sort must be an object with field and direction")
+    field = raw["field"]
+    direction = raw["direction"]
+    if not isinstance(field, str) or not field:
+        raise EntityRequestInvalid("sort field must be a non-empty string")
+    if direction not in ("asc", "desc"):
+        raise EntityRequestInvalid("sort direction must be asc or desc")
+    if field != ROW_ID_COLUMN:
+        attr = next((attr for attr in target.attributes if attr.name == field), None)
+        if attr is None:
+            raise EntityRowInvalid(f"Unknown sort field '{field}'")
+        if attr.type == "json":
+            raise EntityRowInvalid(f"Sorting is not supported for field '{field}'")
+    return RowSort(field, descending=direction == "desc")
 
 
 def resolve_limit(raw: Any, *, maximum: int) -> int:

@@ -2,8 +2,8 @@
 
 A ``row_id`` page executes the profile view's query text with the page bound in
 one block, on the reader connection. Under that same condition, an offset total
-counts that view text. A row-dependent profile with a non-leakproof filter still
-selects the security_barrier view, and its total counts that view. Writes run on
+counts that view text. A custom order or a row-dependent profile with a
+non-leakproof filter reads and counts the security_barrier view. Writes run on
 the owner connection against the physical table and return only ``row_id``; the
 caller presents written rows through its read view.
 """
@@ -26,6 +26,7 @@ from backend.entity.attribute_type import resolve
 from backend.entity.data.capabilities import ROW_WRITE_LIMIT
 from backend.entity.data.filters import CompiledFilter, filter_is_leakproof
 from backend.entity.data.head import HeadTarget
+from backend.entity.data.paging import RowSort
 from backend.entity.data.values import decode_row, reference_value_attr
 from backend.entity.change_log import SOURCE_GUC, SUBJECT_GUC
 from backend.entity.ddl import (
@@ -547,8 +548,9 @@ def query_offset(
     limit: int,
     offset: int,
     include_total: bool,
+    sort: RowSort = RowSort(),
 ) -> tuple[list[dict[str, Any]], int | None]:
-    if _page_through_profile(filters, target, row_dependent):
+    if sort == RowSort() and _page_through_profile(filters, target, row_dependent):
         items = _profile_page_rows(
             conn,
             target,
@@ -558,26 +560,21 @@ def query_offset(
             offset=offset,
             after=None,
         )
-    else:
-        where_sql, params = _where(compiled)
-        select_cols = ", ".join(ident(name) for name in fields)
-        sql = (
-            f"SELECT {select_cols} FROM {_read_from(target)}{where_sql} "
-            f"ORDER BY {ident('row_id')} ASC LIMIT :_limit OFFSET :_offset"
-        )
-        params = dict(params)
-        params["_limit"] = limit
-        params["_offset"] = offset
-        rows = conn.execute(text(sql), params).all()
-        items = [decode_row(fields, tuple(row), target) for row in rows]
+        total = _profile_count(conn, target, filters) if include_total else None
+        return items, total
+
+    where_sql, params = _where(compiled)
+    source = f"FROM {_read_from(target)}{where_sql}"
+    select_cols = ", ".join(ident(name) for name in fields)
+    sql = (
+        f"SELECT {select_cols} {source} "
+        f"ORDER BY {sort.order_sql()} LIMIT :_limit OFFSET :_offset"
+    )
+    rows = conn.execute(text(sql), {**params, "_limit": limit, "_offset": offset}).all()
+    items = [decode_row(fields, tuple(row), target) for row in rows]
     total: int | None = None
     if include_total:
-        if _page_through_profile(filters, target, row_dependent):
-            total = _profile_count(conn, target, filters)
-        else:
-            where_sql, params = _where(compiled)
-            count_sql = f"SELECT count(*) FROM {_read_from(target)}{where_sql}"
-            total = int(conn.execute(text(count_sql), params).scalar_one())
+        total = int(conn.execute(text(f"SELECT count(*) {source}"), params).scalar_one())
     return items, total
 
 

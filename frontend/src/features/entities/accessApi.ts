@@ -6,7 +6,10 @@ import type {
   AccessRestriction,
   AccessSummary,
   DataSchema,
+  DataSort,
 } from "@/features/entities/accessTypes";
+import { parseEntityDataJson, stringifyEntityDataJson } from "./entityDataJson";
+import type { DataFilter } from "@/features/entities/entityDataQuery";
 import { apiClient } from "@/lib/api";
 
 export function getAccessSummary(entityId: string) {
@@ -172,6 +175,9 @@ export function previewAccess(
 }
 
 export type DataQueryBody = DataSchemaBody & {
+  filters?: DataFilter;
+  sort?: DataSort;
+  fields?: string[];
   limit?: number;
   offset?: number;
 };
@@ -193,6 +199,16 @@ export function queryDataRows(tableName: string, body: DataQueryBody) {
   }>(`/entities/${tableName}/query`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: stringifyEntityDataJson(body),
+    parseJson: parseEntityDataJson,
+  });
+}
+
+export function getDataRow(tableName: string, body: DataSchemaBody & { row_id: number | bigint }) {
+  return apiClient<{ row: Record<string, unknown> }>(`/entities/${tableName}/get`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: stringifyEntityDataJson(body),
+    parseJson: parseEntityDataJson,
   });
 }

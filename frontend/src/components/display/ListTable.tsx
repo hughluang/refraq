@@ -51,6 +51,7 @@ type ListTableProps = {
   onClearFilters?: () => void;
   /** Replaces the clear-filters control on the no-match row. */
   noMatchAction?: ReactNode;
+  pageSizeControl?: ReactNode;
   head: ReactNode;
   children?: ReactNode;
 };
@@ -91,6 +92,7 @@ export function ListTable({
   noMatchMessage,
   onClearFilters,
   noMatchAction,
+  pageSizeControl,
   head,
   children,
 }: ListTableProps) {
@@ -185,6 +187,7 @@ export function ListTable({
         total={list.total}
         onChange={list.setPage}
         disabled={busy}
+        pageSizeControl={pageSizeControl}
       />
     </Stack>
   );

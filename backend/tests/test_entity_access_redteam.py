@@ -253,10 +253,10 @@ def test_customer_channels_share_one_shape() -> None:
     assert missing_field.message == "Unknown field 'no_such_column'"
 
 
-def test_sort_is_rejected_before_a_hidden_column_can_order() -> None:
+def test_keyset_rejects_custom_sort() -> None:
     user, table = _seeded_reader()
-    with pytest.raises(EntityRequestInvalid, match="unknown top-level key"):
-        query_rows(table, {"sort": [{"field": "note", "dir": "asc"}]}, user)
+    with pytest.raises(EntityRequestInvalid, match="after_row_id cannot be combined with sort"):
+        query_rows(table, {"after_row_id": None, "sort": {"field": "sku", "direction": "asc"}}, user)
 
 
 def test_definition_rights_do_not_bypass_data_denial() -> None:

@@ -164,6 +164,7 @@ function shouldRedirectSessionExpiry(path: string, error: ApiError): boolean {
 
 export type ApiRequestInit = RequestInit & {
   timeoutMs?: number;
+  parseJson?: (text: string) => unknown;
 };
 
 function requestSignal(init?: ApiRequestInit): AbortSignal | undefined {
@@ -183,7 +184,7 @@ export async function apiClient<T = unknown>(
   init?: ApiRequestInit,
 ): Promise<T> {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const { timeoutMs: _timeoutMs, ...fetchInit } = init ?? {};
+  const { timeoutMs: _timeoutMs, parseJson, ...fetchInit } = init ?? {};
   const response = await fetch(`${baseUrl}${normalizedPath}`, {
     credentials: "include",
     ...fetchInit,
@@ -203,7 +204,7 @@ export async function apiClient<T = unknown>(
     return undefined as T;
   }
 
-  const body: unknown = await response.json();
+  const body: unknown = parseJson ? parseJson(await response.text()) : await response.json();
   rememberSuccessRequestId(body, response);
   return body as T;
 }

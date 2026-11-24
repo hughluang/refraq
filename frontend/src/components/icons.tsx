@@ -5,12 +5,15 @@ import {
   IconAdjustments,
   IconAlertTriangle,
   IconApps,
+  IconArrowDown,
+  IconArrowUp,
   IconArrowBackUp,
   IconArrowForwardUp,
   IconArrowsExchange,
   IconArrowsMaximize,
   IconArrowsJoin2,
   IconArrowsSplit2,
+  IconArrowsSort,
   IconBolt,
   IconBook,
   IconBox,
@@ -103,6 +106,9 @@ function withDefaults(Component: IconComponent) {
 }
 
 export const AdjustmentsIcon = withDefaults(IconAdjustments);
+export const SortIcon = withDefaults(IconArrowsSort);
+export const SortAscIcon = withDefaults(IconArrowUp);
+export const SortDescIcon = withDefaults(IconArrowDown);
 export const AlertIcon = withDefaults(IconAlertTriangle);
 export const CheckIcon = withDefaults(IconCheck);
 export const CircleDashedIcon = withDefaults(IconCircleDashed);

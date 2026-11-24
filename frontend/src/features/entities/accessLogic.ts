@@ -1,5 +1,7 @@
 /** Pure access-control Console rules. No network, no React. */
 
+import { ApiError } from "@/lib/api";
+
 const LEVEL_KEY = /^[a-z][a-z0-9_]{0,62}$/;
 
 export type MaskMode =
@@ -591,4 +593,14 @@ export function operandText(
   }
   if (operand.kind === "subject_attr") return operand.key;
   return operand.duration;
+}
+
+
+/** A previously rendered row or schema may no longer be visible to this caller. */
+export function dataAccessExpired(error: unknown): boolean {
+  return error instanceof ApiError && (
+    [401, 403, 404].includes(error.status) ||
+    ["ENTITY_ACCESS_INVALID", "ENTITY_ACCESS_PENDING", "ENTITY_ACCESS_COMBINATION_LIMIT",
+     "ENTITY_NOT_SERVING", "ENTITY_DEPRECATED", "ENTITY_ROW_INVALID"].includes(error.code)
+  );
 }

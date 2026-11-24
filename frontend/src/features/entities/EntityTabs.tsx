@@ -61,6 +61,8 @@ export function EntityTabs({
   return (
     <PageTabs
       tabs={tabs}
+      fill={value === "data"}
+      scrollable
       value={value}
       onChange={(next) => onChange(parseEntityDetailTab(next))}
     >

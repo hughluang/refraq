@@ -12,6 +12,7 @@ import { listAccountGroups } from "@/features/account/api";
 import { loadDataSchema, queryDataRows } from "@/features/entities/accessApi";
 import { EntityDataBrowser } from "@/features/entities/EntityDataBrowser";
 import type { DataSchema } from "@/features/entities/accessTypes";
+import { writeDataQuery, EMPTY_DATA_QUERY } from "./entityDataQuery";
 import { ApiError } from "@/lib/api";
 
 const session = vi.hoisted(() => ({
@@ -67,7 +68,8 @@ function stubDomApis() {
 
 const schema: DataSchema = {
   entity: { table_name: "material", writable: true, name: "Material" },
-  attributes: [{ name: "sku", type: "string" }],
+  row_id: { type: "integer", operators: ["eq", "gt", "lt"] },
+  attributes: [{ name: "sku", type: "string", operators: ["eq", "contains"] }],
   withheld_field: null,
   business_key: "sku",
 };
@@ -122,6 +124,7 @@ function refreshButton() {
 
 describe("EntityDataBrowser", () => {
   beforeEach(() => {
+    window.history.replaceState(null, "", "/console/entities/ent_material?tab=data");
     stubDomApis();
     resetNotifications();
     session.role_id = "role_operator";
@@ -394,6 +397,7 @@ describe("EntityDataBrowser", () => {
     await waitFor(() => {
       expect(queryDataRows).toHaveBeenCalledWith("material", { limit: 50, offset: 50 });
     });
+    expect(loadDataSchema).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the rows and sends one error notification when a later refresh fails", async () => {
@@ -416,7 +420,7 @@ describe("EntityDataBrowser", () => {
     expect(screen.getByText("common.requestId: req-later").closest("details")).toBeTruthy();
   });
 
-  it("reports access pending as an error notification and keeps the rows", async () => {
+  it("clears the previous access view when a policy is pending", async () => {
     renderBrowser();
     expect(await screen.findByText("ABC")).toBeTruthy();
 
@@ -429,9 +433,8 @@ describe("EntityDataBrowser", () => {
     const notice = screen.getByRole("alert");
     expect(notice.textContent).toContain("entities.data.pending");
     expect(notice.textContent).not.toContain("views are generating");
-    expect(screen.getByText("ABC")).toBeTruthy();
-    expect(screen.getByRole("table").querySelector("[role='alert']")).toBeNull();
-    expect(screen.queryByText("status.unloaded")).toBeNull();
+    expect(screen.queryByText("ABC")).toBeNull();
+    expect(screen.getByRole("button", { name: "status.unloaded" })).toBeTruthy();
   });
 
   it("ignores a slow response from the previous identity", async () => {
@@ -458,4 +461,62 @@ describe("EntityDataBrowser", () => {
     });
     expect(screen.getByText("NARROW")).toBeTruthy();
   });
+  it("restores the requested field, sort, and page after validating the current shape", async () => {
+    const url = new URL(window.location.href);
+    writeDataQuery(url.searchParams, { ...EMPTY_DATA_QUERY, lookup: { field: "sku", value: "ABC" } });
+    url.searchParams.set("dataSort", "sku");
+    url.searchParams.set("dataDirection", "desc");
+    url.searchParams.set("dataPage", "2");
+    window.history.replaceState(null, "", url);
+    vi.mocked(queryDataRows).mockResolvedValue({
+      items: [{ row_id: 51, sku: "ABC" }], total: 71, limit: 50, offset: 50,
+    });
+    renderBrowser();
+    expect(await screen.findByText("ABC")).toBeTruthy();
+    expect(queryDataRows).toHaveBeenCalledExactlyOnceWith("material", {
+      filters: { field: "sku", op: "eq", value: "ABC" },
+      sort: { field: "sku", direction: "desc" }, limit: 50, offset: 50,
+    });
+  });
+
+  it("waits for an explicit reset when a restored field is no longer visible", async () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("dataView", "user");
+    writeDataQuery(url.searchParams, { ...EMPTY_DATA_QUERY, lookup: { field: "missing", value: "42" } });
+    window.history.replaceState(null, "", url);
+    renderBrowser();
+    const reset = await screen.findByRole("button", { name: "entities.data.resetQuery" });
+    expect(queryDataRows).not.toHaveBeenCalled();
+    fireEvent.click(reset);
+    expect(await screen.findByText("ABC")).toBeTruthy();
+    expect(queryDataRows).toHaveBeenCalledExactlyOnceWith("material", {
+      limit: 50, offset: 0, narrow: { type: "user" },
+    });
+    expect(window.location.search).toContain("tab=data");
+  });
+
+  it("drops old results when access is withdrawn during a refresh", async () => {
+    renderBrowser();
+    await screen.findByText("ABC");
+    vi.mocked(queryDataRows).mockRejectedValue(new ApiError(404, "ENTITY_NOT_FOUND", "missing"));
+    fireEvent.click(refreshButton());
+    await screen.findByRole("button", { name: "status.unloaded" });
+    expect(screen.queryByText("ABC")).toBeNull();
+    expect(screen.queryByRole("columnheader", { name: "sku" })).toBeNull();
+  });
+
+  it("allows a rejected query to be corrected without retrying it automatically", async () => {
+    const url = new URL(window.location.href);
+    writeDataQuery(url.searchParams, { ...EMPTY_DATA_QUERY, lookup: { field: "sku", value: "too long" } });
+    window.history.replaceState(null, "", url);
+    vi.mocked(queryDataRows).mockRejectedValueOnce(new ApiError(422, "ENTITY_ROW_INVALID", "invalid value"));
+    renderBrowser();
+    const reset = await screen.findByRole("button", { name: "entities.data.resetQuery" });
+    expect(loadDataSchema).toHaveBeenCalledTimes(2);
+    expect(queryDataRows).toHaveBeenCalledTimes(1);
+    fireEvent.click(reset);
+    expect(await screen.findByText("ABC")).toBeTruthy();
+    expect(queryDataRows).toHaveBeenCalledTimes(2);
+  });
+
 });

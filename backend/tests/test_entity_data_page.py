@@ -15,6 +15,8 @@ from backend.entity.access.facts import GrantSpec
 from backend.entity.data.filters import CompiledFilter, filter_is_leakproof
 from backend.entity.data.sql import query_keyset, query_offset
 from backend.entity.data.head import HeadTarget
+from backend.entity.data.paging import resolve_sort
+from backend.entity.errors import EntityRequestInvalid, EntityRowInvalid
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,
@@ -37,6 +39,22 @@ class _Recording:
     def execute(self, statement: object, params: object = None) -> _Result:
         self.statements.append(str(statement))
         return _Result()
+
+
+@pytest.mark.parametrize("raw", [
+    None, [], [{"field": "sku", "direction": "asc"}], {"field": "sku"},
+    {"field": None, "direction": "asc"}, {"field": "sku", "direction": ["asc"]},
+    {"field": "sku", "direction": "ascending"}, {"field": "sku", "direction": "asc", "extra": True},
+])
+def test_sort_rejects_invalid_structure(raw: object) -> None:
+    with pytest.raises(EntityRequestInvalid):
+        resolve_sort({"sort": raw}, _target())
+
+
+@pytest.mark.parametrize("name", ["doc", "__withheld", "missing"])
+def test_sort_accepts_only_visible_scalar_fields(name: str) -> None:
+    with pytest.raises(EntityRowInvalid):
+        resolve_sort({"sort": {"field": name, "direction": "asc"}}, _target())
 
 
 def test_large_profile_page_is_one_execution_and_keeps_cursor() -> None:

@@ -67,10 +67,16 @@ export type AccessSummary = {
   restrictions: AccessRestriction[];
 };
 
+export type DataSort = { field: string; direction: "asc" | "desc" };
+
 export type DataAttribute = {
   name: string;
   type: string;
   attribute_id?: string;
+  description?: string | null;
+  config?: Record<string, unknown>;
+  codes?: { code: string; label: string | null; writable: boolean }[];
+  operators?: string[];
   upsert_key?: boolean;
   writable?: boolean;
   presentation?: {
@@ -83,6 +89,15 @@ export type DataAttribute = {
 
 export type DataSchema = {
   entity: { table_name: string; writable: boolean; name: string };
+  head?: { version_id: string; version: number };
+  row_id?: { type: string; operators: string[] };
+  limits?: {
+    page_limit_default: number;
+    page_limit_max: number;
+    filter_leaves_max: number;
+    filter_depth_max: number;
+    filter_in_values_max: number;
+  };
   attributes: DataAttribute[];
   withheld_field: string | null;
   access?: { policy_revision: number; narrowed: boolean };

@@ -22,7 +22,11 @@ from backend.entity.access.membership import readable_entity_ids
 from backend.entity.data.capabilities import ROW_WRITE_LIMIT, upsert_key_for
 from backend.entity.data.filters import compile_filters
 from backend.entity.data.head import HeadTarget
-from backend.entity.data.paging import resolve_keyset_query, resolve_offset_query
+from backend.entity.data.paging import (
+    resolve_keyset_query,
+    resolve_offset_query,
+    resolve_sort,
+)
 from backend.entity.data.schema import build_schema
 from backend.entity.data import sql as data_sql
 from backend.entity.data.values import (
@@ -224,37 +228,35 @@ def query_rows(
 ) -> dict[str, Any]:
     access = begin_data(table_name, user, body, action="read", for_write=False)
     target = access.target
-    if "cursor" in body:
-        raise EntityRequestInvalid("cursor is not supported")
-    if "sort" in body or "keys" in body:
-        raise EntityRequestInvalid("unknown top-level key")
-    known = {
-        "filters",
-        "fields",
-        "limit",
-        "offset",
-        "include_total",
-        "after_row_id",
-        "narrow",
-    }
-    unknown = set(body.keys()) - known
-    if unknown:
-        raise EntityRequestInvalid(
-            f"Unknown top-level key(s): {', '.join(sorted(unknown))}"
-        )
-    keyset = "after_row_id" in body
-    if keyset and ("offset" in body or "include_total" in body):
-        raise EntityRequestInvalid(
-            "after_row_id cannot be combined with offset or include_total"
-        )
-    fields = _read_fields(
-        _resolve_fields(body.get("fields"), target),
-        access.outcome.withheld_field,
-    )
-    filters = body.get("filters")
-    compiled = compile_filters(filters, target, require_leaf=False)
-    row_dependent = predicate_depends_on_row(access.outcome.shape)
     try:
+        if "cursor" in body:
+            raise EntityRequestInvalid("cursor is not supported")
+        if "keys" in body:
+            raise EntityRequestInvalid("unknown top-level key")
+        known = {
+            "filters", "fields", "sort", "limit", "offset",
+            "include_total", "after_row_id", "narrow",
+        }
+        unknown = set(body) - known
+        if unknown:
+            raise EntityRequestInvalid(
+                f"Unknown top-level key(s): {', '.join(sorted(unknown))}"
+            )
+        keyset = "after_row_id" in body
+        if keyset and "sort" in body:
+            raise EntityRequestInvalid("after_row_id cannot be combined with sort")
+        if keyset and ("offset" in body or "include_total" in body):
+            raise EntityRequestInvalid(
+                "after_row_id cannot be combined with offset or include_total"
+            )
+        sort = resolve_sort(body, target)
+        fields = _read_fields(
+            _resolve_fields(body.get("fields"), target),
+            access.outcome.withheld_field,
+        )
+        filters = body.get("filters")
+        compiled = compile_filters(filters, target, require_leaf=False)
+        row_dependent = predicate_depends_on_row(access.outcome.shape)
         ctx = read_context(access)
         page_limit_max = resolve_int("entity_page_limit_max").value
         if keyset:
@@ -288,6 +290,7 @@ def query_rows(
                 limit=limit,
                 offset=offset,
                 include_total=include_total,
+                sort=sort,
             )
         access.log(row_count=len(items), outcome_code="ok", verb="query")
         return {

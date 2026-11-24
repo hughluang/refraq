@@ -65,6 +65,7 @@ import {
   createFormErrorTab,
   entityDetailHref,
   entityEditHref,
+  entityRecordHref,
   parseEntityDetailTab,
 } from "@/features/entities/entityDetailTab";
 import {
@@ -797,9 +798,10 @@ export function EntityRecord(props: Props) {
     <PageChrome
       title={title}
       recordTitle={recordTitle}
+      fill={tab === "data"}
       recent={
         recordTitle && entity
-          ? { moduleId: "entities", title: entity.name }
+          ? { moduleId: "entities", title: entity.name, href: entityRecordHref(mode, entity.id) }
           : undefined
       }
       titleExtra={entity ? <EntityStatusBadge entity={entity} /> : undefined}
@@ -807,11 +809,17 @@ export function EntityRecord(props: Props) {
       tabs={list}
     >
       {mode === "show" ? (
-        <Stack>{panels}</Stack>
+        <Stack flex={tab === "data" ? 1 : undefined} mih={tab === "data" ? 0 : undefined}>{panels}</Stack>
       ) : (
         <form
           id={ENTITY_RECORD_FORM_ID}
+          style={tab === "data" ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 } : undefined}
           noValidate
+          onKeyDown={(event) => {
+            if (tab === "data" && event.key === "Enter" && event.target instanceof HTMLInputElement) {
+              event.preventDefault();
+            }
+          }}
           onSubmit={(event) => {
             if (attributeEditorOpen) {
               event.preventDefault();
@@ -831,7 +839,7 @@ export function EntityRecord(props: Props) {
             )(event);
           }}
         >
-          <Stack>{panels}</Stack>
+          <Stack flex={tab === "data" ? 1 : undefined} mih={tab === "data" ? 0 : undefined}>{panels}</Stack>
         </form>
       )}
 

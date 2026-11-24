@@ -1,43 +1,51 @@
 "use client";
 
 import {
+  ActionIcon,
   Button,
   Group,
   Loader,
   Select,
   Stack,
-  Table,
   Text,
+  Tooltip,
+  VisuallyHidden,
 } from "@mantine/core";
 import { useGetIdentity, useTranslate } from "@refinedev/core";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { ListTable } from "@/components/display/ListTable";
+import { RepeatIcon } from "@/components/icons";
+import { FillColumn } from "@/components/layout/FillColumn";
 import { Callout } from "@/components/feedback/Callout";
 import { ProblemDetails } from "@/components/feedback/ProblemDetails";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { listAccountGroups } from "@/features/account/api";
-import { loadDataSchema, queryDataRows } from "@/features/entities/accessApi";
+import { loadDataSchema, queryDataRows, type DataQueryBody } from "./accessApi";
 import {
   classifyAccessProblem,
-  isMaskedPresentation,
+  dataAccessExpired,
   narrowBody,
-  presentCell,
-  withheldNames,
-} from "@/features/entities/accessLogic";
-import type { DataSchema } from "@/features/entities/accessTypes";
+  type DataSchemaBody,
+} from "./accessLogic";
+import type { DataSchema } from "./accessTypes";
+import { EntityDataColumns, EntityDataResults } from "./EntityDataResults";
+import { stringifyEntityDataJson } from "./entityDataJson";
+import { EntityDataQueryControls } from "./EntityDataQueryControls";
+import { compileDataQuery, EMPTY_DATA_QUERY, writeDataQuery } from "./entityDataQuery";
+import {
+  changeDataPage,
+  clearDataOptions,
+  readDataLocation,
+  updateDataLocation,
+  useDataLocation,
+} from "./entityDataLocation";
 import { ApiError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
-import { pageToOffset } from "@/lib/pagination";
+import { pageCountOf, pageToOffset } from "@/lib/pagination";
 import { presentConsoleNotification } from "@/providers/notification-provider";
 import type { CurrentUser } from "@/providers/session-store";
 
-const PAGE_SIZE = 50;
-/** List status only reads this as a flag. The unloaded row does not render it. */
-const QUERY_FAILED = "query-failed";
-
 type Translate = (key: string) => string;
-
 /** Copy that replaces a misleading server detail. Null means use the problem message. */
 function replacedTitle(translate: Translate, err: ApiError): string | null {
   if (err.code === "ENTITY_NOT_FOUND") return translate("entities.data.noGrant");
@@ -48,205 +56,146 @@ function replacedTitle(translate: Translate, err: ApiError): string | null {
   return null;
 }
 
-type Props = {
-  tableName: string;
-  physicalHidden: boolean;
-  active: boolean;
-};
+function notifyFailure(translate: Translate, err: unknown, onRetry: () => void) {
+  if (!(err instanceof ApiError)) {
+    presentProblemNotification(translate, err, { onRetry });
+    return;
+  }
+  const replaced = replacedTitle(translate, err);
+  if (replaced == null) {
+    presentProblemNotification(translate, err, { onRetry });
+    return;
+  }
+  const requestId = err.requestId?.trim() ? err.requestId : null;
+  const retry = (
+    <Button type="button" size="compact-xs" variant="subtle" onClick={onRetry}>
+      {translate("common.retry")}
+    </Button>
+  );
+  presentConsoleNotification({
+    type: "error",
+    title: replaced,
+    message:
+      requestId == null ? (
+        retry
+      ) : (
+        <Stack gap={4}>
+          <ProblemDetails
+            detail={null}
+            requestId={requestId}
+            labels={{
+              summary: translate("form.error.details"),
+              requestId: translate("common.requestId"),
+              copy: translate("form.error.copy"),
+              copied: translate("common.copy.success"),
+              copyFailed: translate("common.copy.failed"),
+            }}
+          />
+          {retry}
+        </Stack>
+      ),
+  });
+}
 
+type Props = { tableName: string; physicalHidden: boolean; active: boolean };
 type ViewAs = "none" | "user" | "role" | "group";
-/** null: not listing groups, including after that list fails. */
-type GroupsLoad = "loading" | "ready" | null;
 
 export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) {
-  const t = useTranslate();
   const { data: me } = useGetIdentity<CurrentUser>();
-  const roleId = me?.role_id ?? null;
-  const [kind, setKind] = useState<ViewAs>("none");
-  const [groupId, setGroupId] = useState<string | null>(null);
-  const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
-  const [groupsLoad, setGroupsLoad] = useState<GroupsLoad>(null);
-  const [schema, setSchema] = useState<DataSchema | null>(null);
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [queryFailed, setQueryFailed] = useState(false);
-  const [pending, setPending] = useState(false);
-  const [busy, setBusy] = useState(active);
-  const [reloadNonce, setReloadNonce] = useState(0);
-  const requestSeq = useRef(0);
-  const groupsSeq = useRef(0);
-  const held = useRef(false);
+  const search = useDataLocation();
+  if (!active || search === null) return null;
+  return (
+    <DataView
+      key={JSON.stringify([tableName, me?.id, me?.role_id])}
+      tableName={tableName}
+      physicalHidden={physicalHidden}
+      search={search}
+      me={me}
+    />
+  );
+}
+
+function DataView({
+  tableName,
+  physicalHidden,
+  search,
+  me,
+}: {
+  tableName: string;
+  physicalHidden: boolean;
+  search: string;
+  me?: CurrentUser;
+}) {
+  const t = useTranslate();
+  const params = new URLSearchParams(search);
+  const kind = params.get("dataView") ?? "none";
+  const groupId = params.get("dataGroup");
+  const roleId = me?.role_id;
+  const [groups, setGroups] = useState<{ id: string; name: string }[] | null>(null);
+  const [groupsFailed, setGroupsFailed] = useState(false);
+  const [groupRetry, setGroupRetry] = useState(0);
   const tRef = useRef(t);
   tRef.current = t;
 
-  const narrowKey = kind === "role" ? (roleId ?? "") : kind === "group" ? (groupId ?? "") : kind;
-  const selectionReady = kind === "role" || kind === "group" ? narrowKey !== "" : true;
-
-  const notifyFailure = (err: unknown, onRetry: () => void) => {
-    const translate = tRef.current;
-    if (!(err instanceof ApiError)) {
-      presentProblemNotification(translate, err, { onRetry });
+  useEffect(() => {
+    setGroupsFailed(false);
+    if (kind !== "group") {
+      setGroups(null);
       return;
     }
-    const replaced = replacedTitle(translate, err);
-    if (replaced == null) {
-      presentProblemNotification(translate, err, { onRetry });
-      return;
-    }
-    const requestId = err.requestId?.trim() ? err.requestId : null;
-    const retry = (
-      <Button type="button" size="compact-xs" variant="subtle" onClick={onRetry}>
-        {translate("common.retry")}
-      </Button>
-    );
-    presentConsoleNotification({
-      type: "error",
-      title: replaced,
-      message:
-        requestId == null ? (
-          retry
-        ) : (
-          <Stack gap={4}>
-            <ProblemDetails
-              detail={null}
-              requestId={requestId}
-              labels={{
-                summary: translate("form.error.details"),
-                requestId: translate("common.requestId"),
-                copy: translate("form.error.copy"),
-                copied: translate("common.copy.success"),
-                copyFailed: translate("common.copy.failed"),
-              }}
-            />
-            {retry}
-          </Stack>
-        ),
-    });
-  };
-
-  const reportQueryFailure = (err: unknown, onRetry: () => void) => {
-    setPending(err instanceof ApiError && classifyAccessProblem(err.code) === "pending");
-    setQueryFailed(true);
-    notifyFailure(err, onRetry);
-  };
-
-  const clearResults = (nextBusy: boolean) => {
-    requestSeq.current += 1;
-    held.current = false;
-    setSchema(null);
-    setRows([]);
-    setTotal(0);
-    setQueryFailed(false);
-    setPending(false);
-    setBusy(nextBusy);
-    setPage(1);
-  };
-
-  const applyKind = (next: ViewAs) => {
-    const listSeq = ++groupsSeq.current;
-    const ready = next === "none" || next === "user" || (next === "role" && Boolean(roleId));
-    clearResults(ready);
-    setKind(next);
-    setGroupId(null);
-    setGroups([]);
-    setGroupsLoad(next === "group" ? "loading" : null);
-    if (next !== "group") return;
-    loadGroups(listSeq);
-  };
-
-  const loadGroups = (listSeq: number) => {
+    let current = true;
+    setGroups(null);
     void listAccountGroups()
-      .then((listed) => {
-        if (listSeq !== groupsSeq.current) return;
-        setGroups(listed.groups.map((group) => ({ id: group.id, name: group.name })));
-        setGroupsLoad("ready");
+      .then((response) => {
+        if (current) setGroups(response.groups);
       })
       .catch((err: unknown) => {
-        if (listSeq !== groupsSeq.current) return;
-        setGroupsLoad(null);
-        notifyFailure(err, () => {
-          if (listSeq !== groupsSeq.current) return;
-          setGroupsLoad("loading");
-          loadGroups(listSeq);
-        });
-      });
-  };
-
-  const applyGroup = (id: string | null) => {
-    clearResults(Boolean(id));
-    setGroupId(id);
-  };
-
-  useEffect(() => {
-    if (!active || !selectionReady) return;
-    const seq = ++requestSeq.current;
-    setBusy(true);
-    setPending(false);
-    setQueryFailed(false);
-    const schemaBody = narrowBody(kind, narrowKey);
-    const queryBody = {
-      limit: PAGE_SIZE,
-      offset: pageToOffset(page, PAGE_SIZE),
-      ...schemaBody,
-    };
-    void (async () => {
-      try {
-        const next = await loadDataSchema(tableName, schemaBody);
-        if (seq !== requestSeq.current) return;
-        const result = await queryDataRows(tableName, queryBody);
-        if (seq !== requestSeq.current) return;
-        held.current = true;
-        setSchema(next);
-        setRows(result.items);
-        setTotal(result.total);
-        setQueryFailed(false);
-      } catch (err) {
-        if (seq !== requestSeq.current) return;
-        if (!held.current) {
-          setSchema(null);
-          setRows([]);
-          setTotal(0);
+        if (current) {
+          setGroupsFailed(true);
+          notifyFailure(tRef.current, err, () => setGroupRetry((n) => n + 1));
         }
-        reportQueryFailure(err, () => setReloadNonce((current) => current + 1));
-      } finally {
-        if (seq === requestSeq.current) setBusy(false);
-      }
-    })();
+      });
     return () => {
-      if (requestSeq.current === seq) requestSeq.current += 1;
+      current = false;
     };
-  }, [active, selectionReady, kind, narrowKey, tableName, page, reloadNonce]);
+  }, [kind, groupRetry]);
 
-  const showError = queryFailed && rows.length === 0 && !busy;
-  const columnCount = Math.max(schema?.attributes.length ?? 1, 1);
-  const list = {
-    presentation: listPresentationOf({
-      loading: busy,
-      error: showError ? QUERY_FAILED : null,
-      total,
-      itemCount: rows.length,
-      filtered: kind !== "none",
-    }),
-    error: showError ? QUERY_FAILED : null,
-    errorRequestId: null,
-    reload: () => setReloadNonce((current) => current + 1),
-    page,
-    setPage,
-    pageSize: PAGE_SIZE,
-    total,
-  };
-  const showTable = active && (selectionReady || schema != null || queryFailed || busy);
+  const selectIdentity = (value: string, group?: string | null) =>
+    updateDataLocation((next) => {
+      clearDataOptions(next);
+      next.delete("dataGroup");
+      if (value === "none") next.delete("dataView");
+      else next.set("dataView", value);
+      if (group) next.set("dataGroup", group);
+    });
+  const validKind = kind === "none" || kind === "user" || kind === "role" || kind === "group";
+  const invalidIdentity =
+    !validKind ||
+    params.getAll("dataView").length > 1 ||
+    params.getAll("dataGroup").length > 1 ||
+    (kind !== "group" && groupId !== null) ||
+    (kind === "role" && !roleId) ||
+    (kind === "group" &&
+      groupId !== null &&
+      groups !== null &&
+      !groups.some((g) => g.id === groupId));
+  const ready = !invalidIdentity && (kind !== "group" || Boolean(groupId && groups));
+  const scopeId = (kind === "group" ? groupId : kind === "role" ? roleId : "") ?? "";
+  const narrow = useMemo(() => narrowBody(kind as ViewAs, scopeId), [kind, scopeId]);
 
-  return (
-    <Stack>
-      {physicalHidden ? (
-        <Callout tone="info">{t("entities.data.physicalHidden")}</Callout>
-      ) : null}
-      <Group align="end">
+  const identity = (
+    <>
+      <Tooltip label={t("entities.data.narrow")} withArrow>
         <Select
-          label={t("entities.data.narrow")}
-          description={kind === "none" ? undefined : t("entities.data.narrowHint")}
+          aria-label={t("entities.data.narrow")}
+          size="sm"
+          w={154}
+          allowDeselect={false}
+          description={
+            kind === "none" ? undefined : (
+              <VisuallyHidden>{t("entities.data.narrowHint")}</VisuallyHidden>
+            )
+          }
           data={[
             { value: "none", label: t("entities.data.narrow.none") },
             { value: "user", label: t("entities.data.narrow.user") },
@@ -254,109 +203,339 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
               ? [
                   {
                     value: "role",
-                    label: t("entities.data.narrow.role", {
-                      name: me?.role_name || roleId,
-                    }),
+                    label: t("entities.data.narrow.role", { name: me?.role_name || roleId }),
                   },
                 ]
               : []),
             { value: "group", label: t("entities.data.narrow.group") },
           ]}
-          value={kind}
-          onChange={(value) => applyKind((value as ViewAs) ?? "none")}
+          value={validKind ? kind : null}
+          onChange={(v) => v && selectIdentity(v)}
         />
-        {groupsLoad === "loading" ? (
-          <Select
-            label={t("entities.data.group")}
-            data={[]}
-            value={null}
-            disabled
-            rightSection={<Loader size="xs" />}
-          />
-        ) : null}
-        {groupsLoad === "ready" && groups.length > 0 ? (
-          <Select
-            label={t("entities.data.group")}
-            data={groups.map((group) => ({ value: group.id, label: group.name }))}
-            value={groupId}
-            onChange={applyGroup}
-          />
-        ) : null}
-        {groupsLoad === "ready" && groups.length === 0 ? (
-          <Text size="sm">{t("entities.data.noGroups")}</Text>
-        ) : null}
-        <Button
+      </Tooltip>
+      {kind === "group" && !groupsFailed && (groups === null || groups.length > 0) && (
+        <Select
+          aria-label={t("entities.data.group")}
+          placeholder={t("entities.data.group")}
+          w={150}
+          searchable
+          disabled={groups === null}
+          value={groupId}
+          data={(groups ?? []).map(({ id, name }) => ({ value: id, label: name }))}
+          rightSection={groups === null ? <Loader size="xs" /> : undefined}
+          onChange={(id) => selectIdentity("group", id)}
+        />
+      )}
+    </>
+  );
+
+  return (
+    <FillColumn gap="xs">
+      {physicalHidden && <Callout tone="info">{t("entities.data.physicalHidden")}</Callout>}
+      <ScopedData
+        key={JSON.stringify([kind, scopeId])}
+        tableName={tableName}
+        identity={identity}
+        search={search}
+        narrow={narrow}
+        ready={ready}
+        onFullAccess={() => selectIdentity("none")}
+      />
+      {kind === "group" && groups?.length === 0 && (
+        <Text size="sm">{t("entities.data.noGroups")}</Text>
+      )}
+      {invalidIdentity && <Callout tone="notice">{t("entities.data.narrowRejected")}</Callout>}
+    </FillColumn>
+  );
+}
+
+function pageRequest(
+  schema: DataSchema,
+  options: ReturnType<typeof readDataLocation>,
+  fields: string[] | null,
+) {
+  const { query, size, page, sort } = options;
+  if (
+    !options.valid ||
+    !query ||
+    size > (schema.limits?.page_limit_max ?? 50) ||
+    (sort &&
+      sort.field !== "row_id" &&
+      !schema.attributes.some((a) => a.name === sort.field && a.type !== "json"))
+  ) {
+    return { error: "entities.data.invalidOptions" } as const;
+  }
+  const compiled = compileDataQuery(query, schema);
+  if (!compiled.ok) return { error: compiled.error } as const;
+  const body: DataQueryBody = { limit: size, offset: pageToOffset(page, size) };
+  if (compiled.filters) body.filters = compiled.filters;
+  if (sort) body.sort = sort;
+  if (fields !== null) {
+    body.fields = [
+      "row_id",
+      ...schema.attributes.map((a) => a.name).filter((name) => fields.includes(name)),
+    ];
+  }
+  return { body } as const;
+}
+
+function ScopedData({
+  tableName,
+  identity,
+  search,
+  narrow,
+  ready,
+  onFullAccess,
+}: {
+  tableName: string;
+  identity: ReactNode;
+  search: string;
+  narrow: DataSchemaBody;
+  ready: boolean;
+  onFullAccess: () => void;
+}) {
+  const t = useTranslate();
+  const tRef = useRef(t);
+  tRef.current = t;
+  const options = useMemo(() => readDataLocation(search), [search]);
+  const [fields, setFields] = useState<string[] | null>(null);
+  const [reload, setReload] = useState(0);
+  const [rejected, setRejected] = useState<string | null>(null);
+  const refresh = useCallback(() => {
+    setRejected(null);
+    setReload((n) => n + 1);
+  }, []);
+  const [loaded, setLoaded] = useState<{ schema: DataSchema; reload: number } | null>(null);
+  const [result, setResult] = useState<{
+    items: Record<string, unknown>[];
+    total: number;
+    request: string;
+  } | null>(null);
+  const [busy, setBusy] = useState(ready);
+  const [failure, setFailure] = useState(false);
+  const [pending, setPending] = useState(false);
+  const schema = loaded?.schema ?? null;
+  const request = useMemo(
+    () => (schema ? pageRequest(schema, options, fields) : null),
+    [schema, options, fields],
+  );
+  const body = request?.body;
+  const requestKey = stringifyEntityDataJson([
+    body,
+    schema?.head?.version_id,
+    schema?.access?.policy_revision,
+  ]);
+  const rejectedRequest = rejected === requestKey;
+  useEffect(() => setRejected(null), [search, fields]);
+  const rows = result?.request === requestKey ? result.items : [];
+  const total = result?.request === requestKey ? result.total : 0;
+
+  const fail = useCallback(
+    (err: unknown) => {
+      setBusy(false);
+      setFailure(true);
+      setPending(err instanceof ApiError && classifyAccessProblem(err.code) === "pending");
+      if (dataAccessExpired(err)) {
+        setResult(null);
+        setLoaded(null);
+      }
+      notifyFailure(tRef.current, err, refresh);
+    },
+    [refresh],
+  );
+
+  useEffect(() => {
+    if (!ready) return;
+    let current = true;
+    setBusy(true);
+    setFailure(false);
+    setPending(false);
+    void loadDataSchema(tableName, narrow)
+      .then((next) => {
+        if (current) setLoaded({ schema: next, reload });
+      })
+      .catch((err: unknown) => {
+        if (current) fail(err);
+      });
+    return () => {
+      current = false;
+    };
+  }, [tableName, narrow, ready, reload, fail]);
+
+  useEffect(() => {
+    if (!ready || loaded?.reload !== reload || !body || rejectedRequest) return;
+    let current = true;
+    setBusy(true);
+    setFailure(false);
+    void queryDataRows(tableName, { ...body, ...narrow })
+      .then((page) => {
+        if (!current) return;
+        const lastPage = Math.max(1, pageCountOf(page.total, options.size));
+        if (options.page > lastPage) {
+          changeDataPage(lastPage);
+          return;
+        }
+        setResult({ items: page.items, total: page.total, request: requestKey });
+        setBusy(false);
+      })
+      .catch((err: unknown) => {
+        if (!current) return;
+        if (
+          err instanceof ApiError &&
+          (err.code === "ENTITY_ROW_INVALID" || err.code === "REQUEST_INVALID")
+        ) {
+          // The serving schema or its limits may have changed since the toolbar was loaded.
+          setRejected(requestKey);
+          setLoaded(null);
+          setResult(null);
+          setReload((n) => n + 1);
+          notifyFailure(tRef.current, err, refresh);
+        } else {
+          fail(err);
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [
+    ready,
+    tableName,
+    loaded,
+    reload,
+    body,
+    narrow,
+    options,
+    requestKey,
+    rejectedRequest,
+    refresh,
+    fail,
+  ]);
+
+  const clearQuery = () =>
+    updateDataLocation((params) => {
+      writeDataQuery(params, EMPTY_DATA_QUERY);
+      params.delete("dataPage");
+    });
+  const filtered = Boolean(options.query?.lookup || options.query?.conditions.length);
+  const invalid = request?.error ?? (rejectedRequest ? "entities.data.invalidOptions" : null);
+  const refreshLabel = t(pending ? "entities.data.retry" : "entities.data.refresh");
+  const actions = (
+    <>
+      {identity}
+      <Tooltip label={refreshLabel}>
+        <ActionIcon
+          type="button"
           variant="default"
-          size="sm"
-          loading={busy}
-          disabled={!selectionReady}
-          onClick={() => setReloadNonce((current) => current + 1)}
+          size="lg"
+          aria-label={refreshLabel}
+          loading={busy && !invalid}
+          disabled={!ready}
+          onClick={refresh}
         >
-          {pending ? t("entities.data.retry") : t("entities.data.refresh")}
-        </Button>
-      </Group>
-      {showTable ? (
-        <ListTable
-          embedded
-          list={list}
-          columnCount={columnCount}
-          minWidth={Math.max(480, columnCount * 140)}
-          emptyMessage={t("entities.data.empty")}
-          noMatchMessage={t("entities.data.emptyNarrowed")}
-          noMatchAction={
-            kind === "none" ? undefined : (
-              <Button variant="subtle" size="xs" onClick={() => applyKind("none")}>
-                {t("entities.data.useFullAccess")}
-              </Button>
-            )
+          <RepeatIcon />
+        </ActionIcon>
+      </Tooltip>
+    </>
+  );
+
+  return (
+    <>
+      {schema ? (
+        <EntityDataQueryControls
+          schema={schema}
+          query={options.query ?? EMPTY_DATA_QUERY}
+          onChange={(next) =>
+            updateDataLocation((params) => {
+              writeDataQuery(params, next);
+              params.delete("dataPage");
+            })
           }
-          head={
-            <Table.Tr>
-              {(schema?.attributes ?? []).map((attribute) => {
-                const masked = isMaskedPresentation(attribute.presentation?.levels);
-                const varying = Boolean(attribute.presentation?.row_varying);
-                return (
-                  <Table.Th key={attribute.name}>
-                    {attribute.name}
-                    {masked ? ` · ${t("entities.access.cell.masked")}` : ""}
-                    {varying ? ` · ${t("entities.access.cell.rowVarying")}` : ""}
-                    {attribute.writable === false ? ` · ${t("entities.data.readOnly")}` : ""}
-                  </Table.Th>
-                );
-              })}
-              {schema ? null : <Table.Th />}
-            </Table.Tr>
+          columnAction={
+            <EntityDataColumns schema={schema} visibleFields={fields} onChange={setFields} />
           }
-        >
-          {schema
-            ? rows.map((row, index) => {
-                const withheld = withheldNames(row, schema.withheld_field);
-                return (
-                  <Table.Tr key={String(row.row_id ?? index)}>
-                    {schema.attributes.map((attribute) => {
-                      const cell = presentCell({
-                        name: attribute.name,
-                        value: row[attribute.name],
-                        withheld,
-                        referenceHidden:
-                          attribute.type === "reference" && attribute.target == null,
-                      });
-                      const text =
-                        cell.kind === "withheld"
-                          ? t("entities.access.cell.withheld")
-                          : cell.kind === "empty"
-                            ? t("entities.access.cell.empty")
-                            : cell.kind === "inaccessible_record"
-                              ? t("entities.access.cell.inaccessibleRecord")
-                              : cell.text;
-                      return <Table.Td key={attribute.name}>{text}</Table.Td>;
-                    })}
-                  </Table.Tr>
-                );
+          actions={actions}
+        />
+      ) : (
+        <Group gap="xs" justify="flex-end">
+          {actions}
+        </Group>
+      )}
+      {invalid ? (
+        <Callout tone="notice">
+          <Group gap="xs">
+            <Text size="sm">{t(invalid)}</Text>
+            <Button
+              type="button"
+              variant="subtle"
+              size="compact-sm"
+              onClick={() => updateDataLocation(clearDataOptions)}
+            >
+              {t("entities.data.resetQuery")}
+            </Button>
+          </Group>
+        </Callout>
+      ) : (
+        ready && (
+          <EntityDataResults
+            key={JSON.stringify([
+              schema?.head?.version_id,
+              schema?.access?.policy_revision,
+              reload,
+            ])}
+            schema={schema}
+            rows={rows}
+            tableName={tableName}
+            narrow={narrow}
+            visibleFields={fields}
+            sort={options.sort}
+            onDetailError={fail}
+            onSort={(sort) =>
+              updateDataLocation((params) => {
+                params.delete("dataPage");
+                if (sort) {
+                  params.set("dataSort", sort.field);
+                  params.set("dataDirection", sort.direction);
+                } else {
+                  params.delete("dataSort");
+                  params.delete("dataDirection");
+                }
               })
-            : null}
-        </ListTable>
-      ) : null}
-    </Stack>
+            }
+            onPageSize={(size) =>
+              updateDataLocation((params) => {
+                params.delete("dataPage");
+                if (size === 50) params.delete("dataSize");
+                else params.set("dataSize", String(size));
+              })
+            }
+            list={{
+              presentation: listPresentationOf({
+                loading: busy,
+                error: failure ? "failed" : null,
+                total,
+                itemCount: rows.length,
+                filtered: filtered || Boolean(narrow.narrow),
+              }),
+              page: options.page,
+              setPage: changeDataPage,
+              pageSize: options.size,
+              total,
+              reload: refresh,
+            }}
+            noMatchMessage={t(filtered ? "entities.data.noMatches" : "entities.data.emptyNarrowed")}
+            noMatchAction={
+              <Button
+                type="button"
+                variant="subtle"
+                size="xs"
+                onClick={filtered ? clearQuery : onFullAccess}
+              >
+                {t(filtered ? "common.filters.clear" : "entities.data.useFullAccess")}
+              </Button>
+            }
+          />
+        )
+      )}
+    </>
   );
 }

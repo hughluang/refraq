@@ -51,7 +51,7 @@ A single Entity Table may reach on the order of 10 million rows. This API is the
 
 ### 2.5 Explicit Non-Goals (Surface)
 
-No soft delete, aggregates, partial success / 207, top-level array bodies, client-chosen sort, composite unique keys, serving opaque cursor / by-keys / MQ, a separate `query-capabilities` verb, kebab `table_name` aliases, Job-backed load or full export, row-level **Management Audit Event**, ETag, Idempotency-Key, or a single batch larger than 1000. Calls on this API (including via PAT) do not produce Management Audit Events; each call that reaches the access decision appends one Entity Access Log record (`docs/business-entity-access.md` §16). Point get by the head **Business Key** is in scope (§6).
+No soft delete, aggregates, partial success / 207, top-level array bodies, composite unique keys, serving opaque cursor / by-keys / MQ, a separate `query-capabilities` verb, kebab `table_name` aliases, Job-backed load or full export, row-level **Management Audit Event**, ETag, Idempotency-Key, or a single batch larger than 1000. Calls on this API (including via PAT) do not produce Management Audit Events; each call that reaches the access decision appends one Entity Access Log record (`docs/business-entity-access.md` §16). Point get by the head **Business Key** is in scope (§6).
 
 ## 3. Cross-Cutting Rules
 
@@ -63,7 +63,7 @@ Authentication is a Session cookie or a User PAT Bearer. Unauthenticated → `40
 
 Every response echoes `X-Request-ID`. Success bodies do not include `request_id`. Instants on the wire follow `docs/conventions-time.md`.
 
-Missing body, non-JSON, non-object body, or unknown top-level keys (including `cursor`, `sort`, `keys`) → `422 REQUEST_INVALID`. `schema`, `get`, and `query` also accept top-level `narrow` (`docs/api-contracts-entity-access.md` §5.6); write verbs reject it. The service validates in the order in §10 so the framework does not reject before authentication.
+Missing body, non-JSON, non-object body, or unknown top-level keys (including `cursor` and `keys`) → `422 REQUEST_INVALID`. `schema`, `get`, and `query` also accept top-level `narrow` (`docs/api-contracts-entity-access.md` §5.6); write verbs reject it. The service validates in the order in §10 so the framework does not reject before authentication.
 
 ### 3.2 Addressing And Coexistence With Definition API
 
@@ -217,12 +217,16 @@ Rules:
 
 ## 7. Query
 
-Stable order is `row_id ASC`. Mode is decided by whether the body contains the top-level key `after_row_id` (including JSON `null`). `after_row_id` together with `offset` or `include_total` → `422 REQUEST_INVALID`. Top-level `cursor` → `422 REQUEST_INVALID`.
+Default order is `row_id ASC`. Mode is decided by whether the body contains the top-level key `after_row_id` (including JSON `null`). `after_row_id` together with `offset`, `include_total`, or `sort` → `422 REQUEST_INVALID`. Top-level `cursor` → `422 REQUEST_INVALID`.
 
 | Mode | Request | Response |
 | --- | --- | --- |
-| Offset (no `after_row_id` key) | `filters?`, `fields?`, `limit?`, `offset?`, `include_total?` | **Offset Page** `{ "items", "total", "limit", "offset" }`. `include_total` defaults to **true**. `false` → `total: null` and skip `COUNT` |
+| Offset (no `after_row_id` key) | `filters?`, `fields?`, `sort?`, `limit?`, `offset?`, `include_total?` | **Offset Page** `{ "items", "total", "limit", "offset" }`. `include_total` defaults to **true**. `false` → `total: null` and skip `COUNT` |
 | Keyset (key `after_row_id` present) | `filters?`, `fields?`, `limit?`, `after_row_id` (`null` = first page; integer = exclusive lower bound) | **Entity Data Keyset Page** `{ "items", "limit", "next_after_row_id" }`. Implementation fetches `limit + 1` to probe |
+
+An offset query accepts one sort, for example `"sort": {"field": "price", "direction": "desc"}`. The object requires exactly `field` and `direction`. Direction is `asc` or `desc`. Malformed sorts return `422 REQUEST_INVALID`. The field may be `row_id` or a visible attribute with a scalar type, including a reference. A JSON attribute, a hidden or unknown field, or `__withheld` returns `422 ENTITY_ROW_INVALID`. The sort field may be omitted from `fields`.
+
+The database orders the filtered result by the presented value before offset and limit. Null values, including withheld cells, sort last in both directions. Equal values use `row_id ASC` as the tiebreaker. A sort on `row_id` alone uses the requested direction.
 
 Both modes share `entity_page_limit_max` with Entity MCP `query_rows` and access preview: owner/group `entity`, seed 200, configurable 50–10000. Omitted `limit` stays 50. Explicit `limit` must be an integer from 1 through the effective maximum; 50 is the administrator's configuration minimum, not a request minimum. Booleans and non-integers are invalid. Excess is rejected, not clamped: `422 REQUEST_INVALID` with `detail` `limit must be <= {effective_max}`.
 
@@ -230,7 +234,7 @@ Pagination validation reads the effective maximum once per query. A parameter ch
 
 Page data uses one query, without artificial batching to work around a database page cap. Keyset reads `limit + 1` once, drops the probe row, and sets `next_after_row_id` from the last returned row when another page exists. With `include_total: true`, count is a separate query; one page-data query does not mean one SQL statement for the entire request.
 
-`offset` is an integer >= 0 and has no maximum. Empty `filters` is allowed. Larger pages increase database work, memory use, and response size; the configurable range is not a capacity guarantee. Wide filters with exact `total`, or `contains`, may hit `504 PLATFORM_TIMEOUT` on large tables. A large `offset` may also hit that timeout. Entity Data Keyset Page is not the platform **Cursor Page** and not a serving opaque cursor (`docs/conventions-pagination.md`).
+`offset` is an integer >= 0 and has no maximum. Empty `filters` is allowed. Larger pages increase database work, memory use, and response size; the configurable range is not a capacity guarantee. Wide filters with exact `total`, or `contains`, may hit `504 PLATFORM_TIMEOUT` on large tables. A large `offset` or a sort across many rows may also hit that timeout. Entity Data Keyset Page is not the platform **Cursor Page** and not a serving opaque cursor (`docs/conventions-pagination.md`).
 
 ## 8. Filters
 
@@ -305,7 +309,7 @@ During execution, missing relation `42P01` → `ENTITY_NOT_SERVING`. `23505` →
 3. Metadata MCP tools, or a Metadata MCP entity pool, for this surface. Entity MCP row tools call this service; Entity SQL is `docs/api-contracts-entity-mcp.md`.
 4. Console authoring calling this schema.
 5. An external entity directory or kebab `table_name` aliases.
-6. Soft delete, aggregates, partial success, client sort, composite uniqueness.
+6. Soft delete, aggregates, partial success, multi-column client sort, composite uniqueness.
 7. Row-level Management Audit Events, ETag, Idempotency-Key.
 8. Job-backed bulk load, full export, or batches larger than 1000.
 

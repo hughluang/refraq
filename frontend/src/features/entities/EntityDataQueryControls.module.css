@@ -1,0 +1,94 @@
+.toolbar {
+  min-width: 0;
+}
+.search {
+  display: flex;
+  align-items: center;
+  flex: 1 1 17rem;
+  max-width: 32rem;
+  min-width: 0;
+}
+.searchField {
+  flex: 0 0 min(9.5rem, 43%);
+  min-width: 0;
+}
+.searchValue {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.searchField input {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+.searchValue input {
+  border-radius: 0;
+}
+.submitSearch {
+  flex-shrink: 0;
+  margin-inline-start: -1px;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+.searchValue {
+  margin-inline-start: -1px;
+}
+.search :focus-within {
+  z-index: 1;
+}
+.viewActions {
+  margin-inline-start: auto;
+}
+.conditions {
+  min-width: 0;
+  max-height: 18dvh;
+  overflow: auto;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.125rem 0.3rem 0.125rem 0.55rem;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-default-hover);
+  font-size: var(--mantine-font-size-xs);
+}
+.chipLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: inherit;
+}
+button.chipLabel:hover {
+  text-decoration: underline;
+}
+.editor {
+  max-height: min(45dvh, 22rem);
+  overflow: auto;
+  padding: var(--mantine-spacing-sm);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+}
+.editorFields > * {
+  flex: 1 1 8.5rem;
+  min-width: 0;
+}
+.value {
+  display: flex;
+  gap: 0.25rem;
+  align-items: end;
+}
+.value > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 48em) {
+  .viewActions {
+    margin-inline-start: 0;
+  }
+  .search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}

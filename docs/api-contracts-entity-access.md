@@ -271,7 +271,7 @@ For a `reference` attribute, `target` is `null` when the caller has no effective
 
 - Rows carry only shape columns. When the shape's `withheld_field` is `"__withheld"`, every row on get, query, and write responses carries `"__withheld": [names]`, an empty array when no cell on that row is withheld. A shape that does not withhold omits the key. `__withheld` cannot appear in `fields`, `filters`, `values`, or `set`.
 - Masked cells carry the masked value under the attribute's wire type; withheld cells carry `null`.
-- `fields`, filter `field`, `values`, and `set` naming a column outside the shape answer exactly as for an unknown attribute name: the same Problem Code and the same `detail` form.
+- `fields`, filter `field`, sort `field`, `values`, and `set` naming a column outside the shape answer exactly as for an unknown attribute name: the same Problem Code and the same `detail` form.
 - Filters evaluate on presented values (`docs/business-entity-access.md` §9.7).
 
 ### 5.4 Writes

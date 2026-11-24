@@ -1,0 +1,90 @@
+.frame {
+  display: flex;
+  flex-flow: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.frame table {
+  table-layout: fixed;
+}
+
+.frame th, .frame td {
+  min-width: 0;
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-xs);
+  max-width: 100%;
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.heading svg {
+  flex-shrink: 0;
+  color: var(--mantine-color-dimmed);
+}
+
+.heading:hover, .heading:hover svg, .frame th[aria-sort] .heading svg {
+  color: var(--mantine-color-anchor);
+}
+
+.cell, .recordLink, .fieldName, .heading > span {
+  display: block;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recordLink {
+  color: var(--mantine-color-anchor);
+  font: inherit;
+  font-weight: 500;
+  text-align: start;
+}
+
+.recordLink:hover, .recordLink:focus-visible {
+  text-decoration: underline;
+}
+
+.cell[data-number], .recordLink {
+  font-variant-numeric: tabular-nums;
+}
+
+.cell[data-muted], .detailField dd[data-muted] {
+  color: var(--mantine-color-dimmed);
+}
+
+.details { margin: 0; }
+
+.detailField {
+  padding-block: var(--mantine-spacing-sm);
+  border-bottom: 1px solid var(--refraq-tone-neutral-border);
+}
+
+.detailField dt {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-xs);
+  overflow-wrap: anywhere;
+}
+
+.detailField dt button {
+  margin-inline-start: auto;
+  flex-shrink: 0;
+}
+
+.detailField dd {
+  margin: var(--mantine-spacing-xs) 0 0;
+  font-size: var(--mantine-font-size-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.detailField dd[data-json] {
+  font-family: var(--mantine-font-family-monospace);
+}

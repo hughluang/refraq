@@ -435,6 +435,43 @@ def test_last_and_previous_pages_use_offset_from_total(data_client) -> None:
     assert deep.json()["offset"] == 10001
 
 
+def test_offset_sort_applies_to_the_filtered_set_before_paging(data_client) -> None:
+    client, stem, _, _ = data_client
+    items = [
+        {"values": {"sku": sku, "qty": qty, "flag": flag}}
+        for sku, qty, flag in [
+            ("empty", None, True), ("first ten", 10, True), ("two", 2, True),
+            ("second ten", 10, True), ("excluded", 100, False),
+        ]
+    ]
+    created = client.post(f"/entities/{stem}/create-many", json={"items": items})
+    assert created.status_code == 201, created.text
+    query = {
+        "filters": {"field": "flag", "op": "eq", "value": True},
+        "fields": ["sku"],
+        "limit": 2,
+    }
+    for direction, expected in [
+        ("asc", ["two", "first ten", "second ten", "empty"]),
+        ("desc", ["first ten", "second ten", "two", "empty"]),
+    ]:
+        for offset in [0, 2]:
+            response = client.post(f"/entities/{stem}/query", json={
+                **query, "sort": {"field": "qty", "direction": direction}, "offset": offset,
+            })
+            assert response.status_code == 200, response.text
+            assert response.json() == {
+                "items": [{"sku": name} for name in expected[offset:offset + 2]],
+                "limit": 2, "offset": offset, "total": 4,
+            }
+
+    reverse_ids = client.post(f"/entities/{stem}/query", json={
+        **query, "sort": {"field": "row_id", "direction": "desc"},
+    })
+    assert reverse_ids.status_code == 200, reverse_ids.text
+    assert reverse_ids.json()["items"] == [{"sku": "second ten"}, {"sku": "two"}]
+
+
 def test_business_key_addressing_reference_and_upsert_default(data_client) -> None:
     client, _stem, _physical, _entity_id = data_client
     from backend.entity.ids import new_entity_id, new_version_id
@@ -2272,6 +2309,12 @@ def test_un_narrowed_combination_pages_the_most_revealing_level(data_client) -> 
     assert "GONE0001" not in queried.text
     assert "secret-gone" not in queried.text
 
+    sorted_notes = client.post(f"/entities/{stem}/query", json={
+        "sort": {"field": "note", "direction": "asc"}, "fields": ["qty"],
+    })
+    assert sorted_notes.status_code == 200, sorted_notes.text
+    assert [row["qty"] for row in sorted_notes.json()["items"]] == [10, 20, 5]
+
     as_user = client.post(
         f"/entities/{stem}/query", json={"narrow": {"type": "user"}}
     )
@@ -2285,9 +2328,10 @@ def test_un_narrowed_combination_pages_the_most_revealing_level(data_client) -> 
 
     as_role = client.post(
         f"/entities/{stem}/query",
-        json={"narrow": {"type": "role", "id": role.id}},
+        json={"narrow": {"type": "role", "id": role.id}, "sort": {"field": "sku", "direction": "asc"}},
     )
     assert as_role.status_code == 200, as_role.text
+    assert [item["sku"] for item in as_role.json()["items"]] == ["****CODE", "****WXYZ"]
     role_rows = {item["qty"]: item for item in as_role.json()["items"]}
     assert set(role_rows) == {5, 10}
     assert role_rows[5]["sku"] == "****WXYZ"
@@ -2297,4 +2341,12 @@ def test_un_narrowed_combination_pages_the_most_revealing_level(data_client) -> 
     assert "shown-both" not in as_role.text
     assert "WIDESKU1" not in as_role.text
     assert "ABCDWXYZ" not in as_role.text
+
+    for field in ["note", "missing"]:
+        invalid = client.post(f"/entities/{stem}/query", json={
+            "narrow": {"type": "role", "id": role.id}, "sort": {"field": field, "direction": "asc"},
+        })
+        assert invalid.status_code == 422
+        assert invalid.json()["code"] == "ENTITY_ROW_INVALID"
+        assert invalid.json()["detail"] == f"Unknown sort field '{field}'"
 
