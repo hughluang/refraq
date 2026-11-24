@@ -9,6 +9,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import NullPool
 
 from backend.core.config import Settings, _database_target
+from backend.metadata.catalog.store import get_catalog_store
+from backend.metadata.mirrors import fleet
 from backend.metadata.mirrors.bootstrap import validate_target
 from backend.metadata.mirrors.deletion import TargetDeletion
 from backend.metadata.mirrors.diagnostic_store import DiagnosticStore
@@ -19,8 +21,12 @@ from backend.metadata.sources.store import get_source_store
 
 def compose_diagnostics(settings: Settings, *, transaction):
     store = DiagnosticStore(memory=settings.store_backend == "memory", transaction=transaction)
-    read_scope = partial(diagnostic_scope, mirror_store=_storage(), source_store=get_source_store())
-    return store, read_scope
+    mirror_store, source_store = _storage(), get_source_store()
+    read_scope = partial(diagnostic_scope, mirror_store=mirror_store, source_store=source_store)
+    dependencies = dict(store=store, mirror_store=mirror_store, source_store=source_store, catalog_store=get_catalog_store())
+    fleet_reads = {name: partial(getattr(fleet, name), **dependencies)
+                   for name in ("inventory", "overview", "sources", "runtimes")}
+    return store, read_scope, fleet_reads
 
 
 def _unavailable():

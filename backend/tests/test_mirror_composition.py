@@ -58,7 +58,7 @@ def test_diagnostics_uses_bound_registry_stores_and_their_locks(monkeypatch):
                                    capture_bindings={"source": {"runtime_instance_id": "retained-runtime"}})
     monkeypatch.setattr(composition, "_storage", lambda: mirror_store)
     monkeypatch.setattr(composition, "get_source_store", lambda: source_store)
-    store, read_scope = composition.compose_diagnostics(settings(backend="memory"), transaction=None)
+    store, read_scope, _ = composition.compose_diagnostics(settings(backend="memory"), transaction=None)
     monkeypatch.setattr(composition, "_storage", lambda: pytest.fail("Mirror store must already be bound"))
     monkeypatch.setattr(composition, "get_source_store", lambda: pytest.fail("Source store must already be bound"))
     monkeypatch.setattr("backend.metadata.mirrors.store.get_source_store", lambda: pytest.fail("Scope must lock its supplied Source store"))
@@ -214,7 +214,8 @@ def test_catalog_matches_frontend_and_permission_filtered_navigation():
     mirror = identities["mirrors"]
     assert mirror.icon == "database"
     assert asdict(mirror.routes) == dict(list="/console/mirrors", show="/console/mirrors/:id", create=None, edit=None,
-                                       aliases=({"path": "/console/mirrors/diagnostics", "action": "list"},))
+                                       aliases=({"path": "/console/mirrors/diagnostics", "action": "list"},
+                                                {"path": "/console/mirrors/inventory", "action": "list"}))
     assert mirror.actions.list == mirror.actions.show == "mirror:read"
     assert mirror.actions.edit == mirror.actions.delete == "mirror:write"
     assert identities["settings"].routes.aliases[0].path == "/console/settings/notification-channel"

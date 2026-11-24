@@ -297,3 +297,10 @@ it("gates Mirror diagnostics with the same read permission as Mirror details", (
   expect(evaluateCan(CATALOG, ["mirror:read"], matched!.resource, matched!.action).can).toBe(true);
   expect(evaluateCan(CATALOG, [], matched!.resource, matched!.action).can).toBe(false);
 });
+
+it("gates Mirror Inventory as a collection rather than a Mirror ID", () => {
+  const matched = matchPath("/console/mirrors/inventory", CATALOG);
+  expect(matched).toEqual({ resource: "mirrors", action: "list" });
+  expect(evaluateCan(CATALOG, ["mirror:read"], matched!.resource, matched!.action).can).toBe(true);
+  expect(evaluateCan(CATALOG, ["mirror:write"], matched!.resource, matched!.action).can).toBe(false);
+});

@@ -19,6 +19,19 @@
 .diagnostic-assignments { grid-column: 1 / -1; }
 .diagnostic-assignments ol { display: flex; flex-wrap: wrap; gap: var(--mantine-spacing-xs) var(--mantine-spacing-xl); padding-inline-start: var(--mantine-spacing-lg); }
 .diagnostic-runtimes summary, details > summary { cursor: pointer; }
+.diagnostic-aggregate-topology { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--mantine-spacing-md); }
+.diagnostic-aggregate-segment { display: grid; align-content: start; gap: var(--mantine-spacing-sm); padding: var(--mantine-spacing-sm); border: 1px solid var(--mantine-color-default-border); border-radius: var(--mantine-radius-sm); }
+.diagnostic-proportions { display: flex; height: 0.65rem; overflow: hidden; background: var(--mantine-color-default-hover); }
+.diagnostic-proportions > span { flex-basis: 0; }
+.diagnostic-proportions [data-health="healthy"] { background: var(--mantine-color-green-filled); }
+.diagnostic-proportions [data-health="failed"] { background: var(--mantine-color-red-filled); }
+.diagnostic-proportions [data-health="stale"] { background: var(--mantine-color-orange-filled); }
+.diagnostic-proportions [data-health="unobserved"] { background: var(--mantine-color-gray-filled); }
+.diagnostic-health-link { display: flex; justify-content: space-between; gap: var(--mantine-spacing-xs); padding-block: 0.2rem; color: var(--mantine-color-text); font-size: var(--mantine-font-size-xs); text-underline-offset: 0.2em; font-variant-numeric: tabular-nums; }
+.diagnostic-health-link:hover { color: var(--mantine-primary-color-filled); }
+.diagnostic-health-link:focus-visible { outline: 2px solid var(--mantine-primary-color-filled); outline-offset: 2px; }
+.diagnostic-finders { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: var(--mantine-spacing-xl); }
+.diagnostic-finders td { overflow-wrap: anywhere; }
 .diagnostic-comparison { display: grid; gap: var(--mantine-spacing-xs); font-variant-numeric: tabular-nums; }
 .diagnostic-comparison-row { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(4rem, 2fr) minmax(5rem, 1fr); gap: var(--mantine-spacing-sm); align-items: center; }
 .diagnostic-comparison-row > :last-child { text-align: end; overflow-wrap: anywhere; }
@@ -30,6 +43,7 @@
   .diagnostic-history { grid-column: 1; }
   .diagnostic-metrics { grid-template-columns: 1fr; gap: var(--mantine-spacing-sm); }
   .diagnostic-segment { padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm); }
+  .diagnostic-aggregate-topology, .diagnostic-finders { grid-template-columns: minmax(0, 1fr); }
   .diagnostic-comparison-row { grid-template-columns: minmax(6rem, 1fr) minmax(2rem, 1fr) minmax(4rem, 1fr); }
 }
 [data-mantine-color-scheme="light"] .diagnostic-health[data-health="healthy"],

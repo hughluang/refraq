@@ -44,8 +44,10 @@ function MirrorRecord({ id }: { id: string }) {
   const { href: current, search } = useConsoleLocation();
   const origin = mirrorReturnHref(search?.get("from") ?? null);
   const originPath = new URL(origin, "http://console.local");
-  let backKey = "mirrors.back";
-  if (originPath.pathname.startsWith("/console/mirrors/")) backKey = "mirrors.backToWaiting";
+  let backKey = "fleet.backToOverview";
+  if (originPath.pathname === "/console/mirrors/inventory") backKey = "fleet.backToInventory";
+  else if (originPath.pathname === "/console/mirrors/diagnostics") backKey = "diagnostics.back";
+  else if (originPath.pathname.startsWith("/console/mirrors/")) backKey = "mirrors.backToWaiting";
   else if (originPath.searchParams.has("mirrorTable")) backKey = "mirrors.backToTable";
   const { data: canWrite } = useCan({ resource: "mirrors", action: "edit" });
   const live = useMirrorStatus(id);

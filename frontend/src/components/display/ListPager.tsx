@@ -35,6 +35,11 @@ export function ListPager({
           onChange={onChange}
           total={pageCount}
           disabled={disabled}
+          getControlProps={(control) => {
+            if (control === "previous") return { "aria-label": t("common.prev") };
+            if (control === "next") return { "aria-label": t("common.next") };
+            return {};
+          }}
         />
       ) : null}
     </Group>

@@ -217,9 +217,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     retry_delays=settings.mirror_recovery_retry_delays_seconds,
                 ))
         _bootstrap_site(settings)
-        app.state.mirror_diagnostics, app.state.mirror_diagnostic_scope = compose_diagnostics(
-            settings, transaction=session_scope,
-        )
+        (app.state.mirror_diagnostics, app.state.mirror_diagnostic_scope,
+         app.state.mirror_fleet_reads) = compose_diagnostics(settings, transaction=session_scope)
         apply_http_runtime()
         open_entity_pool_when_persistent()
         try:

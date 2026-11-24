@@ -223,11 +223,15 @@ class RuntimeDiagnostics:
             except Exception:
                 pass
         events = progress["processed_events"] - previous["processed_events"]
+        current_bytes, previous_bytes = progress.get("processed_bytes"), previous.get("processed_bytes")
+        committed_bytes = (current_bytes - previous_bytes if current_bytes is not None and previous_bytes is not None
+                           and current_bytes >= previous_bytes else None)
         observed = utc_now()
         receipt.samples.append(MirrorSample(
             mirror_id=mid, generation_id=progress["generation_id"], capture_generation=str(authority["capture_generation"]),
             interval_start=start, interval_end=now, **self._window(self.policy.sample_valid_seconds, now=observed),
             committed_events=events, committed_batches=progress["processed_batches"] - previous["processed_batches"],
+            committed_bytes=committed_bytes,
             position_lag=lag, last_target_commit_at=progress["last_target_commit_at"],
             write_state="active" if events else "idle",
         ))

@@ -9,6 +9,8 @@ import { MeasurementContent } from "./MirrorMeasurements";
 import { diagnosticFixture, measurementsFixture, observed } from "./diagnostics.testFixtures";
 import { useDiagnosticRead } from "./useDiagnosticRead";
 import { ApiError } from "@/lib/api";
+import { AggregateTopology } from "./FleetDiagnostics";
+import { createFleetFixture } from "./fleet.testFixtures";
 
 vi.mock("@refinedev/core", () => ({ useTranslate: () => (key: string, params: Record<string, unknown> = {}) => {
   let text = (en as Record<string, string>)[key] ?? key;
@@ -35,6 +37,26 @@ it("opens four shared checks and retains safe failure detail", async () => {
   expect(within(drawer).getByText("PRODUCTION_UNAVAILABLE")).toBeTruthy();
   expect(within(drawer).getByText(/Check Connect task errors/)).toBeTruthy();
   expect(within(drawer).getAllByText(observed).length).toBeGreaterThan(0);
+});
+
+it("opens a Source's four checks from a fleet drill-down without rendering individual paths", async () => {
+  const close = vi.fn();
+  render(<DiagnosticContent data={diagnosticFixture()} origin="/console/mirrors/diagnostics?source_id=source-2&checks=1"
+    page={vi.fn()} selectSource={id => id} showPath={false} initialSource="source-2" closeChecks={close} />, { wrapper: wrap });
+  const drawer = await screen.findByRole("dialog");
+  expect(within(drawer).getAllByRole("heading", { level: 3 })).toHaveLength(4);
+  expect(screen.queryByRole("button", { name: /Production to Kafka, Failed/ })).toBeNull();
+  fireEvent.keyDown(drawer, { key: "Escape" });
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+});
+
+it("filters a segment by its own health and preserves the runtime scope", () => {
+  const data = createFleetFixture().overview();
+  render(<AggregateTopology data={data} scope={{ runtime_id: "capture-01" }} origin="/console/mirrors/diagnostics" />, { wrapper: wrap });
+  const failed = screen.getAllByRole("link", { name: /Failed/ });
+  expect(failed).toHaveLength(4);
+  expect(failed[1].getAttribute("href")).toBe("/console/mirrors/diagnostics?health=failed&segment=production&runtime_id=capture-01");
+  expect(failed[1].textContent).toContain(String(data.segments.production.failed));
 });
 
 it("pages full assignments separately and shows partial interval coverage", () => {

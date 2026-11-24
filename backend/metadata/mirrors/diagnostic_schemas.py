@@ -42,6 +42,8 @@ class MirrorSample(TimedObservation):
     captured_events: int | None = Field(default=None, strict=True, ge=0)
     committed_events: int | None = Field(default=None, strict=True, ge=0)
     committed_batches: int | None = Field(default=None, strict=True, ge=0)
+    captured_bytes: int | None = Field(default=None, strict=True, ge=0)
+    committed_bytes: int | None = Field(default=None, strict=True, ge=0)
     pending_events: int | None = Field(default=None, strict=True, ge=0)
     pending_bytes: int | None = Field(default=None, strict=True, ge=0)
     position_lag: int | None = Field(default=None, strict=True, ge=0)

@@ -51,7 +51,6 @@ __all__ = [
     "get_mirror",
     "get_mirror_detail",
     "diagnostic_scope",
-    "list_mirrors",
     "set_enabled",
     "delete_mirror",
     "delete_mirror_for_object",
@@ -1485,17 +1484,6 @@ def get_mirror_detail(mirror_id):
         detail.update(storage_destination="source_mirror", source_size_bytes=obj.source_size_bytes if obj else None,
                       estimated_rows=obj.estimated_rows if obj else None)
         return dict(mirror=detail, can_enable=not mirror["enabled"] and not mirror.get("deletion_operation_id") and not mirror.get("deletion_reservation") and _eligible_binding(binding, mirror))
-
-
-def list_mirrors(*, limit=100, offset=0, source_id=None, status=None, q=None):
-    store = _storage()
-    with store.transaction() as session:
-        if isinstance(store, SqlMirrorStore) and session.get_bind().dialect.name == "postgresql":
-            session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
-        rows, total = store.page(session, source_id=source_id, status=status, q=q, limit=limit, offset=offset)
-        contexts = {sid: _source_lifecycle(session, sid) for sid in {row["source_id"] for row in rows}}
-        return dict(items=[_present(session, row, contexts[row["source_id"]]) for row in rows],
-                    total=total, limit=limit, offset=offset)
 
 
 def diagnostic_scope(*, mirror_store, source_store):

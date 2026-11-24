@@ -44,6 +44,8 @@ def record_source(source_id, authority, receipt: SourceReceipt, *, store: Diagno
     identity = _identity(authority)
     if any(str(sample.capture_generation) != str(authority.get("capture_generation")) for sample in receipt.samples):
         raise ValueError("Sample capture lineage mismatch")
+    if any(sample.observed_at > now for sample in receipt.samples):
+        raise ValueError("Future diagnostic sample")
 
     def update(previous):
         state = previous if _matches(previous, authority) else dict(authority=identity, checks={}, history=(previous or {}).get("history", []))
@@ -77,6 +79,7 @@ def record_source(source_id, authority, receipt: SourceReceipt, *, store: Diagno
         value = dict(authority=identity, **sample.model_dump(mode="json"))
         store.update("sample", sample.mirror_id, lambda old: value if not old or
                      parse_instant(value["observed_at"]) > parse_instant(old["observed_at"]) else old)
+        store.record_throughput(source_id, identity, sample, now=now)
 
 
 def record_rows(mirror_id, sample: RowSample, *, store: DiagnosticStore):
@@ -106,7 +109,11 @@ def mirror_measurements(mirror_id, *, store: DiagnosticStore, read_scope, read_d
     rows = store.read("rows", mirror_id)
     if not rows or rows["generation_id"] != detail["published_generation_id"]:
         rows = None
-    source = _source(detail["source_id"], [detail], bindings, now, store=store)
+    authority = bindings.get(detail["source_id"], {})
+    runtime_id = authority.get("runtime_instance_id")
+    source = _source(detail["source_id"], [detail], authority, now,
+                     state=store.read("source", detail["source_id"]),
+                     assignment=store.read("runtime_assignment", runtime_id) if runtime_id else None)
     return dict(mirror_id=mirror_id, source_id=detail["source_id"], sample=sample,
                 row_sample=rows, row_sample_stale=bool(rows and not _fresh(rows, now)),
                 estimated_rows=detail["estimated_rows"], published_generation_id=detail["published_generation_id"],
@@ -127,13 +134,10 @@ def _sample_for(mirror, bindings, sample, now):
     return {**value, "stale": not _fresh(sample, now)}
 
 
-def _source(source_id, mirrors, bindings, now, *, store: DiagnosticStore):
-    authority = bindings.get(source_id, {})
-    state = store.read("source", source_id)
+def _source(source_id, mirrors, authority, now, *, state, assignment):
     if not _matches(state, authority):
         state = None
     runtime_id = authority.get("runtime_instance_id")
-    assignment = store.read("runtime_assignment", runtime_id) if runtime_id else None
     checks = checks_at(state, now)
     name = mirrors[0]["source_name"] if mirrors else source_id
     return dict(id=source_id, name=name, runtime_instance_id=runtime_id,
@@ -148,7 +152,7 @@ def read_diagnostics(*, store: DiagnosticStore, read_scope, source_id=None, runt
     mirrors, bindings = read_scope()
     assignments = store.all("runtime_assignment")
     scope = [m for m in mirrors if (source_id is None or m["source_id"] == source_id) and
-             (runtime_id is None or bindings.get(m["source_id"], {}).get("runtime_instance_id") == runtime_id)]
+             (runtime_id is None or (bindings.get(m["source_id"], {}).get("runtime_instance_id") or "unassigned") == runtime_id)]
     if source_id and not scope and source_id not in bindings:
         raise MirrorError("MIRROR_NOT_FOUND", 404)
     grouped = {}
@@ -156,7 +160,10 @@ def read_diagnostics(*, store: DiagnosticStore, read_scope, source_id=None, runt
         grouped[source_id] = []
     for mirror in scope:
         grouped.setdefault(mirror["source_id"], []).append(mirror)
-    sources = [_source(sid, rows, bindings, now, store=store) for sid, rows in sorted(grouped.items())]
+    observations = store.all("source")
+    sources = [_source(sid, rows, bindings.get(sid, {}), now, state=observations.get(sid),
+                       assignment=assignments.get(bindings.get(sid, {}).get("runtime_instance_id")))
+               for sid, rows in sorted(grouped.items())]
     samples = store.all("sample")
     summary = {}
     for metric in METRICS:
@@ -185,10 +192,11 @@ def read_diagnostics(*, store: DiagnosticStore, read_scope, source_id=None, runt
                               stale=sample["stale"] if sample else False))
     matching_runtime_ids = {s["runtime_instance_id"] for s in sources if s["runtime_instance_id"]}
     runtimes = []
+    heartbeats, cycles = store.all("runtime_heartbeat"), store.all("runtime_cycle")
     for rid in sorted(matching_runtime_ids):
         assignment = assignments.get(rid)
-        heartbeat = store.read("runtime_heartbeat", rid)
-        cycle = store.read("runtime_cycle", rid)
+        heartbeat = heartbeats.get(rid)
+        cycle = cycles.get(rid)
         assigned = [sid for sid in (assignment or {}).get("source_ids", [])
                     if bindings.get(sid, {}).get("runtime_instance_id") == rid]
         assigned_offset = assignment_offset if assignment_offset < len(assigned) else 0

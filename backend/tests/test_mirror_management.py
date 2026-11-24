@@ -5,6 +5,7 @@ import pytest
 from backend.core.errors import AppError
 from backend.metadata.mirrors import service
 from backend.metadata.mirrors.store import MemoryMirrorStore
+from backend.tests.mirror_inventory import inventory, inventory_dependencies
 
 
 @pytest.fixture
@@ -31,7 +32,7 @@ def test_never_dispatched_mirror_can_be_deleted_and_reenrolled(opened):
     stopped = service.set_enabled(mid, enabled=False, actor_user_id="u")
     assert stopped["mirror"]["status"] == "disable_pending"
     assert service.delete_mirror(mid, actor_user_id="u") is None
-    assert service.list_mirrors()["total"] == 0
+    assert inventory()["total"] == 0
     new = service.enable_for_object("o1", actor_user_id="u")["mirror"]
     assert new["id"] != mid and new["history_epoch"] is None
     from backend.admin.audit_store import get_audit_store
@@ -100,12 +101,15 @@ def test_recovery_requires_authoritative_binding(opened, monkeypatch):
 
 
 def test_http_strict_management_projection(opened, monkeypatch):
+    from functools import partial
+
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from types import SimpleNamespace
     from backend.admin.deps import get_current_user
     from backend.admin.role_store import get_role_store
     from backend.metadata.mirrors.router import router
+    from backend.metadata.mirrors import fleet
     from backend.admin.roles import SUPER_ADMIN_KEY
 
     from sqlalchemy import create_engine
@@ -133,6 +137,7 @@ def test_http_strict_management_projection(opened, monkeypatch):
     bound = Recovery(session_factory=factory, history=None, retry_delays=(1,), audit=lambda **kwargs: None)
     monkeypatch.setattr(recovery, "_recovery", bound)
     app = FastAPI()
+    app.state.mirror_fleet_reads = {"inventory": partial(fleet.inventory, **inventory_dependencies())}
     app.add_exception_handler(AppError, app_error_handler)
     app.include_router(router)
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
@@ -284,7 +289,7 @@ def test_progress_projects_only_current_correlated_notifications(snapshotting):
     assert catching_up.status == "catching_up" and catching_up.progress.scan_percent == 100
     assert catching_up.progress.scan_complete and catching_up.published_generation_id is None
     assert catching_up.operations[0].state == "pending" and catching_up.history_epoch is None
-    assert service.list_mirrors()["items"][0]["progress"]["stage"] == "catching_up"
+    assert inventory()["items"][0]["progress"]["stage"] == "catching_up"
     snapshot["binding"]["allocation_operation_id"] = "unrelated"
     assert service.get_mirror(mid)["progress"] is None
     snapshot["binding"]["allocation_operation_id"] = op["id"]
@@ -297,14 +302,14 @@ def test_inventory_filters_the_same_observed_status_as_detail(snapshotting):
     snapshot.update(state="catching_up", scan=dict(offset=1, timestamp=1700000000123),
                     completion=dict(offset=2, timestamp=1700000001456))
     assert service.get_mirror_detail(mid)["mirror"]["status"] == "catching_up"
-    listed, = service.list_mirrors()["items"]
+    listed, = inventory()["items"]
     assert listed["status"] == "catching_up"
-    matching = service.list_mirrors(status="catching_up", source_id="s1", q="orders", limit=1)
+    matching = inventory(status="catching_up", source_id="s1", q="orders", limit=1)
     assert matching["total"] == 1 and matching["items"][0]["id"] == mid
-    assert service.list_mirrors(status="catching_up", offset=1)["total"] == 1
-    assert service.list_mirrors(status="catching_up", offset=1)["items"] == []
-    assert service.list_mirrors(status="waiting")["total"] == 0
-    assert service.list_mirrors(status="catching_up", source_id="hidden")["total"] == 0
+    assert inventory(status="catching_up", offset=1)["total"] == 1
+    assert inventory(status="catching_up", offset=1)["items"] == []
+    assert inventory(status="waiting")["total"] == 0
+    assert inventory(status="catching_up", source_id="hidden")["total"] == 0
     assert store.mirrors[mid]["status"] == "waiting"
 
 
@@ -317,11 +322,11 @@ def test_current_blocked_snapshot_is_observable_and_keeps_its_slot(snapshotting,
     assert {item["key"]: item["result"] for item in detail["readiness"]} == {
         "capture_admission": "pass", "incremental_snapshot_blocked": "fail",
     }
-    assert service.list_mirrors(status="needs_attention")["total"] == 1
+    assert inventory(status="needs_attention")["total"] == 1
     assert state["incremental_snapshots"]["active"] == "generation"
     snapshot["binding"]["allocation_operation_id"] = "other-request"
     assert service.get_mirror_detail(mid)["mirror"]["status"] == "waiting"
-    assert service.list_mirrors(status="needs_attention")["total"] == 0
+    assert inventory(status="needs_attention")["total"] == 0
 
 
 def test_retained_published_copy_reports_ready_after_open_confirmation(opened):
@@ -330,8 +335,8 @@ def test_retained_published_copy_reports_ready_after_open_confirmation(opened):
     mirror.update(status="unknown", published_generation_id="published")
     next(iter(store.operations.values()))["state"] = "applied"
     assert service.get_mirror_detail(mid)["mirror"]["status"] == "ready"
-    assert service.list_mirrors(status="ready")["total"] == 1
-    assert service.list_mirrors(status="unknown")["total"] == 0
+    assert inventory(status="ready")["total"] == 1
+    assert inventory(status="unknown")["total"] == 0
 
 
 @pytest.mark.parametrize("replacement_first", [False, True])
@@ -351,6 +356,8 @@ def test_applied_open_admission_follows_the_replacement_publication(snapshotting
 
 
 def test_filtered_inventory_uses_one_candidate_snapshot_during_enrollment(opened, monkeypatch):
+    from backend.metadata.mirrors.fleet_store import FleetStore
+
     store, mid = opened
     original = store.mirrors.pop(mid)
     store.operations.clear()
@@ -358,16 +365,16 @@ def test_filtered_inventory_uses_one_candidate_snapshot_during_enrollment(opened
         mirror = dict(original, id=f"mirror-{index:03}", qualified_table=f"public.table_{index:03}",
                       status="ready", published_generation_id=f"copy-{index}")
         store.mirrors[mirror["id"]] = mirror
-    page = store.page
+    page = FleetStore.inventory_page
 
-    def enroll_after_read(session, **query):
-        result = page(session, **query)
+    def enroll_after_read(fleet, session, **query):
+        result = page(fleet, session, **query)
         store.mirrors["new"] = dict(original, id="new", qualified_table="public.table_000", status="ready",
                                     published_generation_id="new-copy")
         return result
 
-    monkeypatch.setattr(store, "page", enroll_after_read)
-    result = service.list_mirrors(status="ready", limit=500)
+    monkeypatch.setattr(FleetStore, "inventory_page", enroll_after_read)
+    result = inventory(status="ready", limit=500)
     identities = [item["id"] for item in result["items"]]
     assert result["total"] == len(identities) == len(set(identities)) == 101
 

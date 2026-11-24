@@ -15,6 +15,7 @@ from backend.metadata.errors import SourceCaptureControlConflict
 from backend.metadata.mirrors import service
 from backend.metadata.mirrors.schemas import MirrorResponse
 from backend.metadata.sources.store import get_source_store
+from backend.tests.mirror_inventory import inventory
 from backend.tests.test_capture_preparation import management_engine as management_engine
 from backend.tests.test_mirror_generation_allocation import target_dsn as target_dsn
 
@@ -62,7 +63,7 @@ def test_confirmed_stop_tracks_the_current_disable_and_preserves_publication(man
 
     pending = service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")
     assert pending["mirror"]["status"] == "disable_pending"
-    assert service.list_mirrors(status="disabled")["total"] == 0
+    assert inventory(status="disabled")["total"] == 0
     stop = _next_command()
     with pytest.raises(SourceCaptureControlConflict):
         _accept(stop, runtime_instance_id="another-runtime")
@@ -75,8 +76,8 @@ def test_confirmed_stop_tracks_the_current_disable_and_preserves_publication(man
     assert mirror.control.stop_ack.operation_id == pending["operation_id"]
     assert mirror.control.stop_ack.source_operation_id == stop["operation_id"]
     assert next(op for op in mirror.operations if op.id == pending["operation_id"]).state == "applied"
-    assert service.list_mirrors(status="disable_pending")["total"] == 0
-    page = service.list_mirrors(status="disabled")
+    assert inventory(status="disable_pending")["total"] == 0
+    page = inventory(status="disabled")
     assert page["total"] == 1 and page["items"][0]["id"] == mirror_id
     assert service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")["operation_id"] == pending["operation_id"]
     assert control.record_applied_evidence(
@@ -89,8 +90,8 @@ def test_confirmed_stop_tracks_the_current_disable_and_preserves_publication(man
         control.record_source_intent(session, source, updated, actor_user_id="operator", actor_token_id=None)
     with pytest.raises(SourceCaptureControlConflict):
         _accept(stop)
-    assert service.list_mirrors(status="disabled")["total"] == 0
-    assert service.list_mirrors(status="disable_pending")["total"] == 1
+    assert inventory(status="disabled")["total"] == 0
+    assert inventory(status="disable_pending")["total"] == 1
     assert service.get_mirror(mirror_id)["control"]["stop_ack"] is None
 
 
@@ -107,8 +108,8 @@ def test_reconcile_of_other_mirrors_does_not_confirm_per_table_stop(management):
     assert [entry["qualified_table"] for entry in command["published_scope"] if entry["included"]] == ["public.items"]
     _accept(command)
     assert service.get_mirror(mirror_id)["control"]["stop_ack"] is None
-    assert service.list_mirrors(status="disabled")["total"] == 0
-    assert service.list_mirrors(status="disable_pending")["total"] == 1
+    assert inventory(status="disabled")["total"] == 0
+    assert inventory(status="disable_pending")["total"] == 1
 
     excluded, = [entry for entry in command["published_scope"] if not entry["included"]]
     refs = dict(connector_excluded_ref="sha256:" + "1" * 64, inflight_drained_ref="sha256:" + "2" * 64,
@@ -148,7 +149,7 @@ def test_stop_cannot_confirm_a_later_disable_before_the_scope_is_reconciled(mana
     service.set_enabled(mirror_id, enabled=False, actor_user_id="operator")
     _accept(stale_stop)
     assert service.get_mirror(mirror_id)["control"]["stop_ack"] is None
-    assert service.list_mirrors(status="disable_pending")["total"] == 1
+    assert inventory(status="disable_pending")["total"] == 1
     _accept(_next_command())
     assert service.get_mirror(mirror_id)["status"] == "disabled"
 

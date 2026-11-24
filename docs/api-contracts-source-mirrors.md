@@ -60,6 +60,33 @@ Summary keys are `captured_events`, `committed_events`, `committed_batches`, `pe
 
 These reads require global Operations permission only; Source data grants are not required. Read failure must retain an earlier UI snapshot as stale, while authorization failure clears it. No public write endpoint accepts observations.
 
+### 2.2 Fleet Reads
+
+All fleet endpoints require global `mirror:read`. Fleet Sources own at least one registered Mirror, including stopped Mirrors. Contextual runtime assignments with zero Mirrors do not expand that universe. `source_id` selects one Source; `runtime_id` selects the group's fleet Sources, with `unassigned` identifying Sources without a runtime. Scope applies to counts before Inventory refinements or chart windows.
+
+| Method And Path | Query And Response |
+| --- | --- |
+| `GET /mirror-fleet` | Optional `source_id`, `runtime_id`, `rank=size|attention` (default `size`). Returns `observed_at`, `mirror_count`, `source_count`, `source_size`, `estimated_rows`, `published_count`, nullable `published_percent`, `attention_count`, `states`, `snapshot`, `health`, `segments`, up to eight `ranking` Sources and `ranking_total` |
+| `GET /mirror-fleet/sources` | Scope plus optional literal Source-name/id `q`, `health=failed|stale|unobserved|healthy`, `segment=replication|production|consumption|storage`, and Offset Page `limit`/`offset` (default 12, max 100). Returns Source fleet projections ordered by relevant health severity, then Source ID |
+| `GET /mirror-fleet/runtimes` | Scope plus optional literal runtime-ID `q`, health/segment filters, and Offset Page `limit`/`offset` (default 12, max 100). Returns runtime groups ordered by affected Source count descending, then runtime identity. Includes an Unassigned group when applicable |
+| `GET /mirrors` | Existing Source/status/search parameters plus `runtime_id`, `grouped_state=synchronizing|copying|attention|stopped`, `published_only`, `cause=schema|permission|continuity|pending_stop|source_prerequisite|snapshot_evidence`, `sort=priority|size|rows|table`. Returns the Offset Page envelope and `cause_counts`. Console pages contain 12 items. Literal case-insensitive `q` includes qualified table and Mirror ID |
+
+`source_size` and `estimated_rows` have nullable `value`, `sampled` and `missing`; values sum latest collected statistics for registered Mirror tables only. Unknown statistics do not contribute zero. Percentages are null when their denominator is zero. `states` maps each of the four groups to `count` and nullable `percent`. Classification is shared with Inventory predicates. `snapshot` has nullable `scanned_bytes`/`source_size_bytes`, `sampled`, `missing` and `queued`; byte totals include only observed scans/catch-ups and the source sizes of those same tables.
+
+`health` counts each Source once by its worst link in failed, stale, unobserved, healthy order. `segments` contains independent health counts for each of the four links. These counts describe the selected scope, not the visible page or an Inventory filter. Source projections contain `id`, `name`, nullable `runtime_instance_id`, worst-link `health`, `segment_health`, `mirror_count`, `attention_count`, `source_size` and `estimated_rows`. A segment filter evaluates that segment rather than the Source's worst link.
+
+Runtime projections contain `id`, nullable `runtime_instance_id`, `source_count`, `affected_source_count` and a scalar worst-link `health`. `source_count` includes every fleet Source in the scoped group before health filtering. Without an explicit `health`, `affected_source_count` counts Sources whose relevant health is not healthy; with `health`, it counts Sources matching that value, including healthy Sources when `health=healthy`. Groups with no matches are omitted only when `health` is explicit. The relevant health is the selected segment's health when `segment` is present, otherwise the Source's worst-link health; the runtime's scalar `health` is the worst of those values across its scoped Sources.
+
+Inventory items add `grouped_state`, nullable `attention_cause`/`attention_since`, nullable `source_size_bytes` and `estimated_rows`. `cause_counts` describes scope, search, state and publication predicates before the selected cause. Priority order is attention, copying, synchronizing, stopped. Attention sorts blocked unpublished Mirrors, blocked published Mirrors, then pending stops; blocked groups sort longest wait first. Numeric sorts descend with unknowns last; table sort ascends. Every order has an identity tie-breaker. Filtering, sorting, total and paging apply to the entire set.
+
+### 2.3 Throughput History
+
+`GET /mirror-throughput` requires `mirror:read`. It accepts optional `source_id`/`runtime_id` and `hours=1|6|24` (default 6), which changes only the chart window. The response has `observed_at`, `window_start`, `window_end`, `hours`, `unit: MB/s`, `mirror_count`, `source_count` and bounded `points`. Each point has `at`, `bucket_start`, `received` and `committed`. Each rate has nullable `value`, `sampled`, `missing`, nullable `interval_start`/`interval_end`, nullable `oldest_observation`/`newest_observation`, and `measured_seconds`.
+
+Rates compare measured eligible incremental payload bytes per measured second, divided by 1,000,000. The signed interval sample accepts nullable `captured_bytes` and `committed_bytes`; both use the uncompressed key/value/header byte definition in section 2.1. Snapshots, control records, tombstones and replay are excluded. Native committed byte deltas require complete target byte coverage at both interval boundaries; counter or lineage resets produce an unavailable interval. Captured bytes require an independent qualified capture observation. Neither field derives from event counts, Source size, snapshot progress, Kafka position distance or physical I/O.
+
+Durable bounded history retains at least 24 hours of completed measurement intervals, including their Source/runtime and generation lineage. A later authority or publication change does not erase valid historical observations. Sum measured per-Mirror rates with their actual intervals and explicit coverage. Missing series values remain null; a measured idle interval is zero. The Console labels both series accurately and inspects chart samples in UTC.
+
 ## 3. Management And Runtime Interfaces
 
 The following entry points serve Metadata, runtime and deployment verification. Cross-package imports follow `docs/backend-layout.md`. Data transfer objects are immutable values; credentials are excluded. Composition binds external delivery, secret, target and notification adapters.

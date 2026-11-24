@@ -29,9 +29,9 @@ import { useMirrorStatus } from "./useMirrorStatus";
 const tableFilters = [{ key: "tableSource", type: "select", defaultValue: "" }] as const;
 const tablePageSize = 10;
 
-type DrawerProps = { objectId?: string; sourceId?: string; disabled?: boolean; onAccepted?: () => void };
+type DrawerProps = { objectId?: string; sourceId?: string; disabled?: boolean };
 
-export function MirrorTableDrawer({ objectId, sourceId, disabled, onAccepted }: DrawerProps) {
+export function MirrorTableDrawer({ objectId, sourceId, disabled }: DrawerProps) {
   const t = useTranslate();
   const { data: read } = useCan({ resource: "mirrors", action: "show" });
   const { data: write } = useCan({ resource: "mirrors", action: "edit" });
@@ -68,7 +68,7 @@ export function MirrorTableDrawer({ objectId, sourceId, disabled, onAccepted }: 
         ? <MirrorTablePicker key={`${canRead}-${canWrite}`} query={query} onSelect={navigate} showSetting={canRead || canWrite} />
         : <Stack>
             {picker && <Button variant="subtle" w="fit-content" onClick={() => navigate("list")}>{t("mirrors.backToTables")}</Button>}
-            <TableSetting key={`${view}-${canRead}-${canWrite}`} objectId={view!} canRead={canRead} canWrite={canWrite} onAccepted={onAccepted} />
+            <TableSetting key={`${view}-${canRead}-${canWrite}`} objectId={view!} canRead={canRead} canWrite={canWrite} />
           </Stack>)}
     </Drawer>
   </>;
@@ -124,8 +124,8 @@ function MirrorTablePicker({ query, onSelect, showSetting }: {
   </Stack>;
 }
 
-function TableSetting({ objectId, canRead, canWrite, onAccepted }: {
-  objectId: string; canRead: boolean; canWrite: boolean; onAccepted?: () => void;
+function TableSetting({ objectId, canRead, canWrite }: {
+  objectId: string; canRead: boolean; canWrite: boolean;
 }) {
   const t = useTranslate();
   const { pathname, search } = useConsoleLocation();
@@ -187,7 +187,6 @@ function TableSetting({ objectId, canRead, canWrite, onAccepted }: {
       setTable({ ...table, mirror: result.mirror });
       setReceipt(result.operation_id);
       presentConsoleNotification({ type: "success", title: t("mirrors.acceptedForTable", { table: table.qualified_table }) });
-      onAccepted?.();
     } catch (error) {
       if (signal.aborted) return;
       setReceipt(null);
@@ -235,7 +234,6 @@ function TableSetting({ objectId, canRead, canWrite, onAccepted }: {
         onResult={() => {
           setReceipt(null);
           setReload(value => value + 1);
-          onAccepted?.();
         }} />}
       {receipt && !saving && <div role="status"><Text fw={600}>{t("mirrors.accepted")}</Text><Text size="sm">{receipt}</Text></div>}
       {canRead && setting.mirror_id && <TableCopyState key={receipt} id={setting.mirror_id} origin={origin}

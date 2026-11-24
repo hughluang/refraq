@@ -153,13 +153,6 @@ class MirrorDetailResponse(MirrorResponse):
     can_enable: bool
 
 
-class MirrorListResponse(StrictModel):
-    items: list[Mirror]
-    total: int
-    limit: int
-    offset: int
-
-
 class PatchMirrorRequest(StrictModel):
     enabled: bool = Field(strict=True)
 

@@ -13,7 +13,7 @@ from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.models import CatalogObjectRow, SourceRow
 from backend.metadata.mirrors.history_models import HistoryGateRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow
-from backend.metadata.mirrors.lifecycle import dispatch_scope, open_evidence, registry_scope
+from backend.metadata.mirrors.lifecycle import registry_scope
 from backend.metadata.mirrors.status_projection import pending_opens, refresh_source_status
 from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
 from backend.metadata.sources.store import get_source_store
@@ -92,33 +92,6 @@ class MemoryMirrorStore:
             if op["mirror_id"] in mirror_ids and op["kind"] == "open" and op["state"] == "pending":
                 result[op["mirror_id"]].append(op)
         return result
-
-    def page(self, session, *, source_id, q, limit, offset, status=None):
-        contexts = {}
-        if status is not None:
-            for row in self.mirrors.values():
-                sid = row["source_id"]
-                if sid not in contexts and source_id in (None, sid):
-                    state = get_source_store().capture_bindings.get(sid, {})
-                    scope = self.published_scope(session, sid)
-                    operations = self.pending_opens(session, {item["mirror_id"] for item in scope})
-                    contexts[sid] = state, dispatch_scope(scope, state, operations), operations
-
-        def matches_status(row):
-            if status is None:
-                return True
-            state, scope, operations = contexts[row["source_id"]]
-            return open_evidence(row, operations[row["id"]], state, scope).status == status
-
-        needle = (q or "").casefold()
-        rows = sorted((
-            row for row in self.mirrors.values()
-            if (source_id is None or row["source_id"] == source_id)
-            and matches_status(row)
-            and any(needle in row[key].casefold() for key in ("source_key", "source_name", "qualified_table"))
-        ), key=lambda row: (row["source_key"], row["qualified_table"], row["id"]))
-        page = rows[offset:] if limit is None else rows[offset:offset + limit]
-        return deepcopy(page), len(rows)
 
     def save(self, session, state):
         old = self.mirrors.get(state["id"])
@@ -212,30 +185,6 @@ class SqlMirrorStore:
         return session.execute(page).all(), total
 
     pending_opens = staticmethod(pending_opens)
-
-    def page(self, session, *, source_id, q, limit, offset, status=None):
-        criteria = []
-        if status is not None:
-            criteria.append(MirrorRow.effective_status == status)
-        if source_id is not None:
-            criteria.append(MirrorRow.source_id == source_id)
-        source_key = MirrorRow.state["source_key"].as_string()
-        table = MirrorRow.state["qualified_table"].as_string()
-        postgres = session.get_bind().dialect.name == "postgresql"
-        if q:
-            fields = (source_key, MirrorRow.state["source_name"].as_string(), table)
-            if postgres:
-                fields = tuple(func.casefold(field.collate("pg_unicode_fast")) for field in fields)
-                criteria.append(or_(*(field.contains(q.casefold(), autoescape=True) for field in fields)))
-            else:
-                criteria.append(or_(*(field.icontains(q, autoescape=True) for field in fields)))
-        order = (source_key, table, MirrorRow.id)
-        if postgres:
-            order = tuple(column.collate("C") for column in order)
-        total = session.scalar(select(func.count()).select_from(MirrorRow).where(*criteria))
-        rows = session.scalars(select(MirrorRow.state).where(*criteria).order_by(*order)
-                               .limit(limit).offset(offset)).all()
-        return rows, total
 
     def save(self, session, state):
         row = session.get(MirrorRow, state["id"])

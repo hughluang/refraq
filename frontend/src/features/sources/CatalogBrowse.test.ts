@@ -6,7 +6,6 @@ import { cleanup, configure, fireEvent, render, screen, waitFor, within } from "
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MirrorList } from "@/features/mirrors/MirrorList";
 import { CatalogBrowse } from "./CatalogBrowse";
 import { ApiError } from "@/lib/api";
 import en from "@/locales/en-US/common.json";
@@ -19,7 +18,7 @@ const setCatalogMirrorEnabled = vi.hoisted(() => vi.fn());
 const grants = vi.hoisted(() => ({ readMirror: true }));
 
 const schedules = vi.hoisted(() => ({ listSourceSchedules: vi.fn(), runSchedule: vi.fn() }));
-const mirrors = vi.hoisted(() => ({ listMirrors: vi.fn(), getMirror: vi.fn() }));
+const mirrors = vi.hoisted(() => ({ getMirror: vi.fn() }));
 const location = vi.hoisted(() => ({ search: "" as string | null }));
 vi.mock("@/features/schedules/api", () => schedules);
 vi.mock("@/features/mirrors/api", () => mirrors);
@@ -154,7 +153,6 @@ describe("Source and Operations discovery", () => {
     listCatalogObjects.mockResolvedValue({ items: [], total: 0 });
     schedules.listSourceSchedules.mockReset();
     schedules.runSchedule.mockReset();
-    mirrors.listMirrors.mockReset();
     mirrors.getMirror.mockReset();
     listMirrorTables.mockReset();
     setCatalogMirrorEnabled.mockReset();
@@ -226,25 +224,5 @@ describe("Source and Operations discovery", () => {
     expect(await screen.findByText(copy["catalog.collect.contact"])).toBeTruthy();
     expect(window.location.search).toBe("?source=s1");
     expect(screen.queryByRole("button", { name: copy["catalog.collect.action"] })).toBeNull();
-  });
-
-  it("shows the Operations empty state before any source mirror is provisioned", async () => {
-    mirrors.listMirrors.mockResolvedValue({ items: [], total: 0 });
-    render(shell(createElement(MirrorList)));
-    expect(await screen.findByText(copy["mirrors.empty"])).toBeTruthy();
-    expect(screen.queryByRole("link", { name: en["catalog.title"] })).toBeNull();
-  });
-
-  it("keeps filtered emptiness separate from a load failure and a revoked mirror permission", async () => {
-    location.search = "q=missing";
-    mirrors.listMirrors.mockResolvedValueOnce({ items: [], total: 0 })
-      .mockRejectedValueOnce(new ApiError(500, "UNKNOWN", "offline"))
-      .mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", "revoked"));
-    render(shell(createElement(MirrorList)));
-    expect(await screen.findByText(copy["common.noMatch"])).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: copy["common.refresh"] }));
-    fireEvent.click(await screen.findByRole("button", { name: copy["status.unloaded"] }));
-    expect(await screen.findByText(copy["forbidden.back"])).toBeTruthy();
-    expect(screen.queryByRole("link", { name: en["catalog.title"] })).toBeNull();
   });
 });

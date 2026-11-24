@@ -23,10 +23,12 @@ from backend.metadata.capture.store import save_binding
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
 from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, allocation_observation, observation
 from backend.metadata.mirrors import service
+from backend.metadata.mirrors.diagnostic_store import DiagnosticRow
 from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
 from backend.metadata.mirrors.store import SqlMirrorStore
 from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, SourceRow
 from backend.metadata.sources.store import SourceRecord, get_source_store, reset_source_store
+from backend.tests.mirror_inventory import inventory
 
 
 SOURCE = "source-one"
@@ -61,7 +63,7 @@ def management(monkeypatch, request, management_engine):
     request.addfinalizer(reset_source_store)
     engine = management_engine
     for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, MirrorRow,
-                  MirrorOperationRow, service.HistoryGateRow):
+                  MirrorOperationRow, service.HistoryGateRow, DiagnosticRow):
         model.__table__.create(engine)
     factory = sessionmaker(engine)
 
@@ -235,7 +237,7 @@ def test_rollbacks_leave_older_scope_and_command_current(management, tmp_path):
         event.remove(MirrorOperationRow, "after_insert", fail_open)
     control.reconcile_published_scope(SOURCE)
     assert pending_capture_commands() == (old,)
-    assert service.list_mirrors()["total"] == 0
+    assert inventory()["total"] == 0
     service.enable_for_object("items", actor_user_id="operator")
 
     def fail_after_insert(mapper, connection, command):

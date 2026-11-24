@@ -1,5 +1,7 @@
 """Authenticated global mirror Operations; no data-plane HTTP surface."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -10,10 +12,13 @@ from backend.admin.user_store import UserRecord
 from backend.metadata.mirrors import recovery, service
 from backend.metadata.mirrors import diagnostics
 from backend.metadata.mirrors.diagnostic_schemas import DiagnosticsResponse, MeasurementResponse
+from backend.metadata.mirrors.diagnostic_schemas import Health, Link
+from backend.metadata.mirrors.fleet_schemas import (
+    AttentionCause, FleetOverview, GroupedState, InventoryPage, InventorySort, RuntimeFleetPage, SourceFleetPage,
+)
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
 from backend.metadata.mirrors.schemas import (
     JournalPage,
-    MirrorListResponse,
     MirrorDetailResponse,
     MirrorActionReceipt,
     MirrorStatus,
@@ -21,6 +26,7 @@ from backend.metadata.mirrors.schemas import (
     PatchMirrorResponse,
     RecoveryResponse,
 )
+from backend.metadata.mirrors.throughput import ThroughputResponse, read_throughput
 
 router = APIRouter(tags=["mirrors"])
 
@@ -40,17 +46,67 @@ def read_diagnostics(
                                         assignment_offset=assignment_offset)
 
 
-@router.get("/mirrors", response_model=MirrorListResponse)
+@router.get("/mirror-fleet", response_model=FleetOverview)
+def fleet_overview(
+    request: Request,
+    _: UserRecord = Depends(require_permission("mirror:read")),
+    source_id: str | None = None, runtime_id: str | None = None, rank: Literal["size", "attention"] = "size",
+):
+    return request.app.state.mirror_fleet_reads["overview"](source_id=source_id, runtime_id=runtime_id, rank=rank)
+
+
+@router.get("/mirror-fleet/sources", response_model=SourceFleetPage)
+def fleet_sources(
+    request: Request,
+    _: UserRecord = Depends(require_permission("mirror:read")),
+    source_id: str | None = None, runtime_id: str | None = None, q: str | None = Query(default=None, max_length=256),
+    health: Health | None = None, segment: Link | None = None,
+    limit: int = Query(default=12, ge=1, le=100), offset: int = Query(default=0, ge=0),
+):
+    return request.app.state.mirror_fleet_reads["sources"](source_id=source_id, runtime_id=runtime_id,
+                                                          q=q, health=health, segment=segment, limit=limit, offset=offset)
+
+
+@router.get("/mirror-fleet/runtimes", response_model=RuntimeFleetPage)
+def fleet_runtimes(
+    request: Request,
+    _: UserRecord = Depends(require_permission("mirror:read")),
+    source_id: str | None = None, runtime_id: str | None = None, q: str | None = Query(default=None, max_length=256),
+    health: Health | None = None, segment: Link | None = None,
+    limit: int = Query(default=12, ge=1, le=100), offset: int = Query(default=0, ge=0),
+):
+    return request.app.state.mirror_fleet_reads["runtimes"](source_id=source_id, runtime_id=runtime_id,
+                                                           q=q, health=health, segment=segment, limit=limit, offset=offset)
+
+
+@router.get("/mirror-throughput", response_model=ThroughputResponse)
+def fleet_throughput(
+    request: Request,
+    _: UserRecord = Depends(require_permission("mirror:read")),
+    source_id: str | None = None, runtime_id: str | None = None, hours: Literal["1", "6", "24"] = "6",
+):
+    return read_throughput(store=request.app.state.mirror_diagnostics,
+        read_scope=request.app.state.mirror_diagnostic_scope, source_id=source_id, runtime_id=runtime_id, hours=int(hours))
+
+
+@router.get("/mirrors", response_model=InventoryPage)
 def list_mirrors(
+    request: Request,
     _: UserRecord = Depends(require_permission("mirror:read")),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     source_id: str | None = None,
     status: MirrorStatus | None = None,
     q: str | None = None,
+    runtime_id: str | None = None,
+    grouped_state: GroupedState | None = None,
+    published_only: bool = False,
+    cause: AttentionCause | None = None,
+    sort: InventorySort = "priority",
 ):
-    return service.list_mirrors(
-        limit=limit, offset=offset, source_id=source_id, status=status, q=q
+    return request.app.state.mirror_fleet_reads["inventory"](
+        limit=limit, offset=offset, source_id=source_id, status=status, q=q,
+        runtime_id=runtime_id, grouped_state=grouped_state, published_only=published_only, cause=cause, sort=sort,
     )
 
 

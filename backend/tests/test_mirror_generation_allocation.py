@@ -23,6 +23,7 @@ from backend.metadata.capture.store import load_binding, save_binding, save_oper
 from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, SourceRow
 from backend.metadata.mirrors import service
 from backend.metadata.mirrors.bootstrap import create_generation, install
+from backend.metadata.mirrors.diagnostic_store import DiagnosticRow
 from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
@@ -30,6 +31,7 @@ from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.schemas import Mirror
 from backend.metadata.mirrors.store import SqlMirrorStore
 from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity
+from backend.tests.mirror_inventory import inventory
 
 
 @pytest.fixture(scope="module")
@@ -50,7 +52,7 @@ def opened(target_dsn, monkeypatch):
     engine = create_engine("postgresql+psycopg://", creator=lambda: psycopg.connect(target_dsn, dbname=database))
     try:
         for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, MirrorRow,
-                      MirrorOperationRow, HistoryGateRow, HistoryInvalidationRow, RecoveryRow):
+                      MirrorOperationRow, HistoryGateRow, HistoryInvalidationRow, RecoveryRow, DiagnosticRow):
             model.__table__.create(engine)
         store = SqlMirrorStore()
         store.transaction = sessionmaker(engine).begin
@@ -355,11 +357,11 @@ def test_sql_inventory_and_catalog_picker_keep_observed_and_retained_bindings(op
             index["name"] for index in inspect(connection).get_indexes("source_mirrors")
         }
         assert connection.exec_driver_sql("SELECT effective_status FROM source_mirrors").scalar_one() == "catching_up"
-    page = service.list_mirrors(status="catching_up", q="sales.orders", limit=1)
+    page = inventory(status="catching_up", q="sales.orders", limit=1)
     assert page["total"] == 1 and page["items"][0]["id"] == mirror_id
-    assert service.list_mirrors(status="waiting")["total"] == 0
-    assert service.list_mirrors(status="catching_up", offset=1)["items"] == []
-    assert service.list_mirrors(status="catching_up", offset=1)["total"] == 1
+    assert inventory(status="waiting")["total"] == 0
+    assert inventory(status="catching_up", offset=1)["items"] == []
+    assert inventory(status="catching_up", offset=1)["total"] == 1
     with store.transaction() as session:
         source = session.get(SourceRow, authority.source_id)
         source.engine = "mysql"
