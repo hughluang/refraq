@@ -8,20 +8,22 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import NullPool
 
-from backend.core.config import Settings, _database_target
+from backend.core.config import Settings, database_target
 from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.mirrors import fleet
 from backend.metadata.mirrors.bootstrap import validate_target
 from backend.metadata.mirrors.deletion import TargetDeletion
 from backend.metadata.mirrors.diagnostic_store import DiagnosticStore
 from backend.metadata.mirrors.history import SqlHistoryTarget
-from backend.metadata.mirrors.service import MirrorError, _storage, diagnostic_scope
+from backend.metadata.mirrors.errors import MirrorError
+from backend.metadata.mirrors.presentation import diagnostic_scope
+from backend.metadata.mirrors.service import storage
 from backend.metadata.sources.store import get_source_store
 
 
 def compose_diagnostics(settings: Settings, *, transaction):
     store = DiagnosticStore(memory=settings.store_backend == "memory", transaction=transaction)
-    mirror_store, source_store = _storage(), get_source_store()
+    mirror_store, source_store = storage(), get_source_store()
     read_scope = partial(diagnostic_scope, mirror_store=mirror_store, source_store=source_store)
     dependencies = dict(store=store, mirror_store=mirror_store, source_store=source_store, catalog_store=get_catalog_store())
     fleet_reads = {name: partial(getattr(fleet, name), **dependencies)
@@ -75,7 +77,7 @@ def compose_mirrors(settings: Settings) -> MirrorAdapters | None:
     try:
         urls = (policy.gateway_url.get_secret_value(), policy.applier_url.get_secret_value())
         # Target state must never share the Management database.
-        if settings.database_url and _database_target(urls[0]) == _database_target(settings.database_url):
+        if settings.database_url and database_target(urls[0]) == database_target(settings.database_url):
             _unavailable()
         for url, role in zip(urls, ("refraq_mirror_gateway", "refraq_mirror_applier"), strict=True):
             engine = create_engine(

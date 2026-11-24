@@ -8,7 +8,7 @@ import re
 
 from sqlalchemy import text
 
-from backend.metadata.mirrors.service import CommittedOpenPublication, OpenGenerationBinding, OpenPublicationIdentity, publication_certificate_ref
+from backend.metadata.mirrors.reconciliation import CommittedOpenPublication, OpenGenerationBinding, OpenPublicationIdentity, publication_certificate_ref
 from backend.metadata.mirrors.types import Authority
 
 

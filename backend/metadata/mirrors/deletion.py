@@ -8,7 +8,6 @@ from sqlalchemy import text
 from backend.metadata.capture.store import list_operations, load_binding, load_operation, save_binding
 from backend.metadata.mirrors.errors import MirrorError
 from backend.metadata.mirrors.history_models import HistoryGateRow
-from backend.metadata.mirrors.store import MemoryMirrorStore
 from backend.metadata.mirrors.types import Authority
 
 
@@ -28,10 +27,12 @@ def _fence(command, receipt=None):
     return dict(operation_id=command["operation_id"], authority=asdict(authority), receipt=receipt)
 
 
-def deletion_proof(session, mirror, operations):
-    """Return None only when durable management records exclude any runtime dispatch."""
+def deletion_proof(database, mirror, operations):
+    """Return None only when durable management records exclude any runtime dispatch.
+
+    ``database`` is the Management database session, or None for the memory store.
+    """
     mid, source_id = mirror["id"], mirror["source_id"]
-    database = None if isinstance(session, MemoryMirrorStore) else session
     state = load_binding(database, source_id) or {}
     ledger = state.get("incremental_snapshots", {})
     scans = ledger.get("generations", {})
@@ -91,11 +92,11 @@ def deletion_proof(session, mirror, operations):
                                          for op in operations)))
 
 
-def retire_replacement(session, mirror):
+def retire_replacement(database, mirror):
     """Keep the active Source owner's replacement settlement after the Mirror is removed."""
-    if isinstance(session, MemoryMirrorStore):
+    if database is None:
         return
-    state = load_binding(session, mirror["source_id"]) or {}
+    state = load_binding(database, mirror["source_id"]) or {}
     allocation = state.get("allocation") or {}
     command = allocation.get("command", {})
     submission = command.get("replacement", {}).get("scope", {}).get("submission", {})
@@ -105,7 +106,7 @@ def retire_replacement(session, mirror):
     # registered replacement is deleted, including a build abandoned by its stop.
     allocation["deleted_replacement"] = dict(mirror_id=mirror["id"], operation_id=command["operation_id"],
                                               delete_operation_id=mirror["deletion_operation_id"])
-    save_binding(session, state)
+    save_binding(database, state)
 
 
 class TargetDeletion:

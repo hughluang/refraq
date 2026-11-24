@@ -28,10 +28,12 @@ from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocke
 from backend.metadata.capture.snapshot import SnapshotCoordinator
 from backend.metadata.capture.store import list_operations, load_binding, save_binding
 from backend.metadata.errors import SourceCaptureControlConflict
-from backend.metadata.mirrors.service import (
-    MirrorError, ObserveCommittedOpenPublication, OpenPublicationIdentity, read_dispatch_scope,
+from backend.metadata.mirrors.errors import MirrorError
+from backend.metadata.mirrors.reconciliation import (
+    ObserveCommittedOpenPublication, OpenPublicationIdentity,
     reconcile_open_publication, lifecycle_checks, table_prerequisite_check, record_continuity_receipt,
 )
+from backend.metadata.mirrors.service import read_dispatch_scope
 from backend.metadata.mirrors.types import Authority
 from backend.metadata.mirrors.recovery_store import RecoveryRow
 

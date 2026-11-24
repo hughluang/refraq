@@ -27,7 +27,7 @@ from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.errors import MirrorError
 from backend.tests.test_capture_preparation import management_engine as management_engine
 from backend.tests.test_mirror_recovery import Runtime, Target
 

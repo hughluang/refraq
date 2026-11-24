@@ -4,7 +4,7 @@ import json
 
 from sqlalchemy import text
 
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.errors import MirrorError
 from backend.metadata.mirrors.types import Pin
 
 

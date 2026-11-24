@@ -108,7 +108,7 @@ def test_takeover_during_deferred_enrollment_requires_full_fence_and_releases_ol
     source.status = "active"
     source.capture_credential_ciphertext = "fixture"
     source.capture_revision = managed_command["credential_revision"]
-    registry = mirrors._storage()
+    registry = mirrors.storage()
     for name in ("orders", "items"):
         registry.bindings[name] = dict(source_id=source_id, source_name="One", source_key="one", object_id=name,
                                        table_identity=name, qualified_table=f"public.{name}")
@@ -349,7 +349,7 @@ def scanning_source(managed_command):
     source.status = "active"
     source.capture_credential_ciphertext = "fixture"
     source.capture_revision = managed_command["credential_revision"]
-    registry = mirrors._storage()
+    registry = mirrors.storage()
     for name in ("orders", "items"):
         registry.bindings[name] = dict(source_id=source_id, source_name="One", source_key="one", object_id=name,
                                        table_identity=name, qualified_table=f"public.{name}")

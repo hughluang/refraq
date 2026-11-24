@@ -11,9 +11,10 @@ import pytest
 from backend.core.time import utc_now
 from backend.metadata.capture.control import replacement_blocks_lifecycle
 from backend.metadata.capture.store import load_binding, save_binding, save_operation
-from backend.metadata.mirrors import service
+from backend.metadata.mirrors import reconciliation, service
 from backend.metadata.mirrors.bootstrap import create_generation, prepare_authority
 from backend.metadata.mirrors.deletion import TargetDeletion
+from backend.metadata.mirrors.errors import MirrorError
 from backend.metadata.mirrors.history_models import HistoryGateRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.tests.test_mirror_generation_allocation import opened as opened, target_dsn as target_dsn, target_request
@@ -71,8 +72,8 @@ def test_reader_protects_copy_then_purge_recovers_after_management_failure(opene
                 command["binding_id"] = command.pop("resource_binding_id")
                 evidence = dict(observed_at=utc_now().isoformat())
                 save_operation(session, command, evidence)
-                service.record_mirror_stop_evidence(session, command, evidence)
-            with pytest.raises(service.MirrorError, match="MIRROR_READERS_IN_USE"):
+                reconciliation.record_mirror_stop_evidence(session, command, evidence)
+            with pytest.raises(MirrorError, match="MIRROR_READERS_IN_USE"):
                 service.delete_mirror(mid, actor_user_id="operator")
             assert admin.execute("SELECT to_regclass(%s) IS NOT NULL", ("source_mirror." + table,)).fetchone() == (True,)
             with store.transaction() as session:
@@ -83,10 +84,10 @@ def test_reader_protects_copy_then_purge_recovers_after_management_failure(opene
                 persist = store.save
                 def fail_reservation(session, state):
                     if state.get("deletion_reservation"):
-                        raise service.MirrorError("MIRROR_READ_UNAVAILABLE", 503)
+                        raise MirrorError("MIRROR_READ_UNAVAILABLE", 503)
                     persist(session, state)
                 interrupted.setattr(store, "save", fail_reservation)
-                with pytest.raises(service.MirrorError, match="MIRROR_READ_UNAVAILABLE"):
+                with pytest.raises(MirrorError, match="MIRROR_READ_UNAVAILABLE"):
                     service.delete_mirror(mid, actor_user_id="operator")
             assert admin.execute("SELECT (source_mirror_state.acquire_pin(%s,%s))->>'generation_id'",
                                  (pin, mid)).fetchone() == (generation,)
@@ -96,17 +97,17 @@ def test_reader_protects_copy_then_purge_recovers_after_management_failure(opene
             with monkeypatch.context() as interrupted:
                 def fail_acceptance(session, state):
                     if state.get("deletion_operation_id"):
-                        raise service.MirrorError("MIRROR_READ_UNAVAILABLE", 503)
+                        raise MirrorError("MIRROR_READ_UNAVAILABLE", 503)
                     persist(session, state)
                 interrupted.setattr(store, "save", fail_acceptance)
-                with pytest.raises(service.MirrorError, match="MIRROR_READ_UNAVAILABLE"):
+                with pytest.raises(MirrorError, match="MIRROR_READ_UNAVAILABLE"):
                     service.delete_mirror(mid, actor_user_id="operator")
             with pytest.raises(psycopg.Error, match="MIRROR_READ_UNAVAILABLE"):
                 admin.execute("SELECT source_mirror_state.acquire_pin(%s,%s)", (pin, mid))
             # A failed target purge keeps the copy closed to new readers and writers.
             with monkeypatch.context() as interrupted:
                 def lose_purge_reply(*args):
-                    raise service.MirrorError("MIRROR_READ_UNAVAILABLE", 503)
+                    raise MirrorError("MIRROR_READ_UNAVAILABLE", 503)
                 interrupted.setattr(service._target, "purge", lose_purge_reply)
                 accepted = service.delete_mirror(mid, actor_user_id="operator")
                 assert accepted["state"] == "pending"
@@ -120,7 +121,7 @@ def test_reader_protects_copy_then_purge_recovers_after_management_failure(opene
                                      "WHERE id=%s", (generation,)).fetchone() == (True,)
             with monkeypatch.context() as interrupted:
                 def lose_management_reply(*args):
-                    raise service.MirrorError("MIRROR_READ_UNAVAILABLE", 503)
+                    raise MirrorError("MIRROR_READ_UNAVAILABLE", 503)
                 interrupted.setattr(store, "delete", lose_management_reply)
                 accepted = service.delete_mirror(mid, actor_user_id="operator")
                 assert accepted["state"] == "pending"
@@ -128,7 +129,7 @@ def test_reader_protects_copy_then_purge_recovers_after_management_failure(opene
                 with store.transaction() as session:
                     gate = session.get(HistoryGateRow, mid)
                     assert gate.status == "invalidating" and gate.history_epoch != "epoch"
-                with pytest.raises(service.MirrorError, match="MIRROR_CONTROL_CONFLICT"):
+                with pytest.raises(MirrorError, match="MIRROR_CONTROL_CONFLICT"):
                     service.set_enabled(mid, enabled=True, actor_user_id="operator")
             assert admin.execute("SELECT to_regclass(%s)", ("source_mirror." + table,)).fetchone() == (None,)
             assert admin.execute("SELECT count(*) FROM source_mirror_state.live_log WHERE mirror_id=%s", (mid,)).fetchone() == (0,)
@@ -144,7 +145,7 @@ def test_reader_protects_copy_then_purge_recovers_after_management_failure(opene
             service.resume_pending_deletions()
             assert [r["action"] for r in records] == ["mirror.delete"]
             assert records[0]["actor_user_id"] == "operator"
-            with pytest.raises(service.MirrorError, match="MIRROR_NOT_FOUND"):
+            with pytest.raises(MirrorError, match="MIRROR_NOT_FOUND"):
                 service.get_mirror(mid)
             with store.transaction() as session:
                 assert session.get(HistoryGateRow, mid) is None

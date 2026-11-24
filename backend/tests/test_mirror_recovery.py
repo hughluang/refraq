@@ -19,7 +19,8 @@ from backend.metadata.mirrors import router
 from backend.metadata.mirrors.recovery import Recovery, RuntimeDispatchAdapter, bind_recovery, schema_resume_allowed
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
 from backend.metadata.mirrors.recovery_store import RecoveryRow
-from backend.metadata.mirrors.service import CommittedOpenPublication, MirrorError
+from backend.metadata.mirrors.errors import MirrorError
+from backend.metadata.mirrors.reconciliation import CommittedOpenPublication
 from backend.metadata.mirrors.types import Authority
 
 

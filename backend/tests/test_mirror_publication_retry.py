@@ -17,7 +17,7 @@ from backend.metadata.mirrors.application import Application
 from backend.metadata.mirrors.bootstrap import create_generation, install, install_authority, prepare_authority
 from backend.metadata.mirrors.publication import Publication, authorize_retained_delivery, persist_verified_certificate
 from backend.metadata.mirrors.reads import Reads
-from backend.metadata.mirrors.service import (
+from backend.metadata.mirrors.reconciliation import (
     CommittedOpenPublication, OpenGenerationBinding, OpenPublicationIdentity, publication_certificate_ref,
 )
 from backend.metadata.mirrors.types import (

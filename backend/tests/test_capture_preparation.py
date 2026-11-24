@@ -40,7 +40,7 @@ from backend.metadata.capture.test_runtime import (
     CHECKS, SIGNING_KEY, TRUST, allocation_observation, managed_command as managed_command, observation,
 )
 from backend.metadata.capture.test_start import exercise_takeover_retry, scanning_source as scanning_source
-from backend.metadata.mirrors import bootstrap, service
+from backend.metadata.mirrors import bootstrap, reconciliation, service
 from backend.metadata.mirrors.application import Application
 from backend.metadata.mirrors.errors import MirrorError
 from backend.metadata.mirrors.history import History, SqlHistoryTarget
@@ -136,7 +136,7 @@ def test_owner_retry_recovers_the_same_committed_target_fence(native_target, sca
     mid, = registry.mirrors
     table = registry.mirrors[mid]["table_identity"]
     previous_target = Authority(**delivery_composition._target_authority(previous))
-    epoch = service.initial_history_epoch(mid)
+    epoch = reconciliation.initial_history_epoch(mid)
     with psycopg.connect(native_target) as connection:
         bootstrap.prepare_authority(connection, mirror_id=mid, table_identity=table, history_epoch=epoch,
                                     operation_id="initial", expected_authority=None, authority=previous_target,
@@ -336,10 +336,10 @@ def reconcile_open_publication_observation(transaction, target_dsn, restricted, 
     } else None)
     with psycopg.connect(target_dsn) as connection:
         persist_verified_certificate(connection, **publication, verifier=verifier)
-    expected = service.OpenPublicationIdentity(
+    expected = reconciliation.OpenPublicationIdentity(
         authority=authority, generation_id=generation_id, history_epoch=binding["history_epoch"],
         snapshot_operation_id=snapshot["id"], scan_offset=11, completion_offset=12,
-        certificate_ref=service.publication_certificate_ref(certificate),
+        certificate_ref=reconciliation.publication_certificate_ref(certificate),
     )
     with pytest.raises(RuntimeBlocked, match="publication_observation_rejected"):
         reconcile(replace(expected, authority=None), pytest.fail)
@@ -594,11 +594,11 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
     opened = service.enable_for_object("items", actor_user_id="operator")
     control.reconcile_published_scope(SOURCE)
     mirror_id = opened["mirror"]["id"]
-    history_epoch = service.initial_history_epoch(mirror_id)
+    history_epoch = reconciliation.initial_history_epoch(mirror_id)
     if case == "snapshot_replacement_epoch":
         history_epoch = uuid4().hex
         with transaction() as session:
-            session.add(service.HistoryGateRow(mirror_id=mirror_id, history_epoch=history_epoch, status="available",
+            session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch=history_epoch, status="available",
                                                lower_commit_seq=0, lower_entry_seq=0))
         snapshot_faults = []
         recheck = runtime.CaptureRuntime.recheck_snapshot
@@ -701,7 +701,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
         control.reconcile_published_scope(SOURCE)
 
     if case == "withdraw_with_management_timeout":
-        read_open = service._current_open_operation
+        read_open = reconciliation._current_open_operation
 
         def read_open_with_timeout(session, *args):
             if attempts:
@@ -709,7 +709,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                 session.execute(text("SELECT pg_sleep(1)"))
             return read_open(session, *args)
 
-        monkeypatch.setattr(service, "_current_open_operation", read_open_with_timeout)
+        monkeypatch.setattr(reconciliation, "_current_open_operation", read_open_with_timeout)
 
     def dispatch(path, payload):
         nonlocal fenced, receipt
@@ -794,7 +794,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
             command, phase = payload["command"], payload["phase"]
             if phase == "before_start" and case == "history_gate_race":
                 with transaction() as session:
-                    session.add(service.HistoryGateRow(mirror_id=mirror_id, history_epoch="next-epoch",
+                    session.add(HistoryGateRow(mirror_id=mirror_id, history_epoch="next-epoch",
                                                       status="invalidating", lower_commit_seq=0, lower_entry_seq=0))
             if phase == "before_resume" and case == "drift_before_resume":
                 with psycopg.connect(target_dsn) as connection:

@@ -27,6 +27,16 @@ def registry_scope(mirrors):
                   key=lambda entry: (entry["qualified_table"], entry["mirror_id"]))
 
 
+def read_dispatch_scope(store, session, source_id, *, state):
+    """Preserve an in-flight copy while changes to undispatched siblings queue."""
+    desired = store.published_scope(session, source_id)
+    current = (state or {}).get("published_scope", [])
+    if not current or desired == current or not state.get("incremental_snapshots", {}).get("generations"):
+        return desired
+    operations = store.pending_opens(session, {entry["mirror_id"] for entry in current if entry["included"]})
+    return dispatch_scope(desired, state, operations)
+
+
 def current_authority(state, authority, scope):
     expected = asdict(authority)
     expected["binding_id"] = expected.pop("resource_binding_id")

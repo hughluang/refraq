@@ -22,7 +22,7 @@ from backend.metadata.mirrors.publication import Publication, persist_verified_c
 from backend.metadata.mirrors.reads import Reads
 from backend.metadata.mirrors.recovery import Recovery
 from backend.metadata.mirrors.recovery_store import RecoveryRow
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.errors import MirrorError
 from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity, ReadCommittedBounds, Record, SealedScan
 from backend.metadata.models import SourceCaptureBindingRow, SourceRow
 from backend.tests.test_capture_preparation import management_engine as management_engine, native_target as native_target

@@ -838,7 +838,7 @@ def test_mirror_reports_current_wait_reason_without_changing_its_setting(world, 
     from dataclasses import replace
     from datetime import UTC, datetime
     from backend.metadata.capture import configuration
-    from backend.metadata.mirrors import service
+    from backend.metadata.mirrors import presentation
 
     world.login("viewer")
     setting = world.client.put(f"/objects/{world.object_a}/mirror", json={"enabled": True}).json()["mirror"]
@@ -855,7 +855,7 @@ def test_mirror_reports_current_wait_reason_without_changing_its_setting(world, 
     assert reasons() == ["source_disabled"]
     store.save_source(replace(source, capture_credential_ciphertext="sealed", snapshot_window={"start": "01:00", "end": "02:00"}))
     monkeypatch.setattr(configuration, "current_schedule_timezone", lambda: "UTC")
-    monkeypatch.setattr(service, "utc_now", lambda: datetime(2026, 1, 1, 7, tzinfo=UTC))
+    monkeypatch.setattr(presentation, "utc_now", lambda: datetime(2026, 1, 1, 7, tzinfo=UTC))
     assert reasons() == ["snapshot_window_closed"]
     owner = dict(source_id=source.id, owner_epoch=1, runtime_instance_id="owner", capture_generation=1)
     monkeypatch.setitem(store.capture_bindings, source.id, dict(

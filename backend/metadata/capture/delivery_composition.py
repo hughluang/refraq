@@ -24,11 +24,13 @@ from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.bootstrap import validate_target
 from backend.metadata.mirrors.history import History, SqlHistoryTarget
 from backend.metadata.mirrors.publication import Publication
-from backend.metadata.mirrors.service import (
-    MirrorError, OpenGenerationBinding, confirm_retained_opens, current_open_preparations, initial_history_epoch, read_dispatch_scope,
+from backend.metadata.mirrors.errors import MirrorError
+from backend.metadata.mirrors.reconciliation import (
+    OpenGenerationBinding, confirm_retained_opens, current_open_preparations, initial_history_epoch,
     reconcile_open_generation, request_reopen_baseline, require_current_open_allocations,
     require_current_retained_opens, lifecycle_checks, record_continuity_receipt, table_prerequisite_check,
 )
+from backend.metadata.mirrors.service import read_dispatch_scope
 from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity
 
 

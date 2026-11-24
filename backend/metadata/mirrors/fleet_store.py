@@ -7,10 +7,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.core.time import format_instant, parse_instant
 from backend.metadata.mirrors.diagnostic_store import DiagnosticRow
-from backend.metadata.mirrors.diagnostics import LINKS, SEVERITY, _matches, checks_at
+from backend.metadata.mirrors.diagnostics import LINKS, SEVERITY, matches, checks_at
 from backend.metadata.mirrors.lifecycle import current_open, dispatch_scope, open_evidence, registry_scope
 from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
-from backend.metadata.mirrors.store import MemoryMirrorStore
 from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceRow
 
 STATES = ("synchronizing", "copying", "attention", "stopped")
@@ -65,7 +64,9 @@ def _metric(rows, name):
     return dict(value=sum(values) if values else None, sampled=len(values), missing=len(rows) - len(values))
 
 
-class FleetStore:
+class MemoryFleetStore:
+    """Fleet projections over the in-process registry, with the same read interface as ``SqlFleetStore``."""
+
     def __init__(self, mirror_store, diagnostic_store, *, source_store, catalog_store, now):
         self.mirrors = mirror_store
         self.diagnostics = diagnostic_store
@@ -74,7 +75,7 @@ class FleetStore:
         self.now = now
         self._rows = None
 
-    def _memory_rows(self, session):
+    def _load(self, session):
         if self._rows is not None:
             return self._rows
         sources = {s.id: s for s in self.sources.list_sources()[0]}
@@ -93,7 +94,7 @@ class FleetStore:
             desired = registry_scope(mirrors)
             scope = dispatch_scope(desired, binding, operations)
             observation = observations.get(sid)
-            checks = checks_at(observation if _matches(observation, binding) else None, self.now)
+            checks = checks_at(observation if matches(observation, binding) else None, self.now)
             segments = {c["link"]: c["health"] for c in checks}
             health = min(segments.values(), key=SEVERITY.index)
             for mirror in mirrors:
@@ -120,6 +121,107 @@ class FleetStore:
                     health=health, **segments))
         self._rows = result
         return result
+
+    def _scope(self, rows, *, source_id=None, runtime_id=None):
+        return [r for r in rows if (source_id is None or r["source_id"] == source_id) and
+                (runtime_id is None or (r["runtime_instance_id"] or UNASSIGNED) == runtime_id)]
+
+    def inventory_page(self, session, *, source_id=None, runtime_id=None, status=None, grouped_state=None,
+                       published_only=False, cause=None, sort="priority", q=None, limit=100, offset=0):
+        rows = self._scope(self._load(session), source_id=source_id, runtime_id=runtime_id)
+        needle = (q or "").casefold()
+        rows = [r for r in rows if (status is None or r["status"] == status) and
+            (grouped_state is None or r["grouped_state"] == grouped_state) and (not published_only or r["published"]) and
+            any(needle in r[key].casefold() for key in ("id", "qualified_table", "source_name", "source_key"))]
+        facets = {c: sum(r["attention_cause"] == c for r in rows) for c in CAUSES}
+        rows = [r for r in rows if cause is None or r["attention_cause"] == cause]
+        def order(row):
+            table = (row["qualified_table"], row["id"])
+            if sort in {"size", "rows"}:
+                value = row["source_size_bytes" if sort == "size" else "estimated_rows"]
+                return (value is None, -(value or 0), *table)
+            if sort == "table":
+                return table
+            priority = {"attention": 0, "copying": 1, "synchronizing": 2, "stopped": 3}[row["grouped_state"]]
+            triage = 2 if row["attention_cause"] == "pending_stop" else int(row["published"])
+            since = parse_instant(row["attention_since"]).timestamp() if row["attention_since"] else float("inf")
+            size = row["source_size_bytes"] if priority else None
+            return (priority, triage if priority == 0 else 0, since if priority == 0 else 0,
+                    size is None, -(size or 0), *table)
+        rows.sort(key=order)
+        return rows[offset:offset + limit], len(rows), facets
+
+    def _sources(self, session, *, source_id=None, runtime_id=None):
+        groups = {}
+        for row in self._scope(self._load(session), source_id=source_id, runtime_id=runtime_id):
+            groups.setdefault(row["source_id"], []).append(row)
+        return [dict(id=sid, name=rows[0]["source_name"], runtime_instance_id=rows[0]["runtime_instance_id"],
+            health=rows[0]["health"], segment_health={link: rows[0][link] for link in LINKS}, mirror_count=len(rows),
+            attention_count=sum(r["grouped_state"] == "attention" for r in rows),
+            source_size=_metric(rows, "source_size_bytes"), estimated_rows=_metric(rows, "estimated_rows"))
+            for sid, rows in groups.items()]
+
+    def source_page(self, session, *, source_id=None, runtime_id=None, q=None, health=None, segment=None, limit=12, offset=0, rank=None):
+        sources = self._sources(session, source_id=source_id, runtime_id=runtime_id)
+        rows = [s for s in sources if (not q or q.casefold() in (s["id"] + " " + s["name"]).casefold()) and
+                (health is None or (s["segment_health"][segment] if segment else s["health"]) == health)]
+        rows.sort(key=lambda s: (False if rank == "attention" else s["source_size"]["value"] is None,
+                                -(s["attention_count"] if rank == "attention" else s["source_size"]["value"] or 0), s["id"])
+                  if rank else (SEVERITY.index(s["segment_health"][segment] if segment else s["health"]), s["id"]))
+        return rows[offset:offset + limit], len(rows)
+
+    def runtime_page(self, session, *, source_id=None, runtime_id=None, q=None, health=None, segment=None, limit=12, offset=0):
+        sources = self._sources(session, source_id=source_id, runtime_id=runtime_id)
+        groups = {}
+        for source in sources:
+            groups.setdefault(source["runtime_instance_id"] or UNASSIGNED, []).append(source)
+        result = []
+        for rid, rows in groups.items():
+            if q and q.casefold() not in rid.casefold():
+                continue
+            relevant = [r["segment_health"][segment] if segment else r["health"] for r in rows]
+            affected = sum(h == health for h in relevant) if health else sum(h != "healthy" for h in relevant)
+            if health and not affected:
+                continue
+            result.append(dict(id=rid, runtime_instance_id=None if rid == UNASSIGNED else rid,
+                source_count=len(rows), affected_source_count=affected, health=min(relevant, key=SEVERITY.index)))
+        result.sort(key=lambda r: (-r["affected_source_count"], r["id"]))
+        return result[offset:offset + limit], len(result)
+
+    def totals(self, session, *, source_id=None, runtime_id=None):
+        rows = self._scope(self._load(session), source_id=source_id, runtime_id=runtime_id)
+        return dict(mirror_count=len(rows), source_size=_metric(rows, "source_size_bytes"),
+            estimated_rows=_metric(rows, "estimated_rows"), published_count=sum(r["published"] for r in rows),
+            states={s: sum(r["grouped_state"] == s for r in rows) for s in STATES})
+
+    def health_totals(self, session, *, source_id=None, runtime_id=None):
+        sources = self._sources(session, source_id=source_id, runtime_id=runtime_id)
+        return dict(source_count=len(sources), health={h: sum(s["health"] == h for s in sources) for h in SEVERITY},
+            segments={link: {h: sum(s["segment_health"][link] == h for s in sources) for h in SEVERITY} for link in LINKS})
+
+    def scans(self, session, *, source_id=None, runtime_id=None):
+        rows = self._scope(self._load(session), source_id=source_id, runtime_id=runtime_id)
+        return [r for r in rows if r["status"] in {"snapshotting", "catching_up"} and r["grouped_state"] == "copying"]
+
+    def queued(self, session, *, source_id=None, runtime_id=None):
+        return sum(r["queued_copy"] for r in self._scope(self._load(session), source_id=source_id, runtime_id=runtime_id))
+
+    def scan_context(self, session, rows):
+        source_ids = {r["source_id"] for r in rows}
+        if not source_ids:
+            return [], {}, {}
+        mirrors = [m for m in session.mirrors.values() if m["source_id"] in source_ids]
+        bindings = {sid: self.sources.capture_bindings.get(sid, {}) for sid in source_ids}
+        operations = self.mirrors.pending_opens(session, {m["id"] for m in mirrors})
+        return mirrors, bindings, operations
+
+
+class SqlFleetStore:
+    """Fleet projections computed by the database with filtering, counting and paging."""
+
+    def __init__(self, mirror_store, *, now):
+        self.mirrors = mirror_store
+        self.now = now
 
     def _relation(self, session):
         mirror, binding, observation = MirrorRow.state, SourceCaptureBindingRow.state, DiagnosticRow.value
@@ -201,35 +303,8 @@ class FleetStore:
                               else relation.c.runtime_instance_id == runtime_id)
         return conditions
 
-    def _memory_scope(self, rows, *, source_id=None, runtime_id=None):
-        return [r for r in rows if (source_id is None or r["source_id"] == source_id) and
-                (runtime_id is None or (r["runtime_instance_id"] or UNASSIGNED) == runtime_id)]
-
     def inventory_page(self, session, *, source_id=None, runtime_id=None, status=None, grouped_state=None,
                        published_only=False, cause=None, sort="priority", q=None, limit=100, offset=0):
-        if isinstance(session, MemoryMirrorStore):
-            rows = self._memory_scope(self._memory_rows(session), source_id=source_id, runtime_id=runtime_id)
-            needle = (q or "").casefold()
-            rows = [r for r in rows if (status is None or r["status"] == status) and
-                (grouped_state is None or r["grouped_state"] == grouped_state) and (not published_only or r["published"]) and
-                any(needle in r[key].casefold() for key in ("id", "qualified_table", "source_name", "source_key"))]
-            facets = {c: sum(r["attention_cause"] == c for r in rows) for c in CAUSES}
-            rows = [r for r in rows if cause is None or r["attention_cause"] == cause]
-            def order(row):
-                table = (row["qualified_table"], row["id"])
-                if sort in {"size", "rows"}:
-                    value = row["source_size_bytes" if sort == "size" else "estimated_rows"]
-                    return (value is None, -(value or 0), *table)
-                if sort == "table":
-                    return table
-                priority = {"attention": 0, "copying": 1, "synchronizing": 2, "stopped": 3}[row["grouped_state"]]
-                triage = 2 if row["attention_cause"] == "pending_stop" else int(row["published"])
-                since = parse_instant(row["attention_since"]).timestamp() if row["attention_since"] else float("inf")
-                size = row["source_size_bytes"] if priority else None
-                return (priority, triage if priority == 0 else 0, since if priority == 0 else 0,
-                        size is None, -(size or 0), *table)
-            rows.sort(key=order)
-            return rows[offset:offset + limit], len(rows), facets
         relation = self._relation(session)
         columns = relation.c
         conditions = self._scope(relation, source_id=source_id, runtime_id=runtime_id)
@@ -267,15 +342,6 @@ class FleetStore:
         return [dict(r) for r in rows], total, facets
 
     def _sources(self, session, *, source_id=None, runtime_id=None):
-        if isinstance(session, MemoryMirrorStore):
-            groups = {}
-            for row in self._memory_scope(self._memory_rows(session), source_id=source_id, runtime_id=runtime_id):
-                groups.setdefault(row["source_id"], []).append(row)
-            return [dict(id=sid, name=rows[0]["source_name"], runtime_instance_id=rows[0]["runtime_instance_id"],
-                health=rows[0]["health"], segment_health={link: rows[0][link] for link in LINKS}, mirror_count=len(rows),
-                attention_count=sum(r["grouped_state"] == "attention" for r in rows),
-                source_size=_metric(rows, "source_size_bytes"), estimated_rows=_metric(rows, "estimated_rows"))
-                for sid, rows in groups.items()]
         relation = self._relation(session)
         columns = relation.c
         dimensions = (columns.source_id, columns.source_name, columns.runtime_instance_id, columns.health,
@@ -295,13 +361,6 @@ class FleetStore:
 
     def source_page(self, session, *, source_id=None, runtime_id=None, q=None, health=None, segment=None, limit=12, offset=0, rank=None):
         sources = self._sources(session, source_id=source_id, runtime_id=runtime_id)
-        if isinstance(sources, list):
-            rows = [s for s in sources if (not q or q.casefold() in (s["id"] + " " + s["name"]).casefold()) and
-                    (health is None or (s["segment_health"][segment] if segment else s["health"]) == health)]
-            rows.sort(key=lambda s: (False if rank == "attention" else s["source_size"]["value"] is None,
-                                    -(s["attention_count"] if rank == "attention" else s["source_size"]["value"] or 0), s["id"])
-                      if rank else (SEVERITY.index(s["segment_health"][segment] if segment else s["health"]), s["id"]))
-            return rows[offset:offset + limit], len(rows)
         columns = sources.c
         relevant = columns[segment] if segment else columns.health
         conditions = [relevant == health] if health else []
@@ -319,22 +378,6 @@ class FleetStore:
 
     def runtime_page(self, session, *, source_id=None, runtime_id=None, q=None, health=None, segment=None, limit=12, offset=0):
         sources = self._sources(session, source_id=source_id, runtime_id=runtime_id)
-        if isinstance(sources, list):
-            groups = {}
-            for source in sources:
-                groups.setdefault(source["runtime_instance_id"] or UNASSIGNED, []).append(source)
-            result = []
-            for rid, rows in groups.items():
-                if q and q.casefold() not in rid.casefold():
-                    continue
-                relevant = [r["segment_health"][segment] if segment else r["health"] for r in rows]
-                affected = sum(h == health for h in relevant) if health else sum(h != "healthy" for h in relevant)
-                if health and not affected:
-                    continue
-                result.append(dict(id=rid, runtime_instance_id=None if rid == UNASSIGNED else rid,
-                    source_count=len(rows), affected_source_count=affected, health=min(relevant, key=SEVERITY.index)))
-            result.sort(key=lambda r: (-r["affected_source_count"], r["id"]))
-            return result[offset:offset + limit], len(result)
         columns = sources.c
         relevant = columns[segment] if segment else columns.health
         rid = func.coalesce(columns.runtime_instance_id, UNASSIGNED)
@@ -353,11 +396,6 @@ class FleetStore:
                      affected_source_count=r["affected_source_count"], health=SEVERITY[r["severity"]]) for r in rows], total
 
     def totals(self, session, *, source_id=None, runtime_id=None):
-        if isinstance(session, MemoryMirrorStore):
-            rows = self._memory_scope(self._memory_rows(session), source_id=source_id, runtime_id=runtime_id)
-            return dict(mirror_count=len(rows), source_size=_metric(rows, "source_size_bytes"),
-                estimated_rows=_metric(rows, "estimated_rows"), published_count=sum(r["published"] for r in rows),
-                states={s: sum(r["grouped_state"] == s for r in rows) for s in STATES})
         relation = self._relation(session)
         columns = relation.c
         row = session.execute(select(func.count().label("count"), func.sum(columns.source_size_bytes).label("size"),
@@ -373,9 +411,6 @@ class FleetStore:
 
     def health_totals(self, session, *, source_id=None, runtime_id=None):
         sources = self._sources(session, source_id=source_id, runtime_id=runtime_id)
-        if isinstance(sources, list):
-            return dict(source_count=len(sources), health={h: sum(s["health"] == h for s in sources) for h in SEVERITY},
-                segments={link: {h: sum(s["segment_health"][link] == h for s in sources) for h in SEVERITY} for link in LINKS})
         row = session.execute(select(func.count().label("count"),
             *(func.sum(case((sources.c.health == health, 1), else_=0)).label(health) for health in SEVERITY),
             *(func.sum(case((sources.c[link] == health, 1), else_=0)).label(link + "_" + health) for link in LINKS for health in SEVERITY)
@@ -384,16 +419,11 @@ class FleetStore:
             segments={link: {h: row[link + "_" + h] or 0 for h in SEVERITY} for link in LINKS})
 
     def scans(self, session, *, source_id=None, runtime_id=None):
-        if isinstance(session, MemoryMirrorStore):
-            rows = self._memory_scope(self._memory_rows(session), source_id=source_id, runtime_id=runtime_id)
-            return [r for r in rows if r["status"] in {"snapshotting", "catching_up"} and r["grouped_state"] == "copying"]
         relation = self._relation(session)
         return [dict(r) for r in session.execute(select(relation).where(*self._scope(relation, source_id=source_id, runtime_id=runtime_id),
             relation.c.status.in_(("snapshotting", "catching_up")), relation.c.grouped_state == "copying")).mappings()]
 
     def queued(self, session, *, source_id=None, runtime_id=None):
-        if isinstance(session, MemoryMirrorStore):
-            return sum(r["queued_copy"] for r in self._memory_scope(self._memory_rows(session), source_id=source_id, runtime_id=runtime_id))
         relation = self._relation(session)
         return session.scalar(select(func.count()).select_from(relation).where(
             *self._scope(relation, source_id=source_id, runtime_id=runtime_id), relation.c.queued_copy))
@@ -402,13 +432,8 @@ class FleetStore:
         source_ids = {r["source_id"] for r in rows}
         if not source_ids:
             return [], {}, {}
-        if isinstance(session, MemoryMirrorStore):
-            mirrors = [m for m in session.mirrors.values() if m["source_id"] in source_ids]
-            bindings = {sid: self.sources.capture_bindings.get(sid, {}) for sid in source_ids}
-            operations = self.mirrors.pending_opens(session, {m["id"] for m in mirrors})
-        else:
-            mirrors = list(session.scalars(select(MirrorRow.state).where(MirrorRow.source_id.in_(source_ids))))
-            bindings = {r.source_id: r.state for r in session.scalars(select(SourceCaptureBindingRow).where(
-                SourceCaptureBindingRow.source_id.in_(source_ids)))}
-            operations = self.mirrors.pending_opens(session, {m["id"] for m in mirrors})
+        mirrors = list(session.scalars(select(MirrorRow.state).where(MirrorRow.source_id.in_(source_ids))))
+        bindings = {r.source_id: r.state for r in session.scalars(select(SourceCaptureBindingRow).where(
+            SourceCaptureBindingRow.source_id.in_(source_ids)))}
+        operations = self.mirrors.pending_opens(session, {m["id"] for m in mirrors})
         return mirrors, bindings, operations

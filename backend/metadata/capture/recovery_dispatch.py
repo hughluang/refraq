@@ -10,7 +10,7 @@ from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow
 from backend.metadata.mirrors.recovery import Recovery, RuntimeDispatchAdapter
 from backend.metadata.mirrors.recovery_store import RecoveryRow
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.errors import MirrorError
 
 
 class ReplacementDispatch:

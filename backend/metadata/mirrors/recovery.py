@@ -22,8 +22,9 @@ from backend.metadata.mirrors.history_models import HistoryGateRow
 from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors.store import SqlMirrorStore
 from backend.metadata.mirrors.recovery_store import RecoveryRow, lock_source
-from backend.metadata.mirrors.service import (
-    MirrorError, publication_certificate_ref, record_replacement_publication, replacement_publication_allocation,
+from backend.metadata.mirrors.errors import MirrorError
+from backend.metadata.mirrors.reconciliation import (
+    publication_certificate_ref, record_replacement_publication, replacement_publication_allocation,
 )
 from backend.metadata.mirrors.types import Authority
 

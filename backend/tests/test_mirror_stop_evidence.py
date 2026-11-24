@@ -56,7 +56,7 @@ def test_confirmed_stop_tracks_the_current_disable_and_preserves_publication(man
     transaction, _ = management
     mirror_id = service.enable_for_object("orders", actor_user_id="operator")["mirror"]["id"]
     with transaction() as session:
-        store = service._storage()
+        store = service.storage()
         store.save(session, dict(store.get(session, mirror_id), published_generation_id="published-orders"))
     _assign_runtime(transaction)
     _next_command()

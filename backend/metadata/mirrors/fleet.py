@@ -3,28 +3,25 @@
 from contextlib import contextmanager
 
 from backend.core.time import format_instant, utc_now
-from backend.metadata.mirrors import service
-from backend.metadata.mirrors.fleet_store import FleetStore
+from backend.metadata.mirrors import presentation
 from backend.metadata.mirrors.lifecycle import dispatch_scope, open_evidence, registry_scope
-from backend.metadata.mirrors.store import MemoryMirrorStore
 
 
 @contextmanager
 def _read(store, mirror_store, source_store, catalog_store, now):
     with mirror_store.transaction() as session:
-        if not isinstance(session, MemoryMirrorStore) and session.get_bind().dialect.name == "postgresql":
-            session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
-        yield FleetStore(mirror_store, store, source_store=source_store, catalog_store=catalog_store, now=now), session
+        mirror_store.isolate_read(session)
+        yield mirror_store.fleet(store, source_store=source_store, catalog_store=catalog_store, now=now), session
 
 
 def inventory(*, store, mirror_store, source_store, catalog_store, now=None, **query):
     now = now or utc_now()
     with _read(store, mirror_store, source_store, catalog_store, now) as (fleet, session):
         rows, total, facets = fleet.inventory_page(session, **query)
-        contexts = {sid: service._source_lifecycle(session, sid) for sid in {r["source_id"] for r in rows}}
+        contexts = {sid: presentation.source_lifecycle(mirror_store, session, sid) for sid in {r["source_id"] for r in rows}}
         items = []
         for row in rows:
-            item = service._present(session, row["state"], contexts[row["source_id"]])
+            item = presentation.present(mirror_store, session, row["state"], contexts[row["source_id"]])
             item.update({key: row[key] for key in ("grouped_state", "attention_cause", "attention_since",
                                                    "source_size_bytes", "estimated_rows")})
             items.append(item)
@@ -53,7 +50,7 @@ def _snapshot_total(fleet, session, **scope):
     scanned, size, sampled = 0, 0, 0
     for row in rows:
         evidence = open_evidence(row["state"], operations.get(row["id"], []), bindings.get(row["source_id"], {}), scopes[row["source_id"]])
-        progress = service._snapshot_progress(evidence.snapshot, evidence.stage)
+        progress = presentation.snapshot_progress(evidence.snapshot, evidence.stage)
         if progress and progress["scanned_bytes"] is not None and progress["bytes_observed_at"] is not None and row["source_size_bytes"] is not None:
             scanned += progress["scanned_bytes"]
             size += row["source_size_bytes"]

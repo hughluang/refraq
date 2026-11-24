@@ -8,3 +8,8 @@ class MirrorError(AppError):
         self.code = code
         self.http_status = status
         super().__init__()
+
+
+def reject(code, status=409):
+    """Raise the Mirror error for a refused request or a contradicted evidence check."""
+    raise MirrorError(code, status)

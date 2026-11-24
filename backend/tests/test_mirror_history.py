@@ -11,7 +11,7 @@ from backend.metadata.mirrors import history as history_api
 from backend.metadata.mirrors.history import History
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorRow
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.errors import MirrorError
 
 
 def point(mid="a", epoch="epoch", seq=0, entry=0):

@@ -3,7 +3,7 @@
 import pytest
 
 from backend.core.errors import AppError
-from backend.metadata.mirrors import service
+from backend.metadata.mirrors import presentation, reconciliation, service
 from backend.metadata.mirrors.store import MemoryMirrorStore
 from backend.tests.mirror_inventory import inventory, inventory_dependencies
 
@@ -80,7 +80,7 @@ def test_pre_journal_stop_receipt_survives_authority_change(opened, transition):
     if transition == "reopen":
         service.set_enabled(mid, enabled=True, actor_user_id="u")
     else:
-        service.clear_mirror_stop_evidence(None, [{"mirror_id": mid}], source_op)
+        reconciliation.clear_mirror_stop_evidence(None, [{"mirror_id": mid}], source_op)
     events = service.get_mirror_journal(mid)["items"]
     assert [event for event in events if event["kind"] == "stop_confirmed"] == [receipt]
     stop = next(event for event in events if event["id"] == stop_id)
@@ -356,7 +356,7 @@ def test_applied_open_admission_follows_the_replacement_publication(snapshotting
 
 
 def test_filtered_inventory_uses_one_candidate_snapshot_during_enrollment(opened, monkeypatch):
-    from backend.metadata.mirrors.fleet_store import FleetStore
+    from backend.metadata.mirrors.fleet_store import MemoryFleetStore
 
     store, mid = opened
     original = store.mirrors.pop(mid)
@@ -365,7 +365,7 @@ def test_filtered_inventory_uses_one_candidate_snapshot_during_enrollment(opened
         mirror = dict(original, id=f"mirror-{index:03}", qualified_table=f"public.table_{index:03}",
                       status="ready", published_generation_id=f"copy-{index}")
         store.mirrors[mirror["id"]] = mirror
-    page = FleetStore.inventory_page
+    page = MemoryFleetStore.inventory_page
 
     def enroll_after_read(fleet, session, **query):
         result = page(fleet, session, **query)
@@ -373,7 +373,7 @@ def test_filtered_inventory_uses_one_candidate_snapshot_during_enrollment(opened
                                     published_generation_id="new-copy")
         return result
 
-    monkeypatch.setattr(FleetStore, "inventory_page", enroll_after_read)
+    monkeypatch.setattr(MemoryFleetStore, "inventory_page", enroll_after_read)
     result = inventory(status="ready", limit=500)
     identities = [item["id"] for item in result["items"]]
     assert result["total"] == len(identities) == len(set(identities)) == 101
@@ -451,7 +451,7 @@ def test_diagnostics_reads_enrolled_registry_without_capture_or_target(opened):
 
     mirror_store, mid = opened
     store = DiagnosticStore(memory=True, transaction=None)
-    read_scope = partial(service.diagnostic_scope, mirror_store=mirror_store, source_store=get_source_store())
+    read_scope = partial(presentation.diagnostic_scope, mirror_store=mirror_store, source_store=get_source_store())
     rows, bindings = read_scope()
     assert rows[0]["id"] == mid and rows[0]["allocated_generation_id"] is None
     view = diagnostics.read_diagnostics(store=store, read_scope=read_scope, source_id="s1")

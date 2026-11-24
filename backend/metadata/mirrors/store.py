@@ -1,7 +1,7 @@
 """SQL and rollback-capable memory persistence for mirror management."""
 
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from threading import RLock
 
@@ -10,7 +10,8 @@ from sqlalchemy.orm import load_only
 
 from backend.core.db import session_scope
 from backend.metadata.catalog.store import get_catalog_store
-from backend.metadata.models import CatalogObjectRow, SourceRow
+from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceRow
+from backend.metadata.mirrors.fleet_store import MemoryFleetStore, SqlFleetStore
 from backend.metadata.mirrors.history_models import HistoryGateRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.lifecycle import registry_scope
@@ -108,6 +109,42 @@ class MemoryMirrorStore:
     def delete(self, session, mirror_id):
         del self.mirrors[mirror_id]
         self.operations = {key: op for key, op in self.operations.items() if op["mirror_id"] != mirror_id}
+
+    def database(self, session):
+        """Memory mirrors have no Management database session to join."""
+        return None
+
+    def history_gate(self, session, mirror_id, *, lock=False):
+        return None
+
+    def history_epoch(self, session, mirror):
+        return mirror.get("history_epoch")
+
+    def available_history_epoch(self, session, mirror, *, lock=False):
+        return mirror["history_epoch"]
+
+    def source(self, session, source_id):
+        return get_source_store().get_source(source_id)
+
+    def catalog_object(self, session, object_id):
+        return get_catalog_store().get_object(object_id)
+
+    def isolate_read(self, session):
+        """Memory reads already run under the store lock."""
+
+    def registry_rows(self, source_store):
+        """Read every Mirror, Source capture binding and pending Open under the capture and registry locks."""
+        with ExitStack() as stack:
+            stack.enter_context(source_store.capture_lock)
+            stack.enter_context(self.lock)
+            rows = deepcopy(list(self.mirrors.values()))
+            bindings = deepcopy(source_store.capture_bindings)
+            pending = deepcopy([op for op in self.operations.values()
+                                if op["kind"] == "open" and op["state"] == "pending"])
+        return rows, bindings, pending
+
+    def fleet(self, diagnostic_store, *, source_store, catalog_store, now):
+        return MemoryFleetStore(self, diagnostic_store, source_store=source_store, catalog_store=catalog_store, now=now)
 
 
 class SqlMirrorStore:
@@ -215,6 +252,42 @@ class SqlMirrorStore:
         session.delete(mirror)
         session.flush()
         refresh_source_status(session, source_id)
+
+    def database(self, session):
+        return session
+
+    def history_gate(self, session, mirror_id, *, lock=False):
+        return session.get(HistoryGateRow, mirror_id, with_for_update=lock)
+
+    def history_epoch(self, session, mirror):
+        gate = session.get(HistoryGateRow, mirror["id"])
+        return gate.history_epoch if gate is not None else None
+
+    def available_history_epoch(self, session, mirror, *, lock=False):
+        gate = session.get(HistoryGateRow, mirror["id"], with_for_update=lock)
+        return gate.history_epoch if gate and gate.status == "available" else None
+
+    def source(self, session, source_id):
+        return session.get(SourceRow, source_id)
+
+    def catalog_object(self, session, object_id):
+        return session.get(CatalogObjectRow, object_id)
+
+    def isolate_read(self, session):
+        if session.get_bind().dialect.name == "postgresql":
+            session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+
+    def registry_rows(self, source_store):
+        with self.transaction() as session:
+            rows = list(session.scalars(select(MirrorRow.state)))
+            bindings = {row.source_id: row.state for row in session.scalars(select(SourceCaptureBindingRow))}
+            pending = list(session.scalars(select(MirrorOperationRow.command).where(
+                MirrorOperationRow.command["kind"].as_string() == "open",
+                MirrorOperationRow.command["state"].as_string() == "pending")))
+        return rows, bindings, pending
+
+    def fleet(self, diagnostic_store, *, source_store, catalog_store, now):
+        return SqlFleetStore(self, now=now)
 
 
 def catalog_binding(obj, source):

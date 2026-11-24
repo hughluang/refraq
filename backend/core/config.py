@@ -69,7 +69,7 @@ class MirrorTargetSettings(BaseModel):
                     or set(url.query) - {"sslmode", "sslrootcert"}
                 ):
                     raise ValueError
-            if _database_target(str(urls[0])) != _database_target(str(urls[1])):
+            if database_target(str(urls[0])) != database_target(str(urls[1])):
                 raise ValueError
         except (ValueError, TypeError):
             raise ValueError("Mirror target requires distinct restricted identities on one verified TLS PostgreSQL database") from None
@@ -244,7 +244,7 @@ def require_entity_reader_database_url(
             "persistent API requires ENTITY_READER_DATABASE_URL "
             "to open the entity reader pool"
         )
-    if owner_url is not None and _database_target(cleaned) != _database_target(
+    if owner_url is not None and database_target(cleaned) != database_target(
         owner_url
     ):
         raise ValueError(
@@ -262,7 +262,7 @@ def require_entity_signer_database_url(url: str | None, *, reader_url: str) -> s
             "Entity MCP requires ENTITY_SIGNER_DATABASE_URL "
             "to open the entity signer pool"
         )
-    if _database_target(cleaned) != _database_target(reader_url):
+    if database_target(cleaned) != database_target(reader_url):
         raise ValueError(
             "ENTITY_SIGNER_DATABASE_URL must name the same database as "
             "ENTITY_READER_DATABASE_URL"
@@ -272,7 +272,7 @@ def require_entity_signer_database_url(url: str | None, *, reader_url: str) -> s
 
 def require_distinct_entity_database(entity_url: str, metadata_url: str | None) -> None:
     """The entity database may share a server, never the metadata database itself."""
-    if metadata_url and _database_target(entity_url) == _database_target(metadata_url):
+    if metadata_url and database_target(entity_url) == database_target(metadata_url):
         raise ValueError(
             "ENTITY_DATABASE_URL must name a database other than DATABASE_URL"
         )
@@ -281,7 +281,7 @@ def require_distinct_entity_database(entity_url: str, metadata_url: str | None) 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
-def _database_target(url: str) -> tuple[str, int, str]:
+def database_target(url: str) -> tuple[str, int, str]:
     parsed = make_url(url)
     host = (parsed.host or "localhost").lower()
     if host in _LOOPBACK_HOSTS:

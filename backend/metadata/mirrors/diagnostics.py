@@ -20,7 +20,7 @@ def _identity(authority):
     )}
 
 
-def _matches(value, authority):
+def matches(value, authority):
     return value is not None and value.get("authority") == _identity(authority)
 
 
@@ -48,7 +48,7 @@ def record_source(source_id, authority, receipt: SourceReceipt, *, store: Diagno
         raise ValueError("Future diagnostic sample")
 
     def update(previous):
-        state = previous if _matches(previous, authority) else dict(authority=identity, checks={}, history=(previous or {}).get("history", []))
+        state = previous if matches(previous, authority) else dict(authority=identity, checks={}, history=(previous or {}).get("history", []))
         if any(item["id"] == round_id for item in state["history"]):
             return state
         for link, observation in receipt.checks.items():
@@ -123,7 +123,7 @@ def mirror_measurements(mirror_id, *, store: DiagnosticStore, read_scope, read_d
 
 def _sample_for(mirror, bindings, sample, now):
     authority = bindings.get(mirror["source_id"], {})
-    if not _matches(sample, authority):
+    if not matches(sample, authority):
         return None
     if sample["generation_id"] not in {mirror.get("published_generation_id"), mirror.get("allocated_generation_id")}:
         return None
@@ -135,7 +135,7 @@ def _sample_for(mirror, bindings, sample, now):
 
 
 def _source(source_id, mirrors, authority, now, *, state, assignment):
-    if not _matches(state, authority):
+    if not matches(state, authority):
         state = None
     runtime_id = authority.get("runtime_instance_id")
     checks = checks_at(state, now)

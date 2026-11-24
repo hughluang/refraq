@@ -22,10 +22,13 @@ from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocke
 from backend.metadata.capture.store import save_binding
 from backend.metadata.capture.test_delivery import KEY, SCHEMA
 from backend.metadata.capture.test_runtime import CHECKS, SIGNING_KEY, allocation_observation, observation
-from backend.metadata.mirrors import service
+from backend.metadata.mirrors import reconciliation, service
 from backend.metadata.mirrors.diagnostic_store import DiagnosticRow
+from backend.metadata.mirrors.errors import MirrorError
+from backend.metadata.mirrors.history_models import HistoryGateRow
 from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
 from backend.metadata.mirrors.store import SqlMirrorStore
+from backend.metadata.mirrors.types import Authority
 from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, SourceRow
 from backend.metadata.sources.store import SourceRecord, get_source_store, reset_source_store
 from backend.tests.mirror_inventory import inventory
@@ -63,7 +66,7 @@ def management(monkeypatch, request, management_engine):
     request.addfinalizer(reset_source_store)
     engine = management_engine
     for model in (SourceRow, CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, MirrorRow,
-                  MirrorOperationRow, service.HistoryGateRow, DiagnosticRow):
+                  MirrorOperationRow, HistoryGateRow, DiagnosticRow):
         model.__table__.create(engine)
     factory = sessionmaker(engine)
 
@@ -130,7 +133,7 @@ def test_applied_open_preparation_requires_current_complete_scope(management, mo
     if case == "partial_scope":
         service.enable_for_object("orders", actor_user_id="operator")
     with transaction() as session:
-        store = service._storage()
+        store = service.storage()
         operation, = store.ops(session, mirror_id)
         store.save_op(session, dict(operation, state="applied", publication_receipt={"recorded": True}))
     if case == "superseded_revision":
@@ -145,10 +148,10 @@ def test_applied_open_preparation_requires_current_complete_scope(management, mo
             operation_id="owner", authority=stamp, mirror_receipts={mirror_id: "receipt"},
         )})
         save_binding(session, state)
-    authority = service.Authority(**delivery_composition._target_authority(stamp))
-    monkeypatch.setattr(service, "_observe_applied_open", lambda *args: pytest.fail("partial scope was observed"))
-    with pytest.raises(service.MirrorError, match="MIRROR_CONTROL_CONFLICT"):
-        service.current_open_preparations(authority=authority, published_scope=state["published_scope"],
+    authority = Authority(**delivery_composition._target_authority(stamp))
+    monkeypatch.setattr(reconciliation, "_observe_applied_open", lambda *args: pytest.fail("partial scope was observed"))
+    with pytest.raises(MirrorError, match="MIRROR_CONTROL_CONFLICT"):
+        reconciliation.current_open_preparations(authority=authority, published_scope=state["published_scope"],
                                           observe_committed=pytest.fail)
 
 

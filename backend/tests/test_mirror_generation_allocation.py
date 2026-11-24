@@ -21,7 +21,7 @@ from backend.core.errors import AppError
 from backend.core.time import utc_now
 from backend.metadata.capture.store import load_binding, save_binding, save_operation
 from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceCaptureOperationRow, SourceRow
-from backend.metadata.mirrors import service
+from backend.metadata.mirrors import reconciliation, service
 from backend.metadata.mirrors.bootstrap import create_generation, install
 from backend.metadata.mirrors.diagnostic_store import DiagnosticRow
 from backend.metadata.mirrors.history import History
@@ -250,8 +250,8 @@ def test_native_bootstrap_rejects_stale_history_epoch(target_dsn):
 def reconcile(opened, allocate, *, verifier=lambda **_: True, **changes):
     _, mirror_id, operation_id, authority = opened
     binding = dict(target_request(authority), object_id="orders", qualified_table="sales.orders") | changes
-    return service.reconcile_open_generation(mirror_id=mirror_id, operation_id=operation_id,
-                                             binding=service.OpenGenerationBinding(**binding),
+    return reconciliation.reconcile_open_generation(mirror_id=mirror_id, operation_id=operation_id,
+                                             binding=reconciliation.OpenGenerationBinding(**binding),
                                              verify_binding=verifier, allocate=allocate)
 
 
@@ -273,7 +273,7 @@ def test_replacement_only_allocates_the_audited_generation(opened):
                                 identity=identity, journal=dict(state='dispatched', submission_command=submission)))
         initial, = store.ops(session, mirror_id)
         store.save_op(session, dict(initial, state='applied', publication_receipt={'initial': True}))
-    pending, applied = service.current_open_preparations(
+    pending, applied = reconciliation.current_open_preparations(
         authority=authority, published_scope=scope, observe_committed=lambda **_: pytest.fail('observed initial open'),
     )
     replacement, = pending
@@ -289,11 +289,11 @@ def test_replacement_only_allocates_the_audited_generation(opened):
     assert reconcile(replacement_open, allocate) == generation_id
     assert reconcile(replacement_open, lambda **_: pytest.fail('allocated twice')) == generation_id
     with store.transaction() as session:
-        service.require_current_open_allocations(session, authority=authority, allocations=[(replacement, generation_id)])
+        reconciliation.require_current_open_allocations(session, authority=authority, allocations=[(replacement, generation_id)])
         recovery = session.get(RecoveryRow, recovery_id)
         recovery.journal = dict(recovery.journal, submission_command=dict(submission, generation_id='superseded'))
     with store.transaction() as session, pytest.raises(AppError, match='MIRROR_CONTROL_CONFLICT'):
-        service.require_current_open_allocations(session, authority=authority, allocations=[(replacement, generation_id)])
+        reconciliation.require_current_open_allocations(session, authority=authority, allocations=[(replacement, generation_id)])
     assert initial_operation_id != recovery_id
 
 
@@ -540,12 +540,12 @@ def test_reopen_after_verified_table_gap_recovers_interrupted_invalidation(opene
                    mirror_revision=reopen["mirror"]["control"]["control_revision"], operation_id=original_operation,
                    evidence_ref="sha256:" + "a" * 64, start_offset=8, partition_identity=partition, history=history)
     with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
-        service.request_reopen_baseline(**dict(request, partition_identity=dict(partition, topic_incarnation_id="other")))
+        reconciliation.request_reopen_baseline(**dict(request, partition_identity=dict(partition, topic_incarnation_id="other")))
     with pytest.raises(TimeoutError, match="acknowledgment lost"):
-        service.request_reopen_baseline(**request)
+        reconciliation.request_reopen_baseline(**request)
     with store.transaction() as session:
         assert session.get(HistoryGateRow, mirror_id).status == "invalidating"
-    pending, retained = service.current_open_preparations(
+    pending, retained = reconciliation.current_open_preparations(
         authority=authority, published_scope=scope, observe_committed=pytest.fail, history=history)
     assert not retained
     baseline, = pending
@@ -555,8 +555,8 @@ def test_reopen_after_verified_table_gap_recovers_interrupted_invalidation(opene
     assert service.get_mirror(mirror_id)["published_generation_id"] == previous_generation
     with store.transaction() as session:
         assert session.get(HistoryGateRow, mirror_id).status == "available"
-    service.request_reopen_baseline(**request)
-    replay, _ = service.current_open_preparations(
+    reconciliation.request_reopen_baseline(**request)
+    replay, _ = reconciliation.current_open_preparations(
         authority=authority, published_scope=scope, observe_committed=pytest.fail, history=history)
     assert replay == pending
 
@@ -571,7 +571,7 @@ def test_reopen_after_verified_table_gap_recovers_interrupted_invalidation(opene
         state.update(control_revision=current.control_revision, published_scope=scope)
         save_binding(session, state)
     with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
-        service.current_open_preparations(authority=current, published_scope=scope, observe_committed=pytest.fail,
+        reconciliation.current_open_preparations(authority=current, published_scope=scope, observe_committed=pytest.fail,
                                           history=history)
     with store.transaction() as session:
         stamp = {k: state[k] for k in ("source_id", "binding_id", "owner_epoch", "runtime_instance_id",
@@ -583,7 +583,7 @@ def test_reopen_after_verified_table_gap_recovers_interrupted_invalidation(opene
         state["scope_fence"] = dict(authority=stamp, operation_id=command["operation_id"], mirror_receipts={mirror_id: "fence"},
                                     table_boundaries={mirror_id: fresh})
         save_binding(session, state)
-    pending, _ = service.current_open_preparations(authority=current, published_scope=scope,
+    pending, _ = reconciliation.current_open_preparations(authority=current, published_scope=scope,
                                                   observe_committed=pytest.fail, history=history)
     new, = pending
     assert new["operation_id"] == latest["operation_id"] and new["start_offset"] == 12
@@ -594,7 +594,7 @@ def test_reopen_after_verified_table_gap_recovers_interrupted_invalidation(opene
 @pytest.mark.integration
 def test_pending_allocation_recovers_after_a_sibling_switch(opened):
     store, mirror_id, original_operation, authority = opened
-    epoch = service.initial_history_epoch(mirror_id)
+    epoch = reconciliation.initial_history_epoch(mirror_id)
     reconcile(opened, lambda **request: request["generation_id"], history_epoch=epoch)
     with store.transaction() as session:
         original, = store.ops(session, mirror_id)
@@ -629,21 +629,21 @@ def test_pending_allocation_recovers_after_a_sibling_switch(opened):
     history = History(session_factory=sessions, target=Target())
     prepare = dict(authority=current, published_scope=scope, observe_committed=pytest.fail, history=history)
     with pytest.raises(AppError, match="MIRROR_CONTROL_CONFLICT"):
-        service.current_open_preparations(**prepare, selected_table_ids={"orders"})
+        reconciliation.current_open_preparations(**prepare, selected_table_ids={"orders"})
     # A checked interval may lack conclusive coverage before any first publication.
-    service.record_continuity_receipt(authority=current, scope=scope, mirror_id=mirror_id, check_id=original_operation,
+    reconciliation.record_continuity_receipt(authority=current, scope=scope, mirror_id=mirror_id, check_id=original_operation,
                                       decision=dict(result="unknown", observed_at=utc_now().isoformat(),
                                                     evidence_ref="sha256:" + "b" * 64))
     boundary = dict(start_offset=9, partition_identity=partition, mirror_revision=1, evidence_ref="sha256:" + "c" * 64)
     with store.transaction() as session:
         save_binding(session, dict(state, scope_fence=dict(fence, table_boundaries={mirror_id: boundary})))
-    pending, retained = service.current_open_preparations(**prepare)
+    pending, retained = reconciliation.current_open_preparations(**prepare)
     assert not retained
     orders, = [entry for entry in pending if entry["mirror_id"] == mirror_id]
     assert orders["start_offset"] == 9 and orders["operation_id"] != original_operation and orders["history_epoch"] != epoch
     items, = [entry for entry in pending if entry["mirror_id"] == sibling["mirror"]["id"]]
     assert items["operation_id"] == sibling["operation_id"] and not items.get("reopen_baseline")
-    assert service.current_open_preparations(**prepare) == (pending, retained)
+    assert reconciliation.current_open_preparations(**prepare) == (pending, retained)
     assert service.set_enabled(mirror_id, enabled=True, actor_user_id="operator")["operation_id"] == original_operation
     detail = service.get_mirror_detail(mirror_id)["mirror"]
     assert detail["open_request"]["operation_id"] == original_operation
@@ -680,7 +680,7 @@ def test_recheck_keeps_open_and_attributes_later_proof(opened, outcome):
         return dict(result=result, observed_at=utc_now().isoformat(), evidence_ref="sha256:" + digit * 64)
 
     def check(request, result, digit):
-        return service.record_continuity_receipt(authority=authority, scope=scope, mirror_id=mid, check_id=request,
+        return reconciliation.record_continuity_receipt(authority=authority, scope=scope, mirror_id=mid, check_id=request,
                                                  decision=decision(result, digit), published_operation_id=published_open)
 
     opts = dict(expected_epoch=epoch, expected_revision=3, actor_user_id="writer")
@@ -688,11 +688,11 @@ def test_recheck_keeps_open_and_attributes_later_proof(opened, outcome):
         service.request_recheck(mid, **opts)
     with store.transaction() as session:
         command = dict(load_binding(session, authority.source_id))
-    service.table_prerequisite_check(command, table="sales.orders", cause="permission", passed=False, request_id=reopen)
+    reconciliation.table_prerequisite_check(command, table="sales.orders", cause="permission", passed=False, request_id=reopen)
     permission = service.request_recheck(mid, **opts)["operation_id"]
     for _ in range(2):
-        service.table_prerequisite_check(command, table="sales.orders", cause="permission", passed=False, request_id=permission)
-    service.table_prerequisite_check(command, table="sales.orders", cause="permission", passed=True, request_id=permission)
+        reconciliation.table_prerequisite_check(command, table="sales.orders", cause="permission", passed=False, request_id=permission)
+    reconciliation.table_prerequisite_check(command, table="sales.orders", cause="permission", passed=True, request_id=permission)
     detail = service.get_mirror_detail(mid)["mirror"]
     assert detail["blocker"] is None
     assert detail["open_request"]["outcome"] == "awaiting_continuity"
@@ -707,17 +707,17 @@ def test_recheck_keeps_open_and_attributes_later_proof(opened, outcome):
     second = service.request_recheck(mid, **opts)["operation_id"]
     assert first != second
     conclusive = decision(outcome, "3")
-    assert not service.record_continuity_receipt(authority=authority, scope=scope, mirror_id=mid, check_id=first,
+    assert not reconciliation.record_continuity_receipt(authority=authority, scope=scope, mirror_id=mid, check_id=first,
                                                  decision=conclusive, published_operation_id=published_open)
     if outcome == "continuous":
         candidate = SimpleNamespace(mirror_id=mid, operation_id=published_open, certificate_ref=certificate,
                                     generation_id=generation, binding=SimpleNamespace(authority=authority,
                                                                                      history_epoch=epoch, table_identity="orders"))
-        service.confirm_retained_opens(authority=authority, published_scope=scope, candidates=[candidate],
+        reconciliation.confirm_retained_opens(authority=authority, published_scope=scope, candidates=[candidate],
                                        decisions={mid: conclusive}, checks={mid: first})
     else:
         history = History(session_factory=factory, target=SimpleNamespace(invalidate=lambda **kwargs: True))
-        service.request_reopen_baseline(authority=authority, published_scope=scope, mirror_id=mid, mirror_revision=3,
+        reconciliation.request_reopen_baseline(authority=authority, published_scope=scope, mirror_id=mid, mirror_revision=3,
                                         operation_id=published_open, partition_identity=partition, start_offset=10,
                                         history=history, check_id=first, observed_at=conclusive["observed_at"],
                                         evidence_ref=conclusive["evidence_ref"])

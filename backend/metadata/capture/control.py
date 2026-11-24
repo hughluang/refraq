@@ -26,12 +26,8 @@ from backend.metadata.errors import SourceCaptureControlConflict, SourceNotFound
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorRow
 from backend.metadata.mirrors.recovery_store import RecoveryRow
-from backend.metadata.mirrors.service import (
-    clear_mirror_stop_evidence,
-    read_published_scope,
-    read_dispatch_scope,
-    record_mirror_stop_evidence,
-)
+from backend.metadata.mirrors.reconciliation import clear_mirror_stop_evidence, record_mirror_stop_evidence
+from backend.metadata.mirrors.service import read_dispatch_scope, read_published_scope
 from backend.metadata.sources.store import SourceRecord, get_source_store
 
 

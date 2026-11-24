@@ -12,7 +12,7 @@ from sqlalchemy.exc import OperationalError
 from backend.admin.console_modules import build_module_identities, build_navigation
 from backend.core.config import MirrorTargetSettings, Settings
 from backend.metadata.mirrors import composition
-from backend.metadata.mirrors.service import MirrorError
+from backend.metadata.mirrors.errors import MirrorError
 
 
 def policy(**changes):
@@ -56,10 +56,10 @@ def test_diagnostics_uses_bound_registry_stores_and_their_locks(monkeypatch):
     mirror_store.mirrors["retained"] = dict(id="retained", control={"control_revision": 1})
     source_store = SimpleNamespace(capture_lock=TrackedLock("source"),
                                    capture_bindings={"source": {"runtime_instance_id": "retained-runtime"}})
-    monkeypatch.setattr(composition, "_storage", lambda: mirror_store)
+    monkeypatch.setattr(composition, "storage", lambda: mirror_store)
     monkeypatch.setattr(composition, "get_source_store", lambda: source_store)
     store, read_scope, _ = composition.compose_diagnostics(settings(backend="memory"), transaction=None)
-    monkeypatch.setattr(composition, "_storage", lambda: pytest.fail("Mirror store must already be bound"))
+    monkeypatch.setattr(composition, "storage", lambda: pytest.fail("Mirror store must already be bound"))
     monkeypatch.setattr(composition, "get_source_store", lambda: pytest.fail("Source store must already be bound"))
     monkeypatch.setattr("backend.metadata.mirrors.store.get_source_store", lambda: pytest.fail("Scope must lock its supplied Source store"))
 

@@ -11,8 +11,8 @@ from backend.metadata.capture.runtime_store import RuntimeBlocked
 from backend.metadata.mirrors.history import History, SqlHistoryTarget
 from backend.metadata.mirrors.publication import Publication
 from backend.metadata.mirrors.recovery import Recovery
-from backend.metadata.mirrors.service import (
-    MirrorError,
+from backend.metadata.mirrors.errors import MirrorError
+from backend.metadata.mirrors.reconciliation import (
     OpenPublicationIdentity,
     publication_certificate_ref,
     reconcile_open_publication,

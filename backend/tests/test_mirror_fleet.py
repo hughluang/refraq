@@ -13,7 +13,6 @@ from sqlalchemy.orm import sessionmaker
 from backend.metadata.mirrors import diagnostics, fleet, service
 from backend.metadata.mirrors.diagnostic_store import DiagnosticRow, DiagnosticStore
 from backend.metadata.mirrors.fleet_schemas import FleetOverview, InventoryPage, RuntimeFleetPage, SourceFleetPage
-from backend.metadata.mirrors.fleet_store import FleetStore
 from backend.metadata.mirrors.history_models import HistoryGateRow
 from backend.metadata.mirrors.models import MirrorOperationRow, MirrorRow
 from backend.metadata.mirrors.store import MemoryMirrorStore, SqlMirrorStore
@@ -45,9 +44,8 @@ def data(request, monkeypatch):
     source_store = SimpleNamespace(capture_lock=RLock(), capture_bindings=bindings,
         list_sources=lambda: (list(sources.values()), len(sources)), get_source=sources.get)
     catalog = SimpleNamespace(get_object=objects.get)
-    for module in (mirror_store, service):
-        monkeypatch.setattr(module, "get_source_store", lambda: source_store)
-    monkeypatch.setattr(service, "get_catalog_store", lambda: catalog)
+    monkeypatch.setattr(mirror_store, "get_source_store", lambda: source_store)
+    monkeypatch.setattr(mirror_store, "get_catalog_store", lambda: catalog)
     engine = None
     if request.param == "memory":
         storage = MemoryMirrorStore()
@@ -220,7 +218,7 @@ def test_sql_inventory_count_does_not_materialize_fleet_and_is_constant_query_co
     event.listen(data.engine, "before_cursor_execute", record)
     try:
         with data.storage.transaction() as session:
-            rows, total, _ = FleetStore(data.storage, data.telemetry, source_store=data.source_store, catalog_store=data.catalog_store, now=NOW).inventory_page(session, limit=12, offset=12)
+            rows, total, _ = data.storage.fleet(data.telemetry, source_store=data.source_store, catalog_store=data.catalog_store, now=NOW).inventory_page(session, limit=12, offset=12)
         assert total == 30 and len(rows) == 12
         assert len(statements) == 3
         assert "LIMIT" in statements[-1]
