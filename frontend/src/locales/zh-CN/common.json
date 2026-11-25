@@ -63,7 +63,7 @@
   "problems.MIRROR_CONTROL_CONFLICT": "镜像状态已变更，请刷新并检查当前请求。",
   "problems.MIRROR_READ_UNAVAILABLE": "镜像存储或其证据不可用。请检查目标连接后重试。",
   "problems.MIRROR_IN_USE": "该镜像仍在同步或有资源被占用。",
-  "mirrors.sourceToStorage": "{{source}} · PostgreSQL → {{destination}} · 源表大小 {{size}}",
+  "mirrors.sourceToStorage": "{{source}} · {{engine}} → {{destination}} · 源表大小 {{size}}",
   "mirrors.stopPath": "停止同步",
   "mirrors.replacementPath": "替换副本",
   "mirrors.phase.stopRequest": "已请求停止",

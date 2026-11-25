@@ -14,6 +14,7 @@ from backend.admin.audit import persist_audit_event
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.time import utc_now
+from backend.metadata.capture.engines import CAPTURE_ENGINE_CODES
 from backend.metadata.capture.store import (
     list_operations,
     load_binding,
@@ -22,6 +23,7 @@ from backend.metadata.capture.store import (
     save_binding,
     save_operation,
 )
+from backend.metadata.capture.scope import AUTHORITY_KEYS, included_tables, profile_matches_scope, selected_tables
 from backend.metadata.errors import SourceCaptureControlConflict, SourceNotFound
 from backend.metadata.mirrors.history_models import HistoryGateRow, HistoryInvalidationRow
 from backend.metadata.mirrors.models import MirrorRow
@@ -29,30 +31,6 @@ from backend.metadata.mirrors.recovery_store import RecoveryRow
 from backend.metadata.mirrors.reconciliation import clear_mirror_stop_evidence, record_mirror_stop_evidence
 from backend.metadata.mirrors.service import read_dispatch_scope, read_published_scope
 from backend.metadata.sources.store import SourceRecord, get_source_store
-
-
-AUTHORITY_KEYS = (
-    "source_id",
-    "binding_id",
-    "owner_epoch",
-    "runtime_instance_id",
-    "capture_generation",
-    "control_revision",
-    "credential_revision",
-)
-
-
-def included_tables(published_scope):
-    return [table for table in published_scope if table["included"]]
-
-
-def selected_tables(profile_scope, published_scope):
-    qualified = set(profile_scope.get("tables", []))
-    return [entry for entry in included_tables(published_scope) if entry["qualified_table"] in qualified]
-
-
-def profile_matches_scope(profile_scope, published_scope):
-    return bool(selected_tables(profile_scope, published_scope))
 
 
 def table_exclusion_refs(scope, exclusions):
@@ -375,7 +353,7 @@ def _replacement_scope(session, source, operation_id, previous, scope):
 
 
 def _replacement_context(session, source, state, operation_id, profile):
-    if (session is None or state is None or source.engine != "postgresql" or state["desired"] != "configured"
+    if (session is None or state is None or source.engine not in CAPTURE_ENGINE_CODES or state["desired"] != "configured"
             or state["owner_epoch"] <= 0 or not state["runtime_instance_id"]
             or type(state["capture_generation"]) is not int or state["capture_generation"] < 1):
         raise SourceCaptureControlConflict()

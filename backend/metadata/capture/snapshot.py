@@ -1,4 +1,4 @@
-"""Durable PostgreSQL source-channel incremental snapshot orchestration."""
+"""Durable source-channel incremental snapshot orchestration."""
 
 from dataclasses import asdict, dataclass
 import math
@@ -11,9 +11,14 @@ from backend.core.time import utc_now
 from backend.metadata.capture.authority import SignedAuthority
 from backend.metadata.capture.configuration import SnapshotWindow, snapshot_dispatch_allowed
 from backend.metadata.capture.control import source_control_transaction
+from backend.metadata.capture.engines import capture_authorized
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 from backend.metadata.capture.store import load_binding, save_binding
 from backend.metadata.mirrors.types import Authority, PartitionIdentity
+
+
+_NAME = r"[A-Za-z_][A-Za-z0-9_$#@]{0,127}"
+_QUALIFIED = rf"{_NAME}\.{_NAME}"
 
 
 @dataclass(frozen=True)
@@ -36,7 +41,7 @@ class SnapshotBinding:
 
     def validate(self):
         names = (self.qualified_table, self.signal_table)
-        if (not all(re.fullmatch(r"[a-z_][a-z0-9_]{0,62}\.[a-z_][a-z0-9_]{0,62}", name) for name in names)
+        if (not all(re.fullmatch(_QUALIFIED, name) for name in names)
                 or self.qualified_table == self.signal_table
                 or not all((self.signal_relation_identity, self.connector_name, self.notification_topic,
                             self.data_partition.runtime_cluster_id, self.data_partition.topic_incarnation_id,
@@ -64,7 +69,7 @@ class SnapshotCoordinator:
     """
 
     def __init__(self, *, journal, signals, receipt_trust, notification_trust,
-                 max_observation_age_seconds, recheck, dispatch_clock=utc_now):
+                 max_observation_age_seconds, recheck, collection_id, dispatch_clock=utc_now):
         receipt_keys = _signing_keys(receipt_trust)
         notification_keys = _signing_keys(notification_trust)
         if not receipt_keys or not notification_keys or receipt_keys & notification_keys:
@@ -80,6 +85,7 @@ class SnapshotCoordinator:
                                                  audience=notification_trust.audience)
         self.max_observation_age_seconds = max_observation_age_seconds
         self.recheck = recheck
+        self.collection_id = collection_id
         self.dispatch_clock = dispatch_clock
 
     def reconcile(self, binding: SnapshotBinding) -> SnapshotResult:
@@ -212,8 +218,7 @@ class SnapshotCoordinator:
                                   operation["completion"]["offset"])
         return SnapshotResult(operation_id, operation["state"])
 
-    @staticmethod
-    def _notifications(binding, operation, batch):
+    def _notifications(self, binding, operation, batch):
         start, end, records = batch.get("start"), batch.get("end"), batch.get("records")
         high_water = batch.get("high_water")
         cursor = operation["cursor"]
@@ -229,7 +234,8 @@ class SnapshotCoordinator:
             operation.update(state="blocked", fault="snapshot_notification_range_unconfirmed")
             return False
         for offset, record in enumerate(records, start=start):
-            if not _record_notification(binding, operation, record, offset):
+            if not _record_notification(binding, operation, record, offset,
+                                        self.collection_id(binding.qualified_table)):
                 operation.update(state="blocked", fault="snapshot_notification_conflict")
                 return False
         operation["cursor"] = end
@@ -248,9 +254,7 @@ class SnapshotCoordinator:
                 or str(state.get("capture_generation")) != lineage or state.get("desired") != "configured"
                 or state.get("applied_revision") != binding.authority.control_revision
                 or binding.authority.owner_epoch < 1 or not binding.authority.runtime_instance_id
-                or source.status != "active" or source.engine != "postgresql"
-                or not source.capture_credential_ciphertext
-                or source.capture_revision != binding.authority.credential_revision
+                or not capture_authorized(source, credential_revision=binding.authority.credential_revision)
                 or not any(entry["included"] is True and all(entry.get(key) == value for key, value in target.items())
                            for entry in state["published_scope"])):
             raise RuntimeBlocked("snapshot_current_authority_required")
@@ -274,10 +278,10 @@ class SnapshotCoordinator:
         window = SnapshotWindow.model_validate(source.snapshot_window) if source.snapshot_window is not None else None
         return mode == "run_now" or snapshot_dispatch_allowed(window, self.dispatch_clock())
 
-    @staticmethod
-    def _signal(binding, operation_id):
+    def _signal(self, binding, operation_id):
         return {"id": operation_id, "type": "execute-snapshot",
-                "data": {"type": "incremental", "data-collections": [re.escape(binding.qualified_table)]}}
+                "data": {"type": "incremental",
+                         "data-collections": [re.escape(self.collection_id(binding.qualified_table))]}}
 
 
 def _signing_keys(trust):
@@ -294,7 +298,7 @@ def _decimal(value):
     return None
 
 
-def _record_notification(binding, operation, record, offset):
+def _record_notification(binding, operation, record, offset, collection):
     if (not isinstance(record, dict) or type(record.get("offset")) is not int or record["offset"] != offset
             or not isinstance(record.get("value"), dict)):
         return False
@@ -319,17 +323,17 @@ def _record_notification(binding, operation, record, offset):
     if timestamp < operation.get("notification_timestamp", 0):
         return False
     if kind == "STARTED" and phase is None:
-        if data.get("data_collections") != binding.qualified_table:
+        if data.get("data_collections") != collection:
             return False
     elif kind == "DATA_COLLECTIONS_RESOLVED" and phase == "STARTED":
-        if data.get("data_collections") != binding.qualified_table:
+        if data.get("data_collections") != collection:
             return False
     elif kind == "IN_PROGRESS" and phase in {"DATA_COLLECTIONS_RESOLVED", "IN_PROGRESS"}:
-        if data.get("current_collection_in_progress") != binding.qualified_table:
+        if data.get("current_collection_in_progress") != collection:
             return False
     elif kind == "TABLE_SCAN_COMPLETED" and phase in {"DATA_COLLECTIONS_RESOLVED", "IN_PROGRESS"}:
         status, rows = data.get("status"), _decimal(data.get("total_rows_scanned"))
-        if ("scan" in operation or data.get("scanned_collection") != binding.qualified_table
+        if ("scan" in operation or data.get("scanned_collection") != collection
                 or not ((status == "EMPTY" and rows == 0) or (status == "SUCCEEDED" and rows is not None and rows > 0))):
             return False
         operation["scan"] = dict(offset=offset, timestamp=timestamp, status=status, rows=rows)

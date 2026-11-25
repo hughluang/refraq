@@ -18,13 +18,16 @@ from backend.core.config import get_settings
 from backend.core.db import get_session_factory
 from backend.core.errors import PlatformCapacityExceeded, PlatformTimeout
 from backend.metadata.capture.control import (
-    AUTHORITY_KEYS, allocate_owner, profile_matches_scope, reconcile_published_scope, record_applied_evidence,
+    allocate_owner, reconcile_published_scope, record_applied_evidence,
     replace_owner, replacement_blocks_lifecycle, source_control_transaction,
 )
+from backend.metadata.capture.scope import AUTHORITY_KEYS, profile_matches_scope
 from backend.metadata.capture.runtime_adapters import ConnectLifecycle, PrivateHTTP, ReadinessSignals, SnapshotGateway
 from backend.metadata.capture.recovery_dispatch import dispatch_recovery
-from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile, TablePrerequisiteFailed
-from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked, protected_json, protected_read
+from backend.metadata.capture.engines import engine_for_entry
+from backend.metadata.capture.runtime_store import (
+    CommandJournal, RuntimeBlocked, TablePrerequisiteFailed, protected_json, protected_read,
+)
 from backend.metadata.capture.snapshot import SnapshotCoordinator
 from backend.metadata.capture.store import list_operations, load_binding, save_binding
 from backend.metadata.errors import SourceCaptureControlConflict
@@ -481,8 +484,9 @@ def main():
                 raise RuntimeBlocked("recovery_source_not_assigned")
             signal_http = PrivateHTTP(**entry["signals_tls"])
             clients.append(signal_http)
-            profile = PostgreSQLCaptureProfile(**entry["postgresql_profile"])
-            signals = ReadinessSignals(signal_http, verifier=_signing_authority(entry["signing_trust"]),
+            engine = engine_for_entry(entry)
+            profile = engine.profile(**entry[engine.profile_key])
+            signals = ReadinessSignals(signal_http, engine=engine, verifier=_signing_authority(entry["signing_trust"]),
                                        scope=profile.scope, **entry["readiness_policy"])
             state = dispatch_recovery(settings=get_settings(), session_factory=session_factory,
                                       operation_id=args.dispatch_recovery, source_id=entry["source_id"], signals=signals)
@@ -496,14 +500,16 @@ def main():
             signal_http = PrivateHTTP(**entry["signals_tls"])
             clients.append(signal_http)
             verifier = _signing_authority(entry["signing_trust"])
-            profile = PostgreSQLCaptureProfile(**entry["postgresql_profile"])
+            engine = engine_for_entry(entry)
+            profile = engine.profile(**entry[engine.profile_key])
             if (profile.scope["source_id"] != entry["source_id"]
                     or profile.scope["connector_name"] != entry["connector_name"]):
                 raise RuntimeBlocked("configured_scope_mismatch")
-            signals = ReadinessSignals(signal_http, verifier=verifier, scope=profile.scope, **entry["readiness_policy"])
+            signals = ReadinessSignals(signal_http, engine=engine, verifier=verifier, scope=profile.scope,
+                                       **entry["readiness_policy"])
             delivery = SourceDelivery(
                 settings_file=entry.get("delivery_settings_file"), source_id=entry["source_id"],
-                journal=journal, signals=signals, verifier=verifier, profile=profile,
+                journal=journal, signals=signals, verifier=verifier, profile=profile, capture=engine,
             )
             retained_resume = entry.get("retained_position_resume", False)
             if type(retained_resume) is not bool or (retained_resume and profile.snapshot is None):
@@ -534,6 +540,7 @@ def main():
                     receipt_trust=_signing_authority(observers["receipt"]["signing_trust"]),
                     notification_trust=_signing_authority(observers["notification"]["signing_trust"]),
                     max_observation_age_seconds=observers["max_age_seconds"], recheck=runtime.recheck_snapshot,
+                    collection_id=profile.collection_id,
                 )
                 runtime.publish_completed = publish_completed
         if "diagnostics" in config:

@@ -185,6 +185,8 @@ def present(store, session, mirror, context):
     """Project a stored Mirror with its current lifecycle evidence and public operations."""
     operations = store.ops(session, mirror["id"])
     result = deepcopy(mirror)
+    # Mirrors stored before engine expansion could only exist on PostgreSQL Sources.
+    result.setdefault("source_engine", "postgresql")
     result.pop("blocker", None)
     result.pop("deletion_reservation", None)
     gate = store.history_gate(session, mirror["id"])

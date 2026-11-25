@@ -12,13 +12,12 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 from backend.core.db import get_session_factory
-from backend.metadata.capture.control import (
-    AUTHORITY_KEYS, selected_tables, source_control_transaction,
-)
-from backend.metadata.capture.decoder import PostgreSQLDecoder
+from backend.metadata.capture.control import source_control_transaction
 from backend.metadata.capture.delivery import DeliveryBinding, DeliveryLimits, open_delivery
-from backend.metadata.capture.postgresql import TablePrerequisiteFailed
-from backend.metadata.capture.runtime_store import RuntimeBlocked, protected_json, protected_read
+from backend.metadata.capture.runtime_store import (
+    RuntimeBlocked, TablePrerequisiteFailed, protected_json, protected_read,
+)
+from backend.metadata.capture.scope import AUTHORITY_KEYS, selected_tables
 from backend.metadata.capture.snapshot import SnapshotBinding
 from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.bootstrap import validate_target
@@ -99,44 +98,6 @@ class RetainedOpenCandidate:
     target_seek_offset: int
 
 
-def _confirmed_checkpoint(evidence, scope, *, data_topics, data_partitions):
-    checkpoint = evidence.get("durable_source_checkpoint")
-    exclusion = evidence.get("producer_exclusion")
-    if not isinstance(checkpoint, dict) or not isinstance(exclusion, dict):
-        raise RuntimeBlocked("published_open_checkpoint_unconfirmed")
-    topic = checkpoint.get("topic")
-    partition = checkpoint.get("partition")
-    notification = evidence["source_completion"]
-    lineage = exclusion.get("source_lineage")
-    if (not isinstance(topic, str) or not topic or topic in data_topics or topic == notification["notification_topic"]
-            or not isinstance(partition, dict) or set(partition) != {"runtime_cluster_id", "topic_incarnation_id", "partition"}
-            or not isinstance(partition["topic_incarnation_id"], str) or not partition["topic_incarnation_id"]
-            or type(partition["partition"]) is not int or partition["partition"] != 0
-            or any(partition["runtime_cluster_id"] != data.runtime_cluster_id
-                   or partition["topic_incarnation_id"] == data.topic_incarnation_id for data in data_partitions)
-            or partition["topic_incarnation_id"] == notification["notification_partition"]["topic_incarnation_id"]
-            or checkpoint.get("key") != [scope["connector_name"], {"server": scope["topic_prefix"]}]
-            or exclusion.get("slot") != scope["slot"] or exclusion.get("publication") != scope["publication"]
-            or not isinstance(lineage, list) or len(lineage) != 4
-            or any(not isinstance(value, str) or not value for value in lineage)):
-        raise RuntimeBlocked("published_open_checkpoint_unconfirmed")
-    value = checkpoint.get("value")
-    witness = checkpoint.get("wal_witness")
-    if (not isinstance(value, dict) or not isinstance(witness, dict) or value.get("messageType") != "COMMIT"
-            or any(type(value.get(key)) is not int for key in ("txId", "lsn", "lsn_proc", "lsn_commit"))
-            or any(type(witness.get(key)) is not int
-                   for key in ("xid", "wal_start", "wal_end", "commit_lsn", "previous_checkpoint_offset"))
-            or any(type(checkpoint.get(key)) is not int for key in ("offset", "eof"))
-            or type(exclusion.get("confirmed_flush_lsn")) is not int
-            or not 0 <= witness["previous_checkpoint_offset"] < checkpoint["offset"] < checkpoint["eof"]
-            or not 0 < witness["xid"] == value["txId"]
-            or not 0 < witness["wal_start"] < witness["wal_end"] <= exclusion["confirmed_flush_lsn"]
-            or not witness["wal_start"] <= witness["commit_lsn"] <= witness["wal_end"]
-            or not witness["commit_lsn"] == value["lsn"] == value["lsn_proc"] == value["lsn_commit"]):
-        raise RuntimeBlocked("published_open_checkpoint_unconfirmed")
-    return checkpoint
-
-
 def _canonical_coverage(coverage, *, authority, leader_epoch, earliest, end, sealed):
     fields = {"authority", "start", "end", "before", "after", "offsets"}
     if sealed:
@@ -184,11 +145,12 @@ def _retained_coverage(metadata, seal, publisher, leader_epoch, seek):
 class SourceDelivery:
     """A protected immutable manifest; changes require process configuration reload."""
 
-    def __init__(self, *, settings_file, source_id, journal, signals, verifier, profile):
+    def __init__(self, *, settings_file, source_id, journal, signals, verifier, profile, capture):
         self.settings_file = settings_file
         self.source_id = source_id
         self.journal, self.signals, self.verifier = journal, signals, verifier
         self.profile = profile
+        self.capture = capture
         self.engine = None
         self.clients = []
         self.stamp = None
@@ -290,7 +252,7 @@ class SourceDelivery:
                 if applied:
                     opened, = applied
                     evidence = opened.observed.certificate["evidence"]
-                    checkpoint = _confirmed_checkpoint(evidence, self.profile.scope, data_topics=topics, data_partitions=partitions)
+                    checkpoint = self.capture.checkpoint(evidence, self.profile.scope, data_topics=topics, data_partitions=partitions)
                     table = dict(table, start_offset=opened.binding.start_offset)
                     candidate = self._resume_candidate(table, opened, checkpoint)
                     entry = next(entry for entry in scope if entry["mirror_id"] == opened.mirror_id)
@@ -400,7 +362,7 @@ class SourceDelivery:
             raise RuntimeBlocked("open_generation_manifest_required")
         _manifest_anchor(table)
         decoder_data = dict(table["decoder"], capture_generation=authority.capture_generation)
-        decoder = PostgreSQLDecoder(**decoder_data)
+        decoder = self.capture.decoder(**decoder_data)
         partition = PartitionIdentity(**table["partition_identity"])
         native_types = table["native_types"]
         if set(native_types) != set(decoder.columns) or type(table["start_offset"]) is not int:
@@ -439,7 +401,8 @@ class SourceDelivery:
         if (manifest_binding.schema_fingerprint != binding.schema_fingerprint
                 or manifest_binding.key_columns != binding.key_columns or manifest_binding.columns != binding.columns
                 or observed.allocation["native_types"] != table["native_types"]):
-            raise TablePrerequisiteFailed(binding.qualified_table, "schema")
+            raise TablePrerequisiteFailed(binding.qualified_table, "schema",
+                                          f"{self.capture.code}_readiness_unconfirmed")
         if manifest_binding != binding or tuple(manifest_binding.columns) != tuple(binding.columns):
             raise RuntimeBlocked("published_open_manifest_mismatch")
         evidence = observed.certificate["evidence"]
@@ -576,7 +539,7 @@ class SourceDelivery:
         expected = _target_authority(authority)
         if asdict(binding.authority) != expected:
             raise RuntimeBlocked("delivery_manifest_authority_mismatch")
-        decoder = PostgreSQLDecoder(**table["decoder"])
+        decoder = self.capture.decoder(**table["decoder"])
         binding.validate(decoder)
         try:
             metadata = target_metadata(self.engine, binding.generation_id)
@@ -587,7 +550,8 @@ class SourceDelivery:
                 and metadata["table_identity"] == decoder.table_identity and (
                     metadata["schema_fingerprint"] != table["schema_fingerprint"] or metadata["key_columns"] != list(decoder.key_fields)
                     or metadata["column_names"] != list(decoder.columns) or metadata["native_types"] != table["native_types"])):
-            raise TablePrerequisiteFailed(f"{decoder.source['schema']}.{decoder.source['table']}", "schema")
+            raise TablePrerequisiteFailed(decoder.qualified_table, "schema",
+                                          f"{self.capture.code}_readiness_unconfirmed")
         if (metadata is None or metadata["authority"] != expected
                 or metadata["generation_id"] != binding.generation_id
                 or metadata["capture_generation"] != binding.authority.capture_generation
@@ -625,11 +589,10 @@ class SourceDelivery:
         return binding, decoder, metadata
 
     def _validate_topic(self, decoder, topic, partition):
-        src = decoder.source
-        scope = self.profile.scope
+        src, scope = decoder.source, self.profile.scope
         if (src["db"] != scope["database"] or src["name"] != scope["topic_prefix"]
-                or src["schema"] + "." + src["table"] not in scope["tables"]
-                or topic != src["name"] + "." + src["schema"] + "." + src["table"]
+                or decoder.qualified_table not in scope["tables"]
+                or topic != self.capture.topic(src)
                 or type(partition.partition) is not int or partition.partition != 0):
             raise RuntimeBlocked("delivery_scope_mismatch")
 

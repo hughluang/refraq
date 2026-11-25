@@ -11,8 +11,9 @@ from urllib.parse import urlsplit
 import httpx
 
 from backend.core.time import utc_now
-from backend.metadata.capture.control import AUTHORITY_KEYS, table_exclusion_refs
+from backend.metadata.capture.control import table_exclusion_refs
 from backend.metadata.capture.runtime_store import RuntimeBlocked, protected_read
+from backend.metadata.capture.scope import AUTHORITY_KEYS
 from backend.metadata.errors import SourceCaptureControlConflict
 
 
@@ -153,7 +154,7 @@ class ReadinessSignals:
     Snapshot terminal signals can be observed here but are not start authority.
     """
 
-    def __init__(self, http, *, runtime_instance_id, max_age_seconds, required_checks,
+    def __init__(self, http, *, engine, runtime_instance_id, max_age_seconds, required_checks,
                  verifier=None, scope=None):
         mandatory = {"profile_qualified", "source_pressure", "delivery_bounded",
                      "credential_valid", "alarm_drill", "owner_excluded", "target_fenced"}
@@ -161,6 +162,7 @@ class ReadinessSignals:
                 or not mandatory.issubset(set(required_checks))):
             raise RuntimeBlocked("explicit_readiness_policy_required")
         self.http = http
+        self.engine = engine
         self.runtime_instance_id = runtime_instance_id
         self.max_age = max_age_seconds
         self.required = set(required_checks)
@@ -303,7 +305,7 @@ class ReadinessSignals:
             raise RuntimeBlocked("replacement_exclusion_unproven")
         baseline = observation.get("candidate_baseline")
         if (not isinstance(baseline, dict)
-                or set(baseline) != {"postgresql", "wal", "slot", "connect", "kafka", "task_running"}
+                or set(baseline) != self.engine.baseline_keys
                 or not all(_digest_ref(ref) for ref in baseline.values())):
             raise RuntimeBlocked("replacement_baseline_unproven")
         fence = observation.get("target_fence")

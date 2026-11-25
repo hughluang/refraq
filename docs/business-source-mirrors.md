@@ -15,7 +15,7 @@ Related boundaries:
 
 Metadata owns capture admission/control in `backend/metadata/capture/` and mirror registry, application, publication, reads, history and recovery in `backend/metadata/mirrors/`. Mirrors are not Business Entities. Metadata must not import Entity or Channel internals, even when both use the entity database. Composition binds external adapters.
 
-The deployer installs, upgrades and supervises the optional independent Connect/Kafka infrastructure and product-owned applier/control-agent process. API and Beat dispatch durable management intent; neither transports events nor spawns/supervises these processes. The PostgreSQL Connect + Kafka reference design uses one keyed topic and one partition per table, ordered per table, with no partition-count change within a capture generation. It makes no cross-table source-transaction atomicity promise. A standard sink is a bounded comparison candidate, not a second production backend.
+The deployer installs, upgrades and supervises the optional independent Connect/Kafka infrastructure and product-owned applier/control-agent process. API and Beat dispatch durable management intent; neither transports events nor spawns/supervises these processes. The Connect + Kafka reference design, identical for every registered Source engine, uses one keyed topic and one partition per table, ordered per table, with no partition-count change within a capture generation. It makes no cross-table source-transaction atomicity promise. A standard sink is a bounded comparison candidate, not a second production backend.
 
 The management database owns Source configuration, resource bindings, control commands, Mirror operations, recovery requests and history invalidation gates. Dedicated `source_mirror` and `source_mirror_state` schemas in the separate entity database own rows, fences, generations, delivery progress, log counters and reader pins. A Metadata bootstrap entry owns those schemas and guarded functions; it must not call unpublished Entity bootstrap helpers. A dedicated non-superuser owner owns the objects. Restricted applier and read-gateway logins have no unguarded DML or raw row-table grants; ordinary Entity/query roles have no mirror grants. Bootstrap administrative credentials are never used by serving processes.
 
@@ -81,7 +81,7 @@ The Source owns capture credentials and the snapshot window. Explicitly enabled 
 
 Global `mirror:read` authorizes Operations metadata and a Catalog link for callers who can see the table. Operations shows desired state, the durable operation journal, a published generation when available and correlated snapshot progress when observed. Freshness stays unknown without an end-to-end measurement. The Mirror fault field remains null until there is durable evidence bound to the Mirror. Deployment verification uses restricted target access to check rows in the published generation and the corresponding committed live entry in `source_mirror_state.live_log`. User-authorized internal row and History reads check the active User's `sources:data_read` Role capability and viewer-or-higher Source Membership against the immutable Mirror binding.
 
-Disable excludes the Mirror from desired scope and records a pending disable operation. A published copy can remain visible. Operations confirms stop after a signed Source stop or a table-specific exclusion under the current owner. The evidence identifies the exact excluded Mirror revision. Reconciliation that keeps capture running for other Mirrors leaves this stop pending when it lacks exclusion evidence for the disabled table. Superseding Source authority retires the confirmation. A later enable can supersede a pending disable. Missing upstream tables remain eligible for disable. Reopening requires a present, eligible PostgreSQL table.
+Disable excludes the Mirror from desired scope and records a pending disable operation. A published copy can remain visible. Operations confirms stop after a signed Source stop or a table-specific exclusion under the current owner. The evidence identifies the exact excluded Mirror revision. Reconciliation that keeps capture running for other Mirrors leaves this stop pending when it lacks exclusion evidence for the disabled table. Superseding Source authority retires the confirmation. A later enable can supersede a pending disable. Missing upstream tables remain eligible for disable. Reopening requires a present table of a Source engine with a registered capture path.
 
 Reopening restores the current source rows. Verified continuous table coverage permits a retained resume. A proven interval of missed capture starts a new History epoch and an empty replacement at the qualified partition boundary. The previous published copy remains available while the replacement builds. Snapshot rows carry baseline origin. Unknown coverage requires more evidence. Switching one table preserves other tables' identities and history.
 
@@ -141,7 +141,7 @@ Persist bounded transient attempts/next-attempt and jittered backoff within the 
 
 Actual snapshot starts use the live Schedule Timezone/window, one table per Source and deduplicated operation ids. Persist postpone/manual mode. Audited run-now bypasses the window only, never ownership, readiness or resource gates. A timer does not promise to interrupt an uninterruptible scan.
 
-Automatically resume verified unchanged schemas. Automatic add/widen requires explicitly qualified mapping, schema detection and backfill evidence. Unknown DDL, key changes, rename, drop/narrow and TRUNCATE block readiness pending authorization. No text fallback. PostgreSQL row events do not prove schema-only observation: require a DBA-approved fingerprint path with fresh evidence or block.
+Automatically resume verified unchanged schemas. Automatic add/widen requires explicitly qualified mapping, schema detection and backfill evidence. Unknown DDL, key changes, rename, drop/narrow and TRUNCATE block readiness pending authorization. No text fallback. Row events of any engine do not prove schema-only observation: require a DBA-approved fingerprint path with fresh evidence or block.
 
 Recovery requests are audited against the current Mirror History epoch. The supported actions are retry, run now, postpone and manual.
 
@@ -153,9 +153,24 @@ Metadata emits typed redacted events after committed state transitions: `cdc.pre
 
 A freshness measurement requires timestamped Source, delivery and target observations within the approved staleness limit. The management-independent safety alarm remains a separate deployment obligation.
 
-## 10. MySQL Boundary
+## 10. Engine Capture Contracts
 
-Metadata MySQL registration, Connector Spec/driver, introspection, type seeds, API/SpecTree expectations and guarded live queries are an explicit independent prerequisite for MySQL product integration. They are not incidental CDC fixtures. MySQL capture qualification separately proves binlog mode/row image/server identity/privileges, GTID-or-file lineage, retained positions, keys/types/schema, publication barriers, capacity and alarms on pinned versions/topology. PostgreSQL results do not qualify MySQL or block PostgreSQL implementation. Unsupported/unverified profiles remain unavailable.
+A Source engine can be mirrored when `backend/metadata/capture/engines.py` registers it. Registration needs a pinned capture profile, a Debezium envelope decoder, topic naming, a publication hand-off checkpoint confirmer and replacement baseline keys, all passing the shared conformance suite. Management code asks only whether a table is mirror-eligible and whether a Source holds the capture credential under consideration. It never names an engine. Registration is a contract of this repository, not qualification of any database version or topology. The registered engines are PostgreSQL, MySQL, SQL Server and Oracle.
+
+Everything downstream of the decoder is engine-neutral: the `Record` contract, the single transactional target writer, generations, publication and History. A profile pins one explicit, DBA-approved scope, observes prerequisites through the capture identity and never creates publications, CDC instances, supplemental logging, signal tables or grants. A prerequisite that cannot be observed is unknown and blocks. An observed failure for one table blocks only that table's Open.
+
+| Engine | Source log position | Prerequisites a profile observes | Data collection id |
+| --- | --- | --- | --- |
+| PostgreSQL | WAL position and replication slot | Logical replication, slot, publication, replica identity and table read rights | `schema.table` |
+| MySQL | Binlog file and position, plus the GTID set in GTID lineage mode, bound to the pinned server UUID | Row binlog with full row image, retention, replication privileges and keys | `database.table` |
+| SQL Server | Commit and change LSN of the CDC log | Database CDC enabled, one capture instance per table covering every live column, agent running, cleanup retention and read rights | `database.schema.table` |
+| Oracle | SCN and commit SCN of the mined redo, bounded by the flushed SCN | ARCHIVELOG mode, supplemental logging, archived redo retention, mining privileges and read rights | `pdb.schema.table` |
+
+Every engine proves publication hand-off with a durable source checkpoint in a dedicated Kafka partition separate from data and notification partitions, bound to the connector name and topic prefix. The checkpoint carries the engine's log position and a witness that orders it after the previous checkpoint. The producer exclusion proves a source position at or beyond the witness. The signed evidence gateway (`/v1/capture/*`) is deployed outside this repository. This repository defines and validates the evidence. Missing or contradictory evidence keeps capture blocked, and no timer or lag estimate substitutes for it.
+
+The delivery manifest `native_types` use the mirror target type vocabulary (`bigint`, `integer`, `smallint`, `boolean`, `text`, `uuid`, `date`, `bytea`, `jsonb`, `timestamp`, `timestamptz`). The deployer maps each engine's native column types into that vocabulary when generating the manifest. Temporal values of nanosecond precision are admitted only when exactly representable in microseconds. Any unmapped or lossy type blocks the table. MySQL and Oracle names are carried verbatim; Oracle identifiers are upper case.
+
+Metadata registration, Connector Spec, introspection and type seeds for each engine remain prerequisites owned by `docs/business-metadata.md`; they are not created by capture.
 
 ## 11. Non-Goals
 

@@ -15,7 +15,8 @@ from sqlalchemy.orm import sessionmaker
 from backend.core.config import get_settings
 from backend.core.secrets import encrypt_secret
 from backend.core.time import FixedClock, get_clock, set_clock, utc_now
-from backend.metadata.capture import control, delivery_composition, runtime as entrypoint
+from backend.metadata.capture import control, delivery_composition, engines, runtime as entrypoint
+from backend.metadata.capture.scope import AUTHORITY_KEYS
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime import CaptureRuntime
 from backend.metadata.capture.runtime_store import CommandJournal, RuntimeBlocked
@@ -143,7 +144,7 @@ def test_applied_open_preparation_requires_current_complete_scope(management, mo
     with transaction() as session:
         state = control.load_binding(session, SOURCE)
         state.update(owner_epoch=1, runtime_instance_id="agent-one", applied_revision=state["control_revision"])
-        stamp = {key: state[key] for key in control.AUTHORITY_KEYS}
+        stamp = {key: state[key] for key in AUTHORITY_KEYS}
         state["allocation"] = dict(command={"operation_id": "owner"}, evidence={"target_fence": dict(
             operation_id="owner", authority=stamp, mirror_receipts={mirror_id: "receipt"},
         )})
@@ -290,7 +291,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             get_source_store().save_source_on(session, disabled)
             control.record_source_intent(session, source, disabled, actor_user_id=None, actor_token_id=None)
     pending, = pending_capture_commands()
-    previous = {key: pending[key] for key in control.AUTHORITY_KEYS}
+    previous = {key: pending[key] for key in AUTHORITY_KEYS}
     current = dict(previous, owner_epoch=1, runtime_instance_id="agent-one",
                    control_revision=pending["control_revision"] + 1)
     profile_scope = dict(source_id=SOURCE, connector_name="cap_one", host="pg.internal", port=5432,
@@ -407,7 +408,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
                 result = observation(command, phase, checks=checks)
                 result.pop("signature")
                 return dict(result, signature=signed(f"observation:{phase}", command["operation_id"], profile_scope,
-                                                     authority={key: command[key] for key in control.AUTHORITY_KEYS},
+                                                     authority={key: command[key] for key in AUTHORITY_KEYS},
                                                      observation=result))
             if method == "PUT":
                 mutations.append(path)
@@ -425,8 +426,9 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             return None
 
     monkeypatch.setattr(entrypoint, "PrivateHTTP", Transport)
-    monkeypatch.setattr(entrypoint, "PostgreSQLCaptureProfile", lambda **args: PostgreSQLCaptureProfile(
-        **args, connect=lambda **kwargs: SourceConnection(),
+    monkeypatch.setitem(engines._REGISTRY, "postgresql", replace(
+        engines._REGISTRY["postgresql"],
+        profile=lambda **args: PostgreSQLCaptureProfile(**args, connect=lambda **kwargs: SourceConnection()),
     ))
     monkeypatch.setattr(delivery_composition, "applier_engine", lambda settings: SimpleNamespace(dispose=lambda: None))
     monkeypatch.setattr(delivery_composition, "current_open_preparations", lambda **kwargs: ([], []))
@@ -504,7 +506,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             return
         containment["withhold_stop"] = False
         stop_command, = pending_capture_commands()
-        previous = {key: stop_command[key] for key in control.AUTHORITY_KEYS}
+        previous = {key: stop_command[key] for key in AUTHORITY_KEYS}
         current = dict(previous, owner_epoch=2, control_revision=previous["control_revision"] + 1)
         allocation_proof = signed("owner_allocation", "unavailable", allocation_scope,
                                   authority=current, previous_authority=previous)
@@ -533,7 +535,7 @@ def test_protected_runtime_entry_requires_all_bindings_before_connect_mutation(
             get_source_store().save_source_on(session, disabled)
             control.record_source_intent(session, source, disabled, actor_user_id=None, actor_token_id=None)
         stop_command, = pending_capture_commands()
-        previous = {key: stop_command[key] for key in control.AUTHORITY_KEYS}
+        previous = {key: stop_command[key] for key in AUTHORITY_KEYS}
         current = dict(previous, owner_epoch=2, runtime_instance_id="agent-two",
                        control_revision=previous["control_revision"] + 1)
         allocation_proof = signed("owner_allocation", "takeover", allocation_scope,

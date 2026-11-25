@@ -8,11 +8,13 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from backend.metadata.capture.engines import engine_for_entry
 from backend.core.config import get_settings
 from backend.core.time import utc_now
 from backend.core.secrets import encrypt_secret
 from backend.metadata.capture.authority import SignedAuthority
-from backend.metadata.capture.control import AUTHORITY_KEYS, allocate_owner, capture_status, reconcile_published_scope
+from backend.metadata.capture.control import allocate_owner, capture_status, reconcile_published_scope
+from backend.metadata.capture.scope import AUTHORITY_KEYS
 from backend.metadata.capture.credentials import CredentialFiles
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime import CaptureRuntime
@@ -83,7 +85,7 @@ def test_owner_allocation_uses_current_previous_term_and_emits_real_intent(manag
         )})
 
     http = FakeHTTP(handler)
-    signals = ReadinessSignals(http, verifier=verifier(key), runtime_instance_id="agent-two",
+    signals = ReadinessSignals(http, engine=engine_for_entry({"postgresql_profile": {}}), verifier=verifier(key), runtime_instance_id="agent-two",
                                max_age_seconds=30, required_checks=CHECKS, scope=profile)
     request = dict(source_id=state["source_id"], operation_id="cop_new", signed_proof=proof, signals=signals)
     try:
@@ -153,7 +155,7 @@ def test_takeover_during_deferred_enrollment_requires_full_fence_and_releases_ol
                               authority=authority, scope=scope, observation=result)})
 
     http = FakeHTTP(handler)
-    signals = ReadinessSignals(http, verifier=verifier(key), runtime_instance_id="agent-two",
+    signals = ReadinessSignals(http, engine=engine_for_entry({"postgresql_profile": {}}), verifier=verifier(key), runtime_instance_id="agent-two",
                                max_age_seconds=30, required_checks=CHECKS, scope=profile)
     request = dict(source_id=source_id, operation_id="cop_new", signals=signals)
     proof = token(key, authority=authority, scope=scope, previous_authority=previous)
@@ -252,7 +254,7 @@ def test_connect_create_response_loss_reconciles_without_repeating_mutation(tmp_
     http = FakeHTTP(handler)
     journal = CommandJournal(tmp_path)
     runtime = CaptureRuntime(journal=journal, connect=ConnectLifecycle(http, "cap_one"),
-                             signals=ReadinessSignals(http, verifier=TRUST, runtime_instance_id="agent-one",
+                             signals=ReadinessSignals(http, engine=engine_for_entry({"postgresql_profile": {}}), verifier=TRUST, runtime_instance_id="agent-one",
                                                       max_age_seconds=30, required_checks=CHECKS),
                              credentials=Files(), profile=Profile(), delivery=Delivery())
     with pytest.raises(RuntimeBlocked, match="private_http_uncertain"):
@@ -408,7 +410,7 @@ def exercise_takeover_retry(scanning_source, change, observe_fence):
             observation=observed)})
 
     http = FakeHTTP(handler)
-    signals = ReadinessSignals(http, verifier=verifier(key), runtime_instance_id="agent-two",
+    signals = ReadinessSignals(http, engine=engine_for_entry({"postgresql_profile": {}}), verifier=verifier(key), runtime_instance_id="agent-two",
                                max_age_seconds=30, required_checks=CHECKS, scope=profile)
     request = dict(source_id=source_id, operation_id="cop_new", signed_proof=proof, signals=signals)
     try:

@@ -16,6 +16,7 @@ from sqlalchemy.exc import DBAPIError
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
 from backend.metadata.capture.configuration import SnapshotWindow, snapshot_dispatch_allowed
+from backend.metadata.capture.engines import CAPTURE_ENGINE_CODES
 from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.history import admit_observed_history
 from backend.metadata.mirrors.history_models import HistoryGateRow
@@ -335,7 +336,7 @@ class Recovery:
                     raise MirrorError("MIRROR_CONTROL_CONFLICT", 409)
                 if evidence.get("validity") == "lost" and journal["state"] != "invalidated":
                     transitions = self.history.invalidate_history(session, mirror_ids=affected, reason="history_loss", operation_id=operation_id)
-                    binding = load_binding(session, source.id) if source.engine == "postgresql" else None
+                    binding = load_binding(session, source.id) if source.engine in CAPTURE_ENGINE_CODES else None
                     capture_generation = str(binding["capture_generation"] + 1) if binding else uuid4().hex
                     journal.update(state="invalidated", replacement_epoch=next(item["history_epoch"] for item in transitions if item["mirror_id"] == mirror.id),
                                    capture_generation=capture_generation, generation_id=uuid4().hex, next_attempt_at=None)

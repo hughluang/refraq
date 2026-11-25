@@ -13,8 +13,8 @@ from confluent_kafka.admin import OffsetSpec
 from sqlalchemy import text
 
 from backend.core.time import format_instant, parse_instant, utc_now
-from backend.metadata.capture.control import AUTHORITY_KEYS
 from backend.metadata.capture.delivery_composition import applier_engine
+from backend.metadata.capture.scope import AUTHORITY_KEYS
 from backend.metadata.mirrors import diagnostics
 from backend.metadata.mirrors.diagnostic_schemas import DiagnosticPolicy, LinkObservation, MirrorSample, RowSample, SourceReceipt
 from backend.metadata.mirrors.diagnostic_store import DiagnosticStore

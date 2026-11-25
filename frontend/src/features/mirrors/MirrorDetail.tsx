@@ -20,6 +20,7 @@ import { HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { presentConsoleNotification } from "@/providers/notification-provider";
+import { engineLabel } from "@/features/sources/engineLabel";
 import { deleteMirror, requestRecovery, setMirrorEnabled } from "./api";
 import { MirrorDelete } from "./MirrorDelete";
 import { MirrorMeasurements } from "./MirrorMeasurements";
@@ -135,6 +136,7 @@ function MirrorRecord({ id }: { id: string }) {
   }
   const originDescription = mirror ? t("mirrors.sourceToStorage", {
     source: mirror.source_name,
+    engine: engineLabel(t, mirror.source_engine),
     destination: mirror.storage_destination,
     size: mirror.source_size_bytes == null ? t("mirrors.unmeasured") : t("mirrors.bytes", { bytes: mirror.source_size_bytes.toLocaleString() }),
   }) : undefined;

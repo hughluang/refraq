@@ -14,6 +14,15 @@ class RuntimeBlocked(Exception):
     """A safe runtime fault code, never an external response or credential."""
 
 
+class TablePrerequisiteFailed(RuntimeBlocked):
+    """One table's schema or permission prerequisite is observed failing (not merely unknown)."""
+
+    def __init__(self, table, cause, code):
+        super().__init__(code)
+        self.table = table
+        self.cause = cause
+
+
 def protected_read(path, *, limit=1048576):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:

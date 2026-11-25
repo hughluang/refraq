@@ -10,6 +10,7 @@ from sqlalchemy.orm import load_only
 
 from backend.core.db import session_scope
 from backend.metadata.catalog.store import get_catalog_store
+from backend.metadata.capture.engines import CAPTURE_ENGINE_CODES, mirror_eligible
 from backend.metadata.models import CatalogObjectRow, SourceCaptureBindingRow, SourceRow
 from backend.metadata.mirrors.fleet_store import MemoryFleetStore, SqlFleetStore
 from backend.metadata.mirrors.history_models import HistoryGateRow
@@ -75,8 +76,8 @@ class MemoryMirrorStore:
             mirrors = {m["table_identity"]: m for m in self.scope_rows(session, source.id)}
             for obj in objects:
                 bound = mirrors.get(obj.id)
-                eligible = (source.engine == "postgresql" and source.kind == "database"
-                            and obj.is_present and obj.object_type == "table")
+                eligible = mirror_eligible(source_kind=source.kind, engine=source.engine,
+                                           object_type=obj.object_type, is_present=obj.is_present)
                 if not (eligible or (bound and include_bound)):
                     continue
                 if object_id is not None and obj.id != object_id:
@@ -192,7 +193,7 @@ class SqlMirrorStore:
 
     def catalog_tables(self, session, *, visible_ids, object_id, q, include_bound, limit, offset):
         obj = CatalogObjectRow
-        eligible = and_(SourceRow.engine == "postgresql", SourceRow.kind == "database",
+        eligible = and_(SourceRow.engine.in_(CAPTURE_ENGINE_CODES), SourceRow.kind == "database",
                         obj.is_present.is_(True), obj.object_type == "table")
         filters = [or_(eligible, MirrorRow.id.is_not(None)) if include_bound else eligible]
         if visible_ids is not None:
@@ -291,6 +292,7 @@ class SqlMirrorStore:
 
 
 def catalog_binding(obj, source):
-    if obj is None or source is None or not obj.is_present or obj.object_type != "table" or source.kind != "database" or source.engine != "postgresql":
+    if obj is None or source is None or not mirror_eligible(
+            source_kind=source.kind, engine=source.engine, object_type=obj.object_type, is_present=obj.is_present):
         return None
-    return dict(source_id=source.id, object_id=obj.id, source_key=source.key, source_name=source.name, qualified_table=f"{obj.schema_name}.{obj.name}", table_identity=obj.id)
+    return dict(source_id=source.id, object_id=obj.id, source_key=source.key, source_name=source.name, source_engine=source.engine, qualified_table=f"{obj.schema_name}.{obj.name}", table_identity=obj.id)

@@ -12,6 +12,7 @@ from confluent_kafka.admin import TopicDescription
 import jwt
 import pytest
 
+from backend.metadata.capture.engines import engine_for_entry
 from backend.core.time import utc_now
 from backend.metadata.capture import delivery_composition as composition
 from backend.metadata.capture.delivery import DeliveryLimits, KafkaDelivery
@@ -72,6 +73,7 @@ def setup_delivery(monkeypatch, tmp_path):
             }, SIGNING_KEY, algorithm="EdDSA", headers={"kid": "trusted"})}
 
     owner = object.__new__(composition.SourceDelivery)
+    owner.capture = engine_for_entry({"postgresql_profile": {}})
     owner.settings = {"target": {"timeout_seconds": 2}}
     owner.tables = owner.manifest_tables = [table]
     owner.source_id = "source"

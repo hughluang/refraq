@@ -165,6 +165,7 @@ def coordinator(tmp_path, signals, **options):
     return SnapshotCoordinator(
         journal=CommandJournal(tmp_path), signals=signals, receipt_trust=signals.trust("receipt"),
         notification_trust=signals.trust("notifications"), max_observation_age_seconds=30,
+        collection_id=lambda table: table,
         **({"recheck": lambda binding, *, session, source: "window"} | options),
     )
 
@@ -524,7 +525,7 @@ def test_receipt_and_notification_verifiers_require_distinct_keys(tmp_path):
     try:
         with pytest.raises(RuntimeBlocked, match="snapshot_independent_observers_required"):
             SnapshotCoordinator(journal=journal, signals=signals, recheck=None,
-                                max_observation_age_seconds=30, receipt_trust=signals.trust("receipt"),
+                                collection_id=lambda table: table, max_observation_age_seconds=30, receipt_trust=signals.trust("receipt"),
                                 notification_trust=signals.trust("notifications"))
     finally:
         journal.close()
@@ -704,6 +705,7 @@ def test_trust_key_mutation_cannot_turn_notification_signer_into_receipt_observe
     receipt_trust = signals.trust("receipt")
     worker = SnapshotCoordinator(journal=journal, signals=signals, receipt_trust=receipt_trust,
                                  notification_trust=signals.trust("notifications"), max_observation_age_seconds=30,
+                                 collection_id=lambda table: table,
                                  recheck=lambda binding, *, session, source: "window")
     try:
         worker.reconcile(binding)

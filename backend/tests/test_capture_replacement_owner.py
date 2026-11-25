@@ -14,11 +14,13 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from backend.metadata.capture.engines import engine_for_entry
 from backend.admin.audit import persist_audit_event
 from backend.admin.models import AuditEventRow
 from backend.core.time import utc_now
 from backend.metadata.capture import control
 from backend.metadata.capture import delivery_composition as composition
+from backend.metadata.capture.scope import AUTHORITY_KEYS
 from backend.metadata.capture.delivery import DeliveryLimits, KafkaDelivery
 from backend.metadata.capture.runtime import CaptureRuntime
 from backend.metadata.capture.runtime_adapters import ReadinessSignals
@@ -59,7 +61,8 @@ def _prove_snapshot_delivery(monkeypatch, *, dsn, journal, signals, command, key
                                                        notification_topic="cap.notifications",
                                                        notification_partition=asdict(notification)))
     delivery = composition.SourceDelivery(settings_file=None, source_id=SOURCE, journal=journal,
-                                          signals=signals, verifier=verifier(key), profile=profile)
+                                          signals=signals, verifier=verifier(key), profile=profile,
+                                          capture=signals.engine)
     delivery.engine = create_engine("postgresql+psycopg://", creator=lambda: psycopg.connect(
         dsn, options="-c role=refraq_mirror_applier",
     ))
@@ -182,7 +185,7 @@ def test_runtime_replacement_owner_consumes_committed_recovery(
         state = load_binding(session, SOURCE)
         state.update(owner_epoch=1, runtime_instance_id="before-loss")
         save_binding(session, state)
-        previous = {key: state[key] for key in control.AUTHORITY_KEYS}
+        previous = {key: state[key] for key in AUTHORITY_KEYS}
         published_scope = state["published_scope"]
 
     scheduler = Runtime()
@@ -272,7 +275,7 @@ def test_runtime_replacement_owner_consumes_committed_recovery(
                                     authority=authority, scope=scope, observation=observation))
 
     http = Mock(request=Mock(side_effect=observe))
-    signals = ReadinessSignals(http, runtime_instance_id="replacement", max_age_seconds=30, required_checks=CHECKS,
+    signals = ReadinessSignals(http, engine=engine_for_entry({"postgresql_profile": {}}), runtime_instance_id="replacement", max_age_seconds=30, required_checks=CHECKS,
                                verifier=verifier(key), scope=profile)
     if case == "audit_rollback":
         def reject_applied_audit(**event):
@@ -371,7 +374,7 @@ def test_runtime_replacement_owner_consumes_committed_recovery(
             assert command["owner_epoch"] == 2
             assert command["capture_generation"] == 2
             if phase == "stopped":
-                return dict({name: command[name] for name in control.AUTHORITY_KEYS},
+                return dict({name: command[name] for name in AUTHORITY_KEYS},
                             operation_id=command["operation_id"], observed_at=utc_now().isoformat(), **{
                     name: _ref(name) for name in (
                         "target_fence_ref", "owner_exclusion_ref", "retired_commands_rejected_ref",

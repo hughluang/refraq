@@ -7,14 +7,14 @@ import { presentProblemNotification } from "@/components/feedback/presentProblem
 import { ApiError } from "@/lib/api";
 vi.mock("./MirrorMeasurements", () => ({ MirrorMeasurements: () => null }));
 
-const state = vi.hoisted(() => ({ write: true, get: vi.fn(), recover: vi.fn(), enabled: vi.fn(), remove: vi.fn(), older: vi.fn(), replace: vi.fn(), translate: (key: string) => key }));
+const state = vi.hoisted(() => ({ write: true, get: vi.fn(), recover: vi.fn(), enabled: vi.fn(), remove: vi.fn(), older: vi.fn(), replace: vi.fn(), translate: ((key: string, _params?: Record<string, unknown>) => key) as (key: string, params?: Record<string, unknown>) => string }));
 vi.mock("./api", () => ({ getMirror: state.get, requestRecovery: state.recover, setMirrorEnabled: state.enabled, deleteMirror: state.remove, getJournalPage: state.older }));
 vi.mock("@/components/navigation/useConsoleNavigation", () => ({
   useConsoleLocation: () => ({ href: "/console/mirrors/m1", search: new URLSearchParams() }),
   useConsoleNavigation: () => ({ replace: state.replace }),
 }));
 vi.mock("@refinedev/core", () => ({ useTranslate: () => state.translate, useCan: () => ({ data: { can: state.write } }) }));
-vi.mock("@/components/layout/PageChrome", () => ({ PageChrome: ({ children, actions, title, titleExtra }: { children: ReactNode; actions: ReactNode; title: string; titleExtra: ReactNode }) => createElement("main", null, createElement("h1", null, title), titleExtra, actions, children) }));
+vi.mock("@/components/layout/PageChrome", () => ({ PageChrome: ({ children, actions, title, titleExtra, description }: { children: ReactNode; actions: ReactNode; title: string; titleExtra: ReactNode; description?: string }) => createElement("main", null, createElement("h1", null, title), description && createElement("p", null, description), titleExtra, actions, children) }));
 vi.mock("@/components/layout/HeaderActions", () => ({ HeaderActions: ({ navigation, lifecycle, standard }: { navigation: ReactNode; lifecycle: ReactNode; standard: ReactNode }) => createElement("div", null, navigation, lifecycle, standard) }));
 vi.mock("@/components/navigation/ConsoleLink", () => ({ ConsoleLink: ({ children, href }: { children: ReactNode; href: string }) => createElement("a", { href }, children) }));
 vi.mock("@/components/display/StatusBadge", () => ({ StatusBadge: ({ labelKey, freshness }: { labelKey: string; freshness: { onRefresh: () => void; updatedAt: string } }) =>
@@ -35,14 +35,14 @@ vi.mock("@mantine/core", () => ({
 }));
 
 const mirror = {
-  id: "m1", source_id: "source-1", source_name: "Sales", qualified_table: "public.orders",
+  id: "m1", source_id: "source-1", source_name: "Sales", source_engine: "mysql", qualified_table: "public.orders",
   storage_destination: "source_mirror", source_size_bytes: null, estimated_rows: null,
   enabled: false, status: "disable_pending", published_generation_id: null, capture_generation: "capture-1", history_epoch: 7,
   readiness: [{ key: "ownership", result: "unknown", expected: "exclusion proof", observed: null,
     observed_at: null, owner: "deployer", action: "Confirm fence" }],
   control: { stop_ack: null }, progress: null, profile: { state: "unverified" }, fault: null, operations: [],
 };
-afterEach(() => { cleanup(); state.write = true; vi.clearAllMocks(); });
+afterEach(() => { cleanup(); state.write = true; state.translate = (key) => key; vi.clearAllMocks(); });
 it("keeps unknown readiness and unconfirmed disable visible without fabricated progress", async () => {
   state.get.mockResolvedValue({ mirror, can_enable: true });
   render(createElement(MirrorDetail, { id: "m1" }));
@@ -50,6 +50,13 @@ it("keeps unknown readiness and unconfirmed disable visible without fabricated p
   expect(screen.getByText("mirrors.result.unknown")).toBeTruthy();
   expect(screen.getAllByText("mirrors.unknownEvidence").length).toBeGreaterThan(0);
   expect(screen.getByRole("switch", { name: "mirrors.synchronization" }).hasAttribute("disabled")).toBe(false);
+});
+it("names the Source engine in the mirror origin instead of a fixed engine", async () => {
+  state.translate = (key, params) => key === "sources.engines.mysql" ? "MySQL"
+    : key === "mirrors.sourceToStorage" ? `${params?.source} · ${params?.engine} → ${params?.destination}` : key;
+  state.get.mockResolvedValue({ mirror, can_enable: true });
+  render(createElement(MirrorDetail, { id: "m1" }));
+  expect(await screen.findByText("Sales · MySQL → source_mirror")).toBeTruthy();
 });
 it("confirms a stop only when refreshed evidence matches the current disable operation", async () => {
   const observedAt = "2026-01-02T03:04:05Z";

@@ -26,7 +26,7 @@ export function createFleetFixture(count = 1024) {
       const cause = state === "attention" ? ATTENTION_CAUSES[Math.floor(number / 4) % ATTENTION_CAUSES.length] : null;
       const status = state === "synchronizing" ? "ready" : state === "stopped" ? "disabled" : state === "attention" ? (cause === "pending_stop" ? "disable_pending" : "needs_attention") : table === 1 ? "snapshotting" : "waiting";
       mirrors.push({
-        id: `mirror-${String(number + 1).padStart(5, "0")}`, source_id: id, source_key: id, source_name: `PostgreSQL ${String(index + 1).padStart(4, "0")}`,
+        id: `mirror-${String(number + 1).padStart(5, "0")}`, source_id: id, source_key: id, source_name: `PostgreSQL ${String(index + 1).padStart(4, "0")}`, source_engine: "postgresql",
         object_id: `object-${number}`, table_identity: `table-${number}`, qualified_table: `public.${["orders", "events", "balances"][table]}_${String(index + 1).padStart(4, "0")}`,
         enabled: state !== "stopped" && cause !== "pending_stop", status, grouped_state: state,
         published_generation_id: published ? `generation-${number}` : null, capture_generation: null, history_epoch: published ? 1 : null,

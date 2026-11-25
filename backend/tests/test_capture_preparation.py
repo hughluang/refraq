@@ -27,10 +27,12 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
+from backend.metadata.capture.engines import engine_for_entry
 from backend.admin.models import RoleRow, UserGroupMemberRow, UserGroupRow, UserRow
 from backend.core.time import utc_now
 from backend.core.secrets import encrypt_secret
-from backend.metadata.capture import control, delivery_composition, runtime
+from backend.metadata.capture import control, delivery_composition, engines, runtime
+from backend.metadata.capture.scope import AUTHORITY_KEYS
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 from backend.metadata.models import SourceMembershipRow, SourceRow
@@ -659,7 +661,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
     def owner_request(operation_id, instance, *, lineage_change=False, recovery_scope=False, **file_fields):
         with control.source_control_transaction(SOURCE) as (session, _):
             state = control.load_binding(session, SOURCE)
-        previous = {key: state[key] for key in control.AUTHORITY_KEYS}
+        previous = {key: state[key] for key in AUTHORITY_KEYS}
         candidate = dict(previous, owner_epoch=previous["owner_epoch"] + 1, runtime_instance_id=instance,
                          control_revision=previous["control_revision"] + 1)
         scope = dict(profile=profile, published_scope=state["published_scope"])
@@ -687,11 +689,12 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
             connection.execute(sql.SQL("SET SESSION AUTHORIZATION {}").format(sql.Identifier(connector_role)))
             return connection
 
-        monkeypatch.setattr(runtime, "PostgreSQLCaptureProfile", lambda **options: PostgreSQLCaptureProfile(
-            **options, connect=source_connection,
+        monkeypatch.setitem(engines._REGISTRY, "postgresql", replace(
+            engines._REGISTRY["postgresql"],
+            profile=lambda **options: PostgreSQLCaptureProfile(**options, connect=source_connection),
         ))
     else:
-        monkeypatch.setattr(runtime.PostgreSQLCaptureProfile, "configuration", lambda *args: {"fixture": "generated config"})
+        monkeypatch.setattr(PostgreSQLCaptureProfile, "configuration", lambda *args: {"fixture": "generated config"})
     attempts, mutations, owner_receipts = [], [], []
     fenced = receipt = installed = None
     running = False
@@ -772,7 +775,7 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                                                                                      exclusive=True, records=records))}
         if path.endswith("owner-allocations"):
             command, scope = payload["command"], payload["scope"]
-            authority = {key: command[key] for key in control.AUTHORITY_KEYS}
+            authority = {key: command[key] for key in AUTHORITY_KEYS}
             operation_id = command["operation_id"]
             TRUST.verify(payload["authorization"], purpose="owner_allocation", authority=authority,
                          scope=scope, operation_id=operation_id)
@@ -1019,13 +1022,14 @@ def test_protected_executable_prepares_current_open(case, native_target, managem
                             checkpoint_fault = case.rsplit("_", 1)[1]
                         journal = agents.enter_context(closing(runtime.CommandJournal(tmp_path)))
                         http = agents.enter_context(closing(runtime.PrivateHTTP(**tls)))
-                        signals = runtime.ReadinessSignals(http, verifier=TRUST, scope=profile, **entry["readiness_policy"])
+                        capture = engine_for_entry(entry)
+                        signals = runtime.ReadinessSignals(http, engine=capture, verifier=TRUST, scope=profile, **entry["readiness_policy"])
 
                         def new_delivery(journal):
                             return agents.enter_context(closing(delivery_composition.SourceDelivery(
                                 settings_file=entry["delivery_settings_file"], source_id=SOURCE, journal=journal,
                                 signals=signals, verifier=TRUST,
-                                profile=SimpleNamespace(scope=profile, snapshot=profile["snapshot"]),
+                                profile=SimpleNamespace(scope=profile, snapshot=profile["snapshot"]), capture=capture,
                             )))
 
                         warm = new_delivery(journal)

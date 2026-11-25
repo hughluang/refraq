@@ -15,6 +15,7 @@ from typing import Literal, Protocol
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from backend.core.time import utc_now
+from backend.metadata.capture.engines import capture_authorized
 from backend.metadata.capture.store import load_binding, load_operation
 from backend.metadata.mirrors import journal, lifecycle
 from backend.metadata.mirrors.errors import reject
@@ -393,9 +394,7 @@ def current_open_preparations(*, authority: Authority, published_scope, observe_
                     or (assignment_fence != scope_fence and assignment_fence.get("operation_id") != allocation["command"]["operation_id"])):
                 reject("MIRROR_CONTROL_CONFLICT")
             source = session.get(SourceRow, source_id, populate_existing=True)
-            if (source is None or source.status != "active" or source.engine != "postgresql"
-                    or not source.capture_credential_ciphertext
-                    or source.capture_revision != authority.credential_revision):
+            if not capture_authorized(source, credential_revision=authority.credential_revision):
                 reject("MIRROR_CONTROL_CONFLICT")
             for entry, operation in applied:
                 if not operation.get("publication_receipt", {}).get("authority"):
@@ -892,8 +891,7 @@ def reconcile_open_publication(
         binding = _open_publication_binding(operation, expected)
         state = _require_open_binding(session, store, mirror, binding)
         source = session.get(SourceRow, mirror["source_id"], populate_existing=True)
-        if (source.status != "active" or source.engine != "postgresql" or not source.capture_credential_ciphertext
-                or source.capture_revision != expected.authority.credential_revision
+        if (not capture_authorized(source, credential_revision=expected.authority.credential_revision)
                 or state.get("applied_revision") != expected.authority.control_revision):
             reject("MIRROR_CONTROL_CONFLICT")
         snapshot = _publication_snapshot(state, mirror_id, operation, binding, expected)

@@ -6,18 +6,16 @@ import re
 import psycopg
 
 from backend.core.secrets import decrypt_secret
-from backend.metadata.capture.control import selected_tables
-from backend.metadata.capture.runtime_store import RuntimeBlocked
+from backend.metadata.capture.scope import selected_tables
+from backend.metadata.capture.runtime_store import RuntimeBlocked, TablePrerequisiteFailed
 
-
-class TablePrerequisiteFailed(RuntimeBlocked):
-    def __init__(self, table, cause):
-        super().__init__("postgresql_readiness_unconfirmed")
-        self.table = table
-        self.cause = cause
+_UNCONFIRMED = "postgresql_readiness_unconfirmed"
 
 
 class PostgreSQLCaptureProfile:
+    def collection_id(self, qualified_table):
+        return qualified_table
+
     def __init__(self, *, scope, tls, connect=psycopg.connect):
         self.scope = scope
         self.tls = tls
@@ -102,7 +100,7 @@ class PostgreSQLCaptureProfile:
                         if (filtered is not False or has_generated is not False
                                 or not published_columns or not live_columns
                                 or set(published_columns) != set(live_columns)):
-                            raise TablePrerequisiteFailed(table, "schema")
+                            raise TablePrerequisiteFailed(table, "schema", _UNCONFIRMED)
                     cursor.execute("SELECT plugin, database, active FROM pg_replication_slots "
                                    "WHERE slot_name = %s", (p["slot"],))
                     slot = cursor.fetchone()
@@ -111,13 +109,13 @@ class PostgreSQLCaptureProfile:
                     for table in p["tables"]:
                         cursor.execute("SELECT has_table_privilege(current_user, %s, 'SELECT')", (table,))
                         if cursor.fetchone() != (True,):
-                            raise TablePrerequisiteFailed(table, "permission")
+                            raise TablePrerequisiteFailed(table, "permission", _UNCONFIRMED)
                     if self.snapshot is not None:
                         self._validate_signal_relation(cursor)
         except TablePrerequisiteFailed:
             raise
         except Exception:
-            raise RuntimeBlocked("postgresql_readiness_unconfirmed") from None
+            raise RuntimeBlocked(_UNCONFIRMED) from None
 
     @property
     def included_tables(self):

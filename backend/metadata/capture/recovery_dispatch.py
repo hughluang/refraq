@@ -2,8 +2,8 @@
 
 from datetime import datetime, timezone
 
-from backend.metadata.capture.control import AUTHORITY_KEYS, included_tables, profile_matches_scope
 from backend.metadata.capture.runtime_store import RuntimeBlocked
+from backend.metadata.capture.scope import AUTHORITY_KEYS, included_tables, profile_matches_scope
 from backend.metadata.capture.store import load_binding
 from backend.metadata.mirrors.composition import compose_mirrors
 from backend.metadata.mirrors.history import History

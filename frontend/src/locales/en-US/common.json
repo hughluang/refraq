@@ -63,7 +63,7 @@
   "problems.MIRROR_CONTROL_CONFLICT": "The Mirror changed. Refresh it and review the current request.",
   "problems.MIRROR_READ_UNAVAILABLE": "Mirror storage or its evidence is unavailable. Check the target connection and try again.",
   "problems.MIRROR_IN_USE": "This Mirror still has active synchronization or resources in use.",
-  "mirrors.sourceToStorage": "{{source}} · PostgreSQL → {{destination}} · Source size {{size}}",
+  "mirrors.sourceToStorage": "{{source}} · {{engine}} → {{destination}} · Source size {{size}}",
   "mirrors.stopPath": "Stopping synchronization",
   "mirrors.replacementPath": "Replacement copy",
   "mirrors.phase.stopRequest": "Stop requested",

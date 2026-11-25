@@ -84,6 +84,7 @@ class Mirror(StrictModel):
     object_id: str
     source_key: str
     source_name: str
+    source_engine: str
     table_identity: str
     qualified_table: str
     enabled: bool

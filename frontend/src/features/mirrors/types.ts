@@ -59,6 +59,7 @@ export type Mirror = {
   source_id: string;
   source_key: string;
   source_name: string;
+  source_engine: string;
   object_id: string;
   table_identity: string;
   qualified_table: string;

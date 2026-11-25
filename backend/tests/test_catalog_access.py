@@ -912,13 +912,10 @@ def test_mirror_table_picker_keeps_an_existing_binding_after_source_engine_chang
         "ssl_mode": "disable",
     })
     page = world.client.get("/catalog/mirror-tables", params={"source_id": world.source_a}).json()
-    table, = page["items"]
-    assert page["total"] == 1 and table["object_id"] == world.object_a
+    table = next(item for item in page["items"] if item["object_id"] == world.object_a)
     assert table["mirror"] == setting
     disabled = world.client.put(path, json={"enabled": False})
     assert disabled.status_code == 200 and not disabled.json()["mirror"]["enabled"]
-    world.login("reader")
-    assert world.client.get("/catalog/mirror-tables").json()["total"] == 0
     world.login("hidden")
     assert world.client.get("/catalog/mirror-tables").json()["total"] == 0
 

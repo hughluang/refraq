@@ -1,8 +1,9 @@
-"""Strict schema-bearing Debezium PostgreSQL JSON transport decoder."""
+"""Strict schema-bearing Debezium JSON transport decoder with per-engine dialect data."""
 
 import base64
 import json
 import math
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -25,8 +26,60 @@ LOGICAL_TYPES = {
 }
 
 
+@dataclass(frozen=True)
+class DebeziumDialect:
+    """Engine facts the decoder needs; carries data only, no behavior hooks.
+
+    ``schema_in_source`` is false for engines whose Debezium source block has no
+    schema member (MySQL): the catalog schema is then the database itself.
+    ``unavailable`` is the connector's placeholder for an unchanged large value.
+    ``partial_before`` admits null non-key old values (PostgreSQL replica identity DEFAULT).
+    """
+
+    engine: str
+    connector: str
+    schema_in_source: bool
+    unavailable: str | None
+    baseline_markers: tuple[str, ...]
+    partial_before: bool
+    extra_logical: dict = field(default_factory=dict)
+
+    @property
+    def error_code(self):
+        return f"{self.engine}_delivery_invalid"
+
+    @property
+    def logical(self):
+        return {**LOGICAL_TYPES, **self.extra_logical}
+
+
+_TEMPORAL = {
+    "io.debezium.time.Time": "int32",
+    "io.debezium.time.NanoTime": "int64",
+    "io.debezium.time.NanoTimestamp": "int64",
+}
+POSTGRESQL = DebeziumDialect("postgresql", "postgresql", True, TOAST, ("true", "last", "incremental"), True)
+MYSQL = DebeziumDialect(
+    "mysql", "mysql", False, None, ("true", "first", "first_in_data_collection", "last_in_data_collection", "last", "incremental"),
+    False, {**_TEMPORAL, "io.debezium.time.Year": "int32", "io.debezium.data.Enum": "string",
+            "io.debezium.data.EnumSet": "string"},
+)
+MSSQL = DebeziumDialect(
+    "mssql", "sqlserver", True, None, ("true", "first", "first_in_data_collection", "last_in_data_collection", "last", "incremental"),
+    False, dict(_TEMPORAL),
+)
+ORACLE = DebeziumDialect(
+    "oracle", "oracle", True, TOAST, ("true", "first", "first_in_data_collection", "last_in_data_collection", "last", "incremental"),
+    False, dict(_TEMPORAL),
+)
+
+
+class _Invalid(Exception):
+    """Internal rejection; public entry points report one redacted engine code."""
+
+
 def _blocked():
-    raise RuntimeBlocked("postgresql_delivery_invalid") from None
+    raise _Invalid() from None
 
 
 def _pairs(pairs):
@@ -77,14 +130,14 @@ def _fields(schema):
     return result
 
 
-def _validate_scalar(schema):
+def _validate_scalar(schema, logical):
     kind = schema.get("type")
     name = schema.get("name")
     if "optional" in schema and type(schema["optional"]) is not bool:
         _blocked()
     if kind not in {*INTEGER_BITS, "float32", "float64", "boolean", "string", "bytes"}:
         _blocked()
-    if name is not None and LOGICAL_TYPES.get(name) != kind:
+    if name is not None and logical.get(name) != kind:
         _blocked()
     if name == "org.apache.kafka.connect.data.Decimal":
         parameters = schema.get("parameters", {})
@@ -93,12 +146,23 @@ def _validate_scalar(schema):
             _blocked()
 
 
-def _unavailable(value, schema):
+def _unavailable(value, schema, marker):
+    if marker is None:
+        return False
     if schema["type"] == "string":
-        return value == TOAST
+        return value == marker
     if schema["type"] == "bytes":
-        return value == base64.b64encode(TOAST.encode()).decode()
+        return value == base64.b64encode(marker.encode()).decode()
     return False
+
+
+def _exact_micros(value, factor):
+    """Convert to microseconds; nanosecond values that would lose digits are rejected."""
+    if factor is not None:
+        return value * factor
+    if value % 1000:
+        _blocked()
+    return value // 1000
 
 
 def _scalar(value, schema):
@@ -137,10 +201,14 @@ def _scalar(value, schema):
     if name in {"io.debezium.time.MicroTimestamp", "io.debezium.time.Timestamp"}:
         micros = value if name.endswith("MicroTimestamp") else value * 1000
         return (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=micros)).replace(tzinfo=None).isoformat()
-    if name == "io.debezium.time.MicroTime":
-        if not 0 <= value < 86400000000:
+    if name in {"io.debezium.time.MicroTime", "io.debezium.time.Time", "io.debezium.time.NanoTime"}:
+        micros = _exact_micros(value, {"MicroTime": 1, "Time": 1000, "NanoTime": None}[name.rsplit(".", 1)[1]])
+        if not 0 <= micros < 86400000000:
             _blocked()
-        return (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=value)).time().isoformat()
+        return (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=micros)).time().isoformat()
+    if name == "io.debezium.time.NanoTimestamp":
+        micros = _exact_micros(value, None)
+        return (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=micros)).replace(tzinfo=None).isoformat()
     if name == "io.debezium.time.ZonedTimestamp":
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
@@ -153,15 +221,20 @@ def _scalar(value, schema):
     return value
 
 
-class PostgreSQLDecoder:
+class DebeziumDecoder:
     """An admitted immutable table/schema binding, not inferred from incoming data.
 
-    Only the listed scalar Connect encodings are admitted. Schemas, including
-    optionality and logical parameters, must match the installed generation.
+    Only the dialect's listed scalar Connect encodings are admitted. Schemas,
+    including optionality and logical parameters, must match the installed
+    generation. Subclasses only name their ``DIALECT``.
     """
+
+    DIALECT: DebeziumDialect
 
     def __init__(self, *, table_identity, capture_generation, database, namespace,
                  schema_name, table_name, connector_version, key_schema, value_schema):
+        dialect = self.DIALECT
+        logical = dialect.logical
         try:
             self.key_fields = _fields(key_schema)
             envelope = _fields(value_schema)
@@ -171,9 +244,9 @@ class PostgreSQLDecoder:
                     or not self.key_fields.keys() <= self.columns.keys()):
                 _blocked()
             for name, field in self.columns.items():
-                _validate_scalar(field)
+                _validate_scalar(field, logical)
             for name, field in self.key_fields.items():
-                _validate_scalar(field)
+                _validate_scalar(field, logical)
                 if field.get("optional", False):
                     _blocked()
                 if ({k: v for k, v in field.items() if k != "optional"}
@@ -184,6 +257,8 @@ class PostgreSQLDecoder:
                 schema_name, table_name, connector_version,
             )):
                 _blocked()
+            if not dialect.schema_in_source and schema_name != database:
+                _blocked()
             # Detach caller-owned schema dictionaries from the installed profile.
             self.key_schema = _json(json.dumps(key_schema))
             self.value_schema = _json(json.dumps(value_schema))
@@ -191,13 +266,16 @@ class PostgreSQLDecoder:
             self.columns = _fields(_fields(self.value_schema)["after"])
             self.table_identity = table_identity
             self.capture_generation = capture_generation
-            self.source = {"connector": "postgresql", "version": connector_version,
-                           "name": namespace, "db": database, "schema": schema_name,
-                           "table": table_name}
+            self.source = {"connector": dialect.connector, "version": connector_version,
+                           "name": namespace, "db": database, "table": table_name}
+            if dialect.schema_in_source:
+                self.source["schema"] = schema_name
+            self.qualified_table = f"{schema_name}.{table_name}"
         except Exception:
-            _blocked()
+            raise RuntimeBlocked(dialect.error_code) from None
 
     def decode(self, *, offset, key, value):
+        dialect = self.DIALECT
         try:
             if type(offset) is not int or offset < 0:
                 _blocked()
@@ -211,7 +289,7 @@ class PostgreSQLDecoder:
             # Key fields are mandatory; only a logical JSON literal null decodes to None.
             json_null_keys = tuple(k for k, v in typed_key.items() if v is None)
             if any(
-                _unavailable(key_doc["payload"][k], f) for k, f in self.key_fields.items()
+                _unavailable(key_doc["payload"][k], f, dialect.unavailable) for k, f in self.key_fields.items()
             ):
                 _blocked()
             if value is None:
@@ -227,7 +305,7 @@ class PostgreSQLDecoder:
             if any(source.get(k) != v for k, v in self.source.items()):
                 _blocked()
             snapshot = source.get("snapshot")
-            if op == "r" and (snapshot is True or snapshot in ("true", "last", "incremental")):
+            if op == "r" and (snapshot is True or snapshot in dialect.baseline_markers):
                 origin = "baseline"
             elif op in {"c", "u", "d"} and (snapshot is False or snapshot == "false"):
                 origin = "live"
@@ -239,7 +317,9 @@ class PostgreSQLDecoder:
                     _blocked()
                 for k, v in before.items():
                     # Replica identity DEFAULT may omit old non-key values as null.
-                    if k not in self.key_fields and (v is None or _unavailable(v, self.columns[k])):
+                    if k not in self.key_fields and (
+                            (v is None and dialect.partial_before)
+                            or _unavailable(v, self.columns[k], dialect.unavailable)):
                         continue
                     _scalar(v, self.columns[k])
                 if any(_scalar(before[k], f) != typed_key[k] for k, f in self.key_fields.items()):
@@ -253,7 +333,7 @@ class PostgreSQLDecoder:
             if (op in {"c", "r"} and before is not None
                     or not isinstance(after, dict) or set(after) != set(self.columns)):
                 _blocked()
-            unchanged = tuple(k for k in self.columns if _unavailable(after[k], self.columns[k]))
+            unchanged = tuple(k for k in self.columns if _unavailable(after[k], self.columns[k], dialect.unavailable))
             if unchanged and (op != "u" or set(unchanged) & self.key_fields.keys()):
                 _blocked()
             values = {k: _scalar(v, self.columns[k]) for k, v in after.items() if k not in unchanged}
@@ -265,4 +345,20 @@ class PostgreSQLDecoder:
             return Record(offset, self.table_identity, self.capture_generation,
                           "upsert", origin, typed_key, values, unchanged, json_nulls)
         except Exception:
-            _blocked()
+            raise RuntimeBlocked(dialect.error_code) from None
+
+
+class PostgreSQLDecoder(DebeziumDecoder):
+    DIALECT = POSTGRESQL
+
+
+class MySQLDecoder(DebeziumDecoder):
+    DIALECT = MYSQL
+
+
+class MSSQLDecoder(DebeziumDecoder):
+    DIALECT = MSSQL
+
+
+class OracleDecoder(DebeziumDecoder):
+    DIALECT = ORACLE

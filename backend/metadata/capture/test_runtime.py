@@ -10,12 +10,14 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 
+from backend.metadata.capture.engines import engine_for_entry
 from backend.metadata.capture.authority import SignedAuthority
 
 from backend.core.config import get_settings
 from backend.core.time import utc_now
 from backend.metadata.capture import control
-from backend.metadata.capture.control import AUTHORITY_KEYS, capture_status
+from backend.metadata.capture.control import capture_status
+from backend.metadata.capture.scope import AUTHORITY_KEYS
 from backend.metadata.capture.runtime import CaptureRuntime, CommandJournal, RuntimeBlocked
 from backend.metadata.capture.runtime_adapters import ConnectLifecycle, ReadinessSignals, STOP_PROOFS
 from backend.metadata.capture.runtime_store import protected_read
@@ -203,7 +205,7 @@ def test_current_owner_can_stop_but_needs_terminal_proof_to_ack(
     journal = CommandJournal(tmp_path)
     try:
         runtime = CaptureRuntime(journal=journal, connect=ConnectLifecycle(http, "cap_one"),
-                                 signals=ReadinessSignals(http, verifier=TRUST, runtime_instance_id="agent-one",
+                                 signals=ReadinessSignals(http, engine=engine_for_entry({"postgresql_profile": {}}), verifier=TRUST, runtime_instance_id="agent-one",
                                                           max_age_seconds=30, required_checks=CHECKS))
         source_id = managed_command["source_id"]
         if reason is None:
@@ -237,7 +239,7 @@ def test_running_state_requires_signed_start_readiness(phase, failed_check, read
 
     http = FakeHTTP(handler)
     try:
-        signals = ReadinessSignals(http, verifier=TRUST, runtime_instance_id="agent-one",
+        signals = ReadinessSignals(http, engine=engine_for_entry({"postgresql_profile": {}}), verifier=TRUST, runtime_instance_id="agent-one",
                                    max_age_seconds=30, required_checks=CHECKS)
         with pytest.raises(RuntimeBlocked, match="readiness_unknown_or_failed"):
             signals.observation(cmd, phase)
@@ -274,7 +276,7 @@ def test_real_durable_intent_stop_recovers_response_loss_without_second_mutation
     journal = CommandJournal(tmp_path)
     def runtime(journal):
         return CaptureRuntime(journal=journal, connect=ConnectLifecycle(http, "cap_one"),
-                              signals=ReadinessSignals(http, verifier=TRUST, runtime_instance_id="agent-one",
+                              signals=ReadinessSignals(http, engine=engine_for_entry({"postgresql_profile": {}}), verifier=TRUST, runtime_instance_id="agent-one",
                                                        max_age_seconds=30, required_checks=CHECKS))
     with pytest.raises(RuntimeBlocked, match="private_http_uncertain"):
         runtime(journal).poll_source(cmd["source_id"])
@@ -329,7 +331,7 @@ def test_unverified_readiness_and_proofs_block_before_connect(tmp_path, managed_
     http = FakeHTTP(handler)
     journal = CommandJournal(tmp_path)
     agent = CaptureRuntime(journal=journal, connect=ConnectLifecycle(http, "cap_one"),
-                           signals=ReadinessSignals(http, verifier=TRUST, runtime_instance_id="agent-one",
+                           signals=ReadinessSignals(http, engine=engine_for_entry({"postgresql_profile": {}}), verifier=TRUST, runtime_instance_id="agent-one",
                                                     max_age_seconds=30, required_checks=CHECKS))
     with pytest.raises(RuntimeBlocked, match=reason):
         agent.poll_source(cmd["source_id"])

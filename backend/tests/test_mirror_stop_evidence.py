@@ -6,6 +6,7 @@ import pytest
 
 from backend.core.time import utc_now
 from backend.metadata.capture import control
+from backend.metadata.capture.scope import AUTHORITY_KEYS
 from backend.metadata.capture.test_published_scope import (
     SOURCE,
     management as management,
@@ -36,7 +37,7 @@ def _accept(command, **changes):
     else:
         refs |= {"credential_installed", "credential_revoked"}
     evidence = {
-        **{key: command[key] for key in control.AUTHORITY_KEYS},
+        **{key: command[key] for key in AUTHORITY_KEYS},
         **{f"{key}_ref": f"fixture:{key}" for key in refs},
         "operation_id": command["operation_id"],
         "observed_at": utc_now().isoformat(),

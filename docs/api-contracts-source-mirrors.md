@@ -129,6 +129,8 @@ An interrupted first-copy scope fence may carry `inconclusive_tables`, keyed by 
 
 Retained resume decisions bind the original published generation and current Source scope. A continuous decision requires authorization for the current target fence. A gap decision identifies the qualified data partition and last skipped offset for an empty replacement. Unknown continuity leaves that table pending. Table-gap invalidation advances only the affected history epoch and retires its old writers before the new generation receives records. The normal capture loop reconciles publication after the independent deployment verifier stores a completion certificate in the target.
 
+Capture engines are registered in `backend.metadata.capture.engines`. Each registration supplies the profile, decoder, topic name, publication checkpoint confirmer and replacement baseline keys of one Source engine. The runtime selects the engine from the single `<engine>_profile` key of a Source entry. Replacement candidate baselines carry exactly the engine's baseline keys plus `connect`, `kafka` and `task_running`. The per-engine log position and checkpoint evidence are defined in `docs/business-source-mirrors.md` §10 and validated by `backend.metadata.capture.checkpoints`. `Mirror` responses include `source_engine`, the registered engine code of the Source.
+
 ## 5. Foundation Notification HTTP
 
 | Method And Path | Permission | Contract |

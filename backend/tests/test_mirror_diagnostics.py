@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from backend.metadata.capture.engines import engine_for_entry
 from backend.core.time import utc_now
 from backend.metadata.mirrors import diagnostics as d
 from backend.metadata.mirrors.diagnostic_schemas import DiagnosticPolicy, LinkObservation, MirrorSample, RowSample, SourceReceipt
@@ -219,7 +220,7 @@ def test_gateway_signature_binds_exact_scope_authority_and_round(scope):
                   diagnostics={"checks": {}, "samples": []})
     def sign():
         return jwt.encode(claims, key, algorithm="EdDSA", headers={"kid": "observer"})
-    signals = ReadinessSignals(SimpleNamespace(request=lambda *a, **kw: {"signature": sign()}), runtime_instance_id="runtime",
+    signals = ReadinessSignals(engine=engine_for_entry({"postgresql_profile": {}}), http=SimpleNamespace(request=lambda *a, **kw: {"signature": sign()}), runtime_instance_id="runtime",
         max_age_seconds=30, required_checks={"profile_qualified", "source_pressure", "delivery_bounded", "credential_valid", "alarm_drill", "owner_excluded", "target_fenced"},
         scope=claims["scope"], verifier=SignedAuthority(keys={"observer": key.public_key()}, issuer="observer", audience="runtime"))
     assert signals.diagnostic_observation(authority, "round-one") == SourceReceipt()
