@@ -13,16 +13,35 @@ _UNCONFIRMED = "postgresql_readiness_unconfirmed"
 
 
 class PostgreSQLCaptureProfile:
+    scope_keys = frozenset({
+        "source_id", "connector_name", "host", "port", "database", "tables",
+        "publication", "slot", "topic_prefix", "server_version_num",
+    })
+    tls_keys = frozenset({"sslmode", "sslrootcert"})
+    prerequisites = (
+        "wal_level", "server_version", "replication_role", "publication",
+        "published_tables", "slot", "select_privilege",
+    )
+    snapshot_prerequisite = "signal_relation"
+
     def collection_id(self, qualified_table):
         return qualified_table
+
+    @classmethod
+    def template(cls):
+        """Placeholder scope and TLS. ``sslmode`` is a fixed contract literal."""
+        scope = {key: f"<{key.upper()}>" for key in sorted(cls.scope_keys)}
+        scope["tables"] = ["<QUALIFIED_TABLE>"]
+        return {
+            "scope": scope,
+            "tls": {"sslmode": "verify-full", "sslrootcert": "<SSLROOTCERT>"},
+        }
 
     def __init__(self, *, scope, tls, connect=psycopg.connect):
         self.scope = scope
         self.tls = tls
         self.connect = connect
-        required = {"source_id", "connector_name", "host", "port", "database", "tables",
-                    "publication", "slot", "topic_prefix", "server_version_num"}
-        if (set(scope) - {"snapshot", "transaction_metadata"} != required or set(tls) != {"sslmode", "sslrootcert"}
+        if (set(scope) - {"snapshot", "transaction_metadata"} != self.scope_keys or set(tls) != self.tls_keys
                 or tls.get("sslmode") != "verify-full"
                 or not tls.get("sslrootcert") or not scope["tables"]
                 or len(set(scope["tables"])) != len(scope["tables"])
@@ -56,8 +75,7 @@ class PostgreSQLCaptureProfile:
             raise RuntimeBlocked("postgresql_scope_mismatch")
         try:
             access = json.loads(decrypt_secret(source.access_ciphertext))
-            if (any(access.get(k) != p[k] for k in ("host", "port", "database"))
-                    or any(table.split(".")[0] != access.get("schema") for table in p["tables"])):
+            if not self._access_matches(access):
                 raise ValueError()
             credential = json.loads(decrypt_secret(source.capture_credential_ciphertext))
             with self.connect(host=p["host"], port=p["port"], dbname=p["database"],
@@ -116,6 +134,11 @@ class PostgreSQLCaptureProfile:
             raise
         except Exception:
             raise RuntimeBlocked(_UNCONFIRMED) from None
+
+    def _access_matches(self, access):
+        p = self.scope
+        return (all(access.get(key) == p[key] for key in ("host", "port", "database"))
+                and all(table.split(".")[0] == access.get("schema") for table in p["tables"]))
 
     @property
     def included_tables(self):

@@ -8,7 +8,7 @@ import stat
 import tempfile
 
 from backend.core.secrets import decrypt_secret
-from backend.metadata.capture.runtime_store import RuntimeBlocked, protected_read
+from backend.metadata.capture.runtime_store import PROTECTED_FORBIDDEN_BITS, RuntimeBlocked, protected_read
 
 
 def property_value(value):
@@ -22,7 +22,7 @@ class CredentialFiles:
         self.directory = Path(directory)
         info = self.directory.lstat()
         if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
-                or info.st_mode & 0o077 or not provider_directory.startswith("/")
+                or info.st_mode & PROTECTED_FORBIDDEN_BITS or not provider_directory.startswith("/")
                 or any(c in provider_directory for c in ":${}\n\r")):
             raise RuntimeBlocked("private_credential_directory_required")
         self.provider_directory = provider_directory.rstrip("/")

@@ -1,5 +1,7 @@
-import { useTranslate } from "@refinedev/core";
+import { useCan, useTranslate } from "@refinedev/core";
 import { Instant } from "@/components/display/Instant";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { setupHref, setupStepForReadiness } from "./setup/setupLinks";
 import { getMirrorStopEvidence } from "./stopEvidence";
 import type { Mirror } from "./types";
 
@@ -54,10 +56,20 @@ export function MirrorEvent({ mirror }: { mirror: Mirror }) {
   </>;
 }
 
+export function SetupStepLink({ sourceId, readinessKey }: { sourceId: string; readinessKey: string }) {
+  const t = useTranslate();
+  const { data } = useCan({ resource: "mirrors", action: "list" });
+  const step = setupStepForReadiness(readinessKey);
+  if (!data?.can || !step) return null;
+  return <ConsoleLink href={setupHref(sourceId, step)}>{t("mirrorSetup.openStep")}</ConsoleLink>;
+}
+
 export function MirrorNextAction({ mirror }: { mirror: Mirror }) {
   const t = useTranslate();
   const blockers = outstanding(mirror);
-  return <>{blockers.length ? blockers.map(item => <div key={item.key}>{item.key === "capture_admission" && item.owner === "deployer" && item.action === "Qualify capture before admission"
-      ? t("mirrors.confirmCapture") : readinessAction(item, t)}</div>)
-    : t("mirrors.checkLater")}</>;
+  return <>{blockers.length ? blockers.map(item => <div key={item.key}>
+    <div>{item.key === "capture_admission" && item.owner === "deployer" && item.action === "Qualify capture before admission"
+      ? t("mirrors.confirmCapture") : readinessAction(item, t)}</div>
+    <SetupStepLink sourceId={mirror.source_id} readinessKey={item.key} />
+  </div>) : t("mirrors.checkLater")}</>;
 }

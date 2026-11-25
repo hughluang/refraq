@@ -222,6 +222,40 @@ def stub_source(case, **changes):
                            capture_credential_ciphertext=json.dumps({"username": "u", "password": "p"}), **changes)
 
 
+class _EmptyResult:
+    def execute(self, statement, params=None):
+        return self
+
+    def mappings(self):
+        return self
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return []
+
+    def fetchmany(self, count):
+        return []
+
+    def scalar(self):
+        return None
+
+    class dialect:
+        class identifier_preparer:
+            @staticmethod
+            def quote_identifier(name):
+                return name
+
+
+@pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
+def test_declared_prerequisites_are_the_keys_an_empty_observation_returns(case):
+    """PostgreSQL observes prerequisites procedurally and is not part of this binding."""
+    pinned = profile(case)
+    results, _failures = pinned._inspect(_EmptyResult())
+    assert set(results) == set(type(pinned).prerequisites)
+
+
 @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
 def test_readiness_passes_only_when_every_prerequisite_is_proven(case):
     pinned = profile(case)

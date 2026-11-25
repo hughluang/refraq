@@ -8,7 +8,7 @@ import { DisplayField } from "@/components/display/DisplayField";
 import { Instant } from "@/components/display/Instant";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
-import { readinessAction, readinessLabel } from "./MirrorEvidence";
+import { readinessAction, readinessLabel, SetupStepLink } from "./MirrorEvidence";
 import { MirrorCopySummary, MirrorStatusFreshness } from "./MirrorCopySummary";
 import { useMirrorStatus } from "./useMirrorStatus";
 import { mirrorReturnHref, restoreMirrorPosition } from "./mirrorNavigation";
@@ -194,7 +194,7 @@ function MirrorRecord({ id }: { id: string }) {
               <DisplayField label={t("mirrors.expected")} value={<Evidence value={item.expected} />} />
               <DisplayField label={t("mirrors.observed")} value={<Evidence value={item.observed} />} />
               <DisplayField label={t("mirrors.owner")} value={item.owner} />
-              <DisplayField label={t("mirrors.remediation")} value={readinessAction(item, t)} />
+              <DisplayField label={t("mirrors.remediation")} value={<>{readinessAction(item, t)} <SetupStepLink sourceId={mirror.source_id} readinessKey={item.key} /></>} />
             </FormSection>) : <Text>{t("mirrors.unknownEvidence")}</Text>}
           </FormSection>
           {(["profile", "control", "progress", "fault", "operations"] as const).map(key => <FormSection key={key} title={t(`mirrors.${key}`)} columns={1}><Evidence value={mirror[key]} /></FormSection>)}

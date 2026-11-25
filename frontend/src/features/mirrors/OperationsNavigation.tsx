@@ -15,9 +15,10 @@ import type { OperationsScope } from "./fleetTypes";
 import { rememberMirrorPosition, restoreMirrorPosition } from "./mirrorNavigation";
 import classes from "./Operations.module.css";
 
-export type OperationsView = "overview" | "inventory" | "diagnostics";
+export type OperationsView = "overview" | "inventory" | "diagnostics" | "setup";
 const paths: Record<OperationsView, string> = {
   overview: "/console/mirrors", inventory: "/console/mirrors/inventory", diagnostics: "/console/mirrors/diagnostics",
+  setup: "/console/mirrors/setup",
 };
 
 export function operationsScope(search: Pick<URLSearchParams, "get">): OperationsScope {
@@ -57,16 +58,16 @@ export function OperationsNavigation({ view, scope }: { view: OperationsView; sc
   }
   return <Stack gap="sm">
     <nav aria-label={t("fleet.navigation")} className={classes.navigation}>
-      {(["overview", "inventory", "diagnostics"] as const).map(item => <ConsoleLink key={item}
+      {(["overview", "inventory", "diagnostics", "setup"] as const).map(item => <ConsoleLink key={item}
         href={operationsHref(item, scope, viewQuery(item))} aria-current={item === view ? "page" : undefined}>{t(`fleet.${item}`)}</ConsoleLink>)}
     </nav>
-    <Group gap="sm" className={classes.scope}>
+    {view !== "setup" && <Group gap="sm" className={classes.scope}>
       <Text size="sm" fw={500}>{t("fleet.scope")}: {scope.source_id || scope.runtime_id || t("fleet.allSources")}</Text>
       {(scope.source_id || scope.runtime_id) && <Button component={ConsoleLink} href={operationsHref(view)} variant="subtle" size="xs">{t("fleet.entireFleet")}</Button>}
       <Button component={ConsoleLink} href={operationsHref(view, scope, choose)} size="xs" variant="light"
         data-mirror-return="choose-source" onClick={event => rememberMirrorPosition(href, event.currentTarget)}>{t("fleet.findSource")}</Button>
-    </Group>
-    <Drawer opened={opened} onClose={() => push(operationsHref(view, scope, clean))}
+    </Group>}
+    <Drawer opened={opened && view !== "setup"} onClose={() => push(operationsHref(view, scope, clean))}
       title={t("fleet.findSource")} closeButtonProps={{ "aria-label": t("mirrors.closeDrawer") }} position="right" size="lg">
       {opened && <FleetSourcePicker view={view} scope={scope} origin={href} base={clean} />}
     </Drawer>

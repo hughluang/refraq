@@ -12,9 +12,14 @@ import httpx
 
 from backend.core.time import utc_now
 from backend.metadata.capture.control import table_exclusion_refs
+from backend.metadata.capture.profile_support import CONNECTOR_NAME
 from backend.metadata.capture.runtime_store import RuntimeBlocked, protected_read
 from backend.metadata.capture.scope import AUTHORITY_KEYS
 from backend.metadata.errors import SourceCaptureControlConflict
+
+
+MAX_TRANSPORT_TIMEOUT_SECONDS = 120
+MAX_TRANSPORT_RESPONSE_BYTES = 1048576
 
 
 class PrivateHTTP:
@@ -24,7 +29,8 @@ class PrivateHTTP:
         if (url.scheme != "https" or not url.hostname or url.username or url.password
                 or url.path not in {"", "/"} or url.query or url.fragment):
             raise RuntimeBlocked("private_https_origin_required")
-        if not 0 < timeout_seconds <= 120 or not 0 < max_response_bytes <= 1048576:
+        if (not 0 < timeout_seconds <= MAX_TRANSPORT_TIMEOUT_SECONDS
+                or not 0 < max_response_bytes <= MAX_TRANSPORT_RESPONSE_BYTES):
             raise RuntimeBlocked("invalid_transport_bounds")
         protected_read(ca_file)
         protected_read(cert_file)
@@ -59,7 +65,7 @@ class PrivateHTTP:
 
 class ConnectLifecycle:
     def __init__(self, http, connector_name):
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", connector_name):
+        if CONNECTOR_NAME.fullmatch(connector_name) is None:
             raise RuntimeBlocked("connector_not_allowlisted")
         self.http = http
         self.name = connector_name
@@ -137,6 +143,12 @@ class SnapshotGateway:
                              offset=offset, challenge=challenge)
 
 
+MANDATORY_READINESS_CHECKS = frozenset({
+    "profile_qualified", "source_pressure", "delivery_bounded",
+    "credential_valid", "alarm_drill", "owner_excluded", "target_fenced",
+})
+MAX_READINESS_AGE_SECONDS = 3600
+
 STOP_PROOFS = {
     "target_fence_ref", "owner_exclusion_ref", "retired_commands_rejected_ref",
     "task_stopped_ref", "source_session_stopped_ref", "inflight_drained_ref",
@@ -156,10 +168,8 @@ class ReadinessSignals:
 
     def __init__(self, http, *, engine, runtime_instance_id, max_age_seconds, required_checks,
                  verifier=None, scope=None):
-        mandatory = {"profile_qualified", "source_pressure", "delivery_bounded",
-                     "credential_valid", "alarm_drill", "owner_excluded", "target_fenced"}
-        if (not runtime_instance_id or not 0 < max_age_seconds <= 3600
-                or not mandatory.issubset(set(required_checks))):
+        if (not runtime_instance_id or not 0 < max_age_seconds <= MAX_READINESS_AGE_SECONDS
+                or not MANDATORY_READINESS_CHECKS.issubset(set(required_checks))):
             raise RuntimeBlocked("explicit_readiness_policy_required")
         self.http = http
         self.engine = engine

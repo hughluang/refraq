@@ -1,6 +1,6 @@
 """Strict public mirror management shapes; never row-bearing target payloads."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -170,3 +170,100 @@ class MirrorActionReceipt(StrictModel):
 class RecoveryResponse(StrictModel):
     operation_id: str
     state: Literal["pending"]
+
+
+class SetupInput(StrictModel):
+    token: str
+    kind: Literal["https_origin", "bootstrap_servers", "identifier", "connector_name", "topic_prefix", "directory"]
+
+
+class SetupBounds(StrictModel):
+    poll_interval_seconds_max: int
+    sources_max: int
+    timeout_seconds_max: int
+    max_response_bytes_max: int
+    readiness_max_age_seconds: int
+
+
+class SetupPatterns(StrictModel):
+    connector_name: str
+    topic_prefix: str
+    bootstrap_servers: str
+
+
+class SetupTarget(StrictModel):
+    schema_version: int
+    schemas: list[str]
+    roles: list[str]
+    login_roles: list[str]
+    setting: str
+    setting_fields: list[str]
+    driver: str
+    sslmode: str
+    url_template: str
+    bootstrap_env: str
+
+
+class SetupCommand(StrictModel):
+    argv: list[str]
+    env: list[str]
+    mount: str | None
+    host: bool
+
+
+class SetupExitCodes(StrictModel):
+    ready: int
+    blocked: int
+
+
+class SetupRuntime(StrictModel):
+    config_keys: list[str]
+    check_flag: str
+    recovery_flag: str
+    exit_codes: SetupExitCodes
+    fatal_message: str
+    fault_codes: list[str]
+    readiness_policy_keys: list[str]
+    credential_file_keys: list[str]
+    delivery_settings_keys: list[str]
+    native_types: list[str]
+
+
+class SetupGateway(StrictModel):
+    paths: list[str]
+    optional_paths: list[str]
+    connect_paths: list[str]
+    required_checks: list[str]
+    signing_trust_keys: list[str]
+    snapshot_observer_keys: list[str]
+
+
+class SetupTransport(StrictModel):
+    tls_keys: list[str]
+    data_partition: int
+
+
+class SetupEngine(StrictModel):
+    code: str
+    profile_key: str
+    prerequisites: list[str]
+    snapshot_prerequisite: str
+    source_entry: dict[str, Any]
+
+
+class MirrorSetupGuide(StrictModel):
+    connector_version: str
+    compose_service: str
+    site_inputs: list[SetupInput]
+    steps: list[str]
+    bounds: SetupBounds
+    patterns: SetupPatterns
+    protected_forbidden_bits: int
+    target: SetupTarget
+    commands: dict[str, SetupCommand]
+    runtime_config: dict[str, Any]
+    runtime: SetupRuntime
+    gateway: SetupGateway
+    transport: SetupTransport
+    deployment_owned: list[str]
+    engines: list[SetupEngine]

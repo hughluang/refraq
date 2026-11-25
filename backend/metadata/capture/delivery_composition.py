@@ -13,6 +13,7 @@ from sqlalchemy.engine import make_url
 
 from backend.core.db import get_session_factory
 from backend.metadata.capture.control import source_control_transaction
+from backend.metadata.capture.engines import CONNECTOR_VERSION
 from backend.metadata.capture.delivery import DeliveryBinding, DeliveryLimits, open_delivery
 from backend.metadata.capture.runtime_store import (
     RuntimeBlocked, TablePrerequisiteFailed, protected_json, protected_read,
@@ -32,6 +33,8 @@ from backend.metadata.mirrors.reconciliation import (
 from backend.metadata.mirrors.service import read_dispatch_scope
 from backend.metadata.mirrors.types import AnchoredProfile, Authority, PartitionIdentity
 
+
+DELIVERY_SETTINGS_KEYS = frozenset({"target", "tables", "kafka", "group_id", "limits", "max_age_seconds"})
 
 FACTS = {"owner_excluded", "target_fenced", "source_pressure", "alarm_drill",
          "credential_valid", "installed_schema_key", "topic_recreation_excluded",
@@ -165,7 +168,7 @@ class SourceDelivery:
             return
         try:
             settings = protected_json(self.settings_file)
-            if set(settings) != {"target", "tables", "kafka", "group_id", "limits", "max_age_seconds"}:
+            if set(settings) != DELIVERY_SETTINGS_KEYS:
                 raise RuntimeBlocked("delivery_settings_invalid")
             limits = DeliveryLimits(**settings["limits"])
             limits.validate()
@@ -221,7 +224,7 @@ class SourceDelivery:
             for table in selected:
                 binding = table["partition_identity"]
                 notification = self.profile.snapshot["notification_partition"]
-                if (table["decoder"]["connector_version"] != "3.7.1.Final"
+                if (table["decoder"]["connector_version"] != CONNECTOR_VERSION
                         or binding["runtime_cluster_id"] != notification["runtime_cluster_id"]
                         or binding["topic_incarnation_id"] == notification["topic_incarnation_id"]):
                     raise RuntimeBlocked("delivery_snapshot_profile_mismatch")

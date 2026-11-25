@@ -35,6 +35,7 @@ def _connect(*, host, port, database, username, password, tls, timeout, service_
 
 class OracleCaptureProfile(CaptureProfileBase):
     engine_code = "oracle"
+    prerequisites = ("engine_version", "archivelog", "supplemental_logging", "retention", "privileges")
     extra_scope = frozenset({"service_name", "cdb", "minimum_retention_seconds"})
     table_pattern = re.compile(rf"{_IDENT}\.{_IDENT}")
     default_connect = staticmethod(_connect)

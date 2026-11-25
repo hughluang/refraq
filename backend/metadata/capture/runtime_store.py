@@ -10,6 +10,22 @@ import sqlite3
 import stat
 
 
+# Group and other permission bits are refused. The mode itself is not a fixed value.
+PROTECTED_FORBIDDEN_BITS = 0o077
+
+# Only these operator-actionable codes may cross the process diagnostics boundary.
+# Driver responses, evidence, and unrecognized exception text stay private.
+REPORTED_FAULTS = frozenset({
+    "conflicting_owner_request_files", "replacement_owner_blocked", "owner_allocation_blocked",
+    "owner_assignment_unproven", "replacement_owner_requires_recovery", "published_scope_changed",
+    "source_executor_busy", "capture_evidence_rejected", "capture_delivery_blocked",
+    "open_generation_preparation_blocked", "capture_preparation_management_unconfirmed",
+    "capture_snapshot_management_unconfirmed", "incremental_snapshot_blocked",
+    "configuration_outcome_uncertain", "resume_outcome_uncertain", "stop_outcome_uncertain",
+    "readiness_unknown_or_failed", "retained_position_resume_driver_required",
+})
+
+
 class RuntimeBlocked(Exception):
     """A safe runtime fault code, never an external response or credential."""
 
@@ -30,7 +46,7 @@ def protected_read(path, *, limit=1048576):
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.geteuid()
-            or info.st_mode & 0o077
+            or info.st_mode & PROTECTED_FORBIDDEN_BITS
             or info.st_nlink != 1
             or info.st_size > limit
         ):
@@ -63,7 +79,7 @@ class CommandJournal:
         if (
             not stat.S_ISDIR(info.st_mode)
             or info.st_uid != os.geteuid()
-            or info.st_mode & 0o077
+            or info.st_mode & PROTECTED_FORBIDDEN_BITS
         ):
             raise RuntimeBlocked("private_state_directory_required")
         path = self.directory / "commands.sqlite3"

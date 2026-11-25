@@ -17,10 +17,12 @@ from backend.metadata.mirrors.fleet_schemas import (
     AttentionCause, FleetOverview, GroupedState, InventoryPage, InventorySort, RuntimeFleetPage, SourceFleetPage,
 )
 from backend.metadata.mirrors.recovery_schemas import RecoveryRequest
+from backend.metadata.capture.setup_guide import setup_guide
 from backend.metadata.mirrors.schemas import (
     JournalPage,
     MirrorDetailResponse,
     MirrorActionReceipt,
+    MirrorSetupGuide,
     MirrorStatus,
     PatchMirrorRequest,
     PatchMirrorResponse,
@@ -87,6 +89,11 @@ def fleet_throughput(
 ):
     return read_throughput(store=request.app.state.mirror_diagnostics,
         read_scope=request.app.state.mirror_diagnostic_scope, source_id=source_id, runtime_id=runtime_id, hours=int(hours))
+
+
+@router.get("/mirror-setup", response_model=MirrorSetupGuide)
+def read_mirror_setup(_: UserRecord = Depends(require_permission("mirror:read"))):
+    return setup_guide()
 
 
 @router.get("/mirrors", response_model=InventoryPage)

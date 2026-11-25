@@ -47,6 +47,11 @@ class NotificationDeliverySettings(BaseModel):
         return self
 
 
+MIRROR_TARGET_DRIVER = "postgresql+psycopg"
+MIRROR_TARGET_SSLMODE = "verify-full"
+MIRROR_TARGET_ROLES = ("refraq_mirror_gateway", "refraq_mirror_applier")
+
+
 class MirrorTargetSettings(BaseModel):
     """Explicit protected target identities and bounded connection policy."""
 
@@ -61,11 +66,11 @@ class MirrorTargetSettings(BaseModel):
     def _validate_target_identities(self) -> MirrorTargetSettings:
         try:
             urls = [make_url(value.get_secret_value()) for value in (self.gateway_url, self.applier_url)]
-            for url, role in zip(urls, ("refraq_mirror_gateway", "refraq_mirror_applier"), strict=True):
+            for url, role in zip(urls, MIRROR_TARGET_ROLES, strict=True):
                 if (
-                    url.drivername != "postgresql+psycopg" or url.username != role
+                    url.drivername != MIRROR_TARGET_DRIVER or url.username != role
                     or not url.password or not url.host or not url.database
-                    or url.query.get("sslmode") != "verify-full"
+                    or url.query.get("sslmode") != MIRROR_TARGET_SSLMODE
                     or set(url.query) - {"sslmode", "sslrootcert"}
                 ):
                     raise ValueError

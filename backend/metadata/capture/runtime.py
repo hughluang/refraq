@@ -26,7 +26,7 @@ from backend.metadata.capture.runtime_adapters import ConnectLifecycle, PrivateH
 from backend.metadata.capture.recovery_dispatch import dispatch_recovery
 from backend.metadata.capture.engines import engine_for_entry
 from backend.metadata.capture.runtime_store import (
-    CommandJournal, RuntimeBlocked, TablePrerequisiteFailed, protected_json, protected_read,
+    CommandJournal, REPORTED_FAULTS, RuntimeBlocked, TablePrerequisiteFailed, protected_json, protected_read,
 )
 from backend.metadata.capture.snapshot import SnapshotCoordinator
 from backend.metadata.capture.store import list_operations, load_binding, save_binding
@@ -394,17 +394,9 @@ class CaptureRuntime:
 
 
 
-# Only these operator-actionable codes may cross the process diagnostics boundary.
-# Driver responses, evidence, and unrecognized exception text stay private.
-_REPORTED_FAULTS = frozenset({
-    "conflicting_owner_request_files", "replacement_owner_blocked", "owner_allocation_blocked",
-    "owner_assignment_unproven", "replacement_owner_requires_recovery", "published_scope_changed",
-    "source_executor_busy", "capture_evidence_rejected", "capture_delivery_blocked",
-    "open_generation_preparation_blocked", "capture_preparation_management_unconfirmed",
-    "capture_snapshot_management_unconfirmed", "incremental_snapshot_blocked",
-    "configuration_outcome_uncertain", "resume_outcome_uncertain", "stop_outcome_uncertain",
-    "readiness_unknown_or_failed", "retained_position_resume_driver_required",
-})
+MAX_POLL_INTERVAL_SECONDS = 3600
+MAX_ASSIGNED_SOURCES = 100
+SNAPSHOT_OBSERVER_KEYS = frozenset({"receipt", "notification", "max_age_seconds"})
 
 
 def poll_sources(runtimes, previous_faults, diagnostics=None):
@@ -413,7 +405,7 @@ def poll_sources(runtimes, previous_faults, diagnostics=None):
             runtime.poll_once(source_id, owner_allocation_file=request_file, replacement_owner_file=replacement_file)
         except RuntimeBlocked as exc:
             code = str(exc)
-            if code not in _REPORTED_FAULTS:
+            if code not in REPORTED_FAULTS:
                 code = "capture_runtime_blocked"
             if previous_faults.get(source_id) != code:
                 print(json.dumps({"source_id": source_id, "state": "blocked", "code": code}), flush=True)
@@ -436,12 +428,16 @@ def _signing_authority(trust):
     )
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config-file", required=True)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dispatch-recovery", metavar="OPERATION_ID")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     clients = []
     runtimes = []
     stopping = Event()
@@ -470,7 +466,7 @@ def main():
         get_settings.cache_clear()
         interval = config["poll_interval_seconds"]
         sources = config["sources"]
-        if not 0 < interval <= 3600 or not 0 < len(sources) <= 100:
+        if not 0 < interval <= MAX_POLL_INTERVAL_SECONDS or not 0 < len(sources) <= MAX_ASSIGNED_SOURCES:
             raise RuntimeBlocked("explicit_poll_bounds_required")
         if len({entry["source_id"] for entry in sources}) != len(sources):
             raise RuntimeBlocked("duplicate_source_assignment")
@@ -528,7 +524,7 @@ def main():
             if observers is not None:
                 from backend.metadata.capture.completed_publication import publish_completed
 
-                if set(observers) != {"receipt", "notification", "max_age_seconds"}:
+                if set(observers) != SNAPSHOT_OBSERVER_KEYS:
                     raise RuntimeBlocked("snapshot_observer_configuration_invalid")
                 observation_clients = {}
                 for role in ("receipt", "notification"):

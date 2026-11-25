@@ -77,13 +77,14 @@ it("leaves measurement gaps, distinguishes zero and inspects both series with th
   expect(change).toHaveBeenCalledWith("24");
 });
 
-it("keeps scope across the three views and limits chart and Inventory query tokens to their views", () => {
+it("keeps scope across the operations views and limits chart and Inventory query tokens to their views", () => {
   location.search = "source_id=source-0010&hours=24&rank=attention&grouped_state=attention";
   render(<OperationsNavigation view="overview" scope={{ source_id: "source-0010" }} />, { wrapper: wrap });
   const navigation = screen.getByRole("navigation", { name: "Operations views" });
   expect(within(navigation).getByRole("link", { name: "Overview" }).getAttribute("href")).toBe("/console/mirrors?hours=24&rank=attention&source_id=source-0010");
   expect(within(navigation).getByRole("link", { name: "Inventory" }).getAttribute("href")).toBe("/console/mirrors/inventory?grouped_state=attention&source_id=source-0010");
   expect(within(navigation).getByRole("link", { name: "Diagnostics" }).getAttribute("href")).toBe("/console/mirrors/diagnostics?source_id=source-0010");
+  expect(within(navigation).getByRole("link", { name: "Deploy and connect" }).getAttribute("href")).toBe("/console/mirrors/setup?source_id=source-0010");
   expect(operationsScope(new URLSearchParams("source_id=s&runtime_id=r"))).toEqual({ source_id: "s" });
   expect(operationsHref("overview", { runtime_id: "capture/a" })).toBe("/console/mirrors?runtime_id=capture%2Fa");
   expect(decimalBytes(1_000_000)).toBe("1 MB");

@@ -356,3 +356,15 @@ it.each(["latest_request", "operations"])("retires the local pending receipt onc
   await screen.findByText("mirrors.journal.disable", { exact: false });
   expect(screen.queryByText("retry-3: mirrors.pending")).toBeNull();
 });
+
+it("links a blocked capture admission to the runtime deployment step", async () => {
+  state.get.mockResolvedValue({ mirror: {
+    ...mirror, enabled: true, source_id: "source-1",
+    readiness: [{ key: "capture_admission", result: "unknown", owner: "deployer", action: "Qualify capture before admission",
+      expected: null, observed: null, observed_at: null }],
+  } });
+  render(createElement(MirrorDetail, { id: "m1" }));
+  const links = await screen.findAllByRole("link", { name: "mirrorSetup.openStep" });
+  expect(links.every(link => link.getAttribute("href") === "/console/mirrors/setup?source_id=source-1&step=runtime")).toBe(true);
+  expect(screen.getAllByText("mirrors.confirmCapture").length).toBeGreaterThan(0);
+});

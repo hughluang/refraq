@@ -7,7 +7,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     id: "mirrors",
     label_key: "mirrors.title",
     icon: "database",
-    routes: { list: "/console/mirrors", create: null, edit: null, show: "/console/mirrors/:id", aliases: [{ path: "/console/mirrors/diagnostics", action: "list" }, { path: "/console/mirrors/inventory", action: "list" }] },
+    routes: { list: "/console/mirrors", create: null, edit: null, show: "/console/mirrors/:id", aliases: [{ path: "/console/mirrors/diagnostics", action: "list" }, { path: "/console/mirrors/inventory", action: "list" }, { path: "/console/mirrors/setup", action: "list" }] },
     actions: { list: "mirror:read", create: null, edit: "mirror:write", delete: "mirror:write", show: "mirror:read", sample: null },
   },
   {

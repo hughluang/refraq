@@ -2,6 +2,11 @@ import { apiClient } from "@/lib/api";
 import type { OffsetPage } from "@/lib/pagination";
 import type { JournalPage, Mirror, MirrorDetail, PendingOperation, RecoveryRequest } from "./types";
 import type { FleetOverview, FleetSearch, FleetThroughput, InventoryPage, InventoryQuery, OperationsScope, RuntimeFleet, SourceFleet } from "./fleetTypes";
+import type { SetupGuide } from "./setup/setupModel";
+
+export function getMirrorSetup(signal?: AbortSignal) {
+  return apiClient<SetupGuide>("/mirror-setup", { signal });
+}
 
 export function getMirror(id: string, signal?: AbortSignal) {
   return apiClient<{ mirror: MirrorDetail; can_enable: boolean }>(`/mirrors/${encodeURIComponent(id)}`, { signal });

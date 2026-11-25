@@ -17,9 +17,11 @@ from backend.metadata.capture.runtime_store import RuntimeBlocked, TablePrerequi
 from backend.metadata.capture.scope import selected_tables
 
 FILE_REF = re.compile(r"\$\{file:/[A-Za-z0-9_./-]+:[A-Za-z0-9_.-]+\}")
+CONNECTOR_NAME = re.compile(r"[A-Za-z0-9_-]{1,128}")
+TOPIC_PREFIX = re.compile(r"[A-Za-z0-9._-]{1,200}")
+BOOTSTRAP_SERVERS = re.compile(r"[A-Za-z0-9.-]+:[0-9]{1,5}(?:,[A-Za-z0-9.-]+:[0-9]{1,5})*")
 _IDENTITY = re.compile(r"[A-Za-z0-9:_.-]{1,128}")
 _TOPIC = re.compile(r"[a-zA-Z0-9_.-]{1,249}")
-_BOOTSTRAP = re.compile(r"[A-Za-z0-9.-]+:[0-9]{1,5}(?:,[A-Za-z0-9.-]+:[0-9]{1,5})*")
 HISTORY_SECURITY = frozenset({
     "security.protocol", "ssl.endpoint.identification.algorithm", "ssl.truststore.location",
     "ssl.truststore.password", "ssl.keystore.location", "ssl.keystore.password", "ssl.key.password",
@@ -41,6 +43,28 @@ class CaptureProfileBase:
     extra_scope: frozenset = frozenset()
     table_pattern: re.Pattern
     default_connect: Callable
+    prerequisites: tuple[str, ...] = ()
+    snapshot_prerequisite = "signal_relation"
+
+    @classmethod
+    def template(cls):
+        """Placeholder scope and TLS. Values are tokens or fixed contract literals, never secrets."""
+        scope = {key: f"<{key.upper()}>" for key in sorted(COMMON_SCOPE | cls.extra_scope)}
+        scope["tables"] = ["<QUALIFIED_TABLE>"]
+        scope["history"] = {
+            "bootstrap_servers": "<KAFKA_BOOTSTRAP_SERVERS>",
+            "security": {
+                "security.protocol": "SSL",
+                "ssl.truststore.location": "<TRUSTSTORE>",
+                "ssl.truststore.password": "${file:<CONFIG_DIRECTORY>/secrets:truststore_password}",
+            },
+        }
+        tls = {
+            "ca_file": "<CA_FILE>",
+            "truststore": "<TRUSTSTORE>",
+            "truststore_password": "${file:<CONFIG_DIRECTORY>/secrets:truststore_password}",
+        }
+        return {"scope": scope, "tls": tls}
 
     def __init__(self, *, scope, tls, connect=None):
         if (not isinstance(scope, dict) or set(scope) - {"snapshot"} != COMMON_SCOPE | self.extra_scope
@@ -51,8 +75,8 @@ class CaptureProfileBase:
                        for k in ("source_id", "connector_name", "host", "database", "server_version"))
                 or type(scope["port"]) is not int or not 0 < scope["port"] < 65536
                 or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", scope["host"])
-                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", scope["connector_name"])
-                or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", scope["topic_prefix"])
+                or CONNECTOR_NAME.fullmatch(scope["connector_name"]) is None
+                or TOPIC_PREFIX.fullmatch(scope["topic_prefix"]) is None
                 or not isinstance(scope["tables"], list) or not scope["tables"]
                 or len(set(scope["tables"])) != len(scope["tables"])
                 or any(not isinstance(t, str) or not self.table_pattern.fullmatch(t) for t in scope["tables"])
@@ -69,7 +93,7 @@ class CaptureProfileBase:
     def _history_valid(history):
         security = history.get("security") if isinstance(history, dict) else None
         return (isinstance(history, dict) and set(history) == {"bootstrap_servers", "security"}
-                and isinstance(history["bootstrap_servers"], str) and _BOOTSTRAP.fullmatch(history["bootstrap_servers"])
+                and isinstance(history["bootstrap_servers"], str) and BOOTSTRAP_SERVERS.fullmatch(history["bootstrap_servers"])
                 and isinstance(security, dict) and security.get("security.protocol") == "SSL"
                 and set(security) <= HISTORY_SECURITY
                 and all(isinstance(v, str) and v for v in security.values())

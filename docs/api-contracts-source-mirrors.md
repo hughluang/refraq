@@ -23,6 +23,7 @@ All paths are API-relative, authenticated by Session or User PAT. Failures use P
 | `GET /mirrors/{id}` | `mirror:read` | `{mirror: Mirror}` including redacted evidence, and a top-level `can_enable` flag reflecting current table eligibility |
 | `PATCH /mirrors/{id}` | `mirror:write` | `{enabled: boolean}` durable intent. Returns `{mirror: Mirror, operation_id}` to a reader or `{enabled, operation_id}` to a write-only caller |
 | `GET /mirror-diagnostics` | `mirror:read` | Operational observations for optional `source_id`/`runtime_id`; nonnegative `source_offset`, `runtime_offset`, `assignment_offset` default 0. Preview sizes 8/3/8; assignments describe the entire runtime, including Sources outside the selected scope. |
+| `GET /mirror-setup` | `mirror:read` | Deployment guide projection. No Source id, no secrets, and no generated connector properties. |
 | `GET /mirrors/{id}/measurements` | `mirror:read` | Current scoped interval sample, catalog estimate, current-publication row sample, and runtime/check context. |
 | `GET /mirrors/{id}/journal` | `mirror:read` | Newest first. Pass `before` from `next_cursor` and an optional `limit` (1 to 100, default 20). Returns `{items, next_cursor}`. |
 | `DELETE /mirrors/{id}` | `mirror:write` | Delete a disabled Mirror. An optional `expected_control_revision` guards an earlier confirmation. Returns 204 after cleanup or 202 with the pending operation. |
@@ -86,6 +87,10 @@ Inventory items add `grouped_state`, nullable `attention_cause`/`attention_since
 Rates compare measured eligible incremental payload bytes per measured second, divided by 1,000,000. The signed interval sample accepts nullable `captured_bytes` and `committed_bytes`; both use the uncompressed key/value/header byte definition in section 2.1. Snapshots, control records, tombstones and replay are excluded. Native committed byte deltas require complete target byte coverage at both interval boundaries; counter or lineage resets produce an unavailable interval. Captured bytes require an independent qualified capture observation. Neither field derives from event counts, Source size, snapshot progress, Kafka position distance or physical I/O.
 
 Durable bounded history retains at least 24 hours of completed measurement intervals, including their Source/runtime and generation lineage. A later authority or publication change does not erase valid historical observations. Sum measured per-Mirror rates with their actual intervals and explicit coverage. Missing series values remain null; a measured idle interval is zero. The Console labels both series accurately and inspects chart samples in UTC.
+
+### 2.4 Deployment Guide
+
+`GET /mirror-setup` requires `mirror:read` and takes no parameters. The body is a redacted reading of the capture and mirror-target contracts: connector version, site-input tokens and kinds, step ids, numeric bounds, validation patterns, target schema version, schemas, roles, `REFRAQ_MIRROR_TARGET` field names, bootstrap and runtime command argv, runtime configuration keys with placeholders, exit codes, reported fault codes, gateway and Connect paths, mandatory readiness checks, and one source-entry skeleton per registered engine. Placeholders use `<TOKEN>` form. The response contains no Source access, credentials, connector properties, or DDL. The Console fills same-named redacted access fields and registered tables in the browser. See `docs/business-source-mirrors.md` §6.3 and `docs/env.md` §1.4.
 
 ## 3. Management And Runtime Interfaces
 

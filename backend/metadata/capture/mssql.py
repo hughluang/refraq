@@ -30,6 +30,7 @@ def _connect(*, host, port, database, username, password, tls, timeout):
 
 class MSSQLCaptureProfile(CaptureProfileBase):
     engine_code = "mssql"
+    prerequisites = ("engine_version", "cdc_enabled", "agent_running", "retention")
     extra_scope = frozenset({"minimum_retention_seconds"})
     table_pattern = re.compile(rf"{_IDENT}\.{_IDENT}")
     default_connect = staticmethod(_connect)

@@ -107,7 +107,7 @@ The last observed committed target transaction and measured end-to-end freshness
 
 ### 6.2 Fleet Overview And Triage
 
-Operations opens on Overview, with addressable Inventory and Diagnostics views. All three share the entire fleet, one runtime group's assigned fleet Sources, or one Source as scope. Inventory search, state, publication and cause filters refine Inventory only. The chart window refines throughput only. Catalog opened from a Source Overview starts with that Source. Management reads require global `mirror:read` and do not require Source data grants.
+Operations opens on Overview, with addressable Inventory, Diagnostics, and Deploy and connect views. Overview, Inventory, and Diagnostics share the entire fleet, one runtime group's assigned fleet Sources, or one Source as scope. Deploy and connect does not use that fleet scope; it selects one Source on the page. Inventory search, state, publication and cause filters refine Inventory only. The chart window refines throughput only. Catalog opened from a Source Overview starts with that Source. Management reads require global `mirror:read` and do not require Source data grants.
 
 The fleet contains Sources with at least one registered Mirror, including stopped Mirrors. Additional runtime assignments remain visible as contextual assignments without entering fleet totals, Source health or rankings. Sources without a runtime remain discoverable in an Unassigned group. Source-table bytes and estimated rows describe registered Mirror tables using the latest collected catalog statistics, not every table in the Source. Sum measured values with sampled and missing counts; unknown values are not zero.
 
@@ -124,6 +124,16 @@ Attention Inventory replaces estimated rows with the reason. Count cause facets 
 Count each fleet Source once by its worst link in severity order failed, stale, unobserved, healthy. Above eight Sources, Diagnostics shows the health proportions of each of the four segments. Health totals find runtime groups and Sources by worst-link health; segment selection uses that segment's health. Sort runtime groups by affected Source count, then runtime identity; sort Sources by relevant health severity, then Source ID. Search groups and Sources and page each search in sets of twelve. A scoped Source search can expand to the full fleet while retaining its search and health criteria. Selecting a Source opens its four checks.
 
 Direct links and browser Back and Forward preserve scope, filters, search, page, scroll and focused control. The Overview breadcrumb opens Overview directly. Narrow Inventory groups a table's phase, publication and reason together; topology becomes vertical. Health uses text or symbols as well as color, controls support keyboard use, and custom motion respects reduced motion.
+
+### 6.3 Deployment Guide
+
+Deploy and connect requires `mirror:read`. It reads the deployment projection, the selected Source's redacted access, and that Source's registered Mirror tables. It does not read or write connector configuration, credentials, or target SQL.
+
+The administrator supplies the gateway origin, Connect origin, receipt observer origin, notification observer origin, Kafka bootstrap servers, runtime instance id, connector name, topic prefix, and configuration directory. None has a default. The values stay in the browser and are not sent to the API. The gateway origin is one of these values; the runtime reads it only from `signals_tls.origin` in its private file.
+
+The page produces one instruction, shell commands for the Mirror target bootstrap and the Capture Runtime self-check and start, and a runtime configuration skeleton. Same-named access fields (`host`, `port`, `database`, `service_name`) and registered Mirror tables fill the skeleton. Unfilled values remain placeholders. The delivery manifest, the signed owner assignment, and the gateway stay deployment-owned. The page does not generate connector properties or source-database DDL.
+
+A blocked readiness item links to the matching step: capture admission to the runtime self-check, an unqualified table to runtime configuration, a mirror permission or schema block to source prerequisites, and a continuity or incremental-snapshot block to the gateway. Other waits have no deployment link. The projection is a redacted reading of the contracts in `docs/env.md` §1.4 and this document. It is not qualification evidence.
 
 ## 7. History Gates
 

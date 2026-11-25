@@ -20,6 +20,9 @@ from backend.metadata.capture.oracle import OracleCaptureProfile
 from backend.metadata.capture.postgresql import PostgreSQLCaptureProfile
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 
+# Pinned Debezium connector version for every registered engine. Not a qualification.
+CONNECTOR_VERSION = "3.7.1.Final"
+
 
 @dataclass(frozen=True)
 class CaptureEngine:

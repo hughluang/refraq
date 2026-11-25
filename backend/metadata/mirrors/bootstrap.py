@@ -295,10 +295,14 @@ def validate_target(connection, *, expected_role):
         raise ValueError("Mirror target version mismatch")
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description="Install Metadata-owned mirror target using administrative credentials")
     parser.add_argument("--admin-url-env", required=True, help="Name of a protected environment variable; never a credential value")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     with psycopg.connect(os.environ[args.admin_url_env]) as connection:
         install(connection)
 

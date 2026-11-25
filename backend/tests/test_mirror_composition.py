@@ -215,7 +215,8 @@ def test_catalog_matches_frontend_and_permission_filtered_navigation():
     assert mirror.icon == "database"
     assert asdict(mirror.routes) == dict(list="/console/mirrors", show="/console/mirrors/:id", create=None, edit=None,
                                        aliases=({"path": "/console/mirrors/diagnostics", "action": "list"},
-                                                {"path": "/console/mirrors/inventory", "action": "list"}))
+                                                {"path": "/console/mirrors/inventory", "action": "list"},
+                                                {"path": "/console/mirrors/setup", "action": "list"}))
     assert mirror.actions.list == mirror.actions.show == "mirror:read"
     assert mirror.actions.edit == mirror.actions.delete == "mirror:write"
     assert identities["settings"].routes.aliases[0].path == "/console/settings/notification-channel"

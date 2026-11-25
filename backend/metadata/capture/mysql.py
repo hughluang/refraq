@@ -34,6 +34,10 @@ def _connect(*, host, port, database, username, password, tls, timeout):
 
 class MySQLCaptureProfile(CaptureProfileBase):
     engine_code = "mysql"
+    prerequisites = (
+        "engine_version", "binlog_enabled", "row_format", "full_row_image", "server_identity",
+        "retention", "lineage_mode", "privileges", "binlog_capacity",
+    )
     extra_scope = frozenset({
         "server_uuid", "source_server_id", "connector_server_id", "lineage_mode",
         "minimum_retention_seconds", "maximum_binlog_bytes", "maximum_binlog_files",
