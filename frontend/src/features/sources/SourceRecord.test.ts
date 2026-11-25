@@ -15,7 +15,7 @@ const copy = en as Record<string, string>;
 const locale = vi.hoisted(() => ({ current: "en-US" as "en-US" | "zh-CN" }));
 const search = vi.hoisted(() => ({ value: "" }));
 const replace = vi.hoisted(() => vi.fn());
-const gate = vi.hoisted(() => ({ canEdit: true, canDelete: true, canBrowseCatalog: true }));
+const gate = vi.hoisted(() => ({ canEdit: true, canDelete: true }));
 const permissions = vi.hoisted(() => ({
   data: ["sources:read", "sources:write"] as string[],
 }));
@@ -28,6 +28,8 @@ const deleteSourceMembership = vi.hoisted(() => vi.fn());
 const userSearch = vi.hoisted(() => vi.fn());
 const testStored = vi.hoisted(() => vi.fn());
 const testDraft = vi.hoisted(() => vi.fn());
+const checkStored = vi.hoisted(() => vi.fn());
+const checkDraft = vi.hoisted(() => vi.fn());
 const getSourceAccess = vi.hoisted(() => vi.fn());
 const getAccessSchema = vi.hoisted(() => vi.fn());
 const createSource = vi.hoisted(() => vi.fn());
@@ -46,6 +48,8 @@ vi.mock("@/features/sources/api/sources", () => ({
   listSources: (...args: unknown[]) => listSources(...args),
   testSource: (...args: unknown[]) => testStored(...args),
   testSourceDraft: (...args: unknown[]) => testDraft(...args),
+  checkCapture: (...args: unknown[]) => checkStored(...args),
+  checkCaptureDraft: (...args: unknown[]) => checkDraft(...args),
 }));
 
 vi.mock("@/features/sources/api/memberships", () => ({
@@ -104,10 +108,8 @@ vi.mock("@refinedev/core", () => ({
     return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
   },
   useNotification: () => ({ open: notify }),
-  useCan: ({ resource, action }: { resource?: string; action?: string }) => {
-    if (action === "list") {
-      return { data: { can: resource !== "catalog" || gate.canBrowseCatalog } };
-    }
+  useCan: ({ action }: { resource?: string; action?: string }) => {
+    if (action === "list") return { data: { can: true } };
     return { data: { can: action === "delete" ? gate.canDelete : gate.canEdit } };
   },
   usePermissions: () => ({ data: permissions.data, isLoading: false }),
@@ -191,7 +193,6 @@ describe("SourceRecord", () => {
     search.value = "";
     gate.canEdit = true;
     gate.canDelete = true;
-    gate.canBrowseCatalog = true;
     replace.mockReset();
     notify.mockReset();
     permissions.data = ["sources:read", "sources:write"];
@@ -206,6 +207,8 @@ describe("SourceRecord", () => {
     userSearch.mockResolvedValue([{ id: "usr_ada", name: "Ada", key: "ada" }]);
     testStored.mockReset();
     testDraft.mockReset();
+    checkStored.mockReset();
+    checkDraft.mockReset();
     getSourceAccess.mockReset();
     getAccessSchema.mockReset();
     createSource.mockReset();
@@ -291,30 +294,6 @@ describe("SourceRecord", () => {
     expect(screen.queryByRole("button", { name: copy["common.save"] })).toBeNull();
     expect(screen.queryByRole("link", { name: copy["sources.edit"] })).toBeNull();
     expect(getSourceAccess).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["en-US", en["catalog.title"]],
-    ["zh-CN", zh["catalog.title"]],
-  ] as const)("links a Source reader to its Catalog in %s", async (language, label) => {
-    locale.current = language;
-    permissions.data = ["sources:read", "metadata:read"];
-    gate.canEdit = false;
-    getSource.mockResolvedValue({ source: { ...LEDGER, can_write: false } });
-    await renderRecord({ mode: "show", sourceId: "src_1" });
-
-    expect((await screen.findByRole("link", { name: label })).getAttribute("href")).toBe(
-      "/console/catalog?source=src_1",
-    );
-  });
-
-  it("hides Catalog navigation from a Source reader without Catalog access", async () => {
-    permissions.data = ["sources:read"];
-    gate.canBrowseCatalog = false;
-    await renderRecord({ mode: "show", sourceId: "src_1" });
-
-    expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
-    expect(screen.queryByRole("link", { name: en["catalog.title"] })).toBeNull();
   });
 
   it("keeps the key visible and saves an edit without leaving the page", async () => {
@@ -553,6 +532,79 @@ describe("SourceRecord", () => {
     } finally {
       Object.defineProperty(window, "location", { configurable: true, value: prior });
     }
+  });
+
+  it("checks a stored source without a capture secret and sends a draft capture login when replacing", async () => {
+    checkStored.mockResolvedValue({ ok: true, credential: "stored", items: [], tables: { total: 0, truncated: false, limit: 200, items: [] } });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    fireEvent.click(await screen.findByRole("button", { name: "Show capture settings" }));
+    fireEvent.click(screen.getByRole("button", { name: copy["sources.precheck.check"] }));
+    await waitFor(() => expect(checkStored).toHaveBeenCalledWith("src_1", {}));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(copy["sources.precheck.advisory"])).toBeTruthy();
+    expect(within(dialog).getByText(copy["sources.precheck.credential.stored"])).toBeTruthy();
+    expect(within(dialog).queryByText(copy["sources.precheck.tables.none"])).toBeNull();
+    fireEvent.click(within(dialog).getByRole("tab", { name: copy["sources.precheck.tab.tables"] }));
+    expect(within(dialog).getByText(copy["sources.precheck.tables.none"])).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: copy["form.dialog.close"] }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByText(copy["sources.precheck.advisory"])).toBeNull();
+    expect(checkStored).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Set capture credential" }));
+    fireEvent.click(screen.getByRole("button", { name: copy["sources.precheck.check"] }));
+    expect(checkStored).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByText("Required").length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText(/^Capture username/, { selector: "input" }), { target: { value: "capture-user" } });
+    fireEvent.change(screen.getByLabelText(/^Capture password/, { selector: "input" }), { target: { value: "draft-value" } });
+    fireEvent.click(screen.getByRole("button", { name: copy["sources.precheck.check"] }));
+    await waitFor(() => expect(checkStored).toHaveBeenLastCalledWith("src_1", {
+      capture_credential: { username: "capture-user", password: "draft-value" },
+    }));
+    const again = await screen.findByRole("dialog");
+    expect(within(again).getByRole("tab", { name: copy["sources.precheck.tab.items"] }).getAttribute("aria-selected")).toBe("true");
+    expect(within(again).queryByText(copy["sources.precheck.tables.none"])).toBeNull();
+  });
+
+  it("renders capture check failures and keeps the button off a read-only source", async () => {
+    checkStored.mockResolvedValue({
+      ok: true,
+      credential: "access",
+      items: [{ key: "wal_level", result: "fail", observed: "replica", action: "set_wal_level" }],
+      tables: {
+        total: 2,
+        truncated: true,
+        limit: 200,
+        items: [{ name: "public.orders", result: "fail", cause: "schema", observed: "unpublished" }],
+      },
+    });
+    await renderRecord({ mode: "edit", sourceId: "src_1" });
+    fireEvent.click(await screen.findByRole("button", { name: "Show capture settings" }));
+    fireEvent.click(screen.getByRole("button", { name: copy["sources.precheck.check"] }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(copy["sources.precheck.item.wal_level"])).toBeTruthy();
+    expect(within(dialog).getByText(copy["sources.precheck.action.set_wal_level"])).toBeTruthy();
+    expect(within(dialog).getByText(copy["sources.precheck.note.access_credential"])).toBeTruthy();
+    expect(within(dialog).queryByText("public.orders")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("tab", { name: copy["sources.precheck.tab.tables"] }));
+    expect(within(dialog).getByText("public.orders")).toBeTruthy();
+    expect(within(dialog).getByText("Checked 1 of 2 tables, in name order")).toBeTruthy();
+    cleanup();
+
+    getSource.mockResolvedValue({ source: { ...LEDGER, can_write: false } });
+    await renderRecord({ mode: "show", sourceId: "src_1" });
+    expect(await screen.findByRole("heading", { name: "Ledger" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: copy["sources.precheck.check"] })).toBeNull();
+  });
+
+  it("sends the draft access when checking a source that has not been saved", async () => {
+    checkDraft.mockResolvedValue({ ok: false, code: "SOURCE_CAPTURE_CHECK_FAILED" });
+    await renderRecord({ mode: "create" });
+    fireEvent.click(await screen.findByRole("button", { name: "Show capture settings" }));
+    fireEvent.click(screen.getByRole("button", { name: copy["sources.precheck.check"] }));
+    await waitFor(() => expect(checkDraft).toHaveBeenCalledWith({ engine: "postgresql", access: {} }));
+    expect(await screen.findByText(copy["sources.precheck.failed"])).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("sends an edit visit without write permission back to show and keeps the tab", async () => {
@@ -828,7 +880,6 @@ describe("SourceRecord", () => {
     expect(screen.queryByRole("tab", { name: copy["structureDiffs.title"] })).toBeNull();
     expect(screen.queryByLabelText(copy["sources.fields.description"])).toBeNull();
     expect(document.querySelector('a[href*="structure-diffs"]')).toBeNull();
-    expect(document.querySelector('a[href*="/console/catalog"]')).toBeNull();
     expect(getSource).not.toHaveBeenCalled();
     expect(getSourceAccess).not.toHaveBeenCalled();
     expect(getAccessSchema).not.toHaveBeenCalled();

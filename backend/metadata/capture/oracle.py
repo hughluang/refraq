@@ -14,12 +14,17 @@ import oracledb
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
+from backend.metadata.capture.observations import (
+    ORACLE_ARCHIVE_SQL, ORACLE_LOGGING_SQL, ORACLE_MINING_PRIVILEGES, ORACLE_RETENTION_SQL,
+    ORACLE_SUPPLEMENTAL_SQL, ORACLE_VERSION_SQL, oracle_privileges, oracle_select_probe,
+    read_outcome,
+)
 from backend.metadata.capture.profile_support import CaptureProfileBase, disposed
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 
 _IDENT = r"[A-Z][A-Z0-9_$#]{0,127}"
 _SIGNAL_COLUMNS = ["ID", "TYPE", "DATA"]
-_MINING_PRIVILEGES = {"CREATE SESSION", "LOGMINING", "SELECT ANY TRANSACTION"}
+_EXISTS_SQL = "SELECT COUNT(*) FROM all_tables WHERE owner = :owner AND table_name = :name"
 
 
 def _connect(*, host, port, database, username, password, tls, timeout, service_name):
@@ -64,25 +69,16 @@ class OracleCaptureProfile(CaptureProfileBase):
         p = self.scope
         results, failures = {}, []
 
-        def scalar(sql, **params):
-            try:
-                return connection.execute(text(sql), params).scalar()
-            except Exception:
-                return None
-
-        version = scalar("SELECT version_full FROM product_component_version WHERE ROWNUM = 1")
+        version = read_outcome(connection, ORACLE_VERSION_SQL)[0]
         results["engine_version"] = version == p["server_version"]
-        mode = scalar("SELECT log_mode FROM v$database")
+        mode = read_outcome(connection, ORACLE_ARCHIVE_SQL)[0]
         results["archivelog"] = mode == "ARCHIVELOG"
-        minimal = scalar("SELECT supplemental_log_data_min FROM v$database")
+        minimal = read_outcome(connection, ORACLE_SUPPLEMENTAL_SQL)[0]
         results["supplemental_logging"] = minimal in {"YES", "IMPLICIT"}
-        seconds = scalar("SELECT (SYSDATE - MIN(first_time)) * 86400 FROM v$archived_log WHERE deleted = 'NO'")
+        seconds = read_outcome(connection, ORACLE_RETENTION_SQL)[0]
         results["retention"] = seconds is not None and seconds >= p["minimum_retention_seconds"]
-        try:
-            granted = set(connection.execute(text("SELECT privilege FROM session_privs")).scalars().all())
-            results["privileges"] = _MINING_PRIVILEGES <= granted
-        except Exception:
-            results["privileges"] = False
+        granted = oracle_privileges(connection)
+        results["privileges"] = granted is not None and ORACLE_MINING_PRIVILEGES <= granted
         for table in p["tables"]:
             failure = self._table(connection, table)
             if failure is not None:
@@ -94,18 +90,13 @@ class OracleCaptureProfile(CaptureProfileBase):
     @staticmethod
     def _table(connection, table):
         owner, name = table.split(".")
-        exists = connection.execute(text(
-            "SELECT COUNT(*) FROM all_tables WHERE owner = :owner AND table_name = :name"),
-            {"owner": owner, "name": name}).scalar()
-        logging = connection.execute(text(
-            "SELECT (SELECT COUNT(*) FROM all_log_groups WHERE owner = :owner AND table_name = :name "
-            "AND log_group_type = 'ALL COLUMN LOGGING') + "
-            "(SELECT COUNT(*) FROM v$database WHERE supplemental_log_data_all = 'YES') FROM dual"),
-            {"owner": owner, "name": name}).scalar()
+        key = {"owner": owner, "name": name}
+        exists = connection.execute(text(_EXISTS_SQL), key).scalar()
+        logging = connection.execute(text(ORACLE_LOGGING_SQL), key).scalar()
         if exists != 1 or not logging:
             return "schema"
         try:
-            connection.execute(text(f'SELECT 1 FROM "{owner}"."{name}" WHERE 1 = 0'))
+            oracle_select_probe(connection, owner, name)
         except Exception:
             return "permission"
         return None

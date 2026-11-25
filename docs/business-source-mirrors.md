@@ -169,6 +169,8 @@ A Source engine can be mirrored when `backend/metadata/capture/engines.py` regis
 
 Everything downstream of the decoder is engine-neutral: the `Record` contract, the single transactional target writer, generations, publication and History. A profile pins one explicit, DBA-approved scope, observes prerequisites through the capture identity and never creates publications, CDC instances, supplemental logging, signal tables or grants. A prerequisite that cannot be observed is unknown and blocks. An observed failure for one table blocks only that table's Open.
 
+The Console **Capture Precheck** uses these observation queries and does not construct a pinned profile. Comparisons that need a pinned value, including the exact server version and `minimum_retention_seconds`, stay unjudged and return the observed value. An unreadable fact is unknown. The precheck does not admit capture.
+
 | Engine | Source log position | Prerequisites a profile observes | Data collection id |
 | --- | --- | --- | --- |
 | PostgreSQL | WAL position and replication slot | Logical replication, slot, publication, replica identity and table read rights | `schema.table` |

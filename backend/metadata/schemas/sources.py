@@ -89,3 +89,50 @@ class SourceTestResponse(BaseModel):
     ok: bool
     code: str | None = None
     message: str | None = None
+
+
+class CaptureCheckDraftRequest(BaseModel):
+    engine: Literal["postgresql", "mssql", "oracle", "mysql"]
+    access: dict[str, Any]
+    capture_credential: CaptureCredential | None = None
+
+
+class CaptureCheckRequest(BaseModel):
+    engine: Literal["postgresql", "mssql", "oracle", "mysql"] | None = None
+    access: dict[str, Any] | None = None
+    capture_credential: CaptureCredential | None = None
+
+
+class CaptureCheckItem(BaseModel):
+    key: str
+    result: Literal["pass", "fail", "unknown", "not_applicable"]
+    expected: str | None = None
+    observed: str | None = None
+    action: str | None = None
+    note: Literal["access_credential"] | None = None
+
+
+class CaptureCheckTable(BaseModel):
+    name: str
+    result: Literal["pass", "fail", "unknown"]
+    cause: Literal["schema", "permission"] | None = None
+    observed: str | None = None
+    note: Literal["access_credential"] | None = None
+
+
+class CaptureCheckTables(BaseModel):
+    total: int
+    truncated: bool
+    limit: int
+    items: list[CaptureCheckTable]
+
+
+class CaptureCheckResponse(BaseModel):
+    ok: bool
+    code: str | None = None
+    message: str | None = None
+    advisory: bool | None = None
+    credential: Literal["request", "stored", "access"] | None = None
+    engine: str | None = None
+    items: list[CaptureCheckItem] | None = None
+    tables: CaptureCheckTables | None = None

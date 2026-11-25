@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -223,6 +224,16 @@ class PostgresqlConnector:
             raise
         except Exception as exc:  # noqa: BLE001
             raise ConnectorError("JOB_COLLECT_FAILED", str(exc)) from exc
+        finally:
+            eng.dispose()
+
+    @contextmanager
+    def inspection_connection(self, endpoint: SourceEndpoint) -> Iterator[object]:
+        """One connection through this Source's engine, including its TLS mode."""
+        eng = self._engine(endpoint)
+        try:
+            with eng.connect() as connection:
+                yield connection
         finally:
             eng.dispose()
 

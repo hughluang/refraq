@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from pymysql.constants import FIELD_TYPE
 from sqlalchemy import URL, create_engine, inspect, text
 from sqlalchemy.pool import NullPool
@@ -23,6 +26,16 @@ from backend.metadata.connectors.base import (
 
 class MysqlConnector:
     engine = "mysql"
+
+    @contextmanager
+    def inspection_connection(self, endpoint) -> Iterator[object]:
+        """One connection through this Source's engine, including its TLS mode."""
+        eng = self._engine(endpoint, timeout_sec=10)
+        try:
+            with eng.connect() as connection:
+                yield connection
+        finally:
+            eng.dispose()
 
     def _engine(self, endpoint, *, timeout_sec=10):
         if (

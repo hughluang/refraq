@@ -11,14 +11,17 @@ import re
 from sqlalchemy import URL, create_engine, text
 from sqlalchemy.pool import NullPool
 
+from backend.metadata.capture.observations import (
+    mysql_privilege_set, mysql_select_probe, mysql_variables,
+)
 from backend.metadata.capture.profile_support import CaptureProfileBase, disposed
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 
-VARIABLES = (
-    "version", "log_bin", "binlog_format", "binlog_row_image", "server_uuid",
-    "server_id", "gtid_mode", "binlog_expire_logs_seconds",
-)
 _SIGNAL_COLUMNS = ["id", "type", "data"]
+_TABLE_SQL = (
+    "SELECT COUNT(*) FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA = BINARY :database "
+    "AND BINARY TABLE_NAME = BINARY :table AND TABLE_TYPE = 'BASE TABLE'"
+)
 
 
 def _connect(*, host, port, database, username, password, tls, timeout):
@@ -64,16 +67,7 @@ class MySQLCaptureProfile(CaptureProfileBase):
     def _inspect(self, connection):
         p = self.scope
         results, failures = {}, []
-        variables = {}
-        try:
-            params = {f"v{i}": v for i, v in enumerate(VARIABLES)}
-            names = ", ".join(":" + k for k in params)
-            rows = connection.execute(text(
-                "SELECT VARIABLE_NAME, VARIABLE_VALUE FROM performance_schema.global_variables "
-                f"WHERE VARIABLE_NAME IN ({names})"), params).mappings().all()
-            variables = {row["VARIABLE_NAME"].lower(): row["VARIABLE_VALUE"] for row in rows}
-        except Exception:
-            pass
+        variables = mysql_variables(connection)
         for key, variable, expected in (("engine_version", "version", p["server_version"]),
                                         ("binlog_enabled", "log_bin", "ON"),
                                         ("row_format", "binlog_format", "ROW"),
@@ -88,31 +82,25 @@ class MySQLCaptureProfile(CaptureProfileBase):
         results["lineage_mode"] = variables.get("gtid_mode") == ("ON" if p["lineage_mode"] == "gtid" else "OFF")
         results["privileges"] = self._privileges(connection)
         results["binlog_capacity"] = self._capacity(connection)
-        quote = connection.dialect.identifier_preparer.quote_identifier
         for table in p["tables"]:
-            failure = self._table(connection, table, quote)
+            failure = self._table(connection, table)
             if failure is not None:
                 failures.append((table, failure))
         if self.snapshot is not None:
-            results["signal_relation"] = self._signal(connection, quote)
+            results["signal_relation"] = self._signal(connection)
         return results, failures
 
     @staticmethod
     def _privileges(connection):
-        try:
-            granted = set(connection.execute(text(
-                "SELECT PRIVILEGE_TYPE FROM information_schema.USER_PRIVILEGES "
-                "WHERE GRANTEE = CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), "
-                "'@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1)))")).scalars().all())
-        except Exception:
-            return False
+        granted = mysql_privilege_set(connection)
         # Role-derived rights are deliberately not guessed from a missing direct grant.
-        return {"REPLICATION SLAVE", "REPLICATION CLIENT"} <= granted
+        return granted is not None and {"REPLICATION SLAVE", "REPLICATION CLIENT"} <= granted
 
     def _capacity(self, connection):
         p = self.scope
         try:
-            rows = connection.execute(text("SHOW BINARY LOGS")).mappings().fetchmany(p["maximum_binlog_files"] + 1)
+            rows = connection.execute(text("SHOW BINARY LOGS")).mappings().fetchmany(
+                p["maximum_binlog_files"] + 1)
         except Exception:
             return False
         if not rows or len(rows) > p["maximum_binlog_files"]:
@@ -120,22 +108,20 @@ class MySQLCaptureProfile(CaptureProfileBase):
         return sum(int(row["File_size"]) for row in rows) < p["maximum_binlog_bytes"]
 
     @staticmethod
-    def _table(connection, table, quote):
+    def _table(connection, table):
         """Return ``schema`` or ``permission`` when this table is observed failing; ``None`` when proven."""
         database, name = table.split(".")
-        exists = connection.execute(text(
-            "SELECT COUNT(*) FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA = BINARY :database "
-            "AND BINARY TABLE_NAME = BINARY :table AND TABLE_TYPE = 'BASE TABLE'"),
-            {"database": database, "table": name}).scalar()
+        exists = connection.execute(
+            text(_TABLE_SQL), {"database": database, "table": name}).scalar()
         if exists != 1:
             return "schema"
         try:
-            connection.execute(text(f"SELECT * FROM {quote(database)}.{quote(name)} LIMIT 0"))
+            mysql_select_probe(connection, database, name)
         except Exception:
             return "permission"
         return None
 
-    def _signal(self, connection, quote):
+    def _signal(self, connection):
         database, name = self.snapshot["signal_table"].split(".")
         try:
             columns = connection.execute(text(
@@ -158,7 +144,7 @@ class MySQLCaptureProfile(CaptureProfileBase):
                 "(SELECT COUNT(*) FROM information_schema.TABLE_PRIVILEGES WHERE PRIVILEGE_TYPE = 'INSERT' "
                 f"AND GRANTEE = {grantee} AND BINARY TABLE_SCHEMA = BINARY :database "
                 "AND BINARY TABLE_NAME = BINARY :table)"), {"database": database, "table": name}).scalar()
-            connection.execute(text(f"SELECT * FROM {quote(database)}.{quote(name)} LIMIT 0"))
+            mysql_select_probe(connection, database, name)
         except Exception:
             return False
         # Role-derived INSERT rights are not guessed; an absent direct grant is not proven.

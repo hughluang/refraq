@@ -12,6 +12,10 @@ import re
 from sqlalchemy import URL, create_engine, text
 from sqlalchemy.pool import NullPool
 
+from backend.metadata.capture.observations import (
+    MSSQL_AGENT_SQL, MSSQL_CDC_SQL, MSSQL_RETENTION_SQL, MSSQL_SELECT_SQL, MSSQL_VERSION_SQL,
+    mssql_instance, read_outcome,
+)
 from backend.metadata.capture.profile_support import CaptureProfileBase, disposed
 from backend.metadata.capture.runtime_store import RuntimeBlocked
 
@@ -54,19 +58,13 @@ class MSSQLCaptureProfile(CaptureProfileBase):
         p = self.scope
         results, failures = {}, []
 
-        def scalar(sql, **params):
-            try:
-                return connection.execute(text(sql), params).scalar()
-            except Exception:
-                return None
-
-        version = scalar("SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(64))")
+        version = read_outcome(connection, MSSQL_VERSION_SQL)[0]
         results["engine_version"] = version == p["server_version"]
-        enabled = scalar("SELECT is_cdc_enabled FROM sys.databases WHERE name = DB_NAME()")
+        enabled = read_outcome(connection, MSSQL_CDC_SQL)[0]
         results["cdc_enabled"] = bool(enabled)
-        agent = scalar("SELECT status_desc FROM sys.dm_server_services WHERE servicename LIKE 'SQL Server Agent%'")
+        agent = read_outcome(connection, MSSQL_AGENT_SQL)[0]
         results["agent_running"] = agent == "Running"
-        minutes = scalar("SELECT MIN(retention) FROM msdb.dbo.cdc_jobs WHERE database_id = DB_ID() AND job_type = 'cleanup'")
+        minutes = read_outcome(connection, MSSQL_RETENTION_SQL)[0]
         results["retention"] = minutes is not None and int(minutes) * 60 >= p["minimum_retention_seconds"]
         for table in p["tables"]:
             failure = self._table(connection, table)
@@ -76,26 +74,9 @@ class MSSQLCaptureProfile(CaptureProfileBase):
             results["signal_relation"] = self._signal(connection)
         return results, failures
 
-    @staticmethod
-    def _instance(connection, table):
-        """The table's capture instances and their captured/live column sets, or raise when unobservable."""
-        instances = connection.execute(text(
-            "SELECT capture_instance FROM cdc.change_tables WHERE source_object_id = OBJECT_ID(:table)"),
-            {"table": table}).scalars().all()
-        live = set(connection.execute(text(
-            "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(:table)"), {"table": table}).scalars().all())
-        captured = None
-        if len(instances) == 1:
-            captured = set(connection.execute(text(
-                "SELECT column_name FROM cdc.captured_columns WHERE object_id = "
-                "(SELECT object_id FROM cdc.change_tables WHERE capture_instance = :instance)"),
-                {"instance": instances[0]}).scalars().all())
-        return instances, live, captured
-
     def _table(self, connection, table):
-        instances, live, captured = self._instance(connection, table)
-        readable = connection.execute(text("SELECT HAS_PERMS_BY_NAME(:table, 'OBJECT', 'SELECT')"),
-                                      {"table": table}).scalar()
+        instances, live, captured = mssql_instance(connection, table)
+        readable = connection.execute(text(MSSQL_SELECT_SQL), {"table": table}).scalar()
         if not live or len(instances) != 1 or captured != live:
             return "schema"
         return None if readable == 1 else "permission"
@@ -103,7 +84,7 @@ class MSSQLCaptureProfile(CaptureProfileBase):
     def _signal(self, connection):
         table = self.snapshot["signal_table"]
         try:
-            instances, live, captured = self._instance(connection, table)
+            instances, live, captured = mssql_instance(connection, table)
             columns = connection.execute(text(
                 "SELECT c.name FROM sys.columns c WHERE c.object_id = OBJECT_ID(:table) ORDER BY c.column_id"),
                 {"table": table}).scalars().all()

@@ -6,10 +6,50 @@ import re
 import psycopg
 
 from backend.core.secrets import decrypt_secret
+from backend.metadata.capture.observations import PG_SERVER_SQL, pg_column_coverage_failed
 from backend.metadata.capture.scope import selected_tables
 from backend.metadata.capture.runtime_store import RuntimeBlocked, TablePrerequisiteFailed
 
 _UNCONFIRMED = "postgresql_readiness_unconfirmed"
+_PUBLICATION_SQL = (
+    "SELECT puballtables, pubinsert, pubupdate, pubdelete, pubtruncate "
+    "FROM pg_publication WHERE pubname = %s"
+)
+_PUBLISHED_TABLES_SQL = """
+    SELECT published.schemaname || '.' || published.tablename,
+           published.rowfilter IS NOT NULL, published.attnames,
+           attributes.names, attributes.has_generated
+    FROM pg_catalog.pg_publication_tables AS published
+    JOIN pg_catalog.pg_namespace AS namespace ON namespace.nspname = published.schemaname
+    JOIN pg_catalog.pg_class AS relation
+      ON relation.relnamespace = namespace.oid AND relation.relname = published.tablename
+    CROSS JOIN LATERAL (
+        SELECT array_agg(attname) AS names, bool_or(attgenerated <> '') AS has_generated
+        FROM pg_catalog.pg_attribute
+        WHERE attrelid = relation.oid AND attnum > 0 AND NOT attisdropped
+    ) AS attributes
+    WHERE published.pubname = %s
+    LIMIT %s
+"""
+_SLOT_SQL = "SELECT plugin, database, active FROM pg_replication_slots WHERE slot_name = %s"
+_SELECT_SQL = "SELECT has_table_privilege(current_user, %s, 'SELECT')"
+_SIGNAL_SQL = """
+    SELECT database.oid || ':' || relation.oid,
+           has_table_privilege(relation.oid, 'SELECT'), has_table_privilege(relation.oid, 'INSERT'),
+           array_agg(attribute.attname ORDER BY attribute.attnum),
+           bool_and(attribute.atttypid IN ('text'::regtype, 'varchar'::regtype)),
+           EXISTS (SELECT FROM pg_catalog.pg_constraint AS key
+                   WHERE key.conrelid = relation.oid AND key.contype = 'p'
+                     AND NOT key.condeferrable
+                     AND key.conkey = ARRAY[min(attribute.attnum) FILTER (WHERE attribute.attname = 'id')])
+    FROM pg_catalog.pg_class AS relation
+    JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = relation.oid
+    CROSS JOIN pg_catalog.pg_database AS database
+    WHERE database.datname = current_database() AND relation.oid = to_regclass(%s)
+      AND relation.relkind = 'r' AND relation.relpersistence = 'p' AND NOT relation.relrowsecurity
+      AND attribute.attnum > 0 AND NOT attribute.attisdropped
+    GROUP BY database.oid, relation.oid
+"""
 
 
 class PostgreSQLCaptureProfile:
@@ -83,49 +123,28 @@ class PostgreSQLCaptureProfile:
                               connect_timeout=10, options="-c statement_timeout=10000",
                               **self.tls) as connection:
                 with connection.cursor() as cursor:
-                    cursor.execute("SELECT current_database(), current_setting('wal_level'), "
-                                   "current_setting('server_version_num')::int, rolreplication, "
-                                   "rolsuper FROM pg_roles WHERE rolname = current_user")
+                    cursor.execute(PG_SERVER_SQL)
                     database, wal, version, replication, superuser = cursor.fetchone()
                     if (database != p["database"] or wal != "logical"
                             or version != p["server_version_num"] or not replication or superuser):
                         raise ValueError()
-                    cursor.execute("SELECT puballtables, pubinsert, pubupdate, pubdelete, pubtruncate "
-                                   "FROM pg_publication WHERE pubname = %s", (p["publication"],))
+                    cursor.execute(_PUBLICATION_SQL, (p["publication"],))
                     if cursor.fetchone() != (False, True, True, True, True):
                         raise ValueError()
-                    cursor.execute("""
-                        SELECT published.schemaname || '.' || published.tablename,
-                               published.rowfilter IS NOT NULL, published.attnames,
-                               attributes.names, attributes.has_generated
-                        FROM pg_catalog.pg_publication_tables AS published
-                        JOIN pg_catalog.pg_namespace AS namespace ON namespace.nspname = published.schemaname
-                        JOIN pg_catalog.pg_class AS relation
-                          ON relation.relnamespace = namespace.oid AND relation.relname = published.tablename
-                        CROSS JOIN LATERAL (
-                            SELECT array_agg(attname) AS names, bool_or(attgenerated <> '') AS has_generated
-                            FROM pg_catalog.pg_attribute
-                            WHERE attrelid = relation.oid AND attnum > 0 AND NOT attisdropped
-                        ) AS attributes
-                        WHERE published.pubname = %s
-                        LIMIT %s
-                    """, (p["publication"], len(tables) + 1))
+                    cursor.execute(_PUBLISHED_TABLES_SQL, (p["publication"], len(tables) + 1))
                     published_tables = cursor.fetchall()
                     if (len(published_tables) != len(tables)
                             or {row[0] for row in published_tables} != set(tables)):
                         raise ValueError()
                     for table, filtered, published_columns, live_columns, has_generated in published_tables:
-                        if (filtered is not False or has_generated is not False
-                                or not published_columns or not live_columns
-                                or set(published_columns) != set(live_columns)):
+                        if pg_column_coverage_failed(filtered, published_columns, live_columns, has_generated):
                             raise TablePrerequisiteFailed(table, "schema", _UNCONFIRMED)
-                    cursor.execute("SELECT plugin, database, active FROM pg_replication_slots "
-                                   "WHERE slot_name = %s", (p["slot"],))
+                    cursor.execute(_SLOT_SQL, (p["slot"],))
                     slot = cursor.fetchone()
                     if slot is not None and slot[:2] != ("pgoutput", p["database"]):
                         raise ValueError()
                     for table in p["tables"]:
-                        cursor.execute("SELECT has_table_privilege(current_user, %s, 'SELECT')", (table,))
+                        cursor.execute(_SELECT_SQL, (table,))
                         if cursor.fetchone() != (True,):
                             raise TablePrerequisiteFailed(table, "permission", _UNCONFIRMED)
                     if self.snapshot is not None:
@@ -145,23 +164,7 @@ class PostgreSQLCaptureProfile:
         return [*self.scope["tables"], self.snapshot["signal_table"]] if self.snapshot else self.scope["tables"]
 
     def _validate_signal_relation(self, cursor):
-        cursor.execute("""
-            SELECT database.oid || ':' || relation.oid,
-                   has_table_privilege(relation.oid, 'SELECT'), has_table_privilege(relation.oid, 'INSERT'),
-                   array_agg(attribute.attname ORDER BY attribute.attnum),
-                   bool_and(attribute.atttypid IN ('text'::regtype, 'varchar'::regtype)),
-                   EXISTS (SELECT FROM pg_catalog.pg_constraint AS key
-                           WHERE key.conrelid = relation.oid AND key.contype = 'p'
-                             AND NOT key.condeferrable
-                             AND key.conkey = ARRAY[min(attribute.attnum) FILTER (WHERE attribute.attname = 'id')])
-            FROM pg_catalog.pg_class AS relation
-            JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = relation.oid
-            CROSS JOIN pg_catalog.pg_database AS database
-            WHERE database.datname = current_database() AND relation.oid = to_regclass(%s)
-              AND relation.relkind = 'r' AND relation.relpersistence = 'p' AND NOT relation.relrowsecurity
-              AND attribute.attnum > 0 AND NOT attribute.attisdropped
-            GROUP BY database.oid, relation.oid
-        """, (self.snapshot["signal_table"],))
+        cursor.execute(_SIGNAL_SQL, (self.snapshot["signal_table"],))
         if cursor.fetchone() != (self.snapshot["signal_relation_identity"], True, True,
                                  ["id", "type", "data"], True, True):
             raise ValueError()

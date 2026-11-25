@@ -8,6 +8,41 @@ export type SourceAccess = Record<string, unknown>;
 export type CaptureCredential = { username: string; password: string };
 export type SnapshotWindow = { start: string; end: string };
 
+export type CaptureCheckResultName = "pass" | "fail" | "unknown" | "not_applicable";
+
+export type CaptureCheckItem = {
+  key: string;
+  result: CaptureCheckResultName;
+  expected?: string | null;
+  observed?: string | null;
+  action?: string | null;
+  note?: "access_credential" | null;
+};
+
+export type CaptureCheckTable = {
+  name: string;
+  result: Exclude<CaptureCheckResultName, "not_applicable">;
+  cause?: "schema" | "permission" | null;
+  observed?: string | null;
+  note?: "access_credential" | null;
+};
+
+export type CaptureCheckResult = {
+  ok: boolean;
+  code?: string | null;
+  message?: string | null;
+  advisory?: boolean;
+  credential?: "request" | "stored" | "access";
+  engine?: string;
+  items?: CaptureCheckItem[];
+  tables?: {
+    total: number;
+    truncated: boolean;
+    limit: number;
+    items: CaptureCheckTable[];
+  };
+};
+
 export type ConnectorSpec = {
   $id?: string;
   title?: string;

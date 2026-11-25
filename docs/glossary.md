@@ -329,6 +329,11 @@ For `kind=database`, the Source also carries `engine` and a per-engine validated
 Who may open a Source is **Source Membership** at a **Source Access Level**, intersected with the caller's **Role**.
 Avoid calling it Identity Source or Client. Avoid assuming every Source is an enterprise application. Avoid treating reachability as a separate reusable entity. Avoid fixed top-level `database_name` / `schema_filter` beside `access`.
 
+### Capture Precheck
+
+A read-only observation of whether a database **Source** currently exposes the engine facts capture needs. It uses the same catalog queries as the engine capture profile and reports source-level and table-level results of pass, fail, unknown, or not applicable. The result is not stored.
+Avoid treating it as capture readiness, qualification, component availability, or a substitute for the runtime profile. Avoid enabling CDC, publications, supplemental logging, or grants from the check.
+
 ### Source Membership
 
 A binding of one subject (`user`, `role`, or `group`) to one target (one **Source**, or every Source) at one **Source Access Level**. One subject has at most one membership per target. The row lives in the metadata database. A missing subject grants nothing and is still listed as missing.

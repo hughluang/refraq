@@ -115,10 +115,12 @@ Source probe completed-failure remains HTTP 200 `{ "ok": false, "code", "message
 | `DELETE` | `/sources/{id}` | `sources:write` | Hard-delete a **disabled** Source (and its catalog) |
 | `POST` | `/sources/test` | `sources:write` | Reachability probe for a draft Source (not persisted) |
 | `POST` | `/sources/{id}/test` | `sources:write` | Reachability probe for a stored Source |
+| `POST` | `/sources/capture-check` | `sources:write` | **Capture Precheck** for a draft Source (not persisted) |
+| `POST` | `/sources/{id}/capture-check` | `sources:write` | **Capture Precheck** for a stored Source |
 
 There is **no** `PUT /sources/{id}/secret`. Ordinary access credential changes are a full `access` replace via create/patch (or probe override). Capture credential changes use the independent write-only `capture_credential` field, never a probe override.
 
-Instance checks follow the Role check (`docs/business-metadata.md` §6.1). A missing Role key is `403` `AUTH_FORBIDDEN` before the id is resolved. No **Source Access Level** on that Source is `404` `SOURCE_NOT_FOUND`, the same code as an unknown id. A level that does not include the route's key is `403` `AUTH_FORBIDDEN`. `sources:access_manage` does not pass an instance check. `POST /sources`, draft `POST /sources/test`, and `GET /sources/access-schema/{engine}` use only the Role key in the table.
+Instance checks follow the Role check (`docs/business-metadata.md` §6.1). A missing Role key is `403` `AUTH_FORBIDDEN` before the id is resolved. No **Source Access Level** on that Source is `404` `SOURCE_NOT_FOUND`, the same code as an unknown id. A level that does not include the route's key is `403` `AUTH_FORBIDDEN`. `sources:access_manage` does not pass an instance check. `POST /sources`, draft `POST /sources/test`, draft `POST /sources/capture-check`, and `GET /sources/access-schema/{engine}` use only the Role key in the table.
 
 A successful `POST /sources` writes a `user` **Source Membership** for the creator at `maintainer` in the same transaction as the Source and its seed schedules, and writes `source_membership.create`. Hard-delete removes memberships whose target is that Source id. Every-Source memberships remain. `SOURCE_NOT_DISABLED` is returned only after the level check passes.
 
@@ -234,6 +236,107 @@ Rules:
 - Admission pool full or this actor's share full: `ADMISSION_CAPACITY_EXCEEDED` (`503`) / `ADMISSION_ACTOR_LIMIT_EXCEEDED` (`429`), same as Controlled Query (`docs/business-metadata.md` §10.5).
 - Probe does not block save; results are not persisted on the Source.
 
+### Capture precheck
+
+Read-only sync HTTP, same admission pool as the reachability probe. No Job, no catalog mutation, no write to the Source, and no persisted result. The result is advisory. It is not capture admission, qualification, component availability, or a readiness endpoint. Admission remains the runtime profile in `docs/business-source-mirrors.md` §10.
+
+The check only reads system catalogs. It never runs `sp_cdc_enable_db`, `sp_cdc_enable_table`, `CREATE PUBLICATION`, supplemental-logging DDL, grants, or signal-table DDL.
+
+#### `POST /sources/capture-check` (draft)
+
+```json
+{
+  "engine": "mssql",
+  "access": {
+    "host": "db.example.internal",
+    "port": 1433,
+    "username": "meta_reader",
+    "password": "not-a-real-password",
+    "ssl_mode": "disable",
+    "database": "APP",
+    "schema": "dbo",
+    "extra": {}
+  },
+  "capture_credential": {
+    "username": "capture_reader",
+    "password": "not-a-real-password"
+  }
+}
+```
+
+Draft requires `engine` and a full valid `access`, including secrets and dialect scope. `capture_credential` may be omitted or null. An object uses the same shape as §2 and is not stored.
+
+#### `POST /sources/{id}/capture-check` (stored)
+
+```json
+{
+  "engine": null,
+  "access": null,
+  "capture_credential": null
+}
+```
+
+Stored rules match the stored reachability probe for `engine` and `access`: body `access` wins, otherwise the decrypted stored access blob; body `engine` overrides the row for this check only. `capture_credential` omitted or null does not clear the stored credential.
+
+#### Login selection
+
+Use the first login that exists:
+
+1. Request `capture_credential` object. Response `credential` is `request`.
+2. On the stored route only, the stored capture credential when it decrypts to a non-empty username and password. Response `credential` is `stored`. A decrypt failure skips this step.
+3. The ordinary access username and password. Response `credential` is `access`.
+
+When `credential` is `access`, permission observations were not made as the capture login. Each permission item, and every table item, sets `note` to `access_credential`. Other items leave `note` null.
+
+#### Completed result
+
+Connected inspection returns HTTP 200:
+
+```json
+{
+  "ok": true,
+  "advisory": true,
+  "credential": "stored",
+  "engine": "mssql",
+  "items": [
+    {
+      "key": "cdc_enabled",
+      "result": "fail",
+      "expected": "enabled",
+      "observed": "0",
+      "action": "enable_database_cdc",
+      "note": null
+    }
+  ],
+  "tables": {
+    "total": 2,
+    "truncated": false,
+    "limit": 200,
+    "items": [
+      {
+        "name": "dbo.orders",
+        "result": "fail",
+        "cause": "schema",
+        "observed": "instances=0",
+        "note": null
+      }
+    ]
+  }
+}
+```
+
+`advisory` is always true on success. `items` are source-level. `result` is `pass`, `fail`, `unknown`, or `not_applicable`. `tables.items[].result` is `pass`, `fail`, or `unknown`. `cause` is `schema`, `permission`, or null. `expected`, `observed`, and `action` are short secret-free strings or null. `observed` is null when nothing was read.
+
+A fact the login cannot read is `unknown`, never `pass`. A comparison that needs a pinned profile value is `not_applicable` and returns the observed value: server version on every engine, cleanup or binlog or archived-log retention, MySQL `gtid_mode`, and MySQL server uuid and server id are not judged against a pin. SQL Server Express and Web editions are `fail`. Standard, Developer, Enterprise, Evaluation, and Business Intelligence editions are `pass`. Any other observed edition is `unknown`.
+
+Table scope is the permanent base tables in the access schema (PostgreSQL and SQL Server), owner (Oracle), or database (MySQL). At most 200 tables are inspected, chosen by qualified name order. `total` counts the base tables in scope. `truncated` is true when `total` exceeds 200. Returned table items are the inspected subset, ordered `fail`, then `unknown`, then `pass`, then name. One failing table does not hide the others. PostgreSQL passes a table when some publication covers every live column, with no row filter and no generated column, and the login can `SELECT`. SQL Server passes when the table has exactly one capture instance, the captured columns equal the live columns, and the login can `SELECT`.
+
+A connection, authentication, or timeout failure is HTTP 200 `{ "ok": false, "code": "SOURCE_CAPTURE_CHECK_FAILED" | "SOURCE_CAPTURE_CHECK_TIMEOUT", "message": "..." }`. `message` is a fixed sentence. It does not include the driver exception, username, password, connection string, or ciphertext. The timeout bound matches the reachability probe (about 10 seconds) for the whole inspection.
+
+Validation and missing-Source errors use the same status codes as the reachability probe. The check does not block save and stores nothing.
+
+Audit action is `source.capture_check`. Detail is `engine`, `host`, `port`, `credential` (`request`, `stored`, or `access`), `ok`, `code`, and, on success, counts of item and table results. Detail never includes a username, password, ciphertext, observed row, or connection string.
+
 ### 3.1 Source Membership
 
 Business rule: `docs/business-metadata.md` §6.1. Levels are `viewer`, `steward`, `maintainer`. The every-Source target stored on a row is `*`.
@@ -286,7 +389,8 @@ Duplicate, unknown subject, and unknown level write no audit event. A successful
 - A separate Connection resource or credential reuse across Sources
 - Soft delete and versioned credential history (capture replacements still use secret-free Source audit; see §2 and `DELETE /sources/{id}`)
 - Mirror lifecycle, applier, recovery and capture-status shapes are defined separately in `docs/api-contracts-source-mirrors.md`; no CDC version or deployment support matrix is inferred
-- Source test that returns query row data (reachability-only responses only)
+- Source reachability test that returns query row data (the reachability body stays `ok`, `code`, and `message`)
+- Capture Precheck that returns business row data (system-catalog observations only; see §3)
 - Persisting probe results (last-tested timestamp, auto status flip, or blocking save until tested)
 - Free-form YAML authoring; hand-written per-engine forms (use SpecTree)
 - SSH tunnel / Private Link in this slice

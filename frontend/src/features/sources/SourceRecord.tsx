@@ -5,6 +5,7 @@ import { useCan, useNotification, usePermissions, useTranslate } from "@refinede
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { FormSection } from "@/components/form/FormSection";
+import { SourceCapturePrecheck } from "@/features/sources/SourceCapturePrecheck";
 import { SourceConnectionProbe } from "@/features/sources/SourceConnectionProbe";
 import { DisplayField } from "@/components/display/DisplayField";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
@@ -885,7 +886,16 @@ function SourceFields({
                 )}
               </Stack>
             </Paper>
-            <CaptureSettings form={form} source={source} editable={editable} />
+            <CaptureSettings
+              form={form}
+              source={source}
+              editable={editable}
+              canCheck={canTest && Boolean(engine)}
+              engine={engine}
+              draftAccess={!source || (connectionEditable && (form.isDirty("access") || form.isDirty("engine"))) ? form.values.access : undefined}
+              checkDisabled={switching || form.submitting || Boolean(loadingAccess)}
+              validateAccess={validateProbe}
+            />
           </>
         )}
       </Stack>
@@ -893,13 +903,17 @@ function SourceFields({
   );
 }
 
-function CaptureSettings({ form, source, editable }: {
+function CaptureSettings({ form, source, editable, canCheck, engine, draftAccess, checkDisabled, validateAccess }: {
   form: UseConsoleFormReturn<Values>;
   source?: Source;
   editable: boolean;
+  canCheck: boolean;
+  engine?: Engine;
+  draftAccess?: SourceAccess;
+  checkDisabled: boolean;
+  validateAccess: () => boolean;
 }) {
   const t = useTranslate();
-  const catalog = useCan({ resource: ModuleId.catalog, action: ModuleAction.list });
   const [expanded, setExpanded] = useState(Boolean(source?.capture_credential_set || source?.snapshot_window));
   const intent = form.values.captureIntent;
   useEffect(() => {
@@ -935,11 +949,6 @@ function CaptureSettings({ form, source, editable }: {
             {t(expanded ? "sources.workflow.hideCapture" : "sources.workflow.showCapture")}
           </Button>
         </Group>
-        {source?.kind === "database" && catalog.data?.can && (
-          <Button component={ConsoleLink} href={`/console/catalog?source=${encodeURIComponent(source.id)}`} variant="light" size="sm" w="fit-content">
-            {t("catalog.title")}
-          </Button>
-        )}
         <Stack id="source-capture-settings" gap="lg" hidden={!expanded} style={!expanded ? { display: "none" } : undefined}>
           <Stack gap="sm">
             <DisplayField label={t("sources.capture.credential")} value={credential} helper={t("sources.capture.helper")} />
@@ -969,6 +978,30 @@ function CaptureSettings({ form, source, editable }: {
                 <TextField editable label={t("sources.capture.username")} required autoComplete="off" {...form.fieldProps("captureUsername")} />
                 <TextField editable type="password" label={t("sources.capture.password")} required autoComplete="new-password" {...form.fieldProps("capturePassword")} />
               </SimpleGrid>
+            )}
+            {canCheck && engine && (
+              <SourceCapturePrecheck
+                sourceId={source?.id}
+                engine={engine}
+                draftAccess={draftAccess}
+                captureCredential={intent === "replace" ? { username: form.values.captureUsername, password: form.values.capturePassword } : undefined}
+                disabled={checkDisabled}
+                validate={() => {
+                  if (draftAccess && !validateAccess()) return false;
+                  if (intent !== "replace") return true;
+                  const required = t("sources.validation.required");
+                  let ready = true;
+                  if (!form.values.captureUsername) {
+                    form.setFieldError("captureUsername", required);
+                    ready = false;
+                  }
+                  if (!form.values.capturePassword) {
+                    form.setFieldError("capturePassword", required);
+                    ready = false;
+                  }
+                  return ready;
+                }}
+              />
             )}
           </Stack>
           <FormSection order={3} title={t("sources.workflow.window")}>

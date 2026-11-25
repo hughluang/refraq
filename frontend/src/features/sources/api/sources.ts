@@ -2,6 +2,7 @@ import { apiClient } from "@/lib/api";
 import type { ScheduledTask } from "@/features/schedules/types";
 import type { OffsetPage } from "@/lib/pagination";
 import type {
+  CaptureCheckResult,
   CaptureCredential,
   ConnectorSpec,
   Engine,
@@ -112,6 +113,33 @@ export function testSource(
   },
 ) {
   return apiClient<SourceTestResult>(`/sources/${sourceId}/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function checkCaptureDraft(body: {
+  engine: Engine;
+  access: SourceAccess;
+  capture_credential?: CaptureCredential;
+}) {
+  return apiClient<CaptureCheckResult>("/sources/capture-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function checkCapture(
+  sourceId: string,
+  body: {
+    engine?: Engine;
+    access?: SourceAccess;
+    capture_credential?: CaptureCredential;
+  },
+) {
+  return apiClient<CaptureCheckResult>(`/sources/${sourceId}/capture-check`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

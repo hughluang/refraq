@@ -20,6 +20,7 @@ from backend.admin.permissions import permissions_include
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.user_store import UserRecord
 from backend.metadata.capture.control import capture_status
+from backend.metadata.capture.precheck import resolve_capture_login, run_capture_precheck
 from backend.metadata.connectors.specs import get_connector_spec
 from backend.metadata.errors import (
     SourceAccessRequired,
@@ -42,6 +43,9 @@ from backend.metadata.schemas.sources import (
     SourceAccessResponse,
     SourceListResponse,
     SourceOut,
+    CaptureCheckDraftRequest,
+    CaptureCheckRequest,
+    CaptureCheckResponse,
     SourceResponse,
     SourceTestResponse,
     TestSourceDraftRequest,
@@ -181,6 +185,79 @@ async def test_source_draft(
     return SourceTestResponse(ok=result.ok, code=result.code, message=result.message)
 
 
+def _capture_counts(entries: list[dict] | None) -> dict[str, int]:
+    counts = {"pass": 0, "fail": 0, "unknown": 0, "not_applicable": 0}
+    for entry in entries or []:
+        result = entry.get("result")
+        if result in counts:
+            counts[result] += 1
+    return counts
+
+
+def _audit_capture_check(*, user, request, resource_id, engine, access, credential, result) -> None:
+    detail = {
+        "engine": engine,
+        "host": access.get("host"),
+        "port": access.get("port"),
+        "credential": credential,
+        "ok": result.ok,
+        "code": result.code,
+    }
+    if result.ok:
+        detail["items"] = _capture_counts(result.items)
+        detail["tables"] = _capture_counts((result.tables or {}).get("items"))
+    persist_audit_event(
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
+        resource_type="source",
+        resource_id=resource_id,
+        action="source.capture_check",
+        result="success" if result.ok else "failure",
+        detail=detail,
+    )
+
+
+@router.post(
+    "/sources/capture-check",
+    response_model=CaptureCheckResponse,
+    response_model_exclude_none=True,
+)
+async def capture_check_draft(
+    payload: CaptureCheckDraftRequest,
+    request: Request,
+    user: UserRecord = Depends(require_permission("sources:write")),
+) -> CaptureCheckResponse:
+    access = validate_access(payload.engine, payload.access)
+    username, password, credential = resolve_capture_login(
+        request_username=(
+            payload.capture_credential.username.get_secret_value()
+            if payload.capture_credential is not None else None
+        ),
+        request_password=(
+            payload.capture_credential.password.get_secret_value()
+            if payload.capture_credential is not None else None
+        ),
+        stored_ciphertext=None,
+        access=access,
+    )
+    override = None if credential == "access" else (username, password)
+
+    def _check():
+        return run_capture_precheck(
+            engine=payload.engine,
+            access=access,
+            credential_override=override,
+            credential=credential,
+        )
+
+    result = await await_admitted(user.id, _check)
+    _audit_capture_check(
+        user=user, request=request, resource_id="draft", engine=payload.engine,
+        access=access, credential=credential, result=result,
+    )
+    return CaptureCheckResponse.model_validate(result.public())
+
+
 @router.get("/sources/{source_id}", response_model=SourceResponse)
 def get_source(
     source_id: str,
@@ -312,3 +389,56 @@ async def test_source_stored(
         },
     )
     return SourceTestResponse(ok=result.ok, code=result.code, message=result.message)
+
+
+@router.post(
+    "/sources/{source_id}/capture-check",
+    response_model=CaptureCheckResponse,
+    response_model_exclude_none=True,
+)
+async def capture_check_stored(
+    source_id: str,
+    payload: CaptureCheckRequest,
+    request: Request,
+    user: UserRecord = Depends(require_permission("sources:write")),
+) -> CaptureCheckResponse:
+    record = source_service.require_source_permission(
+        user.id, source_id, "sources:write"
+    )
+    engine = payload.engine or record.engine
+    if not engine:
+        raise SourceAccessRequired("Source has no engine for this check")
+    if payload.access is not None:
+        access = validate_access(engine, payload.access)
+    else:
+        if not record.access_ciphertext:
+            raise SourceSecretRequired()
+        access = validate_access(engine, decrypt_access_blob(record.access_ciphertext))
+    username, password, credential = resolve_capture_login(
+        request_username=(
+            payload.capture_credential.username.get_secret_value()
+            if payload.capture_credential is not None else None
+        ),
+        request_password=(
+            payload.capture_credential.password.get_secret_value()
+            if payload.capture_credential is not None else None
+        ),
+        stored_ciphertext=record.capture_credential_ciphertext,
+        access=access,
+    )
+    override = None if credential == "access" else (username, password)
+
+    def _check():
+        return run_capture_precheck(
+            engine=engine,
+            access=access,
+            credential_override=override,
+            credential=credential,
+        )
+
+    result = await await_admitted(user.id, _check)
+    _audit_capture_check(
+        user=user, request=request, resource_id=record.id, engine=engine,
+        access=access, credential=credential, result=result,
+    )
+    return CaptureCheckResponse.model_validate(result.public())
