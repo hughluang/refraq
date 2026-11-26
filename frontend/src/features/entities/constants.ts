@@ -3,6 +3,7 @@ import type { AttributeType } from "@/features/entities/types";
 export const EMPTY_ATTRIBUTE: {
   type: AttributeType;
   name: string;
+  display_name: string;
   required: boolean;
   unique: boolean;
   indexed: boolean;
@@ -24,6 +25,7 @@ export const EMPTY_ATTRIBUTE: {
 } = {
   type: "string",
   name: "",
+  display_name: "",
   required: false,
   unique: false,
   indexed: false,

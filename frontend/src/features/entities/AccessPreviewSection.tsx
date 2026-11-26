@@ -10,6 +10,7 @@ import { userRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { previewAccess } from "@/features/entities/accessApi";
 import { presentCell, withheldNames } from "@/features/entities/accessLogic";
+import { attributeDisplayLabel } from "@/features/entities/entityPresentation";
 import type { AccessRun } from "@/features/entities/accessSession";
 
 type PreviewColumn = { name: string; marks: string };
@@ -83,11 +84,13 @@ export function AccessPreviewSection({
                           : "",
                       ].filter(Boolean);
                       return {
-                        name: attribute.name,
+                        name: attributeDisplayLabel(attribute),
                         marks: marks.join(t("entities.access.summary.actionJoin")),
                       };
                     });
-                    const headers = result.schema.attributes.map((attribute) => attribute.name);
+                    const headers = result.schema.attributes.map((attribute) =>
+                      attributeDisplayLabel(attribute),
+                    );
                     const rows = (result.rows?.items ?? []).map((row) => {
                       const held = withheldNames(row, result.schema.withheld_field);
                       const sources = row.__sources;

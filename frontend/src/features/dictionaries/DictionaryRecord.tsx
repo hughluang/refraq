@@ -398,7 +398,17 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
                   href={`/console/entities/${usage.entity_id}`}
                 />
               </Table.Td>
-              <Table.Td>{usage.attribute_name}</Table.Td>
+              <Table.Td>
+                {usage.attribute_display_name?.trim() ? (
+                  <RecordReference
+                    name={usage.attribute_display_name}
+                    recordKey={usage.attribute_name}
+                    copyable={false}
+                  />
+                ) : (
+                  usage.attribute_name
+                )}
+              </Table.Td>
               <Table.Td>{usage.version}</Table.Td>
               <Table.Td>
                 {usage.behind ? (

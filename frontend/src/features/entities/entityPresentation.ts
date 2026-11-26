@@ -39,6 +39,7 @@ export function draftsFromVersion(version: EntityVersion): AttributeDraft[] {
     return {
       type: item.type,
       name: item.name,
+      display_name: item.display_name ?? "",
       required: item.required,
       unique: item.unique,
       indexed: item.indexed,
@@ -74,6 +75,7 @@ export function attributesFromDrafts(
   return attributes.map((item) => ({
     type: item.type,
     name: item.name.trim(),
+    display_name: item.display_name.trim() || null,
     required: item.required,
     unique: item.unique,
     indexed: item.indexed,
@@ -81,6 +83,23 @@ export function attributesFromDrafts(
     description: item.description.trim() || null,
     config: configFromDraft(item),
   }));
+}
+
+export function attributeTitle(attr: {
+  name: string;
+  display_name?: string | null;
+}): string {
+  const displayName = attr.display_name?.trim();
+  return displayName || attr.name;
+}
+
+export function attributeDisplayLabel(attr: {
+  name: string;
+  display_name?: string | null;
+}): string {
+  const displayName = attr.display_name?.trim();
+  if (!displayName) return attr.name;
+  return `${displayName} (${attr.name})`;
 }
 
 export const REFERENCE_SELF = "self";

@@ -59,6 +59,7 @@ Every successful write in §4 writes one **Management Audit Event** naming the E
 {
   "attribute_id": "att_01HZX",
   "attribute_name": "id_card_no",
+  "attribute_display_name": "ID card number",
   "type": "string",
   "levels": [
     { "key": "clear", "mode": "clear" },
@@ -68,7 +69,7 @@ Every successful write in §4 writes one **Management Audit Event** naming the E
 }
 ```
 
-`levels` is ordered most revealing first. The first level is always `{ "key": "clear", "mode": "clear" }`. Level `key` is `[a-z][a-z0-9_]*`, at most 63 characters, unique within the ladder. `mode` is `"clear"` or a mask object `{ "type", …params }` with types and parameters from `docs/business-entity-access.md` §4. A mask the attribute's type does not accept, unknown parameters, or out-of-range parameters are `422 ENTITY_ACCESS_INVALID`. Every head attribute has a ladder; an attribute without authored masks reads as `[clear]`.
+`levels` is ordered most revealing first. The first level is always `{ "key": "clear", "mode": "clear" }`. Level `key` is `[a-z][a-z0-9_]*`, at most 63 characters, unique within the ladder. `mode` is `"clear"` or a mask object `{ "type", …params }` with types and parameters from `docs/business-entity-access.md` §4. A mask the attribute's type does not accept, unknown parameters, or out-of-range parameters are `422 ENTITY_ACCESS_INVALID`. Every head attribute has a ladder; an attribute without authored masks reads as `[clear]`. `attribute_name` and `attribute_display_name` are read-only.
 
 ### 3.3 Access Profile
 
@@ -80,8 +81,8 @@ Every successful write in §4 writes one **Management Audit Event** naming the E
   "name": "Finance",
   "description": null,
   "columns": [
-    { "attribute_id": "att_01HZA", "attribute_name": "name", "level": "clear" },
-    { "attribute_id": "att_01HZB", "attribute_name": "id_card_no", "level": "last4" }
+    { "attribute_id": "att_01HZA", "attribute_name": "name", "attribute_display_name": "Name", "level": "clear" },
+    { "attribute_id": "att_01HZB", "attribute_name": "id_card_no", "attribute_display_name": "ID card number", "level": "last4" }
   ],
   "broken": false,
   "broken_reasons": [],
@@ -90,7 +91,7 @@ Every successful write in §4 writes one **Management Audit Event** naming the E
 }
 ```
 
-`key` follows the level key rule and is unique within the Entity. `columns` lists head attributes; `attribute_name` is read-only. An `attribute_id` that is not in the head, a duplicate `attribute_id`, or a `level` not in that attribute's ladder is `422 ENTITY_ACCESS_INVALID`. `row_id` is implicit and is not listed. `broken` and `broken_reasons` are derived (`docs/business-entity-access.md` §9.9).
+`key` follows the level key rule and is unique within the Entity. `columns` lists head attributes; `attribute_name` and `attribute_display_name` are read-only. An `attribute_id` that is not in the head, a duplicate `attribute_id`, or a `level` not in that attribute's ladder is `422 ENTITY_ACCESS_INVALID`. `row_id` is implicit and is not listed. `broken` and `broken_reasons` are derived (`docs/business-entity-access.md` §9.9).
 
 ### 3.4 Row Rule
 

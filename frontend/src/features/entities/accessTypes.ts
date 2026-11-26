@@ -13,6 +13,7 @@ export type AccessLevel = {
 export type AccessLadder = {
   attribute_id: string;
   attribute_name: string;
+  attribute_display_name?: string | null;
   type: string;
   levels: AccessLevel[];
 };
@@ -23,7 +24,12 @@ export type AccessProfile = {
   key: string;
   name: string;
   description: string | null;
-  columns: { attribute_id: string; attribute_name?: string | null; level: string }[];
+  columns: {
+    attribute_id: string;
+    attribute_name?: string | null;
+    attribute_display_name?: string | null;
+    level: string;
+  }[];
   broken: boolean;
   broken_reasons: string[];
 };
@@ -71,6 +77,7 @@ export type DataSort = { field: string; direction: "asc" | "desc" };
 
 export type DataAttribute = {
   name: string;
+  display_name?: string | null;
   type: string;
   attribute_id?: string;
   description?: string | null;

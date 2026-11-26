@@ -17,6 +17,7 @@ import { FilterIcon, SearchIcon } from "@/components/icons";
 import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type { DataAttribute, DataSchema } from "./accessTypes";
+import { attributeDisplayLabel, attributeTitle } from "./entityPresentation";
 import {
   compileDataQuery,
   conditionOps,
@@ -217,7 +218,7 @@ export function EntityDataQueryControls({
   const quickLabel = t(
     key +
       (quickAttribute && lookupOp(schema, quickAttribute) === "contains" ? "contains" : "exact"),
-    { field: quickField },
+    { field: quickAttribute ? attributeTitle(quickAttribute) : quickField },
   );
   const hasFilters = Boolean(query.lookup || query.conditions.length);
   const firstFilter = fields.find((f) => f.name === schema.business_key) ?? fields[0];
@@ -229,7 +230,7 @@ export function EntityDataQueryControls({
           <div className={classes.search}>
             <Select
               aria-label={t(key + "searchField")}
-              data={searchable.map((f) => f.name)}
+              data={searchable.map((f) => ({ value: f.name, label: attributeDisplayLabel(f) }))}
               value={quickField}
               allowDeselect={false}
               searchable={searchable.length > 8}
@@ -305,7 +306,7 @@ export function EntityDataQueryControls({
           {query.lookup && (
             <div className={classes.chip}>
               <span className={classes.chipLabel}>
-                {query.lookup.field}{" "}
+                {activeLookup ? attributeTitle(activeLookup) : query.lookup.field}{" "}
                 {t(opKey(activeLookup ? (lookupOp(schema, activeLookup) ?? "eq") : "eq"))}{" "}
                 {query.lookup.value}
               </span>
@@ -324,12 +325,13 @@ export function EntityDataQueryControls({
             </Text>
           )}
           {query.conditions.map((condition, index) => {
+            const condField = fields.find((f) => f.name === condition.field);
             const label = [
-              condition.field,
+              condField ? attributeTitle(condField) : condition.field,
               t(
                 opKey(
                   condition.op,
-                  fields.find((f) => f.name === condition.field),
+                  condField,
                 ),
               ),
               condition.values.join(condition.op === "between" ? " – " : ", "),
@@ -392,7 +394,7 @@ export function EntityDataQueryControls({
             <Select
               label={t(key + "field")}
               value={field.name}
-              data={fields.map((f) => f.name)}
+              data={fields.map((f) => ({ value: f.name, label: attributeDisplayLabel(f) }))}
               searchable={fields.length > 8}
               allowDeselect={false}
               onChange={(v) => {

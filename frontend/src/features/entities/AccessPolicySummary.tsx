@@ -11,6 +11,7 @@ import {
   viewsStatusKey,
 } from "@/features/entities/accessLogic";
 import type { AccessSummary } from "@/features/entities/accessTypes";
+import { attributeDisplayLabel } from "@/features/entities/entityPresentation";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 
 type Props = {
@@ -20,8 +21,15 @@ type Props = {
 export function AccessPolicySummary({ summary }: Props) {
   const t = useTranslate();
   const attributeIds = summary.ladders.map((ladder) => ladder.attribute_id);
-  const nameOf = (id: string) =>
-    summary.ladders.find((ladder) => ladder.attribute_id === id)?.attribute_name ?? id;
+  const nameOf = (id: string) => {
+    const ladder = summary.ladders.find((item) => item.attribute_id === id);
+    return ladder
+      ? attributeDisplayLabel({
+          name: ladder.attribute_name,
+          display_name: ladder.attribute_display_name,
+        })
+      : id;
+  };
   const typeOf = (id: string) =>
     summary.ladders.find((ladder) => ladder.attribute_id === id)?.type ?? null;
   const attention = viewsNeedAttention(summary);

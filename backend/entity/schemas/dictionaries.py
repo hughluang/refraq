@@ -36,6 +36,7 @@ class DictionaryUsageOut(BaseModel):
     entity_name: str
     table_name: str
     attribute_name: str
+    attribute_display_name: str | None = None
     version_id: str
     version: int
     publish_status: str

@@ -348,3 +348,13 @@ def test_attribute_name_rules_are_specific() -> None:
     with pytest.raises(EntityAttributeInvalid, match="must start with a letter"):
         require_attribute_name("1bad")
     require_attribute_name("a" + "x" * (ATTRIBUTE_NAME_MAX_LEN - 1))
+
+
+def test_display_name_change_is_unchanged() -> None:
+    before = (AttributeRecord(name="sku", type="string", max_length=32, display_name="SKU"),)
+    after = (AttributeRecord(name="sku", type="string", max_length=32, display_name="Material SKU"),)
+    result = classify_shapes(before, after, versions=())
+    assert result.change_class == "unchanged"
+    assert len(result.changes) == 1
+    assert result.changes[0].field == "attributes.sku.display_name"
+    assert result.changes[0].change_class == "unchanged"

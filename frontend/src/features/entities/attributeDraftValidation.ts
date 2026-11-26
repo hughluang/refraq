@@ -8,12 +8,15 @@ import type { AttributeDraft, AttributeType } from "@/features/entities/types";
 
 export type AttributeIssueField =
   | "name"
+  | "display_name"
   | "max_length"
   | "precision"
   | "scale"
   | "dictionary_id"
   | "target_entity_id"
   | "business_key";
+
+export const ATTRIBUTE_DISPLAY_NAME_MAX_LEN = 256;
 
 export type AttributeIssue = {
   field: AttributeIssueField;
@@ -56,7 +59,7 @@ function nameIssue(draft: AttributeDraft, names: readonly string[]): AttributeIs
   };
 }
 
-type ConfigIssueField = Exclude<AttributeIssueField, "name" | "business_key">;
+type ConfigIssueField = Exclude<AttributeIssueField, "name" | "display_name" | "business_key">;
 
 type IntIssueField = "max_length" | "precision" | "scale";
 
@@ -167,6 +170,18 @@ function businessKeyIssues(
   return issues;
 }
 
+function displayNameIssue(draft: AttributeDraft): AttributeIssue | null {
+  const trimmed = draft.display_name.trim();
+  if (trimmed.length > ATTRIBUTE_DISPLAY_NAME_MAX_LEN) {
+    return {
+      field: "display_name",
+      key: "entities.validation.attribute.displayNameTooLong",
+      values: { max: ATTRIBUTE_DISPLAY_NAME_MAX_LEN },
+    };
+  }
+  return null;
+}
+
 /** Issues for one draft. `names` includes this draft's name. */
 export function attributeDraftIssues(
   draft: AttributeDraft,
@@ -176,6 +191,8 @@ export function attributeDraftIssues(
   const issues: AttributeIssue[] = [];
   const name = nameIssue(draft, names);
   if (name) issues.push(name);
+  const displayName = displayNameIssue(draft);
+  if (displayName) issues.push(displayName);
   issues.push(...configIssues(draft));
   issues.push(...businessKeyIssues(draft, siblings));
   return issues;

@@ -189,6 +189,15 @@ def _attribute_changes(
                 change_class="non_breaking",
             )
         )
+    if before.display_name != after.display_name:
+        found.append(
+            ShapeChange(
+                field=f"{prefix}.display_name",
+                old_value=before.display_name,
+                new_value=after.display_name,
+                change_class="unchanged",
+            )
+        )
     if before.description != after.description:
         found.append(
             ShapeChange(

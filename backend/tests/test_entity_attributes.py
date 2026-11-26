@@ -1170,3 +1170,33 @@ def test_first_publish_requires_reference_target(client: TestClient) -> None:
     assert published.status_code == 422
     assert published.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
     assert "target_entity_id" in published.json()["detail"]
+
+
+def test_attribute_display_name_normalizes_and_rejects_overlong(client: TestClient) -> None:
+    created = client.post(
+        "/entities",
+        json=_create(
+            table_name="display_name_demo",
+            name="Demo",
+            attributes=[
+                _value(name="sku", display_name="  SKU Code  "),
+                _value(name="note", display_name="   "),
+            ],
+        ),
+    )
+    assert created.status_code == 201, created.text
+    entity = created.json()["entity"]
+    version = client.get(
+        f"/entities/{entity['id']}/versions/{entity['current_version']['id']}"
+    )
+    assert version.status_code == 200
+    attrs = {item["name"]: item for item in version.json()["version"]["attributes"]}
+    assert attrs["sku"]["display_name"] == "SKU Code"
+    assert attrs["note"]["display_name"] is None
+
+    too_long = client.patch(
+        f"/entities/{entity['id']}",
+        json={"attributes": [_value(name="sku", display_name="x" * 257)]},
+    )
+    assert too_long.status_code == 422
+    assert too_long.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"

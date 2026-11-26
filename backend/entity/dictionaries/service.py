@@ -43,6 +43,7 @@ class DictionaryUsage:
     version: int
     publish_status: str
     behind: bool
+    attribute_display_name: str | None = None
 
 
 def list_dictionaries(
@@ -216,7 +217,15 @@ def collect_usages(dictionary_id: str, *, revision: int) -> list[DictionaryUsage
                     snapshot.get("dictionary_id") == dictionary_id
                     and int(snapshot.get("revision") or 0) < revision
                 )
-                usages.append(_usage(entity, version, attr.name, behind=behind))
+                usages.append(
+                    _usage(
+                        entity,
+                        version,
+                        attr.name,
+                        attribute_display_name=attr.display_name,
+                        behind=behind,
+                    )
+                )
     usages.sort(key=lambda item: (item.table_name, item.version, item.attribute_name))
     return usages
 
@@ -244,6 +253,7 @@ def dictionary_out(record: DictionaryRecord, *, include_detail: bool) -> dict[st
             "entity_name": item.entity_name,
             "table_name": item.table_name,
             "attribute_name": item.attribute_name,
+            "attribute_display_name": item.attribute_display_name,
             "version_id": item.version_id,
             "version": item.version,
             "publish_status": item.publish_status,
@@ -265,12 +275,20 @@ def _entry_out(entry: DictionaryEntryRecord) -> dict[str, Any]:
     return {"code": entry.code, "label": entry.label, "active": entry.active}
 
 
-def _usage(entity: Any, version: Any, attribute_name: str, *, behind: bool) -> DictionaryUsage:
+def _usage(
+    entity: Any,
+    version: Any,
+    attribute_name: str,
+    *,
+    attribute_display_name: str | None = None,
+    behind: bool,
+) -> DictionaryUsage:
     return DictionaryUsage(
         entity_id=entity.id,
         entity_name=entity.name,
         table_name=entity.table_name,
         attribute_name=attribute_name,
+        attribute_display_name=attribute_display_name,
         version_id=version.id,
         version=version.version,
         publish_status=version.publish_status,

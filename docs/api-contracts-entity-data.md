@@ -150,6 +150,7 @@ Schema is read-only metadata plus Dictionary; it does not open an entity-databas
   "attributes": [
     {
       "name": "sku",
+      "display_name": "SKU",
       "type": "string",
       "required": true,
       "unique": true,
@@ -178,7 +179,7 @@ Rules:
 - `head` does not expose the physical table name.
 - `row_id` is separate from `attributes`.
 - Top-level `business_key` is the head attribute name marked `business_key`, or `null` when the head has none.
-- Attribute objects keep the definition attribute keys (`docs/api-contracts-entity.md` §3.1): `name`, `type`, `required`, `unique`, `indexed`, `business_key`, `description`, `config`.
+- Attribute objects keep the definition attribute keys (`docs/api-contracts-entity.md` §3.1): `name`, `display_name`, `type`, `required`, `unique`, `indexed`, `business_key`, `description`, `config`.
 - Additional keys: `operators`; `upsert_key` (true when `unique` and type is not `number` or `json`, **including** `boolean`); for `dictionary`, `dictionary` plus `codes` as `[{ "code", "label", "writable" }]`; for `reference`, `target` as on definition reads except that `target.business_key` is the attribute name stored in the head reference snapshot, `target` is `null` when the caller has no effective `read` grant on the target Entity, and `operators` are the operators of the snapshotted target Business Key type (`string` or `integer`). `entity:write` and `entity:access_manage` do not make a target visible. A self-reference is visible, because the caller is already reading that Entity.
 - `limits.page_limit_default` stays 50. `limits.page_limit_max` is the effective System Parameter value at read time; 200 in the example is the seed, not a fixed ceiling. Clients must still handle a later parameter change before their query.
 - `limits.row_write_max` is 1000 and is shared by `create-many` and conditional writes.

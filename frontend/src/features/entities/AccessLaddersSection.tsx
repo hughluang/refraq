@@ -19,6 +19,7 @@ import {
 } from "@/features/entities/accessLogic";
 import type { AccessRun } from "@/features/entities/accessSession";
 import type { AccessLevel, AccessSummary } from "@/features/entities/accessTypes";
+import { attributeTitle } from "@/features/entities/entityPresentation";
 import { ListTable } from "@/components/display/ListTable";
 import { RowActions } from "@/components/display/RowActions";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
@@ -166,9 +167,16 @@ export function AccessLaddersSection({
             <Stack gap="xs">
               <Group justify="space-between" align="flex-start" wrap="wrap">
                 <Stack gap={2}>
-                  <Text fw={600}>{ladder.attribute_name}</Text>
+                  <Text fw={600}>
+                    {attributeTitle({
+                      name: ladder.attribute_name,
+                      display_name: ladder.attribute_display_name,
+                    })}
+                  </Text>
                   <Text size="xs" c="dimmed">
-                    {ladder.type}
+                    {ladder.attribute_display_name?.trim()
+                      ? `${ladder.attribute_name} · ${ladder.type}`
+                      : ladder.type}
                   </Text>
                 </Stack>
                 <Group gap="xs" wrap="wrap">

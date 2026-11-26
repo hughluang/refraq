@@ -21,10 +21,12 @@ import {
   useChangeLogDraft,
   type ChangeLogFilters,
 } from "@/features/entities/changeLogDraft";
+import { attributeDisplayLabel } from "@/features/entities/entityPresentation";
 import type {
   ChangeLogEntrySummary,
   ChangeLogPage,
   ChangeLogSide,
+  EntityAttribute,
 } from "@/features/entities/types";
 import { useEntryZone } from "@/hooks/useFormatInstant";
 import { problemMessage } from "@/lib/problem";
@@ -34,10 +36,19 @@ type Props = {
   entityId: string;
   active: boolean;
   formatInstant: (value: string | null | undefined) => string;
+  attributes?: readonly EntityAttribute[];
 };
 
-export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
+export function EntityChangeLogTab({
+  entityId,
+  active,
+  formatInstant,
+  attributes,
+}: Props) {
   const t = useTranslate();
+  const attributeLabels = new Map(
+    (attributes ?? []).map((attr) => [attr.name, attributeDisplayLabel(attr)]),
+  );
   const zone = useEntryZone();
   const { filters, setFilters } = useChangeLogDraft();
   const [cursor, setCursor] = useState<string | null>(null);
@@ -259,8 +270,8 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
       ) : null}
       {detail ? (
         <Stack>
-          <SideBlock name="before" side={detail.before} />
-          <SideBlock name="after" side={detail.after} />
+          <SideBlock name="before" side={detail.before} attributeLabels={attributeLabels} />
+          <SideBlock name="after" side={detail.after} attributeLabels={attributeLabels} />
         </Stack>
       ) : null}
     </Stack>
@@ -270,9 +281,11 @@ export function EntityChangeLogTab({ entityId, active, formatInstant }: Props) {
 function SideBlock({
   name,
   side,
+  attributeLabels,
 }: {
   name: "before" | "after";
   side: ChangeLogSide;
+  attributeLabels: ReadonlyMap<string, string>;
 }) {
   const t = useTranslate();
   const label = t(
@@ -285,13 +298,19 @@ function SideBlock({
       {side.state === "unavailable" ? (
         <Text>{t("entities.changeLog.unavailable")}</Text>
       ) : (
-        <ImageLines image={side.values ?? {}} />
+        <ImageLines image={side.values ?? {}} attributeLabels={attributeLabels} />
       )}
     </Stack>
   );
 }
 
-function ImageLines({ image }: { image: Record<string, unknown> }) {
+function ImageLines({
+  image,
+  attributeLabels,
+}: {
+  image: Record<string, unknown>;
+  attributeLabels: ReadonlyMap<string, string>;
+}) {
   const t = useTranslate();
   const withheld = new Set(
     Array.isArray(image.__withheld) ? image.__withheld.map(String) : [],
@@ -302,7 +321,7 @@ function ImageLines({ image }: { image: Record<string, unknown> }) {
         .filter(([name]) => name !== "__withheld")
         .map(([name, value]) => (
           <Text key={name}>
-            {name}:{" "}
+            {attributeLabels.get(name) ?? name}:{" "}
             {withheld.has(name)
               ? t("entities.changeLog.withheld")
               : imageCell(value)}

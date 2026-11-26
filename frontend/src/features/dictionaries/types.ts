@@ -9,6 +9,7 @@ export type DictionaryUsage = {
   entity_name: string;
   table_name: string;
   attribute_name: string;
+  attribute_display_name?: string | null;
   version_id: string;
   version: number;
   publish_status: string;

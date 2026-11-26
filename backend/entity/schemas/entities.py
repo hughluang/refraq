@@ -47,6 +47,7 @@ class AttributeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=63)
+    display_name: str | None = None
     type: str | None = None
     required: bool = False
     unique: bool = False
@@ -118,6 +119,7 @@ class DictionaryRefOut(BaseModel):
 class AttributeOut(BaseModel):
     attribute_id: str | None = None
     name: str
+    display_name: str | None = None
     type: str
     required: bool
     unique: bool = False

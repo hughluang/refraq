@@ -31,6 +31,7 @@ export type ReferenceSnapshot = {
 
 export type EntityAttribute = {
   name: string;
+  display_name?: string | null;
   type: AttributeType;
   required: boolean;
   unique: boolean;
@@ -57,6 +58,7 @@ export type EntityRecordFormValues = {
 export type AttributeDraft = {
   type: AttributeType;
   name: string;
+  display_name: string;
   required: boolean;
   unique: boolean;
   indexed: boolean;

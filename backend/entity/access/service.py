@@ -891,6 +891,7 @@ def _ladder_outs(head: _Head) -> list[dict[str, Any]]:
             {
                 "attribute_id": attr.attribute_id,
                 "attribute_name": attr.name,
+                "attribute_display_name": attr.display_name,
                 "type": attr.type,
                 "levels": levels,
             }
@@ -900,6 +901,11 @@ def _ladder_outs(head: _Head) -> list[dict[str, Any]]:
 
 def _profile_out(head: _Head, compiled: CompiledPolicy, record: ProfileRecord) -> dict[str, Any]:
     names = {attr.attribute_id: attr.name for attr in head.attributes if attr.attribute_id}
+    display_names = {
+        attr.attribute_id: attr.display_name
+        for attr in head.attributes
+        if attr.attribute_id
+    }
     reasons = list(compiled.broken_profiles.get(record.id, ()))
     return {
         "id": record.id,
@@ -911,6 +917,7 @@ def _profile_out(head: _Head, compiled: CompiledPolicy, record: ProfileRecord) -
             {
                 "attribute_id": column["attribute_id"],
                 "attribute_name": names.get(column["attribute_id"]),
+                "attribute_display_name": display_names.get(column["attribute_id"]),
                 "level": column["level"],
             }
             for column in record.columns
@@ -1022,9 +1029,17 @@ def _schema(
     by_name = {}
     if full is not None:
         by_name = {item["name"]: dict(item) for item in full["attributes"]}
+    head_display_names = {attr.name: attr.display_name for attr in head.attributes}
     attributes = []
     for column in outcome.columns:
-        payload = by_name.get(column.attr.name, {"name": column.attr.name, "type": column.attr.type})
+        payload = by_name.get(
+            column.attr.name,
+            {
+                "name": column.attr.name,
+                "display_name": head_display_names.get(column.attr.name),
+                "type": column.attr.type,
+            },
+        )
         payload["attribute_id"] = column.attr.attribute_id
         payload["presentation"] = {
             "row_varying": column.row_varying,

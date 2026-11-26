@@ -26,6 +26,7 @@ class AttributeRecord:
     unique: bool = False
     indexed: bool = False
     business_key: bool = False
+    display_name: str | None = None
     description: str | None = None
     max_length: int | None = None
     precision: int | None = None
@@ -75,6 +76,7 @@ class EntityVersionRecord:
 def attribute_to_dict(attr: AttributeRecord) -> dict[str, Any]:
     return {
         "name": attr.name,
+        "display_name": attr.display_name,
         "type": attr.type,
         "required": attr.required,
         "unique": bool(attr.unique),
@@ -100,6 +102,7 @@ def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
     config = payload.get("config")
     if not isinstance(config, dict):
         raise TypeError("attribute config must be an object")
+    display_name = payload.get("display_name")
     description = payload.get("description")
     attribute_type = str(payload["type"])
     attribute_id = payload.get("attribute_id")
@@ -110,6 +113,7 @@ def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
         unique=bool(payload.get("unique", False)),
         indexed=bool(payload.get("indexed", False)),
         business_key=bool(payload.get("business_key", False)),
+        display_name=str(display_name) if isinstance(display_name, str) else None,
         description=str(description) if isinstance(description, str) else None,
         attribute_id=attribute_id if isinstance(attribute_id, str) else None,
         **resolve(attribute_type).stored_fields(config),

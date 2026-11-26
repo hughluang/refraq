@@ -15,6 +15,7 @@ import {
   dataAccessExpired, isMaskedPresentation, withheldNames, type DataSchemaBody,
 } from "@/features/entities/accessLogic";
 import type { DataAttribute, DataSchema, DataSort } from "@/features/entities/accessTypes";
+import { attributeDisplayLabel, attributeTitle } from "@/features/entities/entityPresentation";
 import { stringifyEntityDataJson } from "@/features/entities/entityDataJson";
 import { copyText } from "@/lib/copy-text";
 import { presentConsoleNotification } from "@/providers/notification-provider";
@@ -50,7 +51,12 @@ export function EntityDataColumns({ schema, visibleFields, onChange }: ColumnPro
   const [search, setSearch] = useState("");
   const attributes = schema?.attributes ?? [];
   const selected = new Set(visibleFields ?? attributes.map((attribute) => attribute.name));
-  const matches = attributes.filter(({ name }) => name.toLowerCase().includes(search.trim().toLowerCase()));
+  const needle = search.trim().toLowerCase();
+  const matches = attributes.filter(
+    ({ name, display_name }) =>
+      name.toLowerCase().includes(needle) ||
+      (display_name?.toLowerCase().includes(needle) ?? false),
+  );
 
   function toggle(name: string) {
     if (selected.has(name)) selected.delete(name);
@@ -72,8 +78,8 @@ export function EntityDataColumns({ schema, visibleFields, onChange }: ColumnPro
           <TextInput aria-label={t("entities.data.grid.findColumn")} placeholder={t("entities.data.grid.findColumn")}
             leftSection={<SearchIcon />} value={search} onChange={(e) => setSearch(e.currentTarget.value)} data-autofocus />
           <Stack gap="xs" mah="min(19rem, 45dvh)" style={{ overflowY: "auto" }} py={2}>
-            {matches.map(({ name }) => (
-              <Checkbox key={name} label={name} checked={selected.has(name)} onChange={() => toggle(name)} />
+            {matches.map((attribute) => (
+              <Checkbox key={attribute.name} label={attributeDisplayLabel(attribute)} checked={selected.has(attribute.name)} onChange={() => toggle(attribute.name)} />
             ))}
             {!matches.length && <Text size="sm" c="dimmed">{t("entities.data.grid.noColumns")}</Text>}
           </Stack>
@@ -151,15 +157,18 @@ function RecordDrawer({ rowId, schema, tableName, narrow, onClose, onDetailError
           {columns.filter((attribute) => Object.hasOwn(row, attribute.name)).map((attribute) => {
             const value = cellValue(row, attribute, withheld, t, true);
             const state = columnState(attribute, t);
+            const title = attributeTitle(attribute);
+            const hasDisplayName = Boolean(attribute.display_name?.trim());
             return (
               <div key={attribute.name} className={styles.detailField}>
                 <dt>
-                  <Text span size="sm" fw={600}>{attribute.name}</Text>
+                  <Text span size="sm" fw={600}>{title}</Text>
+                  {hasDisplayName && <Text span size="xs" c="dimmed" ff="monospace">{attribute.name}</Text>}
                   {state && <Text span size="xs" c="dimmed">{state}</Text>}
                   {!value.muted && (
-                    <Tooltip label={t("entities.data.grid.copyValue", { field: attribute.name })}>
+                    <Tooltip label={t("entities.data.grid.copyValue", { field: title })}>
                       <ActionIcon type="button" variant="subtle" size="sm" color="gray"
-                        aria-label={t("entities.data.grid.copyValue", { field: attribute.name })} onClick={() => void copy(value.text)}>
+                        aria-label={t("entities.data.grid.copyValue", { field: title })} onClick={() => void copy(value.text)}>
                         <CopyIcon />
                       </ActionIcon>
                     </Tooltip>
@@ -233,14 +242,17 @@ export function EntityDataResults({
             direction === "desc" ? null : { field: attribute.name, direction: "asc" as const };
           const SortIndicator = direction === "asc" ? SortAscIcon : direction === "desc" ? SortDescIcon : SortIcon;
           const state = columnState(attribute, t);
+          const title = attributeTitle(attribute);
+          const hasDisplayName = Boolean(attribute.display_name?.trim());
           return (
             <Table.Th key={attribute.name} scope="col" aria-sort={direction ? (direction === "asc" ? "ascending" : "descending") : undefined}>
               {sortable ? (
                 <UnstyledButton type="button" className={styles.heading} onClick={() => onSort(nextSort)}
-                  title={t(nextSort ? (nextSort.direction === "asc" ? "entities.data.grid.sortAsc" : "entities.data.grid.sortDesc") : "entities.data.grid.clearSort", { field: attribute.name })}>
-                  <span>{attribute.name}</span><SortIndicator size={14} aria-hidden />
+                  title={t(nextSort ? (nextSort.direction === "asc" ? "entities.data.grid.sortAsc" : "entities.data.grid.sortDesc") : "entities.data.grid.clearSort", { field: title })}>
+                  <span>{title}</span><SortIndicator size={14} aria-hidden />
                 </UnstyledButton>
-              ) : <span className={styles.fieldName}>{attribute.name}</span>}
+              ) : <span className={styles.fieldName}>{title}</span>}
+              {hasDisplayName && <Text component="div" size="xs" c="dimmed" ff="monospace" truncate fw={400}>{attribute.name}</Text>}
               {state && <Text component="div" size="xs" c="dimmed" truncate title={state} fw={400}>{state}</Text>}
             </Table.Th>
           );

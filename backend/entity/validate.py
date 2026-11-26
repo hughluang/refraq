@@ -19,9 +19,11 @@ IDENT_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 PHYSICAL_TABLE_RE = re.compile(r"^.+__v[0-9]+__[0-9a-f]{16}$")
 TABLE_NAME_MAX_LEN = 63
 ATTRIBUTE_NAME_MAX_LEN = 63
+ATTRIBUTE_DISPLAY_NAME_MAX_LEN = 256
 REFERENCE_SELF = "self"
 
 __all__ = [
+    "ATTRIBUTE_DISPLAY_NAME_MAX_LEN",
     "ATTRIBUTE_NAME_MAX_LEN",
     "TABLE_NAME_MAX_LEN",
     "REFERENCE_SELF",
@@ -100,6 +102,7 @@ def _validate_attribute(
         attr,
         name=name,
         type=attribute_type,
+        display_name=_clean_display_name(attr.display_name),
         description=_clean_description(attr.description),
         required=bool(attr.required),
         unique=bool(attr.unique),
@@ -163,6 +166,19 @@ def _require_business_key(attributes: list[AttributeRecord]) -> None:
         raise EntityAttributeInvalid(
             f"Attribute '{attr.name}' business_key requires unique and required"
         )
+
+
+def _clean_display_name(display_name: str | None) -> str | None:
+    if not isinstance(display_name, str):
+        return None
+    cleaned = display_name.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > ATTRIBUTE_DISPLAY_NAME_MAX_LEN:
+        raise EntityAttributeInvalid(
+            f"Attribute display_name must be at most {ATTRIBUTE_DISPLAY_NAME_MAX_LEN} characters"
+        )
+    return cleaned
 
 
 def _clean_description(description: str | None) -> str | None:

@@ -34,6 +34,7 @@ import {
 import { accessProblemText } from "@/features/entities/accessProblem";
 import type { AccessOption, AccessRun } from "@/features/entities/accessSession";
 import type { AccessSummary } from "@/features/entities/accessTypes";
+import { attributeTitle } from "@/features/entities/entityPresentation";
 import { RecordPicker } from "@/components/form/RecordPicker";
 import { entityRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { ListTable } from "@/components/display/ListTable";
@@ -147,8 +148,15 @@ export function AccessProfilesSection({
           <Table.Tr key={ladder.attribute_id}>
             <Table.Td>
               <RecordReference
-                name={ladder.attribute_name}
-                recordKey={ladder.type}
+                name={attributeTitle({
+                  name: ladder.attribute_name,
+                  display_name: ladder.attribute_display_name,
+                })}
+                recordKey={
+                  ladder.attribute_display_name?.trim()
+                    ? `${ladder.attribute_name} · ${ladder.type}`
+                    : ladder.type
+                }
                 copyable={false}
               />
             </Table.Td>

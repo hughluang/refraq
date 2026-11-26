@@ -34,6 +34,7 @@ import {
 } from "@/features/entities/accessLogic";
 import type { AccessOption, AccessRun } from "@/features/entities/accessSession";
 import type { AccessSummary } from "@/features/entities/accessTypes";
+import { attributeDisplayLabel } from "@/features/entities/entityPresentation";
 import { RecordPicker } from "@/components/form/RecordPicker";
 import {
   roleRecordAdapter,
@@ -105,8 +106,15 @@ export function AccessGrantsSection({
       : subjectType === "group"
         ? userGroupRecordAdapter()
         : userRecordAdapter();
-  const attributeName = (id: string) =>
-    summary?.ladders.find((ladder) => ladder.attribute_id === id)?.attribute_name ?? id;
+  const attributeName = (id: string) => {
+    const ladder = summary?.ladders.find((item) => item.attribute_id === id);
+    return ladder
+      ? attributeDisplayLabel({
+          name: ladder.attribute_name,
+          display_name: ladder.attribute_display_name,
+        })
+      : id;
+  };
   const attributeType = (id: string) =>
     summary?.ladders.find((ladder) => ladder.attribute_id === id)?.type ?? null;
   const names = { attributeName, attributeType };
@@ -369,7 +377,10 @@ export function AccessGrantsSection({
                   label={t("entities.access.rule.attr")}
                   data={(summary?.ladders ?? []).map((ladder) => ({
                     value: ladder.attribute_id,
-                    label: ladder.attribute_name,
+                    label: attributeDisplayLabel({
+                      name: ladder.attribute_name,
+                      display_name: ladder.attribute_display_name,
+                    }),
                   }))}
                   value={ruleAttr}
                   onChange={(value) => {

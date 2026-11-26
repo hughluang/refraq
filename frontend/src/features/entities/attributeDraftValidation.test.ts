@@ -81,6 +81,21 @@ describe("attributeDraftIssues", () => {
     ).toEqual([]);
   });
 
+  it("validates optional display_name max length", () => {
+    expect(
+      fields(
+        draft({ name: "sku", max_length: "32", display_name: "x".repeat(256) }),
+        ["sku"],
+      ),
+    ).toEqual([]);
+    expect(
+      fields(
+        draft({ name: "sku", max_length: "32", display_name: "x".repeat(257) }),
+        ["sku"],
+      ),
+    ).toEqual(["display_name"]);
+  });
+
   it("requires a single string or integer business key that is unique and required", () => {
     expect(
       fields(

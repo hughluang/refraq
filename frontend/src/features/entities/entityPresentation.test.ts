@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { EMPTY_ATTRIBUTE } from "@/features/entities/constants";
 import {
+  attributeDisplayLabel,
   attributesFromDrafts,
+  attributeTitle,
   draftsFromVersion,
   isLegalTableName,
   referenceSummaryLabel,
@@ -24,6 +26,7 @@ describe("attributesFromDrafts", () => {
       attributesFromDrafts([
         draft({
           name: " sku ",
+          display_name: " SKU ",
           max_length: "32",
           required: false,
           unique: true,
@@ -35,6 +38,7 @@ describe("attributesFromDrafts", () => {
       {
         type: "string",
         name: "sku",
+        display_name: "SKU",
         required: false,
         unique: true,
         indexed: true,
@@ -61,6 +65,7 @@ describe("attributesFromDrafts", () => {
       {
         type: "reference",
         name: "supplier_id",
+        display_name: null,
         required: false,
         unique: false,
         indexed: false,
@@ -71,6 +76,7 @@ describe("attributesFromDrafts", () => {
       {
         type: "text",
         name: "notes",
+        display_name: null,
         required: false,
         unique: false,
         indexed: false,
@@ -100,6 +106,7 @@ describe("attributesFromDrafts", () => {
       {
         type: "decimal",
         name: "amount",
+        display_name: null,
         required: false,
         unique: false,
         indexed: false,
@@ -110,6 +117,7 @@ describe("attributesFromDrafts", () => {
       {
         type: "dictionary",
         name: "status",
+        display_name: null,
         required: false,
         unique: false,
         indexed: false,
@@ -189,6 +197,7 @@ describe("draftsFromVersion", () => {
       {
         type: "dictionary",
         name: "status",
+        display_name: null,
         required: false,
         unique: false,
         indexed: false,
@@ -197,6 +206,13 @@ describe("draftsFromVersion", () => {
         config: { dictionary_id: "cl_status" },
       },
     ]);
+  });
+
+  it("formats attributeTitle and attributeDisplayLabel with fallback", () => {
+    expect(attributeTitle({ name: "sku", display_name: " SKU " })).toBe("SKU");
+    expect(attributeTitle({ name: "sku", display_name: "  " })).toBe("sku");
+    expect(attributeDisplayLabel({ name: "sku", display_name: "SKU" })).toBe("SKU (sku)");
+    expect(attributeDisplayLabel({ name: "sku", display_name: null })).toBe("sku");
   });
 
   it("labels a reference from the entity, the form, or the raw id", () => {

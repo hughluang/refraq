@@ -8,6 +8,7 @@ import { createRestriction, deleteRestriction } from "@/features/entities/access
 import type { AccessSectionId } from "@/features/entities/accessLogic";
 import type { AccessRun } from "@/features/entities/accessSession";
 import type { AccessSummary } from "@/features/entities/accessTypes";
+import { attributeDisplayLabel } from "@/features/entities/entityPresentation";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 
@@ -38,8 +39,15 @@ export function AccessRestrictionsSection({
 
   const creating = busyId === "restriction-create";
   const deleteBusy = deleteId != null && busyId === `restriction-delete:${deleteId}`;
-  const nameOf = (id: string) =>
-    summary.ladders.find((ladder) => ladder.attribute_id === id)?.attribute_name ?? id;
+  const nameOf = (id: string) => {
+    const ladder = summary.ladders.find((item) => item.attribute_id === id);
+    return ladder
+      ? attributeDisplayLabel({
+          name: ladder.attribute_name,
+          display_name: ladder.attribute_display_name,
+        })
+      : id;
+  };
 
   return (
     <Stack gap="sm">
@@ -93,7 +101,10 @@ export function AccessRestrictionsSection({
             label={t("entities.access.restrictions.deny")}
             data={summary.ladders.map((ladder) => ({
               value: ladder.attribute_id,
-              label: ladder.attribute_name,
+              label: attributeDisplayLabel({
+                name: ladder.attribute_name,
+                display_name: ladder.attribute_display_name,
+              }),
             }))}
             value={denyColumns}
             onChange={setDenyColumns}

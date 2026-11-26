@@ -87,6 +87,7 @@ def _record(item: AttributeIn) -> AttributeRecord:
         unique=item.unique,
         indexed=item.indexed,
         business_key=item.business_key,
+        display_name=item.display_name,
         description=item.description,
         **fields,
     )

@@ -5,6 +5,7 @@ import { useTranslate } from "@refinedev/core";
 
 import { SelectField } from "@/components/form/SelectField";
 import type { FieldNote } from "@/components/form/fieldNotes";
+import { attributeDisplayLabel } from "@/features/entities/entityPresentation";
 import type { EntityAttribute } from "@/features/entities/types";
 
 const EMPTY = "__business_key__";
@@ -53,7 +54,7 @@ export function EntityAttributeSelect({
       .filter((attribute) => attribute.name === current || !hidden.has(attribute.name))
       .map((attribute) => ({
         value: attribute.name,
-        label: attribute.name,
+        label: attributeDisplayLabel(attribute),
       })),
   ];
   const selected =

@@ -279,6 +279,7 @@ function VersionShape({
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>{t("entities.fields.attributeName")}</Table.Th>
+                <Table.Th>{t("entities.fields.attributeDisplayName")}</Table.Th>
                 <Table.Th>{t("entities.fields.attributeType")}</Table.Th>
                 <Table.Th>{t("entities.fields.attributeConfig")}</Table.Th>
                 <Table.Th>{t("entities.fields.required")}</Table.Th>
@@ -294,7 +295,12 @@ function VersionShape({
                 return (
                   <Table.Tr key={attr.name}>
                     <Table.Td>
-                      <Text size="sm">{attr.name}</Text>
+                      <Text size="sm" ff="monospace">{attr.name}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" c={attr.display_name ? undefined : "dimmed"}>
+                        {attr.display_name || "—"}
+                      </Text>
                     </Table.Td>
                     <Table.Td>
                       <Stack gap={2}>

@@ -790,6 +790,7 @@ export function EntityRecord(props: Props) {
               entityId={entityId}
               active={tab === "change_log"}
               formatInstant={formatInstant}
+              attributes={current?.attributes}
             />
           ) : null
         }

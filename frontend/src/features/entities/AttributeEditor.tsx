@@ -9,6 +9,7 @@ import { FieldDisplay } from "@/components/form/FieldDisplay";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { SwitchField } from "@/components/form/SwitchField";
+import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 import { DictionarySelect } from "@/features/dictionaries/DictionarySelect";
 import {
@@ -205,8 +206,8 @@ export function AttributeEditor({
   const liveTitle =
     draft == null
       ? null
-      : draft.name.trim()
-        ? draft.name.trim()
+      : draft.display_name.trim() || draft.name.trim()
+        ? draft.display_name.trim() || draft.name.trim()
         : drawer?.kind === "create"
           ? t("entities.attributes.drawer.create")
           : t("entities.attributes.drawer.untitled");
@@ -220,6 +221,7 @@ export function AttributeEditor({
           <Table.Thead>
             <Table.Tr>
               <Table.Th>{t("entities.fields.attributeName")}</Table.Th>
+              <Table.Th>{t("entities.fields.attributeDisplayName")}</Table.Th>
               <Table.Th>{t("entities.fields.attributeType")}</Table.Th>
               <Table.Th>{t("entities.fields.attributeConfig")}</Table.Th>
               <Table.Th>{t("entities.fields.required")}</Table.Th>
@@ -242,7 +244,12 @@ export function AttributeEditor({
                   }
                 >
                   <Table.Td>
-                    <Text size="sm">{attr.name}</Text>
+                    <Text size="sm" ff="monospace">{attr.name}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" c={attr.display_name ? undefined : "dimmed"}>
+                      {attr.display_name || "—"}
+                    </Text>
                   </Table.Td>
                   <Table.Td>
                     <Stack gap={2}>
@@ -337,6 +344,15 @@ export function AttributeEditor({
               value={draft.name}
               onChange={(event) => updateDraft({ name: event.currentTarget.value })}
               error={issueMessage("name")}
+            />
+            <TextField
+              editable
+              label={t("entities.attributes.drawer.displayName")}
+              value={draft.display_name}
+              onChange={(event) =>
+                updateDraft({ display_name: event.currentTarget.value })
+              }
+              error={issueMessage("display_name")}
             />
             <SelectField
               editable
@@ -474,8 +490,9 @@ export function AttributeEditor({
               }
               error={issueMessage("business_key")}
             />
-            <TextField
+            <TextareaField
               editable
+              minRows={2}
               label={t("entities.attributes.drawer.description")}
               value={draft.description}
               onChange={(event) =>
