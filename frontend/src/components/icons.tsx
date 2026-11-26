@@ -14,6 +14,7 @@ import {
   IconArrowsJoin2,
   IconArrowsSplit2,
   IconArrowsSort,
+  IconBan,
   IconBolt,
   IconBook,
   IconBox,
@@ -41,6 +42,7 @@ import {
   IconDeviceDesktop,
   IconDotsVertical,
   IconEye,
+  IconEyeOff,
   IconFilter,
   IconForms,
   IconHandFinger,
@@ -139,6 +141,12 @@ export const NavExpandIcon = withDefaults(IconChevronRight);
 export const ChevronDownIcon = withDefaults(IconChevronDown);
 export const ChevronUpIcon = withDefaults(IconChevronUp);
 export const EyeIcon = withDefaults(IconEye);
+export const EyeOffIcon = withDefaults(IconEyeOff);
+export const BanIcon = withDefaults(IconBan);
+export const LockIcon = withDefaults(IconLock);
+export const ShieldLockIcon = withDefaults(IconShieldLock);
+export const UsersGroupIcon = withDefaults(IconUsersGroup);
+export const RoleBadgeIcon = withDefaults(IconIdBadge);
 export const KeyIcon = withDefaults(IconKey);
 export const TableIcon = withDefaults(IconTable);
 export const UserIcon = withDefaults(IconUserCircle);

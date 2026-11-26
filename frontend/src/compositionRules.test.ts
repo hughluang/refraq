@@ -63,9 +63,9 @@ const STATIC_TABLES: Record<string, { roots: number; reason: string }> = {
     roots: 1,
     reason: "Dictionary entries are edited in place as form fields, not a record collection.",
   },
-  "features/entities/AccessPreviewSection.tsx": {
-    roots: 2,
-    reason: "Access preview is a fixed sample of marks and cells, not a paged collection.",
+  "features/entities/SpecimenLens.tsx": {
+    roots: 1,
+    reason: "The access specimen lens is a static matrix and preview grid, not a paged collection.",
   },
   "features/entities/EntityVersionsTab.tsx": {
     roots: 1,

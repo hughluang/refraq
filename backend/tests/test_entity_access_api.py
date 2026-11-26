@@ -268,3 +268,148 @@ def test_profile_grant_preview_shape_and_row_log(
     assert logs[-1].user_id != subject.id
     assert logs[-1].preview_subject_user_id == subject.id
     assert logs[-1].verb == "preview"
+
+
+def test_summary_and_preview_project_capabilities_and_identities(
+    client: TestClient,
+) -> None:
+    from backend.admin.subjects.records import SubjectAttributeRecord, UserGroupRecord
+    from backend.admin.subjects.store import get_subject_store
+    from backend.entity.dictionaries.records import DictionaryEntryRecord, DictionaryRecord
+    from backend.entity.dictionaries.store import get_dictionary_store
+
+    now = datetime.now(timezone.utc)
+    get_dictionary_store().create(
+        DictionaryRecord(
+            id="dct_regions",
+            name="regions",
+            display_name="Regions",
+            description=None,
+            revision=1,
+            deprecated_at=None,
+            entries=(
+                DictionaryEntryRecord(code="EAST", label="East", active=True, position=0),
+                DictionaryEntryRecord(code="WEST", label="West", active=False, position=1),
+            ),
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    subjects = get_subject_store()
+    subjects.create_definition(
+        SubjectAttributeRecord(
+            id="sat_region",
+            key="region_scope",
+            name="Region Scope",
+            description=None,
+            value_type="dictionary",
+            dictionary_id="dct_regions",
+            multi_value=False,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    subjects.create_definition(
+        SubjectAttributeRecord(
+            id="sat_team",
+            key="team_code",
+            name="Team Code",
+            description=None,
+            value_type="string",
+            dictionary_id=None,
+            multi_value=False,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    attrs = [
+        AttributeRecord(
+            name="region",
+            type="dictionary",
+            dictionary_id="dct_regions",
+            attribute_id="att_region",
+        ),
+        AttributeRecord(
+            name="age",
+            type="integer",
+            attribute_id="att_age",
+        ),
+        AttributeRecord(
+            name="hired_on",
+            type="date",
+            attribute_id="att_hired",
+        ),
+    ]
+    entity = BusinessEntityRecord(
+        id=new_entity_id(),
+        table_name="staff",
+        name="Staff",
+        description="Staff",
+        deprecated_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    version = EntityVersionRecord(
+        id=new_version_id(),
+        entity_id=entity.id,
+        version=1,
+        attributes=attrs,
+        materialized_attributes=[{**attribute_to_dict(a), "attribute_id": a.attribute_id} for a in attrs],
+        dictionary_snapshots={"region": {"codes": ["EAST"]}},
+        publish_status=PUBLISHED,
+        latest_reconcile_job_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+    get_entity_store().create_entity(entity, version)
+
+    subject = get_user_store().get_by_account("op")
+    assert subject is not None
+    subjects.create_group(
+        UserGroupRecord(
+            id="grp_sales",
+            key="sales",
+            name="Sales",
+            description=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    subjects.add_member("grp_sales", subject.id)
+
+    _login(client, "manager")
+    summary_res = client.get(f"/entities/{entity.id}/access")
+    assert summary_res.status_code == 200, summary_res.text
+    ladders = {item["attribute_name"]: item for item in summary_res.json()["ladders"]}
+
+    assert ladders["region"]["value_type"] == "dictionary"
+    assert ladders["region"]["codes"] == ["EAST"]
+    assert "partial" not in ladders["region"]["accepted_masks"]
+    assert ladders["region"]["operators"] == ["eq", "ne", "in", "is_null"]
+    assert ladders["region"]["compatible_subject_attributes"] == [
+        {
+            "key": "region_scope",
+            "name": "Region Scope",
+            "value_type": "dictionary",
+            "multi_value": False,
+        }
+    ]
+
+    assert ladders["age"]["value_type"] == "integer"
+    assert "bucket" in ladders["age"]["accepted_masks"]
+    assert "gte" in ladders["age"]["operators"]
+
+    assert ladders["hired_on"]["value_type"] == "date"
+    assert "truncate_date" in ladders["hired_on"]["accepted_masks"]
+    assert "gte" in ladders["hired_on"]["operators"]
+
+    preview_res = client.post(
+        f"/entities/{entity.id}/access/preview",
+        json={"subject": {"type": "user", "id": subject.id}, "include_rows": False},
+    )
+    assert preview_res.status_code == 200, preview_res.text
+    identities = preview_res.json()["identities"]
+    assert {"type": "user", "id": None, "display_name": "Op"} in identities
+    assert any(item["type"] == "role" and item["id"] == subject.role_id for item in identities)
+    assert {"type": "group", "id": "grp_sales", "display_name": "Sales"} in identities

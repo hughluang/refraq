@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -20,6 +21,7 @@ __all__ = [
     "RuleInfo",
     "RuleProblem",
     "RuleWarning",
+    "compatible_subject_attributes",
     "eval_rule",
     "rule_sql",
     "validate_rule",
@@ -309,6 +311,20 @@ def _operand_name(body: dict[str, Any], path: str) -> str:
     if len(names) != 1:
         raise RuleProblem(path, "leaf must name exactly one operand")
     return names[0]
+
+
+def compatible_subject_attributes(
+    attr: AttrFact, subject_attrs: Iterable[SubjectAttrFact]
+) -> tuple[SubjectAttrFact, ...]:
+    """Return Subject Attributes compatible with ``attr`` for ``in`` row rules."""
+    out: list[SubjectAttrFact] = []
+    for item in subject_attrs:
+        try:
+            _subject_compatible("$", attr, item)
+        except RuleProblem:
+            continue
+        out.append(item)
+    return tuple(out)
 
 
 def _subject_compatible(path: str, attr: AttrFact, subject: SubjectAttrFact) -> None:

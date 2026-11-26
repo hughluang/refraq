@@ -11,15 +11,15 @@ from backend.entity.attribute_type import resolve
 
 __all__ = [
     "CLEAR",
+    "accepted_masks",
     "mask_sql",
     "validate_levels",
 ]
 
 CLEAR = "clear"
 _KEY_MAX = 63
-_MASK_TYPES = frozenset(
-    {"partial", "email", "hash", "truncate_date", "bucket", "redact", "null"}
-)
+_MASK_ORDER = ("partial", "email", "hash", "truncate_date", "bucket", "redact", "null")
+_MASK_TYPES = frozenset(_MASK_ORDER)
 _PARTIAL_TYPES = frozenset({"string", "text"})
 _TEXTISH = frozenset({"string", "text", "dictionary", "user"})
 _DATE_TYPES = frozenset({"date", "timestamp"})
@@ -153,6 +153,18 @@ def _validate_mode(
     if params:
         raise ModeError(f"levels[{index}].mode has unknown parameters")
     return {"type": kind}
+
+
+def accepted_masks(attr: AttrFact) -> tuple[str, ...]:
+    """Return mask kinds accepted for ``attr`` in canonical order."""
+    out: list[str] = []
+    for kind in _MASK_ORDER:
+        try:
+            _accepts(kind, attr, 0)
+        except ModeError:
+            continue
+        out.append(kind)
+    return tuple(out)
 
 
 def _accepts(kind: str, attr: AttrFact, index: int) -> None:

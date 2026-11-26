@@ -10,11 +10,24 @@ export type AccessLevel = {
   mode: "clear" | { type: string; [key: string]: unknown };
 };
 
+export type CompatibleSubjectAttribute = {
+  key: string;
+  name: string;
+  value_type: string;
+  multi_value: boolean;
+};
+
 export type AccessLadder = {
   attribute_id: string;
   attribute_name: string;
   attribute_display_name?: string | null;
   type: string;
+  value_type?: string;
+  business_key?: boolean;
+  codes?: string[];
+  accepted_masks?: string[];
+  operators?: string[];
+  compatible_subject_attributes?: CompatibleSubjectAttribute[];
   levels: AccessLevel[];
 };
 
@@ -34,6 +47,12 @@ export type AccessProfile = {
   broken_reasons: string[];
 };
 
+export type GrantWarning = {
+  path: string;
+  attribute_id: string;
+  message: string;
+};
+
 export type AccessGrant = {
   id: string;
   subject: AccessSubject;
@@ -41,17 +60,41 @@ export type AccessGrant = {
   row_rule: Record<string, unknown> | null;
   actions: string[];
   status: string;
+  locked?: boolean;
   valid_until: string | null;
   broken: boolean;
+  broken_reasons?: string[];
+  warnings?: GrantWarning[];
 };
 
 export type AccessRestriction = {
   id: string;
-  applies_to: { mode: string; subjects: AccessSubject[] };
+  applies_to: { mode: "all" | "only" | "except" | string; subjects: AccessSubject[] };
   row_rule: Record<string, unknown> | null;
   deny_columns: string[];
   ceilings: { attribute_id: string; level: string }[];
   actions: string[];
+  broken?: boolean;
+  broken_reasons?: string[];
+};
+
+export type PreviewIdentity = {
+  type: "user" | "role" | "group";
+  id: string | null;
+  display_name: string;
+};
+
+export type PreviewAccessResponse = {
+  policy_revision: number;
+  identities?: PreviewIdentity[];
+  effective_grants: string[];
+  schema: DataSchema;
+  rows: {
+    items: Record<string, unknown>[];
+    total: number;
+    limit?: number;
+    offset?: number;
+  } | null;
 };
 
 export type AccessSummary = {

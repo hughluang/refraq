@@ -32,7 +32,11 @@ from backend.entity.access.compiler import (
     render_shape,
     subject_outcome,
 )
-from backend.entity.access.dsl import RuleProblem, validate_rule
+from backend.entity.access.dsl import (
+    RuleProblem,
+    compatible_subject_attributes,
+    validate_rule,
+)
 from backend.entity.access.errors import (
     EntityAccessCombinationLimit,
     EntityAccessGrantNotFound,
@@ -58,7 +62,7 @@ from backend.entity.access.plan import Head as _Head
 from backend.entity.access.plan import attribute_fact as _fact
 from backend.entity.access.plan import load_head as _require_head
 from backend.entity.access.plan import load_policy as _policy
-from backend.entity.access.masks import CLEAR, ModeError, validate_levels
+from backend.entity.access.masks import CLEAR, ModeError, accepted_masks, validate_levels
 from backend.entity.access.records import (
     AccessLogRecord,
     GrantRecord,
@@ -687,6 +691,7 @@ def preview(
     )
     body: dict[str, Any] = {
         "policy_revision": revision,
+        "identities": _preview_identities(person),
         "effective_grants": list(outcome.grant_ids),
         "schema": schema,
         "rows": None,
@@ -882,21 +887,81 @@ def _views(
 
 def _ladder_outs(head: _Head) -> list[dict[str, Any]]:
     stored = {item.attribute_id: item.levels for item in get_access_store().ladders(head.entity_id)}
+    facts = {item.attribute_id: item for item in head.facts}
+    all_subjects = subject_attributes()
+    subject_names = {item.key: item.name for item in all_subjects}
+    subject_facts = [
+        SubjectAttrFact(
+            key=item.key,
+            value_type=item.value_type,
+            dictionary_id=item.dictionary_id,
+            multi_value=item.multi_value,
+        )
+        for item in all_subjects
+    ]
     outs: list[dict[str, Any]] = []
     for attr in head.attributes:
         if not attr.attribute_id:
             continue
+        fact = facts.get(attr.attribute_id) or _fact(attr, head.version)
         levels = stored.get(attr.attribute_id) or [{"key": CLEAR, "mode": CLEAR}]
+        compatible = compatible_subject_attributes(fact, subject_facts)
         outs.append(
             {
                 "attribute_id": attr.attribute_id,
                 "attribute_name": attr.name,
                 "attribute_display_name": attr.display_name,
                 "type": attr.type,
+                "value_type": fact.value_type() or attr.type,
+                "business_key": bool(attr.business_key),
+                "codes": list(fact.codes) if fact.codes else [],
+                "accepted_masks": list(accepted_masks(fact)),
+                "operators": list(fact.operators()),
+                "compatible_subject_attributes": [
+                    {
+                        "key": item.key,
+                        "name": subject_names.get(item.key, item.key),
+                        "value_type": item.value_type,
+                        "multi_value": item.multi_value,
+                    }
+                    for item in compatible
+                ],
                 "levels": levels,
             }
         )
     return outs
+
+
+def _preview_identities(person: Person) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    user_info = user_labels([person.user_id]).get(person.user_id)
+    items.append(
+        {
+            "type": "user",
+            "id": None,
+            "display_name": user_info.display_name if user_info else person.user_id,
+        }
+    )
+    if person.role_id:
+        role = get_role_store().get_by_id(person.role_id)
+        items.append(
+            {
+                "type": "role",
+                "id": person.role_id,
+                "display_name": role.name if role else person.role_id,
+            }
+        )
+    if person.group_ids:
+        labels = group_labels(list(person.group_ids))
+        for gid in person.group_ids:
+            items.append(
+                {
+                    "type": "group",
+                    "id": gid,
+                    "display_name": labels.get(gid) or gid,
+                }
+            )
+    return items
 
 
 def _profile_out(head: _Head, compiled: CompiledPolicy, record: ProfileRecord) -> dict[str, Any]:

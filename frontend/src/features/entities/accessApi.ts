@@ -7,6 +7,7 @@ import type {
   AccessSummary,
   DataSchema,
   DataSort,
+  PreviewAccessResponse,
 } from "@/features/entities/accessTypes";
 import { parseEntityDataJson, stringifyEntityDataJson } from "./entityDataJson";
 import type { DataFilter } from "@/features/entities/entityDataQuery";
@@ -111,6 +112,27 @@ export function createGrant(
   );
 }
 
+export function patchGrant(
+  entityId: string,
+  grantId: string,
+  body: {
+    profile_id?: string;
+    row_rule?: Record<string, unknown> | null;
+    actions?: string[];
+    status?: "active" | "disabled";
+    valid_until?: string | null;
+  },
+) {
+  return apiClient<{ grant: AccessGrant; policy_revision: number }>(
+    `/entities/${entityId}/access/grants/${grantId}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
 export function deleteGrant(entityId: string, grantId: string) {
   return apiClient<void>(`/entities/${entityId}/access/grants/${grantId}`, {
     method: "DELETE",
@@ -137,6 +159,27 @@ export function createRestriction(
   );
 }
 
+export function patchRestriction(
+  entityId: string,
+  restrictionId: string,
+  body: {
+    applies_to?: { mode: string; subjects?: { type: string; id: string }[] };
+    row_rule?: Record<string, unknown> | null;
+    deny_columns?: string[];
+    ceilings?: { attribute_id: string; level: string }[];
+    actions?: string[];
+  },
+) {
+  return apiClient<{ restriction: AccessRestriction; policy_revision: number }>(
+    `/entities/${entityId}/access/restrictions/${restrictionId}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
 export function deleteRestriction(entityId: string, restrictionId: string) {
   return apiClient<void>(
     `/entities/${entityId}/access/restrictions/${restrictionId}`,
@@ -148,26 +191,14 @@ export function previewAccess(
   entityId: string,
   body: {
     subject: { type: "user"; id: string };
+    narrow?: { type: "user" | "role" | "group"; id?: string } | null;
     include_rows: boolean;
+    filters?: Record<string, unknown> | null;
     limit?: number;
     offset?: number;
   },
 ) {
-  return apiClient<{
-    policy_revision: number;
-    effective_grants: string[];
-    schema: {
-      attributes: {
-        name: string;
-        presentation?: { row_varying?: boolean; may_be_withheld?: boolean };
-      }[];
-      withheld_field: string | null;
-    };
-    rows: {
-      items: Record<string, unknown>[];
-      total: number;
-    } | null;
-  }>(`/entities/${entityId}/access/preview`, {
+  return apiClient<PreviewAccessResponse>(`/entities/${entityId}/access/preview`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

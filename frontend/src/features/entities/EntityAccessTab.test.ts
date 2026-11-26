@@ -6,10 +6,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getAccessSummary } from "@/features/entities/accessApi";
 import { EntityAccessTab } from "@/features/entities/EntityAccessTab";
 import type { AccessSummary } from "@/features/entities/accessTypes";
-import { listAllSubjectAttributes } from "@/features/subjects/api";
+import {
+  manualLiveSchedule,
+  memoryAccessPort,
+  type AccessPort,
+  type LiveSchedulePort,
+} from "@/features/entities/accessWorkbench";
 import { ApiError } from "@/lib/api";
 import { ConsoleNotifications } from "@/providers/notification-provider";
 
@@ -19,20 +23,6 @@ vi.mock("@refinedev/core", () => ({
   useTranslate: () => translate,
   useNotification: () => ({ open: vi.fn() }),
 }));
-
-vi.mock("@/features/entities/accessApi", async () => {
-  const actual = await vi.importActual<typeof import("@/features/entities/accessApi")>(
-    "@/features/entities/accessApi",
-  );
-  return { ...actual, getAccessSummary: vi.fn() };
-});
-
-vi.mock("@/features/subjects/api", async () => {
-  const actual = await vi.importActual<typeof import("@/features/subjects/api")>(
-    "@/features/subjects/api",
-  );
-  return { ...actual, listAllSubjectAttributes: vi.fn() };
-});
 
 function stubDomApis() {
   Object.defineProperty(window, "matchMedia", {
@@ -67,7 +57,7 @@ function resetNotifications() {
   notifications.clean();
 }
 
-const summary: AccessSummary = {
+const populatedSummary: AccessSummary = {
   entity_id: "ent_1",
   head_version_id: "ver_1",
   policy_revision: 1,
@@ -75,14 +65,54 @@ const summary: AccessSummary = {
     state: "ready",
     revision: 1,
     single_profile_views: 1,
-    combinations: 0,
+    combinations: 1,
     combination_limit: 64,
     subjects_over_limit: 0,
     latest_job_id: null,
   },
-  ladders: [],
-  profiles: [],
-  grants: [],
+  ladders: [
+    {
+      attribute_id: "att_email",
+      attribute_name: "email",
+      attribute_display_name: "Email",
+      type: "string",
+      value_type: "string",
+      accepted_masks: ["clear", "email", "redact"],
+      operators: ["eq", "neq", "contains", "is_null", "is_not_null"],
+      compatible_subject_attributes: [],
+      levels: [
+        { key: "clear", mode: "clear" },
+        { key: "masked", mode: { type: "email" } },
+      ],
+    },
+  ],
+  profiles: [
+    {
+      id: "prf_1",
+      entity_id: "ent_1",
+      key: "analyst",
+      name: "Analyst",
+      description: null,
+      columns: [{ attribute_id: "att_email", attribute_name: "email", level: "masked" }],
+      broken: false,
+      broken_reasons: [],
+    },
+  ],
+  grants: [
+    {
+      id: "grt_1",
+      subject: { type: "user", id: "usr_ada", display_name: "Ada" },
+      profile_id: "prf_1",
+      row_rule: null,
+      actions: ["read"],
+      status: "active",
+      valid_until: null,
+      locked: false,
+      broken: false,
+      broken_reasons: [],
+      warnings: [],
+    },
+  ],
   restrictions: [],
 };
 
@@ -95,19 +125,28 @@ function shell(node: ReactNode) {
   );
 }
 
-function renderTab(entityId = "ent_1") {
+function renderTab(props: {
+  entityId?: string;
+  canPreviewRows?: boolean;
+  port: AccessPort;
+  schedule?: LiveSchedulePort;
+}) {
   return render(
-    shell(createElement(EntityAccessTab, { entityId, canPreviewRows: false })),
+    shell(
+      createElement(EntityAccessTab, {
+        entityId: props.entityId ?? "ent_1",
+        canPreviewRows: props.canPreviewRows ?? false,
+        port: props.port,
+        schedule: props.schedule ?? manualLiveSchedule(),
+      }),
+    ),
   );
 }
 
-describe("EntityAccessTab load", () => {
+describe("EntityAccessTab", () => {
   beforeEach(() => {
     stubDomApis();
     resetNotifications();
-    vi.mocked(getAccessSummary).mockReset();
-    vi.mocked(listAllSubjectAttributes).mockReset();
-    vi.mocked(listAllSubjectAttributes).mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -116,19 +155,18 @@ describe("EntityAccessTab load", () => {
     vi.unstubAllGlobals();
   });
 
-  it("notifies once and leaves every empty section unloaded", async () => {
-    vi.mocked(getAccessSummary).mockRejectedValue(
-      new ApiError(500, "NO_SUCH_CODE", "Database unavailable", "req-17"),
-    );
-    renderTab();
+  it("notifies once on initial load failure and retries via common.retry", async () => {
+    const port = memoryAccessPort(populatedSummary);
+    let attempts = 0;
+    port.loadSummary = async () => {
+      attempts += 1;
+      throw new ApiError(500, "NO_SUCH_CODE", "Database unavailable", "req-17");
+    };
+
+    renderTab({ port });
 
     expect(await screen.findAllByRole("alert")).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "status.unloaded" })).toHaveLength(3);
-    expect(screen.queryByText("entities.access.summary.title")).toBeNull();
-    expect(screen.queryByText("common.error")).toBeNull();
-    for (const table of screen.getAllByRole("table")) {
-      expect(table.querySelector("[role='alert']")).toBeNull();
-    }
+    expect(screen.getByRole("button", { name: "common.retry" })).toBeTruthy();
 
     fireEvent.click(screen.getByText("form.error.details"));
     expect(screen.getAllByText("Database unavailable")).toHaveLength(1);
@@ -136,54 +174,48 @@ describe("EntityAccessTab load", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
     await waitFor(() => {
-      expect(getAccessSummary).toHaveBeenCalledTimes(2);
+      expect(attempts).toBe(2);
     });
-    expect(getAccessSummary).toHaveBeenLastCalledWith("ent_1");
   });
 
-  it("notifies a later summary failure and keeps the sections that already have a summary", async () => {
-    vi.mocked(getAccessSummary).mockResolvedValueOnce(summary);
-    const view = renderTab();
-    expect(await screen.findByText("entities.access.summary.title")).toBeTruthy();
+  it("notifies on a later entity failure while keeping the loaded workbench", async () => {
+    const port = memoryAccessPort(populatedSummary);
+    const origLoad = port.loadSummary;
+    port.loadSummary = async (entityId) => {
+      if (entityId === "ent_2") {
+        throw new ApiError(500, "NO_SUCH_CODE", "Database unavailable", "req-18");
+      }
+      return origLoad(entityId);
+    };
+
+    const view = renderTab({ entityId: "ent_1", port });
+    expect(await screen.findByText("Ada")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
 
-    vi.mocked(getAccessSummary).mockRejectedValue(
-      new ApiError(500, "NO_SUCH_CODE", "Database unavailable", "req-18"),
-    );
     view.rerender(
-      shell(createElement(EntityAccessTab, { entityId: "ent_2", canPreviewRows: false })),
+      shell(
+        createElement(EntityAccessTab, {
+          entityId: "ent_2",
+          canPreviewRows: false,
+          port,
+          schedule: manualLiveSchedule(),
+        }),
+      ),
     );
 
     expect(await screen.findAllByRole("alert")).toHaveLength(1);
-    expect(screen.getByText("entities.access.summary.title")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
-    fireEvent.click(screen.getByText("form.error.details"));
-    expect(screen.getByText("Database unavailable").closest("details")).toBeTruthy();
-    expect(screen.getByText("common.requestId: req-18").closest("details")).toBeTruthy();
-    for (const table of screen.getAllByRole("table")) {
-      expect(table.querySelector("[role='alert']")).toBeNull();
-    }
+    expect(screen.getByRole("button", { name: "common.retry" })).toBeTruthy();
   });
 
-  it("notifies an options failure without unloading the summary", async () => {
-    vi.mocked(getAccessSummary).mockResolvedValue(summary);
-    vi.mocked(listAllSubjectAttributes).mockRejectedValue(
-      new ApiError(500, "NO_SUCH_CODE", "Attributes offline", "req-19"),
-    );
-    renderTab();
+  it("renders topology + specimen lens and opens inline inspector on node click", async () => {
+    const port = memoryAccessPort(populatedSummary);
+    renderTab({ port });
 
-    expect(await screen.findByText("entities.access.summary.title")).toBeTruthy();
-    expect(await screen.findAllByRole("alert")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "status.unloaded" })).toBeNull();
-    expect(screen.getByRole("alert").textContent).toContain("problems.unknown");
-    fireEvent.click(screen.getByText("form.error.details"));
-    expect(screen.getByText("Attributes offline").closest("details")).toBeTruthy();
-    expect(screen.getByText("common.requestId: req-19").closest("details")).toBeTruthy();
+    expect(await screen.findByText("Ada")).toBeTruthy();
+    expect(screen.getAllByText("Analyst").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("entities.access.workbench.lensMatrixTitle")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "common.retry" }));
-    await waitFor(() => {
-      expect(listAllSubjectAttributes).toHaveBeenCalledTimes(2);
-    });
-    expect(getAccessSummary).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText("Ada"));
+    expect(await screen.findByText("entities.access.grants.save")).toBeTruthy();
   });
 });

@@ -61,6 +61,14 @@ Every successful write in §4 writes one **Management Audit Event** naming the E
   "attribute_name": "id_card_no",
   "attribute_display_name": "ID card number",
   "type": "string",
+  "value_type": "string",
+  "business_key": false,
+  "codes": [],
+  "accepted_masks": ["partial", "email", "hash", "redact", "null"],
+  "operators": ["eq", "ne", "in", "is_null", "contains"],
+  "compatible_subject_attributes": [
+    { "key": "regions", "name": "Regions", "value_type": "string", "multi_value": true }
+  ],
   "levels": [
     { "key": "clear", "mode": "clear" },
     { "key": "last4", "mode": { "type": "partial", "keep_first": 0, "keep_last": 4 } },
@@ -69,7 +77,7 @@ Every successful write in §4 writes one **Management Audit Event** naming the E
 }
 ```
 
-`levels` is ordered most revealing first. The first level is always `{ "key": "clear", "mode": "clear" }`. Level `key` is `[a-z][a-z0-9_]*`, at most 63 characters, unique within the ladder. `mode` is `"clear"` or a mask object `{ "type", …params }` with types and parameters from `docs/business-entity-access.md` §4. A mask the attribute's type does not accept, unknown parameters, or out-of-range parameters are `422 ENTITY_ACCESS_INVALID`. Every head attribute has a ladder; an attribute without authored masks reads as `[clear]`. `attribute_name` and `attribute_display_name` are read-only.
+`levels` is ordered most revealing first. The first level is always `{ "key": "clear", "mode": "clear" }`. Level `key` is `[a-z][a-z0-9_]*`, at most 63 characters, unique within the ladder. `mode` is `"clear"` or a mask object `{ "type", …params }` with types and parameters from `docs/business-entity-access.md` §4. A mask the attribute's type does not accept, unknown parameters, or out-of-range parameters are `422 ENTITY_ACCESS_INVALID`. Every head attribute has a ladder; an attribute without authored masks reads as `[clear]`. `attribute_name`, `attribute_display_name`, `value_type`, `business_key`, `codes`, `accepted_masks`, `operators`, and `compatible_subject_attributes` are read-only authoring projections derived from the head attribute and platform Subject Attributes.
 
 ### 3.3 Access Profile
 
@@ -227,13 +235,17 @@ The grants list keeps the management-list bounds: omitted `limit` is 50, accepte
 ```json
 {
   "policy_revision": 42,
+  "identities": [
+    { "type": "user", "id": null, "display_name": "Ada Lovelace" },
+    { "type": "role", "id": "role_01HZX", "display_name": "Sales rep" }
+  ],
   "effective_grants": ["eag_01HZX"],
   "schema": { "attributes": [], "withheld_field": "__withheld" },
   "rows": null
 }
 ```
 
-`schema` follows §5.2 for the subject, except a reference `target` is still named when that subject has no effective `read` grant on the target Entity. Entity Data API schema and Entity MCP `describe_entity` return `target: null` in that case. `include_rows: true` additionally requires `entity:data_read` and returns `rows` as an **Offset Page** of that subject's rows, each row adding `__sources`: per column, the grant ids that contributed the presented level. When the shape withholds, those rows include `__withheld`. A preview with rows appends an Entity Access Log record naming the caller and the subject. Filters and limits follow the Entity Data API query rules.
+`identities` lists the previewed User's narrowing identities (the direct `user` entry with `id: null`, the User's `role` when assigned, and each `group` the User belongs to). `schema` follows §5.2 for the subject, except a reference `target` is still named when that subject has no effective `read` grant on the target Entity. Entity Data API schema and Entity MCP `describe_entity` return `target: null` in that case. `include_rows: true` additionally requires `entity:data_read` and returns `rows` as an **Offset Page** of that subject's rows, each row adding `__sources`: per column, the grant ids that contributed the presented level. When the shape withholds, those rows include `__withheld`. A preview with rows appends an Entity Access Log record naming the caller and the subject. Filters and limits follow the Entity Data API query rules.
 
 Preview shares `entity_page_limit_max` with HTTP Entity Data offset/keyset queries and Entity MCP `query_rows` (`docs/business-system-parameters.md` §5): seed 200, configurable 50–10000. Omitted `limit` stays 50; an explicit integer from 1 through the effective maximum is accepted, including 1–49. The effective maximum is read once at pagination validation for each preview; changes apply to subsequent requests without a restart or another Entity bootstrap, and do not cancel in-flight requests. Excess is rejected, not clamped: `422 REQUEST_INVALID` with `detail` `limit must be <= {effective_max}`. This validation also applies when `include_rows` is false or no effective rows are available. Preview offset bounds and access semantics are unchanged. Larger pages increase database work, memory use, and response size; the configurable range is not a capacity guarantee.
 
