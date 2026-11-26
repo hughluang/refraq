@@ -3,6 +3,7 @@
 import {
   ActionIcon,
   Button,
+  Checkbox,
   CloseButton,
   Group,
   MultiSelect,
@@ -28,21 +29,22 @@ import {
   queryFields,
   type EntityDataQuery,
   type QueryCondition,
+  type QueryFilterGroup,
 } from "./entityDataQuery";
+import {
+  filterOperatorLabelKey,
+  getFilterOperatorMeta,
+  transitionOperatorValues,
+} from "@/lib/filterOperators";
 import { useEntryZone } from "@/hooks/useFormatInstant";
 import { instantToWall, wallToInstant } from "@/lib/wall-time";
 import classes from "./EntityDataQueryControls.module.css";
 
 const key = "entities.data.query.";
-const opKey = (op: string, field?: DataAttribute) => {
-  if (op === "between") return key + "between";
-  const isTime = field && ["date", "time", "timestamp"].includes(field.type);
-  const suffix = isTime && ["lt", "lte", "gt", "gte"].includes(op) ? ".time" : "";
-  return "entities.access.rule.op." + op + suffix;
-};
 
 function initialCondition(field: DataAttribute, op = conditionOps(field)[0]): QueryCondition {
-  const values = op === "is_null" ? [] : op === "between" ? ["", ""] : [""];
+  const meta = getFilterOperatorMeta(op);
+  const values = meta.arity === "none" ? [] : meta.arity === "range" ? ["", ""] : [""];
   return { field: field.name, op, values };
 }
 
@@ -80,10 +82,29 @@ type ScalarProps = {
   disabled?: boolean;
 };
 
-function ValueInput({ field, ...props }: ScalarProps & { field: DataAttribute }) {
+function ValueInput({
+  field,
+  op,
+  ...props
+}: ScalarProps & { field: DataAttribute; op?: string }) {
   const t = useTranslate();
   const { label, value, onChange, submit, compact, disabled } = props;
-  const kind = inputTypeOf(field);
+  const domain = op ? getFilterOperatorMeta(op).valueDomain : "field";
+  if (domain === "string") {
+    return (
+      <TextInput
+        type="text"
+        label={compact ? undefined : label}
+        aria-label={label}
+        value={value}
+        disabled={disabled}
+        placeholder={compact ? label : undefined}
+        onChange={(e) => onChange(e.currentTarget.value)}
+        onKeyDown={(e) => onSubmitKey(e, submit)}
+      />
+    );
+  }
+  const kind = domain === "json" ? "json" : inputTypeOf(field);
   if (kind === "timestamp") return <InstantInput {...props} />;
   if (kind === "dictionary" || kind === "boolean") {
     const options =
@@ -142,6 +163,10 @@ type Props = {
   actions?: ReactNode;
 };
 
+type EditorTarget =
+  | { groupIndex: number | null; index: number | null; draft: QueryCondition }
+  | null;
+
 export function EntityDataQueryControls({
   schema,
   query,
@@ -157,9 +182,7 @@ export function EntityDataQueryControls({
   const preferred = searchable[0]?.name ?? "";
   const [quickField, setQuickField] = useState(query.lookup?.field ?? preferred);
   const [quickValue, setQuickValue] = useState(query.lookup?.value ?? "");
-  const [editor, setEditor] = useState<{ index: number | null; draft: QueryCondition } | null>(
-    null,
-  );
+  const [editor, setEditor] = useState<EditorTarget>(null);
   const [quickError, setQuickError] = useState("");
   const [filterError, setFilterError] = useState("");
   const [match, setMatch] = useState(query.match);
@@ -186,8 +209,8 @@ export function EntityDataQueryControls({
     onChange(next);
   }
 
-  function startEdit(draft: QueryCondition, index: number | null) {
-    setEditor({ index, draft });
+  function startEdit(draft: QueryCondition, index: number | null, groupIndex: number | null = null) {
+    setEditor({ groupIndex, index, draft });
     setFilterError("");
     setMatch(query.match);
   }
@@ -199,9 +222,20 @@ export function EntityDataQueryControls({
 
   function apply() {
     if (!editor) return;
-    const conditions = [...query.conditions];
-    conditions[editor.index ?? conditions.length] = editor.draft;
-    const next = { ...query, match, conditions };
+    let next: EntityDataQuery;
+    if (editor.groupIndex === null) {
+      const conditions = [...query.conditions];
+      conditions[editor.index ?? conditions.length] = editor.draft;
+      next = { ...query, match, conditions };
+    } else {
+      const groups: QueryFilterGroup[] = [...(query.groups ?? [])];
+      const targetGroup = groups[editor.groupIndex];
+      if (!targetGroup) return;
+      const conditions = [...targetGroup.conditions];
+      conditions[editor.index ?? conditions.length] = editor.draft;
+      groups[editor.groupIndex] = { ...targetGroup, conditions };
+      next = { ...query, match, groups };
+    }
     const compiled = compileDataQuery(next, schema);
     if (!compiled.ok) {
       setFilterError(t(compiled.error));
@@ -213,6 +247,7 @@ export function EntityDataQueryControls({
 
   const draft = editor?.draft;
   const field = fields.find((item) => item.name === draft?.field);
+  const draftMeta = draft ? getFilterOperatorMeta(draft.op) : null;
   const quickAttribute = searchable.find((f) => f.name === quickField) ?? searchable[0];
   const activeLookup = fields.find((f) => f.name === query.lookup?.field);
   const quickLabel = t(
@@ -220,8 +255,23 @@ export function EntityDataQueryControls({
       (quickAttribute && lookupOp(schema, quickAttribute) === "contains" ? "contains" : "exact"),
     { field: quickAttribute ? attributeTitle(quickAttribute) : quickField },
   );
-  const hasFilters = Boolean(query.lookup || query.conditions.length);
+  const groups = query.groups ?? [];
+  const hasFilters = Boolean(query.lookup || query.conditions.length || groups.length);
   const firstFilter = fields.find((f) => f.name === schema.business_key) ?? fields[0];
+
+  function formatConditionLabel(condition: QueryCondition): string {
+    const condField = fields.find((f) => f.name === condition.field);
+    const meta = getFilterOperatorMeta(condition.op);
+    const prefix = condition.negate ? t(key + "notPrefix") + " " : "";
+    const parts = [
+      condField ? attributeTitle(condField) : condition.field,
+      t(filterOperatorLabelKey(condition.op)),
+      condition.values.join(meta.arity === "range" ? " – " : ", "),
+    ]
+      .join(" ")
+      .trim();
+    return prefix + parts;
+  }
 
   return (
     <Stack gap="xs">
@@ -283,7 +333,7 @@ export function EntityDataQueryControls({
             aria-controls={editorId}
             onClick={() => {
               if (editor) setEditor(null);
-              else startEdit(initialCondition(firstFilter), null);
+              else startEdit(initialCondition(firstFilter), null, null);
             }}
           >
             {t(key + "filter")}
@@ -307,7 +357,11 @@ export function EntityDataQueryControls({
             <div className={classes.chip}>
               <span className={classes.chipLabel}>
                 {activeLookup ? attributeTitle(activeLookup) : query.lookup.field}{" "}
-                {t(opKey(activeLookup ? (lookupOp(schema, activeLookup) ?? "eq") : "eq"))}{" "}
+                {t(
+                  filterOperatorLabelKey(
+                    activeLookup ? (lookupOp(schema, activeLookup) ?? "eq") : "eq",
+                  ),
+                )}{" "}
                 {query.lookup.value}
               </span>
               <CloseButton
@@ -319,25 +373,13 @@ export function EntityDataQueryControls({
               />
             </div>
           )}
-          {query.conditions.length > 1 && (
+          {(query.conditions.length + groups.length) > 1 && (
             <Text size="xs" fw={600}>
               {t(key + (query.match === "all" ? "all" : "any"))}
             </Text>
           )}
           {query.conditions.map((condition, index) => {
-            const condField = fields.find((f) => f.name === condition.field);
-            const label = [
-              condField ? attributeTitle(condField) : condition.field,
-              t(
-                opKey(
-                  condition.op,
-                  condField,
-                ),
-              ),
-              condition.values.join(condition.op === "between" ? " – " : ", "),
-            ]
-              .join(" ")
-              .trim();
+            const label = formatConditionLabel(condition);
             return (
               <div key={index} className={classes.chip}>
                 <UnstyledButton
@@ -345,7 +387,7 @@ export function EntityDataQueryControls({
                   className={classes.chipLabel}
                   title={label}
                   disabled={disabled}
-                  onClick={() => startEdit(condition, index)}
+                  onClick={() => startEdit(condition, index, null)}
                 >
                   {label}
                 </UnstyledButton>
@@ -364,6 +406,42 @@ export function EntityDataQueryControls({
               </div>
             );
           })}
+          {groups.map((grp, groupIndex) => (
+            <Group key={`g-${groupIndex}`} gap={4} className={classes.chip}>
+              <Text size="xs" fw={600}>
+                {(grp.negate ? t(key + "notPrefix") + " " : "") +
+                  t(key + (grp.match === "all" ? "all" : "any"))}
+                :
+              </Text>
+              {grp.conditions.map((condition, condIndex) => {
+                const label = formatConditionLabel(condition);
+                return (
+                  <UnstyledButton
+                    key={condIndex}
+                    type="button"
+                    className={classes.chipLabel}
+                    title={label}
+                    disabled={disabled}
+                    onClick={() => startEdit(condition, condIndex, groupIndex)}
+                  >
+                    {label}
+                  </UnstyledButton>
+                );
+              })}
+              <CloseButton
+                size="xs"
+                type="button"
+                aria-label={t(key + "removeGroup")}
+                disabled={disabled}
+                onClick={() =>
+                  onChange({
+                    ...query,
+                    groups: groups.filter((_, gi) => gi !== groupIndex),
+                  })
+                }
+              />
+            </Group>
+          ))}
           <Button
             size="compact-xs"
             variant="subtle"
@@ -375,11 +453,12 @@ export function EntityDataQueryControls({
           </Button>
         </Group>
       )}
-      {editor && draft && field && (
+      {editor && draft && field && draftMeta && (
         <div id={editorId} className={classes.editor}>
           <Group gap="xs" align="end" className={classes.editorFields}>
             {(query.conditions.length > 1 ||
-              (query.conditions.length === 1 && editor.index === null)) && (
+              (query.conditions.length === 1 && editor.index === null) ||
+              groups.length > 0) && (
               <Select
                 label={t(key + "match")}
                 data={[
@@ -406,12 +485,23 @@ export function EntityDataQueryControls({
               label={t(key + "comparison")}
               value={draft.op}
               allowDeselect={false}
-              data={conditionOps(field).map((op) => ({ value: op, label: t(opKey(op, field)) }))}
+              data={conditionOps(field).map((op) => ({
+                value: op,
+                label: t(filterOperatorLabelKey(op)),
+              }))}
               onChange={(op) => {
-                if (op) updateDraft(initialCondition(field, op));
+                if (op) {
+                  updateDraft({
+                    ...draft,
+                    op,
+                    values: transitionOperatorValues(draft.op, op, draft.values),
+                  });
+                }
               }}
             />
-            {draft.op === "in" && field.type === "dictionary" ? (
+            {draftMeta.arity === "array" &&
+            draftMeta.valueDomain === "field" &&
+            field.type === "dictionary" ? (
               <MultiSelect
                 searchable
                 label={t(key + "values")}
@@ -427,9 +517,10 @@ export function EntityDataQueryControls({
                 <div className={classes.value} key={i}>
                   <ValueInput
                     field={field}
+                    op={draft.op}
                     value={value}
                     label={
-                      draft.op === "between"
+                      draftMeta.arity === "range"
                         ? t(key + (i === 0 ? "from" : "through"))
                         : t(key + "value")
                     }
@@ -441,7 +532,7 @@ export function EntityDataQueryControls({
                     }
                     submit={apply}
                   />
-                  {draft.op === "in" && draft.values.length > 1 && (
+                  {draftMeta.arity === "array" && draft.values.length > 1 && (
                     <CloseButton
                       type="button"
                       aria-label={t(key + "removeValue")}
@@ -453,16 +544,45 @@ export function EntityDataQueryControls({
                 </div>
               ))
             )}
+            <Checkbox
+              label={t(key + "negate")}
+              checked={Boolean(draft.negate)}
+              onChange={(e) => updateDraft({ ...draft, negate: e.currentTarget.checked })}
+            />
           </Group>
           <Group gap="xs" mt="sm">
-            {draft.op === "in" && field.type !== "dictionary" && (
+            {draftMeta.arity === "array" &&
+              !(draftMeta.valueDomain === "field" && field.type === "dictionary") && (
+                <Button
+                  type="button"
+                  variant="default"
+                  size="xs"
+                  onClick={() => updateDraft({ ...draft, values: [...draft.values, ""] })}
+                >
+                  {t(key + "addValue")}
+                </Button>
+              )}
+            {firstFilter && editor.groupIndex === null && editor.index === null && (
               <Button
                 type="button"
                 variant="default"
                 size="xs"
-                onClick={() => updateDraft({ ...draft, values: [...draft.values, ""] })}
+                onClick={() => {
+                  const nextGroups: QueryFilterGroup[] = [
+                    ...groups,
+                    { match: match === "all" ? "any" : "all", conditions: [draft] },
+                  ];
+                  const next: EntityDataQuery = { ...query, match, groups: nextGroups };
+                  const compiled = compileDataQuery(next, schema);
+                  if (!compiled.ok) {
+                    setFilterError(t(compiled.error));
+                    return;
+                  }
+                  setEditor(null);
+                  onChange(next);
+                }}
               >
-                {t(key + "addValue")}
+                {t(key + "addAsGroup")}
               </Button>
             )}
             <Button type="button" size="xs" onClick={apply} disabled={disabled}>

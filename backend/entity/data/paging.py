@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from backend.entity.attribute_type import resolve
 from backend.entity.data.capabilities import PAGE_LIMIT_DEFAULT
 from backend.entity.data.head import HeadTarget
 from backend.entity.ddl import ROW_ID_COLUMN, ident
@@ -48,7 +49,7 @@ def resolve_sort(body: dict[str, Any], target: HeadTarget) -> RowSort:
         attr = next((attr for attr in target.attributes if attr.name == field), None)
         if attr is None:
             raise EntityRowInvalid(f"Unknown sort field '{field}'")
-        if attr.type == "json":
+        if not resolve(attr.type).sortable:
             raise EntityRowInvalid(f"Sorting is not supported for field '{field}'")
     return RowSort(field, descending=direction == "desc")
 

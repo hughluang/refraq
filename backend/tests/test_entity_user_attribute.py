@@ -68,7 +68,10 @@ def test_user_column_is_varchar_64_and_not_a_business_key() -> None:
     sql = column_sql(attr, table="people")
     assert "VARCHAR(64)" in sql
     assert "NOT NULL" in sql
-    assert resolve("user").operators == ("eq", "ne", "in", "is_null")
+    assert resolve("user").operators == (
+        "eq", "ne", "in", "not_in", "is_null", "is_not_null"
+    )
+    assert resolve("user").rule_operators == ("eq", "ne", "in", "is_null")
     with pytest.raises(EntityAttributeInvalid, match="business_key"):
         validate_shape(attributes=[_user_attr(business_key=True, unique=True, required=True)])
     classified = classify_shapes(

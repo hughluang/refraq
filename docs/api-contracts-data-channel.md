@@ -186,6 +186,21 @@ Write Entity configuration (`write.entity`):
 
 A dataset source is staged in full, validated in full, and written in one transaction. Any failure rolls the execution back and leaves the target unchanged. A list source is the same one transaction. One round of a Batch Read is one such transaction; the rounds are not combined. A dataset the node cannot read fails the node with `CHANNEL_DATASET_UNAVAILABLE`.
 
+Read Entity configuration (`read.entity`):
+
+| Field | Rule |
+| --- | --- |
+| `entity_id` | Required Business Entity id (`x-refraq-ref: "entity"`). Publish requires the entity to resolve |
+| `match` | Optional `all` or `any`. Default `all`. Combines entries in `filters` |
+| `filters` | Optional array of `{attribute, op, negate?, value?}` items. `attribute` names `row_id` or a head attribute (`x-refraq-ref: "entity_attribute"`). `op` is any operator supported by that attribute's Query operator set. `value` (`x-refraq-template: {"from": "entity_attribute"}`) is omitted for `is_null` / `is_not_null`, a 2-item array for `between`, an array for `in` / `not_in` / `has_any_keys` / `has_all_keys`, and a scalar otherwise |
+| `where` | Optional JSON template resolving to a canonical Entity `filters` AST object (`all` / `any` / `not` / leaf). When both `filters` and `where` are non-empty, they are combined with `all` |
+| `sort_attribute` | Optional nullable string naming `row_id` or a sortable head attribute. Null defaults to `row_id` |
+| `sort_direction` | Optional `asc` or `desc`. Default `asc` |
+| `limit` | Integer from 1 to 100000. Absent means 1000. Exceeding `limit` fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` |
+| `statement_timeout_sec` | Integer seconds from 1 to 3600. Absent means 60 |
+
+Ports are the input `main` and the outputs `main` and `error`. A successful execution returns `{rows, count, total}` where `rows` are projected head rows in the System Identity's Profile shape.
+
 SQL configuration (`read.sql`):
 
 | Field | Rule |

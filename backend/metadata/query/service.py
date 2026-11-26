@@ -32,6 +32,7 @@ from backend.metadata.errors import (
 )
 from backend.metadata.query.compile_sample import (
     SampleFilterSpec,
+    SampleMatch,
     SampleOrderSpec,
     compile_sample_sql,
 )
@@ -375,6 +376,7 @@ def run_catalog_sample(
     include_sql: bool,
     actor_user_id: str | None,
     actor_token_id: str | None,
+    match: SampleMatch = "all",
 ) -> SampleOutcome:
     platform_cap = query_max_rows()
     timeout_sec = query_timeout_sec()
@@ -413,6 +415,11 @@ def run_catalog_sample(
         source_engine = source.engine
 
         known = {c.name for c in obj.columns if c.is_present}
+        column_types = {
+            c.name: canonicalize_native_type(c.data_type)
+            for c in obj.columns
+            if c.is_present and c.data_type
+        }
         compiled_sql = compile_sample_sql(
             engine=source.engine,
             schema_name=obj.schema_name,
@@ -423,6 +430,8 @@ def run_catalog_sample(
             order_by=order_by,
             offset=effective_offset,
             limit=effective_limit,
+            match=match,
+            column_types=column_types,
         )
         return _execute_readonly(
             source_id=obj.source_id,

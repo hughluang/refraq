@@ -573,12 +573,25 @@ BEGIN
     RETURN QUERY SELECT grouped, leaf_sum, in_sum;
     RETURN;
   END IF;
+  IF p_node ? 'not' THEN
+    IF key_count <> 1 THEN
+      RAISE EXCEPTION 'filter node must be a leaf or all/any/not group' USING ERRCODE = '22023';
+    END IF;
+    child := p_node->'not';
+    SELECT f.sql, f.leaves, f.ins
+      INTO part_sql, part_leaves, part_ins
+    FROM entity_access.profile_filter(
+      p_view, child, p_path || ARRAY['not'], p_depth + 1
+    ) AS f;
+    RETURN QUERY SELECT '(NOT COALESCE(' || part_sql || ', false))', part_leaves, part_ins;
+    RETURN;
+  END IF;
   IF NOT (p_node ? 'field' AND p_node ? 'op')
      OR EXISTS (
        SELECT 1 FROM jsonb_object_keys(p_node) AS k
        WHERE k NOT IN ('field', 'op', 'value')
      ) THEN
-    RAISE EXCEPTION 'filter node must be a leaf or all/any group' USING ERRCODE = '22023';
+    RAISE EXCEPTION 'filter node must be a leaf or all/any/not group' USING ERRCODE = '22023';
   END IF;
   IF jsonb_typeof(p_node->'field') IS DISTINCT FROM 'string'
      OR jsonb_typeof(p_node->'op') IS DISTINCT FROM 'string' THEN
@@ -589,7 +602,12 @@ BEGIN
   IF field !~ '^[A-Za-z_][A-Za-z0-9_]*$' THEN
     RAISE EXCEPTION 'filter field is not an identifier' USING ERRCODE = '22023';
   END IF;
-  IF op NOT IN ('eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'is_null') THEN
+  IF op NOT IN (
+    'eq', 'ne', 'ieq', 'gt', 'gte', 'lt', 'lte', 'in',
+    'contains', 'starts_with', 'ends_with',
+    'is_null', 'is_not_null',
+    'json_contains', 'has_key', 'has_any_keys', 'has_all_keys'
+  ) THEN
     RAISE EXCEPTION 'filter op is not allowed' USING ERRCODE = '22023';
   END IF;
   SELECT pg_catalog.format_type(a.atttypid, a.atttypmod),
@@ -604,29 +622,71 @@ BEGIN
     RAISE EXCEPTION 'filter field is not on the view' USING ERRCODE = '22023';
   END IF;
   page_col := 'page.' || pg_catalog.quote_ident(field);
-  IF op = 'is_null' THEN
+  IF op IN ('is_null', 'is_not_null') THEN
     IF p_node ? 'value' AND p_node->'value' <> 'null'::jsonb THEN
-      RAISE EXCEPTION 'is_null must not carry a value' USING ERRCODE = '22023';
+      RAISE EXCEPTION 'null-check op must not carry a value' USING ERRCODE = '22023';
     END IF;
-    RETURN QUERY SELECT page_col || ' IS NULL', 1, 0;
+    RETURN QUERY SELECT page_col || CASE WHEN op = 'is_null' THEN ' IS NULL' ELSE ' IS NOT NULL' END, 1, 0;
     RETURN;
   END IF;
   IF NOT (p_node ? 'value') THEN
     RAISE EXCEPTION 'filter op requires value' USING ERRCODE = '22023';
   END IF;
   path_lit := '{' || array_to_string(p_path || ARRAY['value'], ',') || '}';
-  IF op = 'contains' THEN
+  IF op IN ('contains', 'starts_with', 'ends_with', 'ieq') THEN
     IF is_jsonb OR jsonb_typeof(p_node->'value') IS DISTINCT FROM 'string' THEN
-      RAISE EXCEPTION 'contains value must be a non-empty string' USING ERRCODE = '22023';
+      RAISE EXCEPTION 'text filter value must be a string' USING ERRCODE = '22023';
+    END IF;
+    IF op = 'ieq' THEN
+      expr := 'LOWER(' || page_col || ') = LOWER($1 #>> ' || pg_catalog.quote_literal(path_lit) || ')';
+      RETURN QUERY SELECT expr, 1, 0;
+      RETURN;
     END IF;
     IF (p_node->>'value') = '' THEN
-      RAISE EXCEPTION 'contains value must be a non-empty string' USING ERRCODE = '22023';
+      RAISE EXCEPTION 'pattern filter value must be a non-empty string' USING ERRCODE = '22023';
     END IF;
-    expr := page_col
-      || ' ILIKE (''%%'' || replace(replace(replace($1 #>> '
+    expr := 'replace(replace(replace($1 #>> '
       || pg_catalog.quote_literal(path_lit)
-      || ', E''\\'', E''\\\\''), ''%%'', E''\\%%''), ''_'', E''\\_'') || ''%%'') ESCAPE E''\\''';
+      || ', E''\\'', E''\\\\''), ''%%'', E''\\%%''), ''_'', E''\\_'')';
+    IF op = 'contains' THEN
+      expr := page_col || ' ILIKE (''%%'' || ' || expr || ' || ''%%'') ESCAPE E''\\''';
+    ELSIF op = 'starts_with' THEN
+      expr := page_col || ' ILIKE (' || expr || ' || ''%%'') ESCAPE E''\\''';
+    ELSE
+      expr := page_col || ' ILIKE (''%%'' || ' || expr || ') ESCAPE E''\\''';
+    END IF;
     RETURN QUERY SELECT expr, 1, 0;
+    RETURN;
+  END IF;
+  IF op IN ('json_contains', 'has_key', 'has_any_keys', 'has_all_keys') THEN
+    IF NOT is_jsonb THEN
+      RAISE EXCEPTION 'json filter op requires jsonb column' USING ERRCODE = '22023';
+    END IF;
+    IF op = 'json_contains' THEN
+      expr := page_col || ' @> ($1 #> ' || pg_catalog.quote_literal(path_lit) || ')';
+      RETURN QUERY SELECT expr, 1, 0;
+      RETURN;
+    END IF;
+    IF op = 'has_key' THEN
+      IF jsonb_typeof(p_node->'value') IS DISTINCT FROM 'string' OR (p_node->>'value') = '' THEN
+        RAISE EXCEPTION 'has_key value must be a non-empty string' USING ERRCODE = '22023';
+      END IF;
+      expr := page_col || ' ? ($1 #>> ' || pg_catalog.quote_literal(path_lit) || ')';
+      RETURN QUERY SELECT expr, 1, 0;
+      RETURN;
+    END IF;
+    IF jsonb_typeof(p_node->'value') IS DISTINCT FROM 'array'
+       OR jsonb_array_length(p_node->'value') < 1 THEN
+      RAISE EXCEPTION 'json key array must be non-empty' USING ERRCODE = '22023';
+    END IF;
+    in_count := jsonb_array_length(p_node->'value');
+    IF in_count > __IN_CAP__ THEN
+      RAISE EXCEPTION 'in value count exceeds limit' USING ERRCODE = '22023';
+    END IF;
+    expr := page_col || CASE WHEN op = 'has_any_keys' THEN ' ?| ' ELSE ' ?& ' END
+      || 'ARRAY(SELECT jsonb_array_elements_text($1 #> '
+      || pg_catalog.quote_literal(path_lit) || '))';
+    RETURN QUERY SELECT expr, 1, in_count;
     RETURN;
   END IF;
   IF op = 'in' THEN
@@ -886,8 +946,8 @@ $fn$
 def profile_page_statements() -> list[str]:
     """Exposure-owner page function. The reader passes a view, not a SQL string."""
     body = (
-        _PROFILE_PAGE_SQL.replace("__DEPTH_CAP__", str(FILTER_DEPTH_MAX))
-        .replace("__LEAVES_CAP__", str(FILTER_LEAVES_MAX))
+        _PROFILE_PAGE_SQL.replace("__DEPTH_CAP__", str(FILTER_DEPTH_MAX + 2))
+        .replace("__LEAVES_CAP__", str(FILTER_LEAVES_MAX * 2))
         .replace("__IN_CAP__", str(FILTER_IN_VALUES_MAX))
     )
     exposure = ident(EXPOSURE_OWNER_ROLE)

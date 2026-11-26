@@ -447,6 +447,7 @@ async def run_object_sample(
         return query_service.run_catalog_sample(
             object_id=object_id,
             columns=body.columns,
+            match=body.match,
             filters=[
                 SampleFilterSpec(column=f.column, op=f.op, value=f.value)
                 for f in body.filters

@@ -10,6 +10,7 @@ export type SampleFilter = {
   column: string | null;
   op: SampleFilterOp;
   value: string;
+  valueEnd?: string;
 };
 
 export type SampleFilterDraft = SampleFilter & {
@@ -36,21 +37,40 @@ export type BinaryCellPayload = {
   data: string;
 };
 
+const SAMPLE_OPS = new Set<string>([
+  "eq",
+  "ne",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "between",
+  "in",
+  "not_in",
+  "contains",
+  "not_contains",
+  "starts_with",
+  "ends_with",
+  "is_null",
+  "is_not_null",
+]);
+
 export function isSampleFilterOp(value: string): value is SampleFilterOp {
-  return (
-    value === "eq" ||
-    value === "neq" ||
-    value === "contains" ||
-    value === "is_null"
-  );
+  return SAMPLE_OPS.has(value);
 }
 
 function normalizeFilter(filter: SampleFilter) {
-  return {
+  const isUnary = filter.op === "is_null" || filter.op === "is_not_null";
+  const base: { column: string | null; op: SampleFilterOp; value: string; valueEnd?: string } = {
     column: filter.column,
     op: filter.op,
-    value: filter.op === "is_null" ? "" : filter.value,
+    value: isUnary ? "" : filter.value,
   };
+  if (filter.op === "between") {
+    base.valueEnd = filter.valueEnd ?? "";
+  }
+  return base;
 }
 
 export function sampleFilterSnapshot(
@@ -118,15 +138,36 @@ export function cellExceedsDeclaredPrecision(
 export function buildSampleFilters(
   rows: readonly SampleFilter[],
   declarations: readonly ColumnDeclaration[] = [],
-): Array<{ column: string; op: SampleFilterOp; value: string }> | null {
-  const filters: Array<{ column: string; op: SampleFilterOp; value: string }> =
+): Array<{ column: string; op: SampleFilterOp; value: string | string[] }> | null {
+  const filters: Array<{ column: string; op: SampleFilterOp; value: string | string[] }> =
     [];
   for (const row of rows) {
     if (row.column == null) continue;
-    const value = row.op === "is_null" ? "" : row.value;
+    const isUnary = row.op === "is_null" || row.op === "is_not_null";
+    if (row.op === "between") {
+      filters.push({
+        column: row.column,
+        op: row.op,
+        value: [row.value, row.valueEnd ?? ""],
+      });
+      continue;
+    }
+    if (row.op === "in" || row.op === "not_in") {
+      const items = row.value
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+      filters.push({
+        column: row.column,
+        op: row.op,
+        value: items,
+      });
+      continue;
+    }
+    const value = isUnary ? "" : row.value;
     const declaration = declarations.find((item) => item.name === row.column);
     if (
-      row.op !== "is_null" &&
+      !isUnary &&
       declaration?.temporal_kind != null &&
       declaration.precision != null &&
       fractionalDigitCount(value) > declaration.precision
@@ -152,6 +193,7 @@ export function buildSampleRequest(
   options?: {
     columns?: readonly string[] | null;
     includeSql?: boolean;
+    match?: "all" | "any";
   },
 ): SampleRequestBody | null {
   const rows = Array.isArray(filter) ? filter : [filter as SampleFilter];
@@ -168,6 +210,9 @@ export function buildSampleRequest(
     limit,
     include_sql: options?.includeSql ?? false,
   };
+  if (options?.match && options.match !== "all") {
+    body.match = options.match;
+  }
   if (options?.columns && options.columns.length > 0) {
     body.columns = [...options.columns];
   }

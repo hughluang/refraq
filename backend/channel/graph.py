@@ -516,15 +516,41 @@ def _declared_schema(
         return dict(marker)
     if parent is None or not isinstance(parent.get("attribute"), str) or not entity_id:
         return None
-    head = resolver.entity_head(entity_id)
-    if head is None:
-        return None
-    named = next(
-        (attr for attr in head.attributes if attr.name == parent["attribute"]), None
-    )
-    if named is None:
-        return None
-    return attribute_value_schema(named.value_type)
+    attr_name = parent["attribute"]
+    if attr_name == "row_id":
+        base = attribute_value_schema("integer")
+    else:
+        head = resolver.entity_head(entity_id)
+        if head is None:
+            return None
+        named = next(
+            (attr for attr in head.attributes if attr.name == attr_name), None
+        )
+        if named is None:
+            return None
+        base = attribute_value_schema(named.value_type)
+    op = parent.get("op")
+    if isinstance(op, str):
+        if op in ("is_null", "is_not_null"):
+            return None
+        if op in ("in", "not_in"):
+            return {"type": "array", "items": base}
+        if op == "between":
+            return {"type": "array", "items": base, "minItems": 2, "maxItems": 2}
+        if op in (
+            "ieq",
+            "contains",
+            "not_contains",
+            "starts_with",
+            "ends_with",
+            "has_key",
+        ):
+            return {"type": "string"}
+        if op in ("has_any_keys", "has_all_keys"):
+            return {"type": "array", "items": {"type": "string"}}
+        if op == "json_contains":
+            return {"type": ["object", "array", "string", "number", "boolean", "null"]}
+    return base
 
 
 def _type_and_config_problems(
@@ -916,6 +942,8 @@ def _reference_problems(
                             node_id=str(node["id"]),
                         )
                     )
+                continue
+            if value == "row_id" and node.get("type") == "read.entity":
                 continue
             head = resolver.entity_head(entity_id) if entity_id else None
             if head is None:

@@ -30,6 +30,7 @@ from backend.entity.attribute_type import resolve
 from backend.entity.data import sql as data_sql
 from backend.entity.data.filters import compile_filters
 from backend.entity.data.head import HeadTarget, resolve_head
+from backend.entity.data.paging import resolve_sort
 from backend.entity.data.values import (
     encode_inbound,
     require_business_key_value,
@@ -40,6 +41,7 @@ from backend.entity.ddl import ident
 from backend.entity.errors import (
     EntityNotFound,
     EntityRowInvalid,
+    EntityRowLimitExceeded,
     EntityRowWriteFailed,
 )
 from backend.entity.reference_binding import business_key_attr
@@ -81,7 +83,8 @@ def head_target(entity_id: str) -> HeadTarget | None:
 def read_rows(
     entity_id: str,
     *,
-    filters: list[dict[str, Any]],
+    filters: Mapping[str, Any] | None = None,
+    sort: Mapping[str, Any] | None = None,
     user: UserRecord,
     limit: int,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -90,8 +93,9 @@ def read_rows(
         raise EntityNotFound()
     access = begin_data(entity.table_name, user, {}, action="read", for_write=False)
     target = access.target
-    tree = _as_filter_tree(filters)
-    compiled = compile_filters(tree, target)
+    filter_tree = dict(filters) if filters is not None else None
+    compiled = compile_filters(filter_tree, target)
+    row_sort = resolve_sort({"sort": dict(sort)} if sort is not None else {}, target)
     fields = ["row_id", *[attr.name for attr in target.attributes]]
     ctx = read_context(access)
     with data_sql.entity_read_connection(ctx) as conn:
@@ -100,17 +104,14 @@ def read_rows(
             target,
             fields=fields,
             compiled=compiled,
-            filters=tree,
             row_dependent=predicate_depends_on_row(access.outcome.shape),
             limit=limit + 1,
             offset=0,
             include_total=True,
+            sort=row_sort,
         )
     if len(items) > limit:
-        raise EntityRowWriteFailed(
-            f"Read returned more than {limit} rows",
-            reason="item_limit",
-        )
+        raise EntityRowLimitExceeded(f"Read returned more than {limit} rows")
     access.log(row_count=len(items), outcome_code="ok", verb="channel-read")
     return items, int(total or len(items))
 
@@ -194,23 +195,6 @@ def write_rows(
             verb="channel-write",
         )
         raise
-
-
-def _as_filter_tree(filters: list[dict[str, Any]]) -> dict[str, Any] | None:
-    if not filters:
-        return None
-    leaves = []
-    for item in filters:
-        leaves.append(
-            {
-                "field": item["attribute"],
-                "op": item.get("op", "eq"),
-                "value": item.get("value"),
-            }
-        )
-    if len(leaves) == 1:
-        return leaves[0]
-    return {"all": leaves}
 
 
 def _match_key_name(target: HeadTarget, match_key: str | None) -> str:

@@ -47,10 +47,56 @@ _CONFIG_FIELD_ORDER = (
 
 ChangeClass = Literal["breaking", "non_breaking", "unchanged"]
 
-_EQ_NE_NULL = ("eq", "ne", "is_null")
-_EQ_NE_IN_NULL = ("eq", "ne", "in", "is_null")
-_EQ_NE_IN_CONTAINS_NULL = ("eq", "ne", "in", "contains", "is_null")
-_CMP = ("eq", "ne", "in", "gt", "gte", "lt", "lte", "is_null")
+# Access Row-Rule operator sets (closed DSL in backend/entity/access/dsl.py)
+_RULE_EQ_NE_NULL = ("eq", "ne", "is_null")
+_RULE_EQ_NE_IN_NULL = ("eq", "ne", "in", "is_null")
+_RULE_EQ_NE_IN_CONTAINS_NULL = ("eq", "ne", "in", "contains", "is_null")
+_RULE_CMP = ("eq", "ne", "in", "gt", "gte", "lt", "lte", "is_null")
+
+# Entity Data Query operator sets
+_QUERY_BOOL = ("eq", "ne", "is_null", "is_not_null")
+_QUERY_ENUM = ("eq", "ne", "in", "not_in", "is_null", "is_not_null")
+_QUERY_TEXT = (
+    "eq",
+    "ne",
+    "ieq",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "between",
+    "in",
+    "not_in",
+    "contains",
+    "not_contains",
+    "starts_with",
+    "ends_with",
+    "is_null",
+    "is_not_null",
+)
+_QUERY_CMP = (
+    "eq",
+    "ne",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "between",
+    "in",
+    "not_in",
+    "is_null",
+    "is_not_null",
+)
+_QUERY_JSON = (
+    "eq",
+    "ne",
+    "json_contains",
+    "has_key",
+    "has_any_keys",
+    "has_all_keys",
+    "is_null",
+    "is_not_null",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,22 +223,26 @@ class _AttributeType:
         *,
         name: str,
         operators: tuple[str, ...],
+        rule_operators: tuple[str, ...],
         physical_template: str,
         physical_bare: str,
         encode: Any,
         decode: Any,
         allows_upsert_key: bool = True,
+        sortable: bool = True,
         reads: frozenset[str] = frozenset(),
         config_keys: frozenset[str] = frozenset(),
         config_limits: tuple[_ConfigLimit, ...] = (),
     ) -> None:
         self.name = name
         self.operators = operators
+        self.rule_operators = rule_operators
         self.physical_template = physical_template
         self.physical_bare = physical_bare
         self._encode = encode
         self._decode = decode
         self.allows_upsert_key = allows_upsert_key
+        self.sortable = sortable
         self.reads = reads
         self.config_keys = config_keys
         self.config_limits = config_limits
@@ -251,7 +301,8 @@ class _String(_AttributeType):
         super().__init__(
             name="string",
             config_keys=frozenset({"max_length"}),
-            operators=_EQ_NE_IN_CONTAINS_NULL,
+            operators=_QUERY_TEXT,
+            rule_operators=_RULE_EQ_NE_IN_CONTAINS_NULL,
             physical_template="VARCHAR({max_length})",
             physical_bare="VARCHAR",
             config_limits=(
@@ -306,7 +357,8 @@ class _Decimal(_AttributeType):
         super().__init__(
             name="decimal",
             config_keys=frozenset({"precision", "scale"}),
-            operators=_CMP,
+            operators=_QUERY_CMP,
+            rule_operators=_RULE_CMP,
             physical_template="NUMERIC({precision},{scale})",
             physical_bare="NUMERIC",
             config_limits=(
@@ -377,7 +429,8 @@ class _Dictionary(_AttributeType):
         super().__init__(
             name="dictionary",
             config_keys=frozenset({"dictionary_id"}),
-            operators=_EQ_NE_IN_NULL,
+            operators=_QUERY_ENUM,
+            rule_operators=_RULE_EQ_NE_IN_NULL,
             reads=frozenset({"dictionary"}),
             physical_template="VARCHAR(64)",
             physical_bare="VARCHAR(64)",
@@ -460,7 +513,8 @@ class _Reference(_AttributeType):
         super().__init__(
             name="reference",
             config_keys=frozenset({"target_entity_id"}),
-            operators=_CMP,
+            operators=_QUERY_CMP,
+            rule_operators=_RULE_CMP,
             reads=frozenset({"target"}),
             physical_template="VARCHAR | BIGINT",
             physical_bare="VARCHAR | BIGINT",
@@ -524,7 +578,8 @@ _TYPES: tuple[_AttributeType, ...] = (
     _String(),
     _AttributeType(
         name="text",
-        operators=_EQ_NE_IN_CONTAINS_NULL,
+        operators=_QUERY_TEXT,
+        rule_operators=_RULE_EQ_NE_IN_CONTAINS_NULL,
         physical_template="TEXT",
         physical_bare="TEXT",
         encode=encode_text,
@@ -532,7 +587,8 @@ _TYPES: tuple[_AttributeType, ...] = (
     ),
     _AttributeType(
         name="integer",
-        operators=_CMP,
+        operators=_QUERY_CMP,
+        rule_operators=_RULE_CMP,
         physical_template="BIGINT",
         physical_bare="BIGINT",
         encode=encode_bigint,
@@ -541,7 +597,8 @@ _TYPES: tuple[_AttributeType, ...] = (
     _Decimal(),
     _AttributeType(
         name="number",
-        operators=_CMP,
+        operators=_QUERY_CMP,
+        rule_operators=_RULE_CMP,
         allows_upsert_key=False,
         physical_template="DOUBLE PRECISION",
         physical_bare="DOUBLE PRECISION",
@@ -550,7 +607,8 @@ _TYPES: tuple[_AttributeType, ...] = (
     ),
     _AttributeType(
         name="boolean",
-        operators=_EQ_NE_NULL,
+        operators=_QUERY_BOOL,
+        rule_operators=_RULE_EQ_NE_NULL,
         physical_template="BOOLEAN",
         physical_bare="BOOLEAN",
         encode=encode_boolean,
@@ -558,7 +616,8 @@ _TYPES: tuple[_AttributeType, ...] = (
     ),
     _AttributeType(
         name="date",
-        operators=_CMP,
+        operators=_QUERY_CMP,
+        rule_operators=_RULE_CMP,
         physical_template="DATE",
         physical_bare="DATE",
         encode=encode_date,
@@ -566,7 +625,8 @@ _TYPES: tuple[_AttributeType, ...] = (
     ),
     _AttributeType(
         name="timestamp",
-        operators=_CMP,
+        operators=_QUERY_CMP,
+        rule_operators=_RULE_CMP,
         physical_template="TIMESTAMPTZ",
         physical_bare="TIMESTAMPTZ",
         encode=encode_timestamp,
@@ -574,7 +634,8 @@ _TYPES: tuple[_AttributeType, ...] = (
     ),
     _AttributeType(
         name="time",
-        operators=_CMP,
+        operators=_QUERY_CMP,
+        rule_operators=_RULE_CMP,
         physical_template="TIME",
         physical_bare="TIME",
         encode=encode_time,
@@ -582,8 +643,10 @@ _TYPES: tuple[_AttributeType, ...] = (
     ),
     _AttributeType(
         name="json",
-        operators=_EQ_NE_NULL,
+        operators=_QUERY_JSON,
+        rule_operators=_RULE_EQ_NE_NULL,
         allows_upsert_key=False,
+        sortable=False,
         physical_template="JSONB",
         physical_bare="JSONB",
         encode=encode_json,
@@ -593,7 +656,8 @@ _TYPES: tuple[_AttributeType, ...] = (
     _Reference(),
     _AttributeType(
         name="user",
-        operators=_EQ_NE_IN_NULL,
+        operators=_QUERY_ENUM,
+        rule_operators=_RULE_EQ_NE_IN_NULL,
         reads=frozenset({"user"}),
         physical_template="VARCHAR(64)",
         physical_bare="VARCHAR(64)",

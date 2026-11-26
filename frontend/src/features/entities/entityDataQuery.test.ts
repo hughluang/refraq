@@ -28,7 +28,7 @@ const schema: DataSchema = {
     { name: "sku", type: "string", operators: ["eq", "contains", "in"] },
     { name: "notes", type: "text", operators: ["eq", "contains", "is_null"] },
     { name: "on_sale", type: "boolean", operators: ["eq", "ne"] },
-    { name: "due", type: "date", operators: ["eq", "gte", "lte"] },
+    { name: "due", type: "date", operators: ["eq", "gte", "lte", "between"] },
     { name: "price", type: "decimal", operators: ["eq"] },
     { name: "replacement", type: "reference", operators: ["eq", "gt", "lt"] },
     {
@@ -100,12 +100,7 @@ describe("entity data viewer queries", () => {
           {
             any: [
               { field: "state", op: "in", value: ["old", "open"] },
-              {
-                all: [
-                  { field: "due", op: "gte", value: "2026-01-01" },
-                  { field: "due", op: "lte", value: "2026-02-28" },
-                ],
-              },
+              { field: "due", op: "between", value: ["2026-01-01", "2026-02-28"] },
               { field: "on_sale", op: "eq", value: false },
             ],
           },
@@ -181,9 +176,14 @@ describe("entity data viewer queries", () => {
       { field: "due", op: "between", values: ["2026-01-01", "2026-01-31"] },
       { field: "state", op: "in", values: ["open", "old"] },
     ];
-    const query = { lookup: { field: "row_id", value: "23" }, match: "any" as const, conditions };
+    const query = {
+      lookup: { field: "row_id", value: "23" },
+      match: "any" as const,
+      negate: true,
+      conditions,
+    };
     for (const limit of [
-      { filter_leaves_max: 3 },
+      { filter_leaves_max: 2 },
       { filter_depth_max: 3 },
       { filter_in_values_max: 1 },
     ]) {

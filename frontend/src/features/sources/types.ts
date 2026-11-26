@@ -257,14 +257,31 @@ export type SampleResult = {
   sql?: string | null;
 };
 
-export type SampleFilterOp = "eq" | "neq" | "contains" | "is_null";
+export type SampleFilterOp =
+  | "eq"
+  | "ne"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "between"
+  | "in"
+  | "not_in"
+  | "contains"
+  | "not_contains"
+  | "starts_with"
+  | "ends_with"
+  | "is_null"
+  | "is_not_null";
 
 export type SampleRequestBody = {
   columns?: string[] | null;
+  match?: "all" | "any";
   filters?: Array<{
     column: string | null;
     op: SampleFilterOp;
-    value?: string;
+    value?: string | string[];
   }>;
   order_by?: Array<{ column: string; direction: "asc" | "desc" }>;
   offset?: number;

@@ -122,12 +122,49 @@ def test_physical_sql_and_dictionary_check_predicate() -> None:
 
 
 def test_operators_and_upsert_key_come_from_the_type() -> None:
-    compared = ("eq", "ne", "in", "gt", "gte", "lt", "lte", "is_null")
+    compared = (
+        "eq",
+        "ne",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "between",
+        "in",
+        "not_in",
+        "is_null",
+        "is_not_null",
+    )
     assert resolve("integer").operators == compared
+    assert resolve("integer").rule_operators == (
+        "eq", "ne", "in", "gt", "gte", "lt", "lte", "is_null"
+    )
     assert resolve("reference").operators == resolve("integer").operators
-    assert resolve("string").operators == ("eq", "ne", "in", "contains", "is_null")
-    assert resolve("dictionary").operators == ("eq", "ne", "in", "is_null")
-    assert resolve("boolean").operators == ("eq", "ne", "is_null")
+    assert resolve("string").operators == (
+        "eq",
+        "ne",
+        "ieq",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "between",
+        "in",
+        "not_in",
+        "contains",
+        "not_contains",
+        "starts_with",
+        "ends_with",
+        "is_null",
+        "is_not_null",
+    )
+    assert resolve("string").rule_operators == ("eq", "ne", "in", "contains", "is_null")
+    assert resolve("dictionary").operators == (
+        "eq", "ne", "in", "not_in", "is_null", "is_not_null"
+    )
+    assert resolve("boolean").operators == ("eq", "ne", "is_null", "is_not_null")
+    assert resolve("json").sortable is False
+    assert resolve("string").sortable is True
     assert resolve("boolean").allows_upsert_key is True
     assert resolve("number").allows_upsert_key is False
     assert resolve("json").allows_upsert_key is False

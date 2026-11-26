@@ -34,6 +34,7 @@ def _query_body(
     *,
     filters: Any,
     fields: Any,
+    sort: Any,
     limit: Any,
     offset: Any,
     include_total: Any,
@@ -44,6 +45,8 @@ def _query_body(
         body["filters"] = filters
     if fields is not None:
         body["fields"] = fields
+    if sort is not None:
+        body["sort"] = sort
     if limit is not None:
         body["limit"] = limit
     if offset is not None:
@@ -94,6 +97,7 @@ with warnings.catch_warnings():
         table_name: str,
         filters: dict[str, Any] | None = None,
         fields: list[str] | None = None,
+        sort: dict[str, Any] | None = None,
         limit: int | None = None,
         offset: int | None = None,
         include_total: bool | None = None,
@@ -108,6 +112,7 @@ with warnings.catch_warnings():
             body = _query_body(
                 filters=filters,
                 fields=fields,
+                sort=sort,
                 limit=limit,
                 offset=offset,
                 include_total=include_total,

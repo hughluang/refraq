@@ -1158,11 +1158,14 @@ def _read_rows(
     )
     params: dict[str, Any] = {}
     if filters:
-        _reject_filter_fields(filters, {column.attr.name for column in outcome.columns})
         target = _target(head)
         if target is None:
             raise EntityNotServing()
-        compiled = compile_filters(filters, target)
+        compiled = compile_filters(
+            filters,
+            target,
+            allowed_fields={column.attr.name for column in outcome.columns},
+        )
         if compiled is not None:
             sql = f"SELECT * FROM ({sql}) AS preview_filtered WHERE {compiled.sql}"
             params.update(compiled.params)
@@ -1225,22 +1228,6 @@ def _json_value(value: Any) -> Any:
     if hasattr(value, "isoformat") and not isinstance(value, str):
         return value.isoformat()
     return value
-
-
-def _reject_filter_fields(node: Any, allowed: set[str]) -> None:
-    if isinstance(node, dict):
-        if "field" in node:
-            field = node["field"]
-            if field == "__withheld" or field not in allowed and field != "row_id":
-                raise EntityRowInvalid(f"Unknown filter field '{field}'")
-        for key in ("all", "any"):
-            items = node.get(key)
-            if isinstance(items, list):
-                for item in items:
-                    _reject_filter_fields(item, allowed)
-    elif isinstance(node, list):
-        for item in node:
-            _reject_filter_fields(item, allowed)
 
 
 def _write_log(

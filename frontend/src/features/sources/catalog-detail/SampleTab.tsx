@@ -37,6 +37,10 @@ import {
   SortIcon,
 } from "@/components/icons";
 import {
+  availableFilterOperators,
+  filterOperatorLabelKey,
+} from "@/lib/filterOperators";
+import {
   binaryByteLength,
   cellExceedsDeclaredPrecision,
   formatSampleCell,
@@ -110,12 +114,24 @@ export function SampleTab({ object }: SampleTabProps) {
   );
 
   const opOptions = useMemo(
-    () => [
-      { value: "eq", label: t("catalog.sample.opEq") },
-      { value: "neq", label: t("catalog.sample.opNeq") },
-      { value: "contains", label: t("catalog.sample.opContains") },
-      { value: "is_null", label: t("catalog.sample.opIsNull") },
-    ],
+    () =>
+      availableFilterOperators([
+        "eq",
+        "ne",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "between",
+        "in",
+        "not_in",
+        "contains",
+        "not_contains",
+        "starts_with",
+        "ends_with",
+        "is_null",
+        "is_not_null",
+      ]).map((op) => ({ value: op, label: t(filterOperatorLabelKey(op)) })),
     [t],
   );
 
@@ -372,7 +388,8 @@ export function SampleTab({ object }: SampleTabProps) {
 
       <Stack gap="xs">
         {filters.map((row, idx) => {
-          const needsValue = row.op !== "is_null" && row.column != null;
+          const isUnary = row.op === "is_null" || row.op === "is_not_null";
+          const needsValue = !isUnary && row.column != null;
           return (
             <Group key={row.id} align="flex-end" wrap="wrap">
               <SelectField
@@ -394,24 +411,39 @@ export function SampleTab({ object }: SampleTabProps) {
                 label={idx === 0 ? t("catalog.sample.filterOp") : undefined}
                 aria-label={t("catalog.sample.filterOp")}
                 data={opOptions}
-                value={row.op}
+                value={row.op === "neq" ? "ne" : row.op}
                 onChange={(v) => {
                   if (v == null || !isSampleFilterOp(v)) return;
                   updateFilter(row.id, { op: v });
                 }}
                 allowDeselect={false}
-                w={140}
+                w={180}
               />
               <TextField
                 editable={needsValue}
                 label={idx === 0 ? t("catalog.sample.filterValue") : undefined}
                 aria-label={t("catalog.sample.filterValue")}
+                placeholder={
+                  row.op === "in" || row.op === "not_in" ? "a, b, c" : undefined
+                }
                 value={row.value}
                 onChange={(e) => {
                   updateFilter(row.id, { value: e.currentTarget.value });
                 }}
-                w={200}
+                w={row.op === "between" ? 130 : 200}
               />
+              {row.op === "between" ? (
+                <TextField
+                  editable={needsValue}
+                  label={idx === 0 ? t("entities.data.query.through") : undefined}
+                  aria-label={t("entities.data.query.through")}
+                  value={row.valueEnd ?? ""}
+                  onChange={(e) => {
+                    updateFilter(row.id, { valueEnd: e.currentTarget.value });
+                  }}
+                  w={130}
+                />
+              ) : null}
               {filters.length > 1 || row.column != null || row.value !== "" ? (
                 <ActionIcon
                   variant="subtle"

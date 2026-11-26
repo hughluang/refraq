@@ -25,7 +25,7 @@ from backend.core.db import map_platform_db_error
 from backend.core.errors import PlatformCapacityExceeded
 from backend.entity.attribute_type import resolve
 from backend.entity.data.capabilities import ROW_WRITE_LIMIT
-from backend.entity.data.filters import CompiledFilter, filter_is_leakproof
+from backend.entity.data.filters import CompiledFilter
 from backend.entity.data.head import HeadTarget
 from backend.entity.data.paging import RowSort
 from backend.entity.data.values import decode_row, reference_value_attr
@@ -692,24 +692,23 @@ def query_offset(
     *,
     fields: list[str],
     compiled: CompiledFilter | None,
-    filters: Any,
     row_dependent: bool,
     limit: int,
     offset: int,
     include_total: bool,
     sort: RowSort = RowSort(),
 ) -> tuple[list[dict[str, Any]], int | None]:
-    if sort == RowSort() and _page_through_profile(filters, target, row_dependent):
+    if sort == RowSort() and _page_through_profile(compiled, row_dependent):
         items = _profile_page_rows(
             conn,
             target,
             fields=fields,
-            filters=filters,
+            compiled=compiled,
             limit=limit,
             offset=offset,
             after=None,
         )
-        total = _profile_count(conn, target, filters) if include_total else None
+        total = _profile_count(conn, target, compiled) if include_total else None
         return items, total
 
     where_sql, params = _where(compiled)
@@ -733,18 +732,17 @@ def query_keyset(
     *,
     fields: list[str],
     compiled: CompiledFilter | None,
-    filters: Any,
     row_dependent: bool,
     limit: int,
     after_row_id: int | None,
 ) -> tuple[list[dict[str, Any]], int | None]:
     fetch = limit + 1
-    if _page_through_profile(filters, target, row_dependent):
+    if _page_through_profile(compiled, row_dependent):
         items = _profile_page_rows(
             conn,
             target,
             fields=fields,
-            filters=filters,
+            compiled=compiled,
             limit=fetch,
             offset=0,
             after=after_row_id,
@@ -776,11 +774,11 @@ def query_keyset(
     return page, next_after
 
 
-def _page_through_profile(filters: Any, target: HeadTarget, row_dependent: bool) -> bool:
-    return not row_dependent or filter_is_leakproof(filters, target)
+def _page_through_profile(compiled: CompiledFilter | None, row_dependent: bool) -> bool:
+    return not row_dependent or compiled is None or compiled.leakproof
 
 
-def _profile_count(conn: Connection, target: HeadTarget, filters: Any) -> int:
+def _profile_count(conn: Connection, target: HeadTarget, compiled: CompiledFilter | None) -> int:
     """Count the view text. The reader passes the view and a filter, not SQL."""
     sql = (
         f"SELECT {qualified_table(ENTITY_ACCESS_SCHEMA, 'profile_count')}("
@@ -790,7 +788,7 @@ def _profile_count(conn: Connection, target: HeadTarget, filters: Any) -> int:
         text(sql),
         {
             "_view": _read_from(target),
-            "_filter": None if not filters else json.dumps(filters),
+            "_filter": None if compiled is None else compiled.profile_json,
         },
     ).scalar_one()
     return int(value)
@@ -801,7 +799,7 @@ def _profile_page_rows(
     target: HeadTarget,
     *,
     fields: list[str],
-    filters: Any,
+    compiled: CompiledFilter | None,
     limit: int,
     offset: int,
     after: int | None,
@@ -826,7 +824,7 @@ def _profile_page_rows(
             "_limit": limit,
             "_offset": offset,
             "_after": after,
-            "_filter": None if not filters else json.dumps(filters),
+            "_filter": None if compiled is None else compiled.profile_json,
         },
     ).all()
     return [decode_row(fields, tuple(row), target) for row in rows]

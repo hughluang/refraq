@@ -47,7 +47,7 @@ class AttrFact:
         kind = self.value_type()
         if not kind:
             return ()
-        return resolve(kind).operators
+        return resolve(kind).rule_operators
 
     def pg_type(self) -> str:
         kind = self.value_type()

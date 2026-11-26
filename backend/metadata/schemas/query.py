@@ -4,19 +4,37 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 __all__ = [
     "ColumnDeclaration",
     "QueryRequest",
     "QueryResponse",
     "SampleFilterIn",
+    "SampleMatch",
     "SampleOrderIn",
     "SampleRequest",
     "SampleResponse",
 ]
 
-SampleFilterOp = Literal["eq", "neq", "contains", "is_null"]
+SampleFilterOp = Literal[
+    "eq",
+    "ne",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "between",
+    "in",
+    "not_in",
+    "contains",
+    "not_contains",
+    "starts_with",
+    "ends_with",
+    "is_null",
+    "is_not_null",
+]
+SampleMatch = Literal["all", "any"]
 OrderDirection = Literal["asc", "desc"]
 
 
@@ -56,7 +74,14 @@ class QueryResponse(BaseModel):
 class SampleFilterIn(BaseModel):
     column: str | None = None
     op: SampleFilterOp = "eq"
-    value: str = ""
+    value: str | list[str] | None = ""
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def _normalize_legacy_op(cls, raw: Any) -> Any:
+        if raw == "neq":
+            return "ne"
+        return raw
 
 
 class SampleOrderIn(BaseModel):
@@ -66,6 +91,7 @@ class SampleOrderIn(BaseModel):
 
 class SampleRequest(BaseModel):
     columns: list[str] | None = None
+    match: SampleMatch = "all"
     filters: list[SampleFilterIn] = Field(default_factory=list)
     order_by: list[SampleOrderIn] = Field(default_factory=list)
     offset: int = Field(default=0, ge=0)

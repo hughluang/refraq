@@ -1,37 +1,71 @@
 import type { DataAttribute, DataSchema } from "./accessTypes";
 import { parseEntityDataJson } from "./entityDataJson";
+import { availableFilterOperators, getFilterOperatorMeta } from "@/lib/filterOperators";
 import { Instant } from "@/lib/instant";
 
-export type QueryCondition = { field: string; op: string; values: string[] };
+export type QueryCondition = {
+  field: string;
+  op: string;
+  values: string[];
+  negate?: boolean;
+};
+
+export type QueryFilterGroup = {
+  match: "all" | "any";
+  negate?: boolean;
+  conditions: QueryCondition[];
+};
+
 export type EntityDataQuery = {
   lookup: { field: string; value: string } | null;
   match: "all" | "any";
+  negate?: boolean;
   conditions: QueryCondition[];
+  groups?: QueryFilterGroup[];
 };
 
 export const EMPTY_DATA_QUERY: EntityDataQuery = { lookup: null, match: "all", conditions: [] };
 
 export type DataFilter =
-  { field: string; op: string; value?: unknown } | { all: DataFilter[] } | { any: DataFilter[] };
+  | { field: string; op: string; value?: unknown }
+  | { all: DataFilter[] }
+  | { any: DataFilter[] }
+  | { not: DataFilter };
 
 const PARAM = "dataQuery";
 const ERROR = "entities.data.query.error.";
-const KNOWN_OPS = ["contains", "eq", "ne", "in", "gt", "gte", "lt", "lte", "is_null"];
 
-function hasKeys(value: unknown, keys: string[]): value is Record<string, unknown> {
+function hasExactOrSubsetKeys(
+  value: unknown,
+  required: string[],
+  optional: string[] = [],
+): value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const allowed = new Set([...required, ...optional]);
+  const keys = Object.keys(value);
   return (
-    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+    required.every((key) => Object.hasOwn(value, key)) && keys.every((key) => allowed.has(key))
   );
 }
 
 function isCondition(value: unknown): value is QueryCondition {
+  if (!hasExactOrSubsetKeys(value, ["field", "op", "values"], ["negate"])) return false;
+  if (value.negate !== undefined && typeof value.negate !== "boolean") return false;
   return (
-    hasKeys(value, ["field", "op", "values"]) &&
     typeof value.field === "string" &&
     typeof value.op === "string" &&
     Array.isArray(value.values) &&
     value.values.every((item) => typeof item === "string")
+  );
+}
+
+function isFilterGroup(value: unknown): value is QueryFilterGroup {
+  if (!hasExactOrSubsetKeys(value, ["match", "conditions"], ["negate"])) return false;
+  if (value.negate !== undefined && typeof value.negate !== "boolean") return false;
+  return (
+    (value.match === "all" || value.match === "any") &&
+    Array.isArray(value.conditions) &&
+    value.conditions.every(isCondition)
   );
 }
 
@@ -42,12 +76,16 @@ export function readDataQuery(params: Pick<URLSearchParams, "getAll">): EntityDa
   if (encoded.length !== 1) return null;
   try {
     const parsed: unknown = JSON.parse(encoded[0]);
-    if (!hasKeys(parsed, ["lookup", "match", "conditions"])) return null;
-    const { lookup, match, conditions } = parsed;
+    if (
+      !hasExactOrSubsetKeys(parsed, ["lookup", "match", "conditions"], ["negate", "groups"])
+    )
+      return null;
+    const { lookup, match, conditions, negate, groups } = parsed;
+    if (negate !== undefined && typeof negate !== "boolean") return null;
     if (
       lookup !== null &&
       !(
-        hasKeys(lookup, ["field", "value"]) &&
+        hasExactOrSubsetKeys(lookup, ["field", "value"]) &&
         typeof lookup.field === "string" &&
         typeof lookup.value === "string"
       )
@@ -59,14 +97,25 @@ export function readDataQuery(params: Pick<URLSearchParams, "getAll">): EntityDa
       !conditions.every(isCondition)
     )
       return null;
-    return { lookup: lookup as EntityDataQuery["lookup"], match, conditions };
+    if (groups !== undefined && (!Array.isArray(groups) || !groups.every(isFilterGroup))) {
+      return null;
+    }
+    const result: EntityDataQuery = {
+      lookup: lookup as EntityDataQuery["lookup"],
+      match,
+      conditions,
+    };
+    if (negate) result.negate = true;
+    if (groups && groups.length > 0) result.groups = groups;
+    return result;
   } catch {
     return null;
   }
 }
 
 export function writeDataQuery(params: URLSearchParams, query: EntityDataQuery): void {
-  if (!query.lookup && !query.conditions.length) params.delete(PARAM);
+  const hasGroups = Boolean(query.groups && query.groups.length > 0);
+  if (!query.lookup && !query.conditions.length && !hasGroups) params.delete(PARAM);
   else params.set(PARAM, JSON.stringify(query));
 }
 
@@ -77,9 +126,7 @@ export function queryFields(schema: DataSchema): DataAttribute[] {
 }
 
 export function conditionOps(field: DataAttribute): string[] {
-  const ops = KNOWN_OPS.filter((op) => field.operators?.includes(op));
-  if (ops.includes("gte") && ops.includes("lte")) ops.splice(1, 0, "between");
-  return ops;
+  return availableFilterOperators(field.operators);
 }
 
 export function lookupOp(schema: DataSchema, field: DataAttribute): "eq" | "contains" | null {
@@ -107,7 +154,22 @@ const BIGINT_MAX = BigInt("9223372036854775807");
 const INVALID = Symbol("invalid-filter-value");
 const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
 
-function scalarValue(field: DataAttribute, raw: string): unknown {
+function scalarValue(field: DataAttribute, raw: string, op?: string): unknown {
+  const domain = op ? getFilterOperatorMeta(op).valueDomain : "field";
+  if (domain === "string") {
+    if (raw.includes("\u0000")) return INVALID;
+    if (op === "ieq") return raw;
+    return raw.length ? raw : INVALID;
+  }
+  if (domain === "json") {
+    if (!raw.length || raw.includes("\u0000")) return INVALID;
+    try {
+      const parsed = parseEntityDataJson(raw);
+      return parsed === undefined ? INVALID : parsed;
+    } catch {
+      return INVALID;
+    }
+  }
   if (!raw.length || raw.includes("\u0000")) return INVALID;
   const clean = raw.trim();
   switch (inputTypeOf(field)) {
@@ -152,41 +214,74 @@ function scalarValue(field: DataAttribute, raw: string): unknown {
   }
 }
 
-function group(terms: DataFilter[], mode: EntityDataQuery["match"]): DataFilter {
+function group(terms: DataFilter[], mode: "all" | "any"): DataFilter {
   return terms.length === 1 ? terms[0] : mode === "all" ? { all: terms } : { any: terms };
 }
 
 type CompiledQuery = { ok: true; filters?: DataFilter } | { ok: false; error: string };
 
-export function compileDataQuery(query: EntityDataQuery, schema: DataSchema): CompiledQuery {
-  const fields = queryFields(schema);
+function compileConditionList(
+  conditions: readonly QueryCondition[],
+  fields: readonly DataAttribute[],
+  counters: { leaves: number; inValues: number },
+): { ok: true; terms: DataFilter[] } | { ok: false; error: string } {
   const terms: DataFilter[] = [];
-  let leaves = 0;
-  let inValues = 0;
-
-  for (const { field: name, op, values } of query.conditions) {
+  for (const { field: name, op, values, negate } of conditions) {
     const field = fields.find((item) => item.name === name);
     if (!field || !conditionOps(field).includes(op)) return { ok: false, error: ERROR + "field" };
-    const expected = op === "is_null" ? 0 : op === "between" ? 2 : 1;
-    if (op === "in" ? !values.length : values.length !== expected)
-      return { ok: false, error: ERROR + "value" };
-    const encoded = values.map((value) => scalarValue(field, value));
-    if (encoded.includes(INVALID)) return { ok: false, error: ERROR + "value" };
-    if (op === "between") {
-      terms.push({
-        all: [
-          { field: name, op: "gte", value: encoded[0] },
-          { field: name, op: "lte", value: encoded[1] },
-        ],
-      });
-      leaves += 2;
-    } else {
-      if (op === "is_null") terms.push({ field: name, op });
-      else terms.push({ field: name, op, value: op === "in" ? encoded : encoded[0] });
-      if (op === "in") inValues += encoded.length;
-      leaves += 1;
+    const meta = getFilterOperatorMeta(op);
+    if (meta.arity === "none") {
+      if (values.length !== 0) return { ok: false, error: ERROR + "value" };
+      const leaf: DataFilter = { field: name, op };
+      terms.push(negate ? { not: leaf } : leaf);
+      counters.leaves += 1;
+      continue;
     }
+    if (meta.arity === "range") {
+      if (values.length !== 2) return { ok: false, error: ERROR + "value" };
+      const encoded = values.map((v) => scalarValue(field, v, op));
+      if (encoded.includes(INVALID)) return { ok: false, error: ERROR + "value" };
+      const leaf: DataFilter = { field: name, op, value: encoded };
+      terms.push(negate ? { not: leaf } : leaf);
+      counters.leaves += 1;
+      continue;
+    }
+    if (meta.arity === "array") {
+      if (!values.length) return { ok: false, error: ERROR + "value" };
+      const encoded = values.map((v) => scalarValue(field, v, op));
+      if (encoded.includes(INVALID)) return { ok: false, error: ERROR + "value" };
+      const leaf: DataFilter = { field: name, op, value: encoded };
+      terms.push(negate ? { not: leaf } : leaf);
+      counters.inValues += encoded.length;
+      counters.leaves += 1;
+      continue;
+    }
+    if (values.length !== 1) return { ok: false, error: ERROR + "value" };
+    const encoded = scalarValue(field, values[0], op);
+    if (encoded === INVALID) return { ok: false, error: ERROR + "value" };
+    const leaf: DataFilter = { field: name, op, value: encoded };
+    terms.push(negate ? { not: leaf } : leaf);
+    counters.leaves += 1;
   }
+  return { ok: true, terms };
+}
+
+export function compileDataQuery(query: EntityDataQuery, schema: DataSchema): CompiledQuery {
+  const fields = queryFields(schema);
+  const counters = { leaves: 0, inValues: 0 };
+
+  const rootRes = compileConditionList(query.conditions, fields, counters);
+  if (!rootRes.ok) return rootRes;
+  const rootParts: DataFilter[] = [...rootRes.terms];
+
+  for (const sub of query.groups ?? []) {
+    if (!sub.conditions.length) continue;
+    const subRes = compileConditionList(sub.conditions, fields, counters);
+    if (!subRes.ok) return subRes;
+    const grouped = group(subRes.terms, sub.match);
+    rootParts.push(sub.negate ? { not: grouped } : grouped);
+  }
+
   const combined: DataFilter[] = [];
   if (query.lookup) {
     const { field: name, value } = query.lookup;
@@ -198,15 +293,18 @@ export function compileDataQuery(query: EntityDataQuery, schema: DataSchema): Co
     const op = lookupOp(schema, field);
     if (!op) return { ok: false, error: ERROR + "field" };
     combined.push({ field: name, op, value: encoded });
-    leaves += 1;
+    counters.leaves += 1;
   }
   if (
-    leaves > (schema.limits?.filter_leaves_max ?? 20) ||
-    inValues > (schema.limits?.filter_in_values_max ?? 1000)
+    counters.leaves > (schema.limits?.filter_leaves_max ?? 20) ||
+    counters.inValues > (schema.limits?.filter_in_values_max ?? 1000)
   )
     return { ok: false, error: ERROR + "limit" };
 
-  if (terms.length) combined.push(group(terms, query.match));
+  if (rootParts.length) {
+    const body = group(rootParts, query.match);
+    combined.push(query.negate ? { not: body } : body);
+  }
   if (!combined.length) return { ok: true };
   const filters = group(combined, "all");
   if (depthOf(filters) > (schema.limits?.filter_depth_max ?? 8))
@@ -216,6 +314,7 @@ export function compileDataQuery(query: EntityDataQuery, schema: DataSchema): Co
 
 function depthOf(node: DataFilter): number {
   if ("field" in node) return 1;
+  if ("not" in node) return 1 + depthOf(node.not);
   const children = "all" in node ? node.all : node.any;
   return 1 + Math.max(...children.map(depthOf));
 }

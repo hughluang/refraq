@@ -730,7 +730,7 @@ def test_stored_draft_without_ref_validates_and_refines() -> None:
     graph = _graph(
         [
             _without_ref("nd_trigger", "trigger.manual", "Run"),
-            _without_ref("nd_read", "read.entity", "Read"),
+            _without_ref("nd_read", "read.nonexistent", "Read"),
             _without_ref("nd_write", "write.entity", "Write"),
         ],
         [

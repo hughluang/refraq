@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from backend.entity.attribute_type import resolve
 from backend.entity.lifecycle import latest_published_of
 from backend.entity.store import get_entity_store
 from backend.entity.table_name import published_attributes
@@ -25,6 +26,8 @@ class HeadAttribute:
     unique: bool
     business_key: bool
     value_type: str
+    operators: tuple[str, ...] = ()
+    sortable: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,13 +43,22 @@ def get_entity_head(entity_id: str) -> EntityHeadShape | None:
     version = latest_published_of(store.list_all_versions(entity_id))
     if version is None:
         return None
-    attributes = tuple(
-        HeadAttribute(
-            name=attr.name,
-            unique=bool(attr.unique),
-            business_key=bool(attr.business_key),
-            value_type=attr.type,
+    attributes = []
+    for attr in published_attributes(version):
+        value_type = attr.type
+        if attr.type == "reference":
+            snap = version.reference_snapshots.get(attr.name)
+            if isinstance(snap, dict) and isinstance(snap.get("type"), str):
+                value_type = snap["type"]
+        spec = resolve(value_type)
+        attributes.append(
+            HeadAttribute(
+                name=attr.name,
+                unique=bool(attr.unique),
+                business_key=bool(attr.business_key),
+                value_type=value_type,
+                operators=spec.operators,
+                sortable=spec.sortable,
+            )
         )
-        for attr in published_attributes(version)
-    )
-    return EntityHeadShape(attributes=attributes)
+    return EntityHeadShape(attributes=tuple(attributes))

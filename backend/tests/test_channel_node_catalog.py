@@ -42,6 +42,9 @@ _OUTPUT_VIEWS = {
     ),
     "transform.if": OutputView(kind="record"),
     "transform.merge": OutputView(kind="rows", rows="rows", metrics=("count",)),
+    "read.entity": OutputView(
+        kind="rows", rows="rows", metrics=("count", "total")
+    ),
     "transform.set_fields": OutputView(kind="record"),
     "volume.batch_read": OutputView(
         kind="container", metrics=("count", "total", "batch_size"), item="rows"

@@ -167,6 +167,8 @@ class ResolvedAttribute:
     unique: bool
     business_key: bool
     value_type: str = "string"
+    operators: tuple[str, ...] = ()
+    sortable: bool = True
 
 
 @dataclass(frozen=True, slots=True)

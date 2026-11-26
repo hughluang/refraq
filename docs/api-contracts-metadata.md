@@ -349,7 +349,8 @@ Request:
 | Field | Notes |
 | --- | --- |
 | `columns` | Optional column subset; omit or null → `SELECT *`; empty list → `SAMPLE_FILTER_INVALID` |
-| `filters` | Optional list; AND-combined. v1 ops: `eq`, `neq`, `contains`, `is_null`. Entries without `column` are ignored |
+| `match` | Optional `all` (AND) or `any` (OR) combinator across `filters`. Default `all` |
+| `filters` | Optional list of `{ column, op, value }`. Ops: `eq`, `ne` (legacy `neq` alias accepted at ingress), `gt`, `gte`, `lt`, `lte`, `between`, `in`, `not_in`, `contains`, `not_contains`, `starts_with`, `ends_with`, `is_null`, `is_not_null`. `value` is a string for scalar/pattern ops, `[low, high]` for `between`, a non-empty string list (max 100) for `in`/`not_in`, and omitted/null for `is_null`/`is_not_null`. Numeric columns validate and emit typed numeric SQL literals. Entries without `column` are ignored |
 | `order_by` | Optional; without it, pagination order is unstable (especially `offset > 0`) |
 | `offset` | Default **0**; must be ≥ 0 |
 | `limit` | Default **50**; must be ≥ 1 |

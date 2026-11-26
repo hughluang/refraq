@@ -12,7 +12,7 @@ import pytest
 
 from backend.entity.access.compiler import Shape, predicate_depends_on_row
 from backend.entity.access.facts import GrantSpec
-from backend.entity.data.filters import CompiledFilter, filter_is_leakproof
+from backend.entity.data.filters import CompiledFilter, compile_filters
 from backend.entity.data.sql import query_keyset, query_offset
 from backend.entity.data.head import HeadTarget
 from backend.entity.data.paging import resolve_sort
@@ -68,9 +68,9 @@ def test_large_profile_page_is_one_execution_and_keeps_cursor() -> None:
             self.calls.append((str(statement), params))
             return Rows()
     conn = Connection()
-    filters = {"field": "row_id", "op": "gt", "value": 500}
+    compiled = compile_filters({"field": "row_id", "op": "gt", "value": 500}, _target())
     items, after = query_keyset(
-        conn, _target(), fields=["row_id"], compiled=None, filters=filters,
+        conn, _target(), fields=["row_id"], compiled=compiled,
         row_dependent=False, limit=10000, after_row_id=500,
     )
     assert [row["row_id"] for row in items] == list(range(501, 10501))
@@ -81,7 +81,7 @@ def test_large_profile_page_is_one_execution_and_keeps_cursor() -> None:
     assert params["_limit"] == 10001
     assert params["_offset"] == 0
     assert params["_after"] == 500
-    assert params["_filter"] == '{"field": "row_id", "op": "gt", "value": 500}'
+    assert params["_filter"] == '{"field":"row_id","op":"gt","value":500}'
 
 
 def test_large_offset_projection_and_count_are_separate() -> None:
@@ -98,7 +98,7 @@ def test_large_offset_projection_and_count_are_separate() -> None:
             return Rows()
     conn = Connection()
     items, total = query_offset(
-        conn, _target(), fields=["sku"], compiled=None, filters=None,
+        conn, _target(), fields=["sku"], compiled=None,
         row_dependent=False, limit=1000, offset=250, include_total=True,
     )
     assert items == [{"sku": "a"}] * 1000
@@ -115,7 +115,7 @@ def test_large_offset_projection_and_count_are_separate() -> None:
 def test_internal_read_keeps_its_own_probe_limit(monkeypatch, count) -> None:
     from backend.admin.system_parameters import set_parameter
     from backend.entity import rows
-    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.errors import EntityRowLimitExceeded
     from backend.worker.parameters import assemble_system_parameters
 
     assemble_system_parameters()
@@ -140,10 +140,10 @@ def test_internal_read_keeps_its_own_probe_limit(monkeypatch, count) -> None:
             return Result()
     monkeypatch.setattr(rows.data_sql, "entity_read_connection", lambda ctx: nullcontext(Connection()))
     if count == 301:
-        with pytest.raises(EntityRowWriteFailed, match="Read returned more than 300 rows"):
-            rows.read_rows("ent", filters=[], user=None, limit=300)
+        with pytest.raises(EntityRowLimitExceeded, match="Read returned more than 300 rows"):
+            rows.read_rows("ent", filters=None, user=None, limit=300)
     else:
-        items, total = rows.read_rows("ent", filters=[], user=None, limit=300)
+        items, total = rows.read_rows("ent", filters=None, user=None, limit=300)
         assert len(items) == total == 300
     assert len(calls) == 2
     assert calls[0][1]["_limit"] == 301
@@ -161,8 +161,13 @@ def test_row_dependent_keyset_uses_one_direct_read(size) -> None:
             return Result()
     items, after = query_keyset(
         Connection(), _target(), fields=["row_id"],
-        compiled=CompiledFilter(sql='"sku" ILIKE :p0', params={"p0": "%a%"}),
-        filters={"field": "sku", "op": "contains", "value": "a"},
+        compiled=CompiledFilter(
+            sql='"sku" ILIKE :p0',
+            params={"p0": "%a%"},
+            profile_json='{"field":"sku","op":"contains","value":"a"}',
+            leakproof=False,
+            fields=frozenset({"sku"}),
+        ),
         row_dependent=True, limit=250, after_row_id=500,
     )
     assert len(items) == min(250, size)
@@ -213,7 +218,6 @@ def test_offset_total_uses_the_same_inline_gate() -> None:
         target,
         fields=["row_id"],
         compiled=None,
-        filters=None,
         row_dependent=False,
         limit=2,
         offset=0,
@@ -229,8 +233,13 @@ def test_offset_total_uses_the_same_inline_gate() -> None:
         closed_conn,  # type: ignore[arg-type]
         target,
         fields=["row_id"],
-        compiled=CompiledFilter(sql=" AND (sku ILIKE :p0)", params={"p0": "%a%"}),
-        filters={"field": "sku", "op": "contains", "value": "a"},
+        compiled=CompiledFilter(
+            sql=" AND (sku ILIKE :p0)",
+            params={"p0": "%a%"},
+            profile_json='{"field":"sku","op":"contains","value":"a"}',
+            leakproof=False,
+            fields=frozenset({"sku"}),
+        ),
         row_dependent=True,
         limit=2,
         offset=0,
@@ -256,13 +265,16 @@ def test_row_rule_marks_the_predicate_row_dependent() -> None:
 
 def test_leakproof_filters_may_share_the_profile_query_block() -> None:
     target = _target()
-    assert filter_is_leakproof(None, target)
-    assert filter_is_leakproof({}, target)
-    assert filter_is_leakproof({"field": "sku", "op": "eq", "value": "a"}, target)
-    assert filter_is_leakproof({"field": "row_id", "op": "gt", "value": 1}, target)
-    assert filter_is_leakproof({"field": "qty", "op": "is_null"}, target)
-    assert filter_is_leakproof({"field": "ref", "op": "eq", "value": 1}, target)
-    assert filter_is_leakproof(
+    assert compile_filters(None, target) is None
+    assert compile_filters({}, target) is None
+    assert compile_filters({"field": "sku", "op": "eq", "value": "a"}, target).leakproof
+    assert compile_filters({"field": "sku", "op": "gte", "value": "a"}, target).leakproof
+    assert compile_filters({"field": "sku", "op": "between", "value": ["a", "z"]}, target).leakproof
+    assert compile_filters({"field": "row_id", "op": "gt", "value": 1}, target).leakproof
+    assert compile_filters({"field": "qty", "op": "is_null"}, target).leakproof
+    assert compile_filters({"field": "qty", "op": "is_not_null"}, target).leakproof
+    assert compile_filters({"field": "ref", "op": "eq", "value": 1}, target).leakproof
+    assert compile_filters(
         {
             "all": [
                 {"field": "sku", "op": "eq", "value": "a"},
@@ -270,21 +282,33 @@ def test_leakproof_filters_may_share_the_profile_query_block() -> None:
             ]
         },
         target,
-    )
-    assert not filter_is_leakproof(
+    ).leakproof
+    assert compile_filters(
+        {"not": {"field": "sku", "op": "eq", "value": "a"}}, target
+    ).leakproof
+    assert not compile_filters(
         {"field": "sku", "op": "contains", "value": "a"}, target
-    )
-    assert not filter_is_leakproof({"field": "qty", "op": "eq", "value": "1.00"}, target)
-    assert not filter_is_leakproof({"field": "doc", "op": "eq", "value": {}}, target)
-    assert not filter_is_leakproof(
+    ).leakproof
+    assert not compile_filters(
+        {"field": "sku", "op": "starts_with", "value": "a"}, target
+    ).leakproof
+    assert not compile_filters(
+        {"field": "sku", "op": "ieq", "value": "a"}, target
+    ).leakproof
+    assert not compile_filters({"field": "qty", "op": "eq", "value": "1.00"}, target).leakproof
+    assert not compile_filters({"field": "doc", "op": "eq", "value": {}}, target).leakproof
+    assert not compile_filters(
+        {"field": "doc", "op": "has_key", "value": "k"}, target
+    ).leakproof
+    assert not compile_filters(
         {
             "any": [
                 {"field": "sku", "op": "eq", "value": "a"},
-                {"field": "note", "op": "contains", "value": "a"},
+                {"field": "sku", "op": "contains", "value": "a"},
             ]
         },
         target,
-    )
+    ).leakproof
 
 
 def _grant(row_rule: dict[str, object] | None) -> GrantSpec:

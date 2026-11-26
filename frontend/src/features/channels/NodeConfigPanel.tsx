@@ -1478,8 +1478,35 @@ function JsonObjectField({
 
 function attributeSchema(scope: Record<string, unknown>, head: HeadState) {
   const name = typeof scope.attribute === "string" ? scope.attribute : "";
-  const attribute = head.attributes.find((item) => item.name === name);
-  return attribute ? attributeValueSchema(attribute.type) : null;
+  const op = typeof scope.op === "string" ? scope.op : "";
+  const base =
+    name === "row_id"
+      ? attributeValueSchema("integer")
+      : (() => {
+          const attribute = head.attributes.find((item) => item.name === name);
+          return attribute ? attributeValueSchema(attribute.type) : null;
+        })();
+  if (!base) return null;
+  if (op === "is_null" || op === "is_not_null") return null;
+  if (op === "in" || op === "not_in") return { type: "array", items: base };
+  if (op === "between") return { type: "array", items: base, minItems: 2, maxItems: 2 };
+  if (
+    op === "ieq" ||
+    op === "contains" ||
+    op === "not_contains" ||
+    op === "starts_with" ||
+    op === "ends_with" ||
+    op === "has_key"
+  ) {
+    return { type: "string" };
+  }
+  if (op === "has_any_keys" || op === "has_all_keys") {
+    return { type: "array", items: { type: "string" } };
+  }
+  if (op === "json_contains") {
+    return { type: ["object", "array", "string", "number", "boolean", "null"] };
+  }
+  return base;
 }
 
 function SubchannelInputField({

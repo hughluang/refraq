@@ -38,6 +38,8 @@ class ChannelReferenceResolver:
                     unique=attr.unique,
                     business_key=attr.business_key,
                     value_type=attr.value_type,
+                    operators=attr.operators,
+                    sortable=attr.sortable,
                 )
                 for attr in shape.attributes
             )

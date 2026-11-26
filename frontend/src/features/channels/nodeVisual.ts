@@ -49,6 +49,7 @@ const TYPE_ICON: Record<string, NodeIcon> = {
   "trigger.scheduled": CalendarTimeIcon,
   "trigger.error": AlertIcon,
   "trigger.subchannel": SubchannelIcon,
+  "read.entity": DatabaseSearchIcon,
   "read.changes": ListIcon,
   "read.sql": DatabaseIcon,
   "read.source_query": PlugConnectedIcon,

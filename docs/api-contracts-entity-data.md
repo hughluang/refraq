@@ -239,22 +239,22 @@ Page data uses one query, without artificial batching to work around a database 
 
 ## 8. Filters
 
-Top-level `filters` with leaf triples `field` / `op` / `value`, and groups `all` / `any` (non-empty arrays). `field` is `row_id` or an attribute in the caller's shape; a hidden attribute answers exactly as an unknown one. Leaves compare presented values: masked cells by their masked value, withheld cells as NULL. This contract is self-contained: it does not wrap Action `query.filters` and does not reuse Catalog Sample.
+Top-level `filters` with leaf triples `field` / `op` / `value` (optional for unary operators `is_null` and `is_not_null`), groups `all` / `any` (non-empty arrays), and unary group negation `not` (one valid filter object). `field` is `row_id` or an attribute in the caller's shape; a hidden attribute answers exactly as an unknown one. Leaves compare presented values: masked cells by their masked value, withheld cells as NULL. This contract is self-contained: it does not wrap Action `query.filters` and does not reuse Catalog Sample.
 
-Operators: `eq`, `ne`, `in`, `contains`, `gt`, `gte`, `lt`, `lte`, `is_null`. Caps: 20 leaves, depth 8, total `in` values 1000 (same as schema `filter_*` limits).
+Operators: `eq`, `ne`, `ieq`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `not_in`, `contains`, `not_contains`, `starts_with`, `ends_with`, `is_null`, `is_not_null`, `json_contains`, `has_key`, `has_any_keys`, `has_all_keys`. Caps: 20 leaves (`between` counts as 1 leaf), depth 8, total set-valued items (`in`, `not_in`, `has_any_keys`, `has_all_keys`) 1000 (same as schema `filter_*` limits).
 
 Type whitelist (`operators` is the sole source of truth):
 
 | Types | Operators |
 | --- | --- |
-| string, text | eq, ne, in, contains, is_null |
-| integer, number, decimal, date, timestamp, time, row_id | eq, ne, in, gt, gte, lt, lte, is_null |
+| string, text | eq, ne, ieq, gt, gte, lt, lte, between, in, not_in, contains, not_contains, starts_with, ends_with, is_null, is_not_null |
+| integer, number, decimal, date, timestamp, time, row_id | eq, ne, gt, gte, lt, lte, between, in, not_in, is_null, is_not_null |
 | reference | operators of the snapshotted target Business Key type (`string` or `integer`) |
-| boolean | eq, ne, is_null |
-| dictionary, user | eq, ne, in, is_null |
-| json | eq, ne, is_null |
+| boolean | eq, ne, is_null, is_not_null |
+| dictionary, user | eq, ne, in, not_in, is_null, is_not_null |
+| json | eq, ne, json_contains, has_key, has_any_keys, has_all_keys, is_null, is_not_null |
 
-`ne` is SQL `IS DISTINCT FROM`. `contains` is `ILIKE` after escaping `\` then `%` and `_`, with explicit `ESCAPE '\'`. Empty `in` or empty `contains` → `422`.
+Null-safe negation and operator rules: `ne` is SQL `IS DISTINCT FROM`. `not` compiles to `NOT COALESCE(child, false)`. `not_in` is `col IS NULL OR col NOT IN (...)`. `not_contains` is `col IS NULL OR col NOT ILIKE ... ESCAPE '\'`. `between` expects a 2-element array `[low, high]` and compiles to `col >= low AND col <= high`. `ieq` is `LOWER(col) = LOWER(value)`. `contains` / `starts_with` / `ends_with` use `ILIKE` after escaping `\`, `%`, and `_` with explicit `ESCAPE '\'`. `json_contains` is `@>`, `has_key` is `?`, `has_any_keys` is `?|`, and `has_all_keys` is `?&`. Empty `in` / `not_in` / `has_any_keys` / `has_all_keys`, empty pattern strings, non-2-element `between`, or values on `is_null` / `is_not_null` → `422`. Non-leakproof operators (`ieq`, `contains`, `not_contains`, `starts_with`, `ends_with`, JSONB operators, and comparisons on `decimal`/`json`) execute against the `security_barrier` view directly when a row-dependent access policy applies.
 
 ## 9. Value Encoding
 
