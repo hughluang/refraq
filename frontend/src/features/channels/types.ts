@@ -37,6 +37,7 @@ export type GraphSettings = {
   keep_succeeded_runs?: boolean;
   keep_failed_runs?: boolean;
   keep_test_runs?: boolean;
+  concurrency?: "allow" | "forbid";
 };
 
 export type Graph = {

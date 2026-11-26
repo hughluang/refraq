@@ -33,8 +33,11 @@ from backend.core.db import session_scope
 from backend.core.time import utc_now
 from backend.entity.datasets import (
     any_row_exists,
+    append_chunks,
+    append_from_dataset,
     column_types,
     copy_chunks,
+    create_empty_table,
     create_table_from_query,
     drop_relation,
     format_type_declaration,
@@ -382,6 +385,118 @@ class DatasetRegistry:
             return False
         return not any_row_exists(record.relation)
 
+    def get_or_create_empty_buffer(
+        self,
+        *,
+        job_id: str,
+        buffer_name: str,
+        node_id: str,
+        seq: int,
+    ) -> DatasetRecord:
+        existing_id = _get_buffer_id(job_id, buffer_name)
+        if existing_id is not None:
+            record = self._store.get(existing_id)
+            if record is not None and record.status == "ready":
+                return record
+        record = self._begin(job_id=job_id, node_id=node_id, seq=seq)
+        try:
+            row_count, size = create_empty_table(record.relation)
+        except Exception:
+            self._drop_failed(record)
+            raise
+        ready = self._ready(record, columns=[], row_count=row_count, size=size)
+        _set_buffer_id(job_id, buffer_name, ready.id)
+        return ready
+
+    def append_buffer_dataset(
+        self,
+        *,
+        job_id: str,
+        buffer_name: str,
+        node_id: str,
+        seq: int,
+        source_id: str,
+    ) -> DatasetRecord:
+        source = self._require(source_id)
+        if source.row_count <= 0:
+            return self.get_or_create_empty_buffer(
+                job_id=job_id,
+                buffer_name=buffer_name,
+                node_id=node_id,
+                seq=seq,
+            )
+        target = self.get_or_create_empty_buffer(
+            job_id=job_id,
+            buffer_name=buffer_name,
+            node_id=node_id,
+            seq=seq,
+        )
+        self._ensure_capacity()
+        prior_size = target.size_bytes
+
+        def on_size(size: int) -> None:
+            target.size_bytes = size
+            self._store.save(target)
+            if self._store.used_bytes() >= _limit_bytes():
+                raise DatasetQuotaExceeded()
+
+        try:
+            row_count, size = append_from_dataset(
+                target.relation,
+                source.relation,
+                on_size=on_size,
+            )
+        except Exception:
+            target.size_bytes = prior_size
+            self._store.save(target)
+            raise
+        columns = target.columns if target.columns else list(source.columns)
+        return self._ready(target, columns=columns, row_count=row_count, size=size)
+
+    def append_buffer_chunks(
+        self,
+        *,
+        job_id: str,
+        buffer_name: str,
+        node_id: str,
+        seq: int,
+        columns: Sequence[DatasetColumnSpec],
+        chunks: Iterable[Sequence[Sequence[Any]]],
+    ) -> DatasetRecord:
+        _reject_temporal_target(columns)
+        target = self.get_or_create_empty_buffer(
+            job_id=job_id,
+            buffer_name=buffer_name,
+            node_id=node_id,
+            seq=seq,
+        )
+        self._ensure_capacity()
+        prior_size = target.size_bytes
+
+        def on_chunk(size: int) -> None:
+            target.size_bytes = size
+            self._store.save(target)
+            if self._store.used_bytes() >= _limit_bytes():
+                raise DatasetQuotaExceeded()
+
+        try:
+            row_count, size = append_chunks(
+                target.relation,
+                [_pg_column(column) for column in columns],
+                _reject_temporal_values(columns, chunks),
+                on_chunk_size=on_chunk,
+            )
+            stored_columns = (
+                target.columns
+                if target.columns
+                else _with_normalized_types(column_types(target.relation), columns)
+            )
+        except Exception:
+            target.size_bytes = prior_size
+            self._store.save(target)
+            raise
+        return self._ready(target, columns=stored_columns, row_count=row_count, size=size)
+
     def _begin(self, *, job_id: str, node_id: str, seq: int) -> DatasetRecord:
         self._ensure_capacity()
         dataset_id = "d" + uuid.uuid4().hex
@@ -575,6 +690,18 @@ def _drop_and_mark(record: DatasetRecord) -> None:
 
 _memory_datasets: MemoryDatasetStore | None = None
 _dataset_lock = threading.Lock()
+_buffer_ids: dict[tuple[str, str], str] = {}
+_buffer_lock = threading.Lock()
+
+
+def _get_buffer_id(job_id: str, name: str) -> str | None:
+    with _buffer_lock:
+        return _buffer_ids.get((job_id, name))
+
+
+def _set_buffer_id(job_id: str, name: str, dataset_id: str) -> None:
+    with _buffer_lock:
+        _buffer_ids[(job_id, name)] = dataset_id
 
 
 def get_dataset_store() -> MemoryDatasetStore | SqlDatasetStore:
@@ -592,6 +719,8 @@ def reset_dataset_store() -> None:
     global _memory_datasets
     with _dataset_lock:
         _memory_datasets = None
+    with _buffer_lock:
+        _buffer_ids.clear()
 
 
 def _with_normalized_types(

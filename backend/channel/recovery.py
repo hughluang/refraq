@@ -32,7 +32,7 @@ def settle_success(run: Any) -> None:
     that advance has returned.
     """
     advance_from_run(run)
-    if run.target == "published":
+    if run.target == "published" and getattr(run, "outcome", None) == "completed":
         _write_streak(run.channel_id, 0)
     discard_unkept_run(getattr(run, "job_id", None))
 

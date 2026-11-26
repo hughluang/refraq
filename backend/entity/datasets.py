@@ -29,8 +29,11 @@ __all__ = [
     "CHANNEL_DATASET_SCHEMA",
     "ORD_COLUMN",
     "any_row_exists",
+    "append_chunks",
+    "append_from_dataset",
     "column_types",
     "copy_chunks",
+    "create_empty_table",
     "create_table_from_query",
     "drop_relation",
     "format_type_declaration",
@@ -131,6 +134,140 @@ def create_table_from_query(relation: str, query: str) -> tuple[int, int]:
         conn.exec_driver_sql(f"ANALYZE {relation}")
         size = _relation_size(conn, relation)
     return row_count, int(size)
+
+
+def create_empty_table(relation: str) -> tuple[int, int]:
+    """Create an empty UNLOGGED dataset table with only ``_ord``."""
+    _require_relation(relation)
+    ordinal = ident(ORD_COLUMN)
+    with get_entity_engine().begin() as conn:
+        conn.exec_driver_sql(
+            f"CREATE UNLOGGED TABLE {relation} ({ordinal} bigint PRIMARY KEY)"
+        )
+        size = _relation_size(conn, relation)
+    return 0, int(size)
+
+
+def append_from_dataset(
+    target_relation: str,
+    source_relation: str,
+    *,
+    on_size: Callable[[int], None] | None = None,
+) -> tuple[int, int]:
+    """Append all rows from ``source_relation`` into ``target_relation``."""
+    _require_relation(target_relation)
+    _require_relation(source_relation)
+    ordinal = ident(ORD_COLUMN)
+    with get_entity_engine().begin() as conn:
+        source_cols = _column_types_on(conn, source_relation)
+        if not source_cols:
+            return _count_on(conn, target_relation), _relation_size(conn, target_relation)
+        target_cols = _column_types_on(conn, target_relation)
+        if not target_cols:
+            for col in source_cols:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {target_relation} ADD COLUMN {ident(col['name'])} {col['type']}"
+                )
+        elif [
+            (col["name"], col["type"]) for col in target_cols
+        ] != [(col["name"], col["type"]) for col in source_cols]:
+            raise ValueError("Buffer column schema does not match appended dataset")
+        base_ord = int(
+            conn.execute(
+                text(f"SELECT COALESCE(MAX({ordinal}), 0) FROM {target_relation}")
+            ).scalar_one()
+        )
+        col_sql = ", ".join(ident(col["name"]) for col in source_cols)
+        conn.execute(
+            text(
+                f"INSERT INTO {target_relation} ({ordinal}, {col_sql}) "
+                f"SELECT :base + row_number() OVER (ORDER BY {ordinal}), {col_sql} "
+                f"FROM {source_relation} ORDER BY {ordinal}"
+            ),
+            {"base": base_ord},
+        )
+        if on_size is not None:
+            on_size(_relation_size(conn, target_relation))
+        conn.exec_driver_sql(f"ANALYZE {target_relation}")
+        total = _count_on(conn, target_relation)
+        size = _relation_size(conn, target_relation)
+    return total, int(size)
+
+
+def append_chunks(
+    relation: str,
+    columns: Sequence[tuple[str, str]],
+    chunks: Iterable[Sequence[Sequence[Any]]],
+    on_chunk_size: Callable[[int], None] | None = None,
+) -> tuple[int, int]:
+    """Append COPY chunks into an existing ``channel_dataset`` table."""
+    _require_relation(relation)
+    if not columns:
+        raise ValueError("dataset table needs at least one column")
+    ordinal = ident(ORD_COLUMN)
+    names: list[str] = []
+    for name, pg_type in columns:
+        ident(name)
+        if _PHYSICAL_TYPE_RE.fullmatch(pg_type) is None:
+            raise ValueError(f"unsupported dataset column type: {pg_type}")
+        names.append(name)
+    copy_columns = ", ".join([ordinal, *[ident(name) for name in names]])
+    with get_entity_engine().begin() as conn:
+        target_cols = _column_types_on(conn, relation)
+        if not target_cols:
+            for name, pg_type in columns:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {relation} ADD COLUMN {ident(name)} {pg_type}"
+                )
+        elif [
+            (col["name"], col["type"]) for col in target_cols
+        ] != [(name, pg_type) for name, pg_type in columns]:
+            raise ValueError("Buffer column schema does not match appended rows")
+        base_ord = int(
+            conn.execute(
+                text(f"SELECT COALESCE(MAX({ordinal}), 0) FROM {relation}")
+            ).scalar_one()
+        )
+        raw = conn.connection.driver_connection
+        appended = 0
+        for chunk in chunks:
+            rows = list(chunk)
+            if rows:
+                with raw.cursor() as cursor:
+                    with cursor.copy(
+                        f"COPY {relation} ({copy_columns}) FROM STDIN"
+                    ) as copy:
+                        for offset, row in enumerate(rows, start=base_ord + appended + 1):
+                            copy.write_row((offset, *row))
+                appended += len(rows)
+            if on_chunk_size is not None:
+                on_chunk_size(_relation_size(conn, relation))
+        conn.exec_driver_sql(f"ANALYZE {relation}")
+        total = _count_on(conn, relation)
+        size = _relation_size(conn, relation)
+    return total, int(size)
+
+
+def _column_types_on(conn: Any, relation: str) -> list[dict[str, str]]:
+    statement = text(
+        """
+        SELECT a.attname AS name, format_type(a.atttypid, a.atttypmod) AS type
+        FROM pg_attribute AS a
+        WHERE a.attrelid = cast(:relation AS regclass)
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND a.attname <> :ordinal
+        ORDER BY a.attnum
+        """
+    )
+    rows = conn.execute(
+        statement, {"relation": relation, "ordinal": ORD_COLUMN}
+    ).mappings()
+    return [{"name": str(row["name"]), "type": str(row["type"])} for row in rows]
+
+
+def _count_on(conn: Any, relation: str) -> int:
+    return int(conn.execute(text(f"SELECT count(*) FROM {relation}")).scalar_one())
 
 
 def copy_chunks(

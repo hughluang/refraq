@@ -188,6 +188,10 @@ export function NodeConfigPanel({
     ) {
       return false;
     }
+    if (field.key === "datasets") {
+      const source = data.config.source as Record<string, unknown> | undefined;
+      return source?.kind === "entity";
+    }
     return fieldVisible(field, data.config);
   });
   const entityId = typeof data.config.entity_id === "string" ? data.config.entity_id : "";

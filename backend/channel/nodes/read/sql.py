@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from backend.channel.dataset_bindings import (
+    DATASETS_CONFIG_SCHEMA,
+    bind_dataset_sql,
+    resolve_dataset_bindings,
+    validate_dataset_bindings,
+)
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
@@ -74,16 +80,35 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     params, error = _bound_params(hooks, config.get("params"))
     if error is not None:
         return error
+    statement_text = str(statement)
+    if config.get("datasets"):
+        if config["source"].get("kind") != "entity":
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_CONFIG_INVALID",
+                error_message="datasets is supported only when source is entity",
+            )
+        bindings, error = resolve_dataset_bindings(config.get("datasets"), hooks)
+        if error is not None:
+            return error
+        try:
+            statement_text = bind_dataset_sql(statement_text, bindings)
+        except ValueError as exc:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_CONFIG_INVALID",
+                error_message=str(exc),
+            )
     try:
         if params is None:
             output = run_channel_sql(
-                str(statement),
+                statement_text,
                 source=config["source"],
                 statement_timeout_sec=config.get("statement_timeout_sec", 30),
             )
         else:
             output = run_channel_sql(
-                str(statement),
+                statement_text,
                 source=config["source"],
                 statement_timeout_sec=config.get("statement_timeout_sec", 30),
                 params=params,
@@ -94,17 +119,19 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
 
 
 def _check(config: Mapping[str, Any], resolver: ReferenceResolver) -> list[Problem]:
+    problems = validate_dataset_bindings(config)
     source = config["source"]
     if source.get("kind") != "source":
-        return []
+        return problems
     source_id = source["source_id"]
     if resolver.source_exists(source_id):
-        return []
+        return problems
     return [
+        *problems,
         Problem(
             "CHANNEL_REFERENCE_UNRESOLVED",
             f"Source does not resolve: {source_id}",
-        )
+        ),
     ]
 
 
@@ -193,6 +220,7 @@ NODE_TYPE = NodeType(
                     "x-refraq-template": _JSON_SCALAR,
                 },
             },
+            "datasets": DATASETS_CONFIG_SCHEMA,
             "statement_timeout_sec": {
                 "type": "integer",
                 "minimum": 1,

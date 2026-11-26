@@ -119,6 +119,7 @@ class GraphSettingsIn(BaseModel):
     keep_succeeded_runs: bool = True
     keep_failed_runs: bool = True
     keep_test_runs: bool = True
+    concurrency: Literal["allow", "forbid"] = "allow"
 
     @field_validator("run_timeout_sec")
     @classmethod

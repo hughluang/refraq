@@ -711,7 +711,7 @@ Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a pe
 
 ### Dataset Reference
 
-A claim check. The value `{dataset_id, columns, count}` names a run-scoped table in the entity database and has no `relation`. The registry row is the only fact source. **Data Channel** owns the registry and the lifecycle. `backend.entity.datasets` creates, reads, and drops the table and does not own the registry. Dataset Query, Materialize, and Changes Dataset produce one. Each producer may be a direct child of a container. One execution creates one dataset. Batch Read and Write Entity consume one.
+A claim check. The value `{dataset_id, columns, count}` names a run-scoped table in the entity database and has no `relation`. The registry row is the only fact source. **Data Channel** owns the registry and the lifecycle. `backend.entity.datasets` creates, reads, and drops the table and does not own the registry. Dataset Query, Materialize, Changes Dataset, and Dataset Buffer produce one. Each producer may be a direct child of a container. One execution creates one dataset (or appends to a named buffer for Dataset Buffer). Batch Read, Write Entity, and entity-scoped `datasets` bindings on Dataset Query and SQL consume one.
 Avoid a `relation` on the value, rows traveling on an edge, a Read or SQL node producing one, temp table as a user concept, **Entity Table**, **Source Mirror**, an item list, and expiry with run-record retention as the only clock.
 
 ### Channel Variable

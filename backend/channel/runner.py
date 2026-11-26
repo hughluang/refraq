@@ -8,6 +8,7 @@ from typing import Any
 from backend.admin.user_store import get_user_store
 from backend.channel import channel_run
 from backend.channel.dataset_registry import seal_dataset_expiry
+from backend.channel.locks import ChannelRunLock, try_acquire_channel_run_lock
 from backend.channel import recovery
 from backend.channel.run_store import get_run_store, note_killed_run
 from backend.channel.sandbox import SandboxFailed
@@ -62,34 +63,99 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     run.graph = graph
     run.version = version
     run.trigger_node_id = trigger
-    started = utc_now()
-    actor = _actor(claimed)
-    context = channel_run.expression_context(channel, run, started, actor, claimed.trigger_kind)
-    run.context = context
-    store.update_run(run)
-    elapsed = 0.0
-    if claimed.started_at is not None:
-        elapsed = max(
-            0.0,
-            (started - ensure_aware_utc(claimed.started_at)).total_seconds(),
-        )
-    timeout = (graph.get("settings") or {}).get("run_timeout_sec")
+    run_lock: ChannelRunLock | None = None
+    if (graph.get("settings") or {}).get("concurrency") == "forbid":
+        run_lock = try_acquire_channel_run_lock(run.channel_id)
+        if run_lock is None:
+            run.outcome = "skipped"
+            store.update_run(run)
+            append_job_log(
+                job_id,
+                level="info",
+                message="skipped overlapping channel run (concurrency=forbid)",
+            )
+            result = {
+                "schema": "channel_run.v1",
+                "channel_id": run.channel_id,
+                "version": run.version,
+                "outcome": "skipped",
+            }
+            done = mark_succeeded(job_id, result=result)
+            if done is not None and done.status == "succeeded":
+                recovery.settle_success(run)
+            seal_dataset_expiry(job_id)
+            return {"status": done.status if done is not None else "missing"}
     try:
-        outcome = channel_run.execute_channel_run(
-            graph=graph,
-            trigger_node_id=trigger,
-            trigger_node=trigger_node,
-            run=run,
-            context=context,
-            actor=actor,
-            started_at=format_instant(started),
-            job=claimed,
-            timeout_sec=timeout,
-            started=time.monotonic() - elapsed,
-            pinned=bool((claimed.input or {}).get("pin_version")),
+        started = utc_now()
+        actor = _actor(claimed)
+        context = channel_run.expression_context(
+            channel, run, started, actor, claimed.trigger_kind
         )
-    except SandboxFailed as exc:
-        code, message = "CHANNEL_SANDBOX_FAILED", str(exc)
+        run.context = context
+        store.update_run(run)
+        elapsed = 0.0
+        if claimed.started_at is not None:
+            elapsed = max(
+                0.0,
+                (started - ensure_aware_utc(claimed.started_at)).total_seconds(),
+            )
+        timeout = (graph.get("settings") or {}).get("run_timeout_sec")
+        try:
+            outcome = channel_run.execute_channel_run(
+                graph=graph,
+                trigger_node_id=trigger,
+                trigger_node=trigger_node,
+                run=run,
+                context=context,
+                actor=actor,
+                started_at=format_instant(started),
+                job=claimed,
+                timeout_sec=timeout,
+                started=time.monotonic() - elapsed,
+                pinned=bool((claimed.input or {}).get("pin_version")),
+            )
+        except SandboxFailed as exc:
+            code, message = "CHANNEL_SANDBOX_FAILED", str(exc)
+            failed = mark_failed(job_id, error_code=code, error_summary=message)
+            if failed is not None and failed.status == "failed":
+                recovery.settle_failure(
+                    job=failed,
+                    run=run,
+                    error_code=code,
+                    error_message=message,
+                    node_id=None,
+                )
+            seal_dataset_expiry(job_id)
+            return {"status": "failed"}
+        run.outcome = outcome.outcome
+        run.failed_node_id = outcome.failed_node_id
+        run.stopped_node_id = outcome.stopped_node_id
+        run.skipped_node_ids = list(outcome.skipped_node_ids)
+        get_run_store().update_run(run)
+        if outcome.stopped_node_id:
+            append_job_log(
+                job_id,
+                level="warning",
+                message=f"stopped at node {outcome.stopped_node_id}",
+            )
+        if outcome.status == "succeeded":
+            result = {
+                "schema": "channel_run.v1",
+                "channel_id": run.channel_id,
+                "version": run.version,
+                "outcome": outcome.outcome,
+            }
+            done = mark_succeeded(job_id, result=result)
+            if done is not None and done.status == "succeeded":
+                recovery.settle_success(run)
+            seal_dataset_expiry(job_id)
+            return {"status": done.status if done is not None else "missing"}
+        if outcome.status == "cancelled":
+            mark_cancelled(job_id)
+            seal_dataset_expiry(job_id)
+            return {"status": "cancelled"}
+        code = outcome.error_code or "CHANNEL_NODE_FAILED"
+        message = outcome.error_message or "Channel run failed"
         failed = mark_failed(job_id, error_code=code, error_summary=message)
         if failed is not None and failed.status == "failed":
             recovery.settle_failure(
@@ -97,48 +163,13 @@ def run_channel_job(job_id: str) -> dict[str, str]:
                 run=run,
                 error_code=code,
                 error_message=message,
-                node_id=None,
+                node_id=outcome.failed_node_id or outcome.stopped_node_id,
             )
         seal_dataset_expiry(job_id)
         return {"status": "failed"}
-    run.outcome = outcome.outcome
-    run.failed_node_id = outcome.failed_node_id
-    run.stopped_node_id = outcome.stopped_node_id
-    run.skipped_node_ids = list(outcome.skipped_node_ids)
-    get_run_store().update_run(run)
-    if outcome.stopped_node_id:
-        append_job_log(
-            job_id,
-            level="warning",
-            message=f"stopped at node {outcome.stopped_node_id}",
-        )
-    if outcome.status == "succeeded":
-        result = {
-            "schema": "channel_run.v1", "channel_id": run.channel_id,
-            "version": run.version, "outcome": outcome.outcome,
-        }
-        done = mark_succeeded(job_id, result=result)
-        if done is not None and done.status == "succeeded":
-            recovery.settle_success(run)
-        seal_dataset_expiry(job_id)
-        return {"status": done.status if done is not None else "missing"}
-    if outcome.status == "cancelled":
-        mark_cancelled(job_id)
-        seal_dataset_expiry(job_id)
-        return {"status": "cancelled"}
-    code = outcome.error_code or "CHANNEL_NODE_FAILED"
-    message = outcome.error_message or "Channel run failed"
-    failed = mark_failed(job_id, error_code=code, error_summary=message)
-    if failed is not None and failed.status == "failed":
-        recovery.settle_failure(
-            job=failed,
-            run=run,
-            error_code=code,
-            error_message=message,
-            node_id=outcome.failed_node_id or outcome.stopped_node_id,
-        )
-    seal_dataset_expiry(job_id)
-    return {"status": "failed"}
+    finally:
+        if run_lock is not None:
+            run_lock.release()
 
 
 def _cancel(job_id: str, run: Any, node_id: str | None) -> None:

@@ -739,7 +739,7 @@ The call is allowed while a draft run is queued or running, and while the channe
 
 The response describes the submitted graph. `valid` is false when any problem has severity `error`. `ports` lists every declared port of that graph. `schema` is the refined JSON Schema, or `null` when it is not known. An invalid graph is a `200` result, not a Problem Details failure.
 
-`context` is the JSON Schema of `self.channel`, `self.run`, and `self.platform`. It does not depend on the submitted graph. `channel` has `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `run_retry_limit`, `error_channel_id`, `keep_succeeded_runs`, `keep_failed_runs`, `keep_test_runs`). `run` has `id`, `target`, `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `platform` has `site_name`, `schedule_timezone`, `now`, and `parameters`. `parameters` lists every registered System Parameter: an integer constraint is `integer`, and every other constraint is `string`.
+`context` is the JSON Schema of `self.channel`, `self.run`, and `self.platform`. It does not depend on the submitted graph. `channel` has `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `run_retry_limit`, `error_channel_id`, `keep_succeeded_runs`, `keep_failed_runs`, `keep_test_runs`, `concurrency`). `run` has `id`, `target`, `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `platform` has `site_name`, `schedule_timezone`, `now`, and `parameters`. `parameters` lists every registered System Parameter: an integer constraint is `integer`, and every other constraint is `string`.
 
 ### 5.8 `POST /channels/{id}/publish/preview` and `POST /channels/{id}/publish`
 

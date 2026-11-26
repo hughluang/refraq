@@ -49,6 +49,9 @@ _OUTPUT_VIEWS = {
     "volume.changes_dataset": OutputView(
         kind="dataset", dataset="dataset", metrics=("count",)
     ),
+    "volume.dataset_buffer": OutputView(
+        kind="dataset", dataset="dataset", metrics=("count",)
+    ),
     "volume.dataset_query": OutputView(
         kind="dataset", dataset="dataset", metrics=("count",)
     ),

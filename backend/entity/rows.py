@@ -56,7 +56,7 @@ __all__ = [
 # Rows held in memory while a dataset page is staged. Callers page by this size.
 WRITE_CHUNK_SIZE = 1000
 
-Mode = Literal["upsert", "create", "update", "delete"]
+Mode = Literal["upsert", "create", "update", "delete", "replace"]
 
 
 @dataclass(frozen=True)
@@ -150,7 +150,25 @@ def write_rows(
             first = chunk
             break
     if first is None:
-        return RowWriteResult(0, 0, 0, 0, 0)
+        if mode != "replace":
+            return RowWriteResult(0, 0, 0, 0, 0)
+        budget = pulse or _deadline_pulse(
+            300_000 if statement_timeout_ms is None else statement_timeout_ms
+        )
+        try:
+            with data_sql.entity_connection() as conn:
+                if channel_run_id is not None:
+                    data_sql.set_change_log_actor(conn, SOURCE_CHANNEL_RUN, channel_run_id)
+                deleted = _clear_in_transaction(conn, budget, access, target, key_name)
+            access.log(row_count=0, outcome_code="ok", verb="channel-write")
+            return RowWriteResult(0, 0, 0, deleted, 0)
+        except Exception as exc:
+            access.log(
+                row_count=None,
+                outcome_code=getattr(exc, "code", "error"),
+                verb="channel-write",
+            )
+            raise
     budget = pulse or _deadline_pulse(
         300_000 if statement_timeout_ms is None else statement_timeout_ms
     )
@@ -250,6 +268,44 @@ def _tick(conn: Any, pulse: Callable[[], int]) -> None:
     data_sql.set_write_timeouts(conn, pulse())
 
 
+def _clear_in_transaction(
+    conn: Any,
+    pulse: Callable[[], int],
+    access: Any,
+    target: HeadTarget,
+    key_name: str,
+) -> int:
+    _tick(conn, pulse)
+    has_rows = conn.execute(
+        text(f"SELECT 1 FROM {target.qualified_table} LIMIT 1")
+    ).first()
+    if has_rows is None:
+        return 0
+    covered = _covers(access, {key_name})
+    if not covered:
+        raise EntityRowWriteFailed(
+            f"Column '{key_name}' is outside the write grant",
+            attribute=key_name,
+            reason="column",
+        )
+    per_grant = " UNION ALL ".join(
+        "SELECT ("
+        f"SELECT min(t.{ident('row_id')}) FROM {target.qualified_table} AS t "
+        f"WHERE NOT ({_image_predicate(access, grant, 't')})"
+        ") AS fail_id"
+        for grant in covered
+    )
+    failed = _first_ord(
+        conn,
+        pulse,
+        f"SELECT min(fail_id) FROM ({per_grant}) AS per_grant HAVING count(*) = count(fail_id)",
+    )
+    if failed is not None:
+        raise EntityRowWriteFailed("Row rule rejected the write", reason="row_rule")
+    _tick(conn, pulse)
+    return data_sql.clear_target_rows(conn, target.qualified_table)
+
+
 def _write_in_transaction(
     conn: Any,
     access: Any,
@@ -267,6 +323,7 @@ def _write_in_transaction(
     )
     codes = _dictionary_codes(target)
     column_ords: dict[str, int] = {}
+    present_counts: dict[str, int] = {}
     total = 0
     ordinal = 0
     for chunk in chunks:
@@ -289,11 +346,19 @@ def _write_in_transaction(
             for ord_, present, _values in encoded:
                 for name in present:
                     column_ords.setdefault(name, ord_)
+                    present_counts[name] = present_counts.get(name, 0) + 1
         total += len(chunk)
         if not paired:
             ordinal += len(chunk)
+    _tick(conn, pulse)
+    data_sql.index_write_stage(conn, stage, key_name)
     _validate(conn, pulse, access, target, stage, mode, key_name, columns, column_ords)
     _tick(conn, pulse)
+    present_columns = (
+        {name: count == total for name, count in present_counts.items()}
+        if mode != "delete"
+        else None
+    )
     inserted, updated, unchanged, deleted, unmatched = data_sql.write_staged_counts(
         conn,
         target=target.qualified_table,
@@ -301,6 +366,7 @@ def _write_in_transaction(
         mode=mode,
         key=key_name,
         columns=columns,
+        present_columns=present_columns,
     )
     _tick(conn, pulse)
     data_sql.drop_write_stage(conn, stage)
@@ -504,7 +570,7 @@ def _validate(
             )
     business = business_key_attr(target.attributes)
     if (
-        mode in {"upsert", "update"}
+        mode in {"upsert", "update", "replace"}
         and business is not None
         and business.name != key_name
     ):
@@ -569,6 +635,17 @@ def _validate(
                 faults.append(
                     _Fault(failed, 3, "Row rule rejected the write", None, None, "row_rule")
                 )
+            elif mode == "replace":
+                delete_failed = _first_ord(
+                    conn,
+                    pulse,
+                    _replace_delete_rule_sql(access, covered, target, stage, key_name),
+                )
+                if delete_failed is not None:
+                    raise EntityRowWriteFailed(
+                        "Row rule rejected the write",
+                        reason="row_rule",
+                    )
     if not faults:
         return
     fault = min(faults, key=lambda item: (item.ordinal, item.rank))
@@ -713,6 +790,28 @@ def _rule_sql_query(
     return (
         f"SELECT min(fail_ord) FROM ({per_grant}) AS per_grant "
         "HAVING count(*) = count(fail_ord)"
+    )
+
+
+def _replace_delete_rule_sql(
+    access: Any,
+    grants: list[Any],
+    target: HeadTarget,
+    stage: str,
+    key: str,
+) -> str:
+    per_grant = " UNION ALL ".join(
+        "SELECT ("
+        f"SELECT min(t.{ident('row_id')}) FROM {target.qualified_table} AS t "
+        f"WHERE NOT EXISTS ("
+        f"SELECT 1 FROM {stage} AS s WHERE s.{ident(key)} IS NOT DISTINCT FROM t.{ident(key)}"
+        f") AND NOT ({_image_predicate(access, grant, 't')})"
+        ") AS fail_id"
+        for grant in grants
+    )
+    return (
+        f"SELECT min(fail_id) FROM ({per_grant}) AS per_grant "
+        "HAVING count(*) = count(fail_id)"
     )
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Mapping
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -45,12 +46,14 @@ from backend.entity.errors import (
 )
 
 __all__ = [
+    "clear_target_rows",
     "copy_write_stage",
     "create_write_stage",
     "drop_write_stage",
     "delete_ids",
     "entity_connection",
     "entity_read_connection",
+    "index_write_stage",
     "insert_row",
     "query_keyset",
     "query_offset",
@@ -269,9 +272,9 @@ def set_write_timeouts(conn: Connection, remaining_ms: int) -> None:
 
 
 def create_write_stage(conn: Connection, columns: list[tuple[str, str]]) -> str:
-    """Stage table in ``entity_data``, visible only until this transaction ends.
+    """Unlogged stage table in ``entity_data``, visible only until this transaction ends.
 
-    The entity owner is not granted ``TEMP``, so this is an ordinary table
+    The entity owner is not granted ``TEMP``, so this is an ``UNLOGGED`` table
     created inside the write transaction. ``drop_write_stage`` removes it
     before commit; a rollback removes the create with the rest of the write.
     """
@@ -279,8 +282,14 @@ def create_write_stage(conn: Connection, columns: list[tuple[str, str]]) -> str:
     for name, type_sql in columns:
         defs.append(f"{ident(name)} {type_sql}")
     qualified = qualified_table(ENTITY_DATA_SCHEMA, f"wstage_{uuid.uuid4().hex[:16]}")
-    conn.execute(text(f"CREATE TABLE {qualified} ({', '.join(defs)})"))
+    conn.execute(text(f"CREATE UNLOGGED TABLE {qualified} ({', '.join(defs)})"))
     return qualified
+
+
+def index_write_stage(conn: Connection, table: str, key: str) -> None:
+    """Index the staged match key and refresh planner stats before validation/write."""
+    conn.execute(text(f"CREATE INDEX ON {table} ({ident(key)})"))
+    conn.execute(text(f"ANALYZE {table}"))
 
 
 def drop_write_stage(conn: Connection, table: str) -> None:
@@ -305,6 +314,12 @@ def copy_write_stage(
                 copy.write_row(row)
 
 
+def clear_target_rows(conn: Connection, target: str) -> int:
+    """Delete every row in ``target`` inside the current write transaction."""
+    result = conn.execute(text(f"DELETE FROM {target}"))
+    return int(result.rowcount or 0)
+
+
 def write_staged_counts(
     conn: Connection,
     *,
@@ -313,6 +328,7 @@ def write_staged_counts(
     mode: str,
     key: str,
     columns: list[str],
+    present_columns: Mapping[str, bool] | None = None,
 ) -> tuple[int, int, int, int, int]:
     """Set-wise insert, update, or delete. Counts come from ``RETURNING`` old/new.
 
@@ -320,22 +336,36 @@ def write_staged_counts(
     snapshot, so unchanged and unmatched are the staged rows ``RETURNING`` did
     not classify as changed. Locks are taken by this statement.
     """
-    sql = _staged_sql(target, stage, mode, key, columns)
+    sql = _staged_sql(target, stage, mode, key, columns, present_columns)
     row = conn.execute(text(sql)).one()
     return tuple(int(value) for value in row)  # type: ignore[return-value]
 
 
-def _staged_sql(target: str, stage: str, mode: str, key: str, columns: list[str]) -> str:
+def _staged_sql(
+    target: str,
+    stage: str,
+    mode: str,
+    key: str,
+    columns: list[str],
+    present_columns: Mapping[str, bool] | None,
+) -> str:
     if mode == "delete":
         return _delete_sql(target, stage, key)
+    assert present_columns is not None
     if mode == "update":
-        return _update_sql(target, stage, key, columns)
+        return _update_sql(target, stage, key, columns, present_columns)
     if mode == "create":
-        return _create_sql(target, stage, columns)
-    return _upsert_sql(target, stage, key, columns)
+        return _create_sql(target, stage, columns, present_columns)
+    if mode == "replace":
+        return _replace_sql(target, stage, key, columns, present_columns)
+    return _upsert_sql(target, stage, key, columns, present_columns)
 
 
-def _stage_expr(name: str) -> str:
+def _stage_expr(name: str, present_columns: Mapping[str, bool]) -> str:
+    if name not in present_columns:
+        return "NULL"
+    if present_columns[name]:
+        return f"s.{ident(name)}"
     return (
         f"CASE WHEN {_sql_lit(name)} = ANY(s.{ident('_present')}) "
         f"THEN s.{ident(name)} ELSE NULL END"
@@ -346,9 +376,14 @@ def _sql_lit(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _create_sql(target: str, stage: str, columns: list[str]) -> str:
+def _create_sql(
+    target: str,
+    stage: str,
+    columns: list[str],
+    present_columns: Mapping[str, bool],
+) -> str:
     col_sql = ", ".join(ident(name) for name in columns)
-    select_sql = ", ".join(_stage_expr(name) for name in columns)
+    select_sql = ", ".join(_stage_expr(name, present_columns) for name in columns)
     return f"""
 WITH written AS (
     INSERT INTO {target} ({col_sql})
@@ -365,13 +400,25 @@ SELECT
 """
 
 
-def _upsert_sql(target: str, stage: str, key: str, columns: list[str]) -> str:
-    others = [name for name in columns if name != key]
+def _upsert_sql(
+    target: str,
+    stage: str,
+    key: str,
+    columns: list[str],
+    present_columns: Mapping[str, bool],
+) -> str:
+    others = [
+        name
+        for name in columns
+        if name != key and name in present_columns
+    ]
     col_sql = ", ".join(ident(name) for name in columns)
-    select_sql = ", ".join(_stage_expr(name) for name in columns)
+    select_sql = ", ".join(_stage_expr(name, present_columns) for name in columns)
     if others:
-        assigns = ", ".join(_conflict_assign(stage, key, name) for name in others)
-        guard = _conflict_guard(stage, key, others)
+        assigns = ", ".join(
+            _upsert_assign(stage, key, name, present_columns) for name in others
+        )
+        guard = _upsert_guard(stage, key, others, present_columns)
     else:
         assigns = f"{ident(key)} = excluded.{ident(key)}"
         guard = "FALSE"
@@ -401,6 +448,90 @@ SELECT
 """
 
 
+def _replace_sql(
+    target: str,
+    stage: str,
+    key: str,
+    columns: list[str],
+    present_columns: Mapping[str, bool],
+) -> str:
+    others = [
+        name
+        for name in columns
+        if name != key and name in present_columns
+    ]
+    col_sql = ", ".join(ident(name) for name in columns)
+    select_sql = ", ".join(_stage_expr(name, present_columns) for name in columns)
+    if others:
+        assigns = ", ".join(
+            _upsert_assign(stage, key, name, present_columns) for name in others
+        )
+        guard = _upsert_guard(stage, key, others, present_columns)
+    else:
+        assigns = f"{ident(key)} = excluded.{ident(key)}"
+        guard = "FALSE"
+    return f"""
+WITH written AS (
+    INSERT INTO {target} AS t ({col_sql})
+    SELECT {select_sql}
+    FROM {stage} AS s
+    ON CONFLICT ({ident(key)}) DO UPDATE SET {assigns}
+    WHERE {guard}
+    RETURNING (old.{ident('row_id')} IS NULL) AS inserted
+),
+matched AS (
+    SELECT 1
+    FROM {stage} AS s
+    JOIN {target} AS t ON t.{ident(key)} = s.{ident(key)}
+),
+removed AS (
+    DELETE FROM {target} AS t
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM {stage} AS s
+        WHERE s.{ident(key)} IS NOT DISTINCT FROM t.{ident(key)}
+    )
+    RETURNING old.{ident('row_id')}
+)
+SELECT
+    (SELECT count(*) FROM written WHERE inserted)::int,
+    (SELECT count(*) FROM written WHERE NOT inserted)::int,
+    (
+        (SELECT count(*) FROM matched)
+        - (SELECT count(*) FROM written WHERE NOT inserted)
+    )::int,
+    (SELECT count(*) FROM removed)::int,
+    0
+"""
+
+
+def _upsert_assign(
+    stage: str,
+    key: str,
+    name: str,
+    present_columns: Mapping[str, bool],
+) -> str:
+    if present_columns.get(name):
+        return f"{ident(name)} = excluded.{ident(name)}"
+    return _conflict_assign(stage, key, name)
+
+
+def _upsert_guard(
+    stage: str,
+    key: str,
+    others: list[str],
+    present_columns: Mapping[str, bool],
+) -> str:
+    uniform = [name for name in others if present_columns.get(name)]
+    heterogeneous = [name for name in others if not present_columns.get(name)]
+    terms = [
+        f"t.{ident(name)} IS DISTINCT FROM excluded.{ident(name)}" for name in uniform
+    ]
+    if heterogeneous:
+        terms.append(_conflict_guard(stage, key, heterogeneous))
+    return " OR ".join(terms)
+
+
 def _conflict_assign(stage: str, key: str, name: str) -> str:
     return (
         f"{ident(name)} = (SELECT CASE WHEN {_sql_lit(name)} = ANY(g.{ident('_present')}) "
@@ -422,8 +553,18 @@ def _conflict_guard(stage: str, key: str, others: list[str]) -> str:
     )
 
 
-def _update_sql(target: str, stage: str, key: str, columns: list[str]) -> str:
-    others = [name for name in columns if name != key]
+def _update_sql(
+    target: str,
+    stage: str,
+    key: str,
+    columns: list[str],
+    present_columns: Mapping[str, bool],
+) -> str:
+    others = [
+        name
+        for name in columns
+        if name != key and name in present_columns
+    ]
     matched = (
         f"SELECT 1 FROM {stage} AS s "
         f"JOIN {target} AS t ON t.{ident(key)} = s.{ident(key)}"
@@ -438,13 +579,21 @@ SELECT
     ((SELECT count(*) FROM {stage}) - (SELECT count(*) FROM ({matched}) AS matched))::int
 """
     assigns = ", ".join(
-        f"{ident(name)} = CASE WHEN {_sql_lit(name)} = ANY(s.{ident('_present')}) "
-        f"THEN s.{ident(name)} ELSE t.{ident(name)} END"
+        (
+            f"{ident(name)} = s.{ident(name)}"
+            if present_columns.get(name)
+            else f"{ident(name)} = CASE WHEN {_sql_lit(name)} = ANY(s.{ident('_present')}) "
+            f"THEN s.{ident(name)} ELSE t.{ident(name)} END"
+        )
         for name in others
     )
     guard = " OR ".join(
-        f"({_sql_lit(name)} = ANY(s.{ident('_present')}) "
-        f"AND t.{ident(name)} IS DISTINCT FROM s.{ident(name)})"
+        (
+            f"t.{ident(name)} IS DISTINCT FROM s.{ident(name)}"
+            if present_columns.get(name)
+            else f"({_sql_lit(name)} = ANY(s.{ident('_present')}) "
+            f"AND t.{ident(name)} IS DISTINCT FROM s.{ident(name)})"
+        )
         for name in others
     )
     return f"""

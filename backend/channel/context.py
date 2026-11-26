@@ -28,6 +28,11 @@ def _flag(found: dict[str, Any], key: str) -> bool:
     return found[key] is not False
 
 
+def _concurrency(found: dict[str, Any]) -> str:
+    value = found.get("concurrency")
+    return "forbid" if value == "forbid" else "allow"
+
+
 def _settings(raw: Any) -> dict[str, Any]:
     found = dict(raw) if isinstance(raw, dict) else {}
     return {
@@ -37,6 +42,7 @@ def _settings(raw: Any) -> dict[str, Any]:
         "keep_succeeded_runs": _flag(found, "keep_succeeded_runs"),
         "keep_failed_runs": _flag(found, "keep_failed_runs"),
         "keep_test_runs": _flag(found, "keep_test_runs"),
+        "concurrency": _concurrency(found),
     }
 
 
@@ -105,6 +111,7 @@ def context_schema() -> dict[str, dict[str, Any]]:
                         "keep_succeeded_runs": {"type": "boolean"},
                         "keep_failed_runs": {"type": "boolean"},
                         "keep_test_runs": {"type": "boolean"},
+                        "concurrency": {"type": "string", "enum": ["allow", "forbid"]},
                     },
                     required=[
                         "run_timeout_sec",
@@ -113,6 +120,7 @@ def context_schema() -> dict[str, dict[str, Any]]:
                         "keep_succeeded_runs",
                         "keep_failed_runs",
                         "keep_test_runs",
+                        "concurrency",
                     ],
                 ),
             },

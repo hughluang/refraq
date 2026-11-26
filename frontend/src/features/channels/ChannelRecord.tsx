@@ -323,6 +323,7 @@ function ChannelExisting({
     keepSucceededRuns: boolean;
     keepFailedRuns: boolean;
     keepTestRuns: boolean;
+    concurrency: "allow" | "forbid";
   }>({
     initialValues: {
       description: "",
@@ -332,6 +333,7 @@ function ChannelExisting({
       keepSucceededRuns: true,
       keepFailedRuns: true,
       keepTestRuns: true,
+      concurrency: "allow",
     },
   });
   const formRef = useRef(form);
@@ -827,6 +829,7 @@ function ChannelExisting({
       keepSucceededRuns: graph.settings.keep_succeeded_runs !== false,
       keepFailedRuns: graph.settings.keep_failed_runs !== false,
       keepTestRuns: graph.settings.keep_test_runs !== false,
+      concurrency: graph.settings.concurrency === "forbid" ? "forbid" : "allow",
     });
     detailsForm.markSaved();
     setDescriptionOpen(true);
@@ -844,6 +847,7 @@ function ChannelExisting({
     keepSucceededRuns: boolean;
     keepFailedRuns: boolean;
     keepTestRuns: boolean;
+    concurrency: "allow" | "forbid";
   }) => {
     form.setFieldValue("description", values.description.trim().slice(0, DESCRIPTION_MAX));
     const next = runTimeoutSec(values.timeout);
@@ -860,6 +864,7 @@ function ChannelExisting({
               keep_succeeded_runs: values.keepSucceededRuns,
               keep_failed_runs: values.keepFailedRuns,
               keep_test_runs: values.keepTestRuns,
+              concurrency: values.concurrency,
             },
           }
         : current,
@@ -1280,6 +1285,22 @@ function ChannelExisting({
               clearable
               onChange={(next) => detailsForm.setFieldValue("errorChannelId", next)}
             />
+            <SelectField
+              editable
+              label={t("channels.settings.concurrency")}
+              description={t("channels.settings.concurrencyHint")}
+              data={[
+                { value: "allow", label: t("channels.settings.concurrency.allow") },
+                { value: "forbid", label: t("channels.settings.concurrency.forbid") },
+              ]}
+              value={detailsForm.values.concurrency}
+              onChange={(next) =>
+                detailsForm.setFieldValue(
+                  "concurrency",
+                  next === "forbid" ? "forbid" : "allow",
+                )
+              }
+            />
             <RunKeepingFields
               keepSucceededRuns={detailsForm.values.keepSucceededRuns}
               keepFailedRuns={detailsForm.values.keepFailedRuns}
@@ -1340,6 +1361,16 @@ function ChannelExisting({
               error={
                 errorChannelsFailed ? t("channels.settings.errorChannelLoadFailed") : undefined
               }
+            />
+            <SelectField
+              editable={false}
+              label={t("channels.settings.concurrency")}
+              description={t("channels.settings.concurrencyHint")}
+              data={[
+                { value: "allow", label: t("channels.settings.concurrency.allow") },
+                { value: "forbid", label: t("channels.settings.concurrency.forbid") },
+              ]}
+              value={graph.settings.concurrency === "forbid" ? "forbid" : "allow"}
             />
             <RunKeepingFields
               keepSucceededRuns={graph.settings.keep_succeeded_runs !== false}

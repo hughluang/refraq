@@ -376,11 +376,12 @@ NODE_TYPE = NodeType(
             },
             "mode": {
                 "type": "string",
-                "enum": ["upsert", "create", "update", "delete"],
+                "enum": ["upsert", "create", "update", "delete", "replace"],
                 "title": "Mode",
                 "description": (
                     "upsert creates or updates by the match key; create inserts; "
-                    "update changes a match; delete removes a match."
+                    "update changes a match; delete removes a match; "
+                    "replace upserts staged rows and deletes absent target rows."
                 ),
             },
             "match_key": {
