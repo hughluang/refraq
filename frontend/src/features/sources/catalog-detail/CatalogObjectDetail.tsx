@@ -1,29 +1,29 @@
 "use client";
 
 import {
-  ActionIcon,
   Badge,
   Button,
   Group,
-  Text,
-  Tooltip,
 } from "@mantine/core";
-import { useCan, useNotification, useTranslate } from "@refinedev/core";
+import { useCan, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { RepeatIcon } from "@/components/icons";
-import { Instant } from "@/components/display/Instant";
-import { FillColumn } from "@/components/layout/FillColumn";
-import { PageTabs, useConsoleTab, type PageTabItem } from "@/components/layout/consoleTabs";
 import { StatusBadge } from "@/components/display/StatusBadge";
 import {
   presentCatalogPresence,
   presentCatalogSemantics,
 } from "@/components/display/statusTone";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
+import { NavCollapseIcon, RepeatIcon } from "@/components/icons";
+import { FillColumn } from "@/components/layout/FillColumn";
+import { HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
+import {
+  PageTabs,
+  useConsoleTab,
+  type PageTabItem,
+} from "@/components/layout/consoleTabs";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
-import { objectTypeLabel, semanticSourceLabel } from "@/features/sources/catalogLabel";
 import {
   isAccessEvaluationPending,
   ModuleAction,
@@ -36,14 +36,19 @@ import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
 import { HistoryTab } from "@/features/sources/catalog-detail/HistoryTab";
 import { JoinsTab } from "@/features/sources/catalog-detail/JoinsTab";
 import { OverviewTab } from "@/features/sources/catalog-detail/OverviewTab";
-import { isSampleEligible } from "@/features/sources/catalog-detail/catalogObjectKind";
 import { SampleTab } from "@/features/sources/catalog-detail/SampleTab";
+import { isSampleEligible } from "@/features/sources/catalog-detail/catalogObjectKind";
+import { objectTypeLabel } from "@/features/sources/catalogLabel";
 import type { CatalogObject } from "@/features/sources/types";
 import { ApiError } from "@/lib/api";
-import { copyText } from "@/lib/copy-text";
 
 type CatalogObjectDetailProps = {
   objectId: string;
+};
+
+export type ExternalColumnFilterRequest = {
+  filter: "all" | "empty";
+  nonce: number;
 };
 
 export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
@@ -52,7 +57,6 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
 
 function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
   const t = useTranslate();
-  const { open } = useNotification();
   const { data: canWrite } = useCan({
     resource: ModuleId.catalog,
     action: ModuleAction.edit,
@@ -79,9 +83,14 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [notFound, setNotFound] = useState(false);
   const [reloadEpoch, setReloadEpoch] = useState(0);
   const [joinsVisited, setJoinsVisited] = useState(false);
   const [historyVisited, setHistoryVisited] = useState(false);
+  const [, setInspectedColumnId] = useState<string | null>(null);
+  const [, setExternalFilterRequest] =
+    useState<ExternalColumnFilterRequest | null>(null);
+
   const sampleEligible = object
     ? isSampleEligible(object.object_type)
     : true;
@@ -107,22 +116,38 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
         setLoading(true);
       }
       setFailed(false);
+      setNotFound(false);
       try {
         const objRes = await resolveCatalogObject(objectId, controller.signal);
         if (controller.signal.aborted) return;
+        if (!objRes.object) {
+          setObject(null);
+          setNotFound(true);
+          return;
+        }
         setObject(objRes.object);
         if (refresh) {
           setReloadEpoch((n) => n + 1);
         }
       } catch (err) {
         if (controller.signal.aborted) return;
+        if (err instanceof ApiError && err.status === 404) {
+          setObject(null);
+          setNotFound(true);
+          return;
+        }
         setFailed(true);
-        if (!refresh || (err instanceof ApiError && [401, 403, 404].includes(err.status))) {
+        if (
+          !refresh ||
+          (err instanceof ApiError && [401, 403].includes(err.status))
+        ) {
           setObject(null);
         }
-        presentProblemNotification(t, err, { onRetry: () => {
-          if (!controller.signal.aborted) void load();
-        } });
+        presentProblemNotification(t, err, {
+          onRetry: () => {
+            if (!controller.signal.aborted) void load();
+          },
+        });
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false);
@@ -137,6 +162,8 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
     setReloadEpoch(0);
     setJoinsVisited(false);
     setHistoryVisited(false);
+    setInspectedColumnId(null);
+    setExternalFilterRequest(null);
     void load();
     return () => request.current?.abort();
   }, [load]);
@@ -154,27 +181,23 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
     if (!showSampleTab && activeTab === "sample") {
       setTab("overview");
     }
-  }, [showSampleTab, activeTab]);
+  }, [showSampleTab, activeTab, setTab]);
+
+  const handleOpenColumn = useCallback(
+    (columnId: string, filter: "all" | "empty" = "all") => {
+      setInspectedColumnId(columnId);
+      setExternalFilterRequest({ filter, nonce: Date.now() });
+      setTab("columns");
+    },
+    [setTab],
+  );
 
   const title = useMemo(() => {
-    if (!object) return t("catalog.detail");
+    if (!object) return objectId;
     return `${object.schema_name}.${object.name}`;
-  }, [object, t]);
+  }, [object, objectId]);
 
-  const copyLocator = async () => {
-    if (!object) return;
-    try {
-      await copyText(object.locator_key);
-      open?.({ type: "success", message: t("common.copy.success") });
-    } catch {
-      open?.({
-        type: "error",
-        message: t("common.copy.failed"),
-      });
-    }
-  };
-
-  if (loading || failed || !object) {
+  if (loading || failed || notFound || !object) {
     return (
       <PageChrome
         title={t("catalog.detail")}
@@ -188,6 +211,11 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
   const semanticsReady = presentCatalogSemantics(
     Boolean(object.business_semantics_ready),
   );
+  const hasColumns =
+    (object.object_type !== "procedure" && object.object_type !== "function") ||
+    object.columns.length > 0;
+  const backHref = `/console/catalog?source=${encodeURIComponent(object.source_id)}`;
+
   const detailTabs: PageTabItem[] = [
     {
       value: "overview",
@@ -197,17 +225,22 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
           object={object}
           writable={writable}
           onSaved={setObject}
-          mirrorControls={
-            object.mirror && (canReadMirror?.can || canWriteMirror?.can) ? (
-              <MirrorTableDrawer objectId={object.id} disabled={refreshing} />
-            ) : null
-          }
+          onOpenColumn={handleOpenColumn}
+          onOpenTab={setTab}
+          onOpenColumnsCoverage={(filter) => {
+            setExternalFilterRequest({ filter, nonce: Date.now() });
+            setTab("columns");
+          }}
         />
       ),
     },
     {
       value: "columns",
-      label: t("catalog.tabs.columns"),
+      label: hasColumns
+        ? t("catalog.detail.tabs.columnsCount", {
+            count: object.columns.length,
+          })
+        : t("catalog.tabs.columns"),
       panel: (
         <ColumnsTab
           object={object}
@@ -230,7 +263,11 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
       value: "joins",
       label: t("catalog.tabs.joins"),
       panel: (
-        <JoinsTab object={object} writable={writable} listEnabled={joinsVisited} />
+        <JoinsTab
+          object={object}
+          writable={writable}
+          listEnabled={joinsVisited}
+        />
       ),
     },
     {
@@ -246,84 +283,78 @@ function CatalogObjectRecord({ objectId }: CatalogObjectDetailProps) {
   );
 
   return (
-    <PageTabs fill scrollable value={activeTab} onChange={setTab} tabs={detailTabs}>
+    <PageTabs
+      fill
+      scrollable
+      value={activeTab}
+      onChange={setTab}
+      tabs={detailTabs}
+    >
       {({ list, panels }) => (
         <PageChrome
           title={t("catalog.title")}
           recordTitle={title}
           titleBasis="10rem"
-          description={object.business_name ?? undefined}
+          description={object.business_name || object.comment || undefined}
+          titleExtra={
+            <Group gap="xs" wrap="wrap">
+              <Badge variant="default" size="sm">
+                {objectTypeLabel(t, object.object_type)}
+              </Badge>
+              <StatusBadge
+                tone={presence.tone}
+                labelKey={presence.labelKey}
+                size="sm"
+              />
+              <StatusBadge
+                tone={
+                  object.business_semantics_ready ? "success" : "warning"
+                }
+                labelKey={semanticsReady.labelKey}
+                size="sm"
+              />
+            </Group>
+          }
           recent={{ moduleId: "catalog", title }}
           fill
           tabs={list}
           actions={
-            <Group gap="xs">
-              <Button
-                component={ConsoleLink}
-                href="/console/catalog"
-                variant="default"
-                size="sm"
-                aria-label={t("catalog.backToList")}
-              >
-                <Text component="span" visibleFrom="sm">{t("catalog.backToList")}</Text>
-                <Text component="span" hiddenFrom="sm">←</Text>
-              </Button>
-              <Button
-                size="sm"
-                variant="light"
-                disabled={refreshing}
-                onClick={() => void load({ refresh: true })}
-                aria-label={t("catalog.refresh")}
-              >
-                <Text component="span" visibleFrom="sm">{t("catalog.refresh")}</Text>
-                <Text component="span" hiddenFrom="sm"><RepeatIcon /></Text>
-              </Button>
-            </Group>
+            <HeaderActions
+              navigation={
+                <Group gap="xs" wrap="nowrap">
+                  <Button
+                    component={ConsoleLink}
+                    href={backHref}
+                    variant="subtle"
+                    size="xs"
+                    leftSection={<NavCollapseIcon size={14} />}
+                  >
+                    {t("catalog.backToList")}
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="xs"
+                    leftSection={<RepeatIcon size={14} />}
+                    onClick={() => void load({ refresh: true })}
+                    loading={refreshing}
+                  >
+                    {t("catalog.refresh")}
+                  </Button>
+                </Group>
+              }
+              lifecycle={
+                object.mirror &&
+                (canReadMirror?.can || canWriteMirror?.can) ? (
+                  <MirrorTableDrawer
+                    objectId={object.id}
+                    disabled={refreshing}
+                  />
+                ) : undefined
+              }
+            />
           }
         >
           <FillColumn gap="md">
-            <details style={{ flexShrink: 0 }}>
-              <summary style={{ cursor: "pointer" }}>
-                <Group gap="sm" wrap="wrap" component="span" display="inline-flex">
-                  <Badge variant="light">{objectTypeLabel(t, object.object_type)}</Badge>
-                  <StatusBadge tone={presence.tone} labelKey={presence.labelKey} />
-                  <StatusBadge tone={semanticsReady.tone} labelKey={semanticsReady.labelKey} />
-                </Group>
-              </summary>
-              <Group gap="sm" wrap="wrap" mt="sm">
-                <Text size="sm" c="dimmed">
-                  {t("catalog.semantics.provenance")}: {" "}
-                  {object.semantic_source ? semanticSourceLabel(t, object.semantic_source) : "—"}
-                </Text>
-                {object.semantics_updated_at ? (
-                  <Text size="sm" c="dimmed">
-                    {t("catalog.semantics.updatedAt")}: {" "}
-                    <Instant value={object.semantics_updated_at} />
-                  </Text>
-                ) : null}
-                {object.collected_at ? (
-                  <Text size="sm" c="dimmed">
-                    {t("catalog.structure.collectedAt")}:{" "}
-                    <Instant value={object.collected_at} />
-                  </Text>
-                ) : null}
-              </Group>
-              <Group gap="xs" wrap="nowrap">
-                <Text size="xs" c="dimmed" style={{ wordBreak: "break-all", flex: 1 }}>
-                  {object.locator_key}
-                </Text>
-                <Tooltip label={t("catalog.copyLocator")}>
-                  <ActionIcon
-                    variant="subtle"
-                    size="sm"
-                    onClick={() => void copyLocator()}
-                    aria-label={t("catalog.copyLocator")}
-                  >
-                    ⎘
-                  </ActionIcon>
-                </Tooltip>
-              </Group>
-            </details>
             {panels}
           </FillColumn>
         </PageChrome>

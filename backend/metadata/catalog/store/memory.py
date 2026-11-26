@@ -652,12 +652,26 @@ class MemoryCatalogStore:
         self,
         object_id: str,
         *,
+        scope: str | None = None,
+        column_id: str | None = None,
+        field_name: str | None = None,
+        semantic_source: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[Any], int]:
         with self._lock:
             items = [
-                c for c in self._semantics_changes if c.object_id == object_id
+                c
+                for c in self._semantics_changes
+                if c.object_id == object_id
+                and (
+                    scope is None
+                    or (scope == "object" and c.column_id is None)
+                    or (scope == "column" and c.column_id is not None)
+                )
+                and (column_id is None or c.column_id == column_id)
+                and (field_name is None or c.field_name == field_name)
+                and (semantic_source is None or c.semantic_source == semantic_source)
             ]
             items.sort(key=lambda c: (c.created_at, c.id), reverse=True)
             return apply_offset_page(items, limit=limit, offset=offset)

@@ -42,6 +42,7 @@ class ForeignKeyView:
     ref_table: str
     ref_columns: list[str]
     is_present: bool
+    ref_object_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,8 @@ class ObjectView:
     foreign_keys: list[ForeignKeyView] = field(default_factory=list)
     indexes: list[IndexView] = field(default_factory=list)
     ddl: str | None = None
+    source_size_bytes: int | None = None
+    estimated_rows: int | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +157,16 @@ def column_view(record: CatalogColumnRecord) -> ColumnView:
     )
 
 
+def _resolve_fk_target_map(source_id: str) -> dict[tuple[str, str], str]:
+    present = get_catalog_store().list_present_for_source(source_id)
+    targets: dict[tuple[str, str], str] = {}
+    for candidate in present:
+        key = (candidate.schema_name, candidate.name)
+        if key not in targets or candidate.object_type == "table":
+            targets[key] = candidate.id
+    return targets
+
+
 def object_view(
     record: CatalogObjectRecord, *, include_columns: bool
 ) -> ObjectView:
@@ -163,6 +176,11 @@ def object_view(
     ddl: str | None = None
     if include_columns:
         columns = [column_view(c) for c in record.columns]
+        fk_targets = (
+            _resolve_fk_target_map(record.source_id)
+            if record.foreign_keys
+            else {}
+        )
         foreign_keys = [
             ForeignKeyView(
                 name=fk.name,
@@ -171,6 +189,7 @@ def object_view(
                 ref_table=fk.ref_table,
                 ref_columns=list(fk.ref_columns),
                 is_present=fk.is_present,
+                ref_object_id=fk_targets.get((fk.ref_schema, fk.ref_table)),
             )
             for fk in record.foreign_keys
         ]
@@ -209,6 +228,8 @@ def object_view(
         foreign_keys=foreign_keys,
         indexes=indexes,
         ddl=ddl,
+        source_size_bytes=record.source_size_bytes if include_columns else None,
+        estimated_rows=record.estimated_rows if include_columns else None,
     )
 
 

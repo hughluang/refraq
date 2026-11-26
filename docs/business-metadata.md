@@ -535,7 +535,7 @@ Rules:
   process cache of query embeddings. Neighbor time is
   `refraq_catalog_neighbor_seconds` on `/metrics`. Catalog Search is a **Top-K Read**:
   `{ items, limit, offset, rank_mode, truncated }`, no `total`. `offset` past the
-  window may be empty. Exact locator resolve is `GET /objects/{ref}`, not Search.
+  window may be empty. Exact locator resolve is `GET /catalog/objects/resolve?ref=…` (or `GET /objects/{id}` by surrogate id), not Search.
   Per-Source list `q` is not this ranking. Model Service rules: `docs/business-model-services.md`.
 - Concurrent Catalog Search and other platform short reads are bounded by the runtime
   capacity contract (`docs/env.md`). Excess in-flight work, a full platform pool, or the

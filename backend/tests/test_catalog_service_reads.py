@@ -713,3 +713,96 @@ def test_mcp_find_join_path_smoke(client: TestClient) -> None:
     assert "error" not in body
     assert "paths_found" in body
     assert body["rank_mode"] is None
+
+
+def test_http_detail_enrichment_resolve_and_semantics_change_filters(
+    client: TestClient,
+) -> None:
+    from backend.metadata.catalog.records import CatalogForeignKeyRecord
+
+    _seed_source()
+    customers = replace(
+        _table("obj_customers", "customers", [("col_cust_id", "id")]),
+        source_size_bytes=4096,
+        estimated_rows=50,
+    )
+    orders = replace(
+        _table(
+            "obj_orders",
+            "orders",
+            [("col_ord_id", "id"), ("col_ord_cust", "customer_id")],
+        ),
+        source_size_bytes=16384,
+        estimated_rows=420,
+        foreign_keys=[
+            CatalogForeignKeyRecord(
+                name="fk_orders_customers",
+                columns=["customer_id"],
+                ref_schema="public",
+                ref_table="customers",
+                ref_columns=["id"],
+            )
+        ],
+    )
+    apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="j_enrich",
+        collected=[customers, orders],
+        schema_scope=None,
+    )
+
+    resolved = client.get(
+        "/catalog/objects/resolve",
+        params={"ref": "obj/postgresql/mes/public/table/orders"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    detail = resolved.json()["object"]
+    assert detail["id"] == "obj_orders"
+    assert detail["source"] == {
+        "id": "src_1",
+        "key": "mes",
+        "name": "MES",
+        "engine": "postgresql",
+    }
+    assert detail["source_size_bytes"] == 16384
+    assert detail["estimated_rows"] == 420
+    assert detail["foreign_keys"][0]["ref_object_id"] == "obj_customers"
+
+    patch_obj = client.patch(
+        "/objects/obj_orders/semantics",
+        json={"business_name": "Sales Orders"},
+    )
+    assert patch_obj.status_code == 200
+    patch_col = client.patch(
+        "/columns/col_ord_cust/semantics",
+        json={"business_name": "Customer ID"},
+    )
+    assert patch_col.status_code == 200
+
+    all_changes = client.get("/objects/obj_orders/semantics-changes")
+    assert all_changes.status_code == 200
+    items = all_changes.json()["items"]
+    assert len(items) == 2
+    by_field = {(item["column_id"], item["field_name"]): item for item in items}
+    col_change = by_field[("col_ord_cust", "business_name")]
+    assert col_change["column_name"] == "customer_id"
+    assert col_change["actor_display_name"] == "Admin"
+    obj_change = by_field[(None, "business_name")]
+    assert obj_change["column_name"] is None
+    assert obj_change["actor_display_name"] == "Admin"
+
+    col_only = client.get(
+        "/objects/obj_orders/semantics-changes",
+        params={"scope": "column", "column_id": "col_ord_cust"},
+    )
+    assert col_only.status_code == 200
+    assert col_only.json()["total"] == 1
+    assert col_only.json()["items"][0]["column_name"] == "customer_id"
+
+    obj_only = client.get(
+        "/objects/obj_orders/semantics-changes",
+        params={"scope": "object", "semantic_source": "user_input"},
+    )
+    assert obj_only.status_code == 200
+    assert obj_only.json()["total"] == 1
+    assert obj_only.json()["items"][0]["column_id"] is None

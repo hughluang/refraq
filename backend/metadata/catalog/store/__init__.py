@@ -140,6 +140,10 @@ class CatalogSemanticsStore(Protocol):
         self,
         object_id: str,
         *,
+        scope: str | None = None,
+        column_id: str | None = None,
+        field_name: str | None = None,
+        semantic_source: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[Any], int]: ...

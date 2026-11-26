@@ -84,4 +84,6 @@ def present_object(view: ObjectView, *, profile: ObjectPresentProfile) -> dict[s
     payload["foreign_keys"] = [asdict(fk) for fk in view.foreign_keys]
     payload["indexes"] = [asdict(idx) for idx in view.indexes]
     payload["ddl"] = view.ddl
+    payload["source_size_bytes"] = view.source_size_bytes
+    payload["estimated_rows"] = view.estimated_rows
     return payload

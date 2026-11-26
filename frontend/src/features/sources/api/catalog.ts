@@ -1,5 +1,5 @@
-import { apiClient } from "@/lib/api";
-import type { CatalogObject, SemanticsChange } from "@/features/sources/types";
+import { ApiError, apiClient } from "@/lib/api";
+import type { CatalogObject, SemanticsChange, SemanticsChangeQuery } from "@/features/sources/types";
 import type { OffsetPage } from "@/lib/pagination";
 import type { MirrorReference } from "@/features/mirrors/types";
 
@@ -92,33 +92,27 @@ export function deleteCatalogMirror(objectId: string, token: string, signal: Abo
 }
 
 export async function resolveCatalogObject(objectRef: string, signal?: AbortSignal): Promise<{ object: CatalogObject | null }> {
-  if (!objectRef.startsWith("obj/")) return getCatalogObject(objectRef, signal);
-  const parts = objectRef.split("/");
-  if (parts.length !== 6 || parts.some((part) => !part)) return { object: null };
-  const [, engine, sourceKey, , objectType, name] = parts;
-  const pageSize = 100;
-  let sourceTotal = Infinity;
-  for (let offset = 0; offset < sourceTotal; offset += pageSize) {
-    const page = await listCatalogSources({ q: sourceKey, limit: pageSize, offset, signal });
-    if (offset === 0) sourceTotal = page.total;
-    const source = page.items.find((item) => item.key === sourceKey && item.engine === engine);
-    if (source) {
-      let objectTotal = Infinity;
-      for (let objectOffset = 0; objectOffset < objectTotal; objectOffset += pageSize) {
-        const objects = await listCatalogObjects(source.id, decodeURIComponent(name), {
-          object_type: objectType, include_absent: true,
-          limit: pageSize, offset: objectOffset, signal,
-        });
-        if (objectOffset === 0) objectTotal = objects.total;
-        const exact = objects.items.find((item) => item.locator_key === objectRef);
-        if (exact) return getCatalogObject(exact.id, signal);
-        if (objects.items.length === 0) break;
+  if (objectRef.startsWith("obj/")) {
+    const parts = objectRef.split("/");
+    if (parts.length !== 6 || parts.some((part) => !part)) return { object: null };
+    try {
+      const params = new URLSearchParams({ ref: objectRef });
+      return await apiClient<{ object: CatalogObject }>(`/catalog/objects/resolve?${params}`, { signal });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        return { object: null };
       }
+      throw error;
+    }
+  }
+  try {
+    return await getCatalogObject(objectRef, signal);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
       return { object: null };
     }
-    if (page.items.length === 0) break;
+    throw error;
   }
-  return { object: null };
 }
 
 export function searchCatalogObjects(
@@ -147,9 +141,13 @@ export function searchCatalogObjects(
 
 export function listSemanticsChanges(
   objectId: string,
-  params?: { limit?: number; offset?: number },
+  params?: SemanticsChangeQuery,
 ) {
   const qs = new URLSearchParams();
+  if (params?.scope) qs.set("scope", params.scope);
+  if (params?.column_id) qs.set("column_id", params.column_id);
+  if (params?.field_name) qs.set("field_name", params.field_name);
+  if (params?.semantic_source) qs.set("semantic_source", params.semantic_source);
   if (params?.limit != null) qs.set("limit", String(params.limit));
   if (params?.offset != null) qs.set("offset", String(params.offset));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
@@ -158,5 +156,5 @@ export function listSemanticsChanges(
     total: number;
     limit: number;
     offset: number;
-  }>(`/objects/${objectId}/semantics-changes${suffix}`);
+  }>(`/objects/${encodeURIComponent(objectId)}/semantics-changes${suffix}`);
 }

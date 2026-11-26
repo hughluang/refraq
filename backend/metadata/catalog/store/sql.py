@@ -833,15 +833,32 @@ class SqlCatalogStore:
         self,
         object_id: str,
         *,
+        scope: str | None = None,
+        column_id: str | None = None,
+        field_name: str | None = None,
+        semantic_source: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[CatalogSemanticsChangeRecord], int]:
         with session_scope() as session:
+            stmt = select(CatalogSemanticsChangeRow).where(
+                CatalogSemanticsChangeRow.object_id == object_id
+            )
+            if scope == "object":
+                stmt = stmt.where(CatalogSemanticsChangeRow.column_id.is_(None))
+            elif scope == "column":
+                stmt = stmt.where(CatalogSemanticsChangeRow.column_id.is_not(None))
+            if column_id is not None:
+                stmt = stmt.where(CatalogSemanticsChangeRow.column_id == column_id)
+            if field_name is not None:
+                stmt = stmt.where(CatalogSemanticsChangeRow.field_name == field_name)
+            if semantic_source is not None:
+                stmt = stmt.where(
+                    CatalogSemanticsChangeRow.semantic_source == semantic_source
+                )
             rows = list(
                 session.scalars(
-                    select(CatalogSemanticsChangeRow)
-                    .where(CatalogSemanticsChangeRow.object_id == object_id)
-                    .order_by(
+                    stmt.order_by(
                         CatalogSemanticsChangeRow.created_at.desc(),
                         CatalogSemanticsChangeRow.id.desc(),
                     )

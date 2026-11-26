@@ -20,8 +20,12 @@ const mirrorGrants = vi.hoisted(() => new Set<string>());
 
 const copy = en as Record<string, string>;
 
-function translate(key: string) {
-  return copy[key] ?? key;
+function translate(key: string, options?: Record<string, unknown>) {
+  const template = copy[key] ?? key;
+  if (!options) return template;
+  return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
+    String(options[name] ?? ""),
+  );
 }
 
 vi.mock("@refinedev/core", () => ({
@@ -445,22 +449,86 @@ describe("CatalogObjectDetail load", () => {
     await waitFor(() => expect(getCatalogObject).toHaveBeenCalledTimes(2));
   });
 
-  it("keeps supplementary object metadata available behind a compact disclosure", async () => {
-    getCatalogObject.mockResolvedValue({ object: {
-      id: "obj_1", source_id: "source", schema_name: "public", name: "orders",
-      object_type: "table", locator_key: "obj/postgresql/demo/public/table/orders",
-      columns: [], is_present: true, business_semantics_ready: false,
-    } });
+  it("renders the telemetry ribbon, source links, column coverage, and titleExtra status badges", async () => {
+    getCatalogObject.mockResolvedValue({
+      object: {
+        id: "obj_1",
+        source_id: "source",
+        source: {
+          id: "source",
+          key: "demo",
+          name: "Demo Postgres",
+          engine: "postgresql",
+        },
+        schema_name: "public",
+        name: "orders",
+        object_type: "table",
+        locator_key: "obj/postgresql/demo/public/table/orders",
+        columns: [
+          {
+            id: "col_1",
+            locator_key: "col/1",
+            name: "id",
+            data_type: "bigint",
+            nullable: false,
+            business_name: "Order ID",
+            business_description: null,
+            ordinal: 1,
+            is_present: true,
+          },
+          {
+            id: "col_2",
+            locator_key: "col/2",
+            name: "total",
+            data_type: "numeric",
+            nullable: true,
+            business_name: null,
+            business_description: null,
+            ordinal: 2,
+            is_present: true,
+          },
+        ],
+        is_present: true,
+        business_semantics_ready: false,
+        estimated_rows: 1234,
+        source_size_bytes: 1500000,
+        open_questions: ["Verify currency unit"],
+      },
+    });
     render(shell(createElement(CatalogObjectDetail, { objectId: "obj_1" })));
     await screen.findByRole("heading", { name: "public.orders" });
-    const locator = screen.getByText("obj/postgresql/demo/public/table/orders");
-    const details = locator.closest("details")!;
-    expect(details.open).toBe(false);
-    expect(details.querySelector("summary")?.textContent).toContain("Present");
-    fireEvent.click(details.querySelector("summary")!);
-    expect(details.open).toBe(true);
-    expect(screen.getByRole("button", { name: "Copy locator" })).toBeTruthy();
+
+    const header = document.querySelector("[data-page-header]")!;
+    expect(header.textContent).toContain("Present");
+    expect(header.textContent).toContain("Business semantics incomplete");
+
+    const telemetry = screen.getByRole("region", {
+      name: copy["catalog.detail.telemetryAria"],
+    });
+    expect(within(telemetry).getByText("obj/postgresql/demo/public/table/orders")).toBeTruthy();
+    expect(within(telemetry).getByRole("button", { name: "Copy locator" })).toBeTruthy();
+
+    const sourceLink = within(telemetry).getByRole("link", { name: "Demo Postgres" });
+    expect(sourceLink.getAttribute("href")).toBe("/console/sources/source");
+
+    const diffsLink = within(telemetry).getByRole("link", {
+      name: copy["catalog.detail.structureDiffs"],
+    });
+    expect(diffsLink.getAttribute("href")).toBe("/console/sources/source?tab=diffs");
+
+    expect(within(telemetry).getByText("1,234")).toBeTruthy();
+    expect(within(telemetry).getByText("1.43 MB")).toBeTruthy();
+    expect(within(telemetry).getByText("1 open questions")).toBeTruthy();
+
+    const coverageBtn = within(telemetry).getByRole("button", {
+      name: /1\/2 columns documented/,
+    });
+    fireEvent.click(coverageBtn);
+    expect(screen.getByRole("tab", { selected: true }).textContent).toContain("Columns (2)");
     expect(screen.getByRole("tablist").style.flexWrap).toBe("nowrap");
+    expect(
+      screen.queryByRole("region", { name: copy["catalog.detail.telemetryAria"] }),
+    ).toBeNull();
   });
 
   it("ignores a prior object's late response after navigation", async () => {

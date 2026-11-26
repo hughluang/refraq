@@ -87,6 +87,7 @@ class CatalogForeignKeyOut(BaseModel):
     ref_table: str
     ref_columns: list[str]
     is_present: bool = True
+    ref_object_id: str | None = None
 
 
 class CatalogIndexOut(BaseModel):
@@ -128,8 +129,20 @@ class CatalogMirrorTableListResponse(OffsetPage[CatalogMirrorTable]):
     pass
 
 
+class CatalogSourceOut(BaseModel):
+    id: str
+    key: str
+    name: str
+    engine: str | None
+
+
+class CatalogSourceListResponse(OffsetPage[CatalogSourceOut]):
+    pass
+
+
 class CatalogObjectOut(BaseModel):
     mirror: CatalogMirrorOut | None = None
+    source: CatalogSourceOut | None = None
     id: str
     locator_key: str
     source_id: str
@@ -154,6 +167,8 @@ class CatalogObjectOut(BaseModel):
     ddl: str | None = None
     is_present: bool = True
     collected_at: Instant | None = None
+    source_size_bytes: int | None = None
+    estimated_rows: int | None = None
 
 
 class CatalogObjectListResponse(OffsetPage[CatalogObjectOut]):
@@ -304,24 +319,15 @@ class SemanticsChangeOut(BaseModel):
     id: str
     object_id: str
     column_id: str | None = None
+    column_name: str | None = None
     field_name: str
     old_value: object | None = None
     new_value: object | None = None
     semantic_source: str
     actor_user_id: str | None = None
+    actor_display_name: str | None = None
     created_at: Instant
 
 
 class SemanticsChangeListResponse(OffsetPage[SemanticsChangeOut]):
-    pass
-
-
-class CatalogSourceOut(BaseModel):
-    id: str
-    key: str
-    name: str
-    engine: str | None
-
-
-class CatalogSourceListResponse(OffsetPage[CatalogSourceOut]):
     pass

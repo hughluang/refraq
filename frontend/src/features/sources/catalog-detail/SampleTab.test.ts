@@ -8,11 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SampleTab } from "@/features/sources/catalog-detail/SampleTab";
 import { runObjectSample } from "@/features/sources/api/sample";
 import type { CatalogColumn, CatalogObject, SampleResult } from "@/features/sources/types";
+import { copyText } from "@/lib/copy-text";
 import en from "@/locales/en-US/common.json";
 import zh from "@/locales/zh-CN/common.json";
 
 const copy = en as Record<string, string>;
 const chinese = zh as Record<string, string>;
+
+const openNotification = vi.hoisted(() => vi.fn());
 
 function translate(key: string, options?: Record<string, unknown>) {
   const template = copy[key] ?? key;
@@ -22,12 +25,16 @@ function translate(key: string, options?: Record<string, unknown>) {
 
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => translate,
-  useNotification: () => ({ open: vi.fn() }),
+  useNotification: () => ({ open: openNotification }),
   useCan: () => ({ data: { can: true }, isLoading: false }),
 }));
 
 vi.mock("@/features/sources/api/sample", () => ({
   runObjectSample: vi.fn(),
+}));
+
+vi.mock("@/lib/copy-text", () => ({
+  copyText: vi.fn().mockResolvedValue(undefined),
 }));
 
 function column(name: string, present: boolean): CatalogColumn {
@@ -95,6 +102,7 @@ function stubDomApis() {
     disconnect() {}
   }
   globalThis.ResizeObserver = ResizeObserverStub;
+  Element.prototype.scrollIntoView = vi.fn();
 }
 
 function shell(node: ReactNode) {
@@ -113,9 +121,20 @@ function resultHeader(rowCount: string): HTMLElement {
   return header;
 }
 
-function chooseOption(label: string, optionName: string) {
-  const combobox = screen.getByRole("combobox", { name: label });
+function chooseOption(label: string, optionName: string, index = 0) {
+  const comboboxes = screen.getAllByRole("combobox", { name: label });
+  const combobox = comboboxes[index];
+  if (!combobox) throw new Error(`missing combobox ${label} at ${index}`);
   fireEvent.mouseDown(combobox);
+  fireEvent.click(combobox);
+  const controlsId = combobox.getAttribute("aria-controls");
+  const controlled = controlsId ? document.getElementById(controlsId) : null;
+  if (controlled) {
+    fireEvent.click(
+      within(controlled).getByRole("option", { name: optionName, hidden: true }),
+    );
+    return;
+  }
   const lists = screen.getAllByRole("listbox", { hidden: true });
   const list = lists.find((item) =>
     within(item).queryByRole("option", { name: optionName, hidden: true }),
@@ -137,6 +156,8 @@ describe("SampleTab result header", () => {
   beforeEach(() => {
     stubDomApis();
     vi.mocked(runObjectSample).mockReset();
+    vi.mocked(copyText).mockClear();
+    openNotification.mockReset();
   });
 
   afterEach(() => {
@@ -204,5 +225,177 @@ describe("SampleTab result header", () => {
     expect(screen.queryByText(copy["catalog.sample.unstableOrder"])).toBeNull();
     expect(screen.queryByText(copy["catalog.sample.stale"])).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("supports multi-filter rows including is_null", async () => {
+    vi.mocked(runObjectSample).mockResolvedValue(sampleResult(0, false));
+    const object = catalogObject([column("id", true), column("region", true)]);
+    render(shell(createElement(SampleTab, { object })));
+
+    chooseOption(copy["catalog.sample.filterColumn"], "region", 0);
+    chooseOption(copy["catalog.sample.filterOp"], copy["catalog.sample.opIsNull"], 0);
+
+    fireEvent.click(screen.getByRole("button", { name: copy["catalog.sample.addFilter"] }));
+    chooseOption(copy["catalog.sample.filterColumn"], "id", 1);
+    const valueInputs = screen.getAllByRole("textbox", {
+      name: copy["catalog.sample.filterValue"],
+    });
+    expect(valueInputs).toHaveLength(1);
+    fireEvent.change(valueInputs[0]!, { target: { value: "42" } });
+
+    fireEvent.click(screen.getByRole("button", { name: copy["catalog.sample.load"] }));
+    expect(await screen.findByText("north")).toBeTruthy();
+
+    expect(runObjectSample).toHaveBeenCalledWith(
+      "obj-1",
+      expect.objectContaining({
+        filters: [
+          { column: "region", op: "is_null", value: "" },
+          { column: "id", op: "eq", value: "42" },
+        ],
+      }),
+    );
+
+    const removeButtons = screen.getAllByRole("button", {
+      name: copy["catalog.sample.removeFilter"],
+    });
+    fireEvent.click(removeButtons[0]!);
+    expect(
+      screen.getAllByRole("combobox", { name: copy["catalog.sample.filterColumn"] }),
+    ).toHaveLength(1);
+  });
+
+  it("supports column projection presets and compiled SQL preview", async () => {
+    vi.mocked(runObjectSample).mockResolvedValue({
+      columns: ["id"],
+      declarations: [],
+      rows: [["1"]],
+      truncated: false,
+      duration_ms: 8,
+      offset: 0,
+      limit: 50,
+      has_more: false,
+      sql: 'SELECT "id" FROM "public"."orders" ORDER BY "id" ASC LIMIT 50',
+    });
+
+    const object = catalogObject([column("id", true), column("region", true)]);
+    render(shell(createElement(SampleTab, { object })));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: copy["catalog.sample.columnsPkOnly"] }),
+    );
+    expect(
+      screen.getByRole("button", { name: copy["catalog.sample.columnsReset"] }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("switch", { name: copy["catalog.sample.showSql"] }));
+    fireEvent.click(screen.getByRole("button", { name: copy["catalog.sample.load"] }));
+
+    expect(
+      await screen.findByText(
+        'SELECT "id" FROM "public"."orders" ORDER BY "id" ASC LIMIT 50',
+      ),
+    ).toBeTruthy();
+
+    expect(runObjectSample).toHaveBeenCalledWith(
+      "obj-1",
+      expect.objectContaining({
+        columns: ["id"],
+        include_sql: true,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: copy["catalog.sample.copySql"] }));
+    expect(copyText).toHaveBeenCalledWith(
+      'SELECT "id" FROM "public"."orders" ORDER BY "id" ASC LIMIT 50',
+    );
+  });
+
+  it("supports header sorting and renders typed cells and precision warnings", async () => {
+    vi.mocked(runObjectSample).mockResolvedValue({
+      columns: ["id", "note", "active", "payload", "seen_at"],
+      declarations: [
+        {
+          name: "seen_at",
+          temporal_kind: "time",
+          precision: 3,
+          nullable: true,
+        },
+      ],
+      rows: [[null, "", true, { encoding: "base64", data: "AQID" }, "01:02:03.1234"]],
+      truncated: false,
+      duration_ms: 5,
+      offset: 0,
+      limit: 50,
+      has_more: false,
+    });
+
+    const object = catalogObject([
+      column("id", true),
+      column("note", true),
+      column("active", true),
+      column("payload", true),
+      column("seen_at", true),
+    ]);
+    render(shell(createElement(SampleTab, { object })));
+
+    fireEvent.click(screen.getByRole("button", { name: copy["catalog.sample.load"] }));
+
+    expect(await screen.findByText(copy["catalog.sample.nullBadge"])).toBeTruthy();
+    expect(screen.getByText(copy["catalog.sample.emptyStringBadge"])).toBeTruthy();
+    expect(screen.getByText("true")).toBeTruthy();
+    expect(
+      screen.getByText(translate("catalog.sample.binaryBadge", { bytes: 3 })),
+    ).toBeTruthy();
+    expect(screen.getByLabelText(copy["catalog.sample.precision"])).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: translate("catalog.sample.sortBy", { column: "note" }),
+      }),
+    );
+    expect(await screen.findByText("Outdated")).toBeTruthy();
+  });
+
+  it("opens the row inspector drawer and copies row JSON and cell values", async () => {
+    vi.mocked(runObjectSample).mockResolvedValue({
+      columns: ["id", "region"],
+      declarations: [],
+      rows: [[101, "west"]],
+      truncated: false,
+      duration_ms: 7,
+      offset: 0,
+      limit: 50,
+      has_more: false,
+    });
+
+    const object = catalogObject([column("id", true), column("region", true)]);
+    render(shell(createElement(SampleTab, { object })));
+
+    fireEvent.click(screen.getByRole("button", { name: copy["catalog.sample.load"] }));
+    expect(await screen.findByText("west")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: translate("catalog.sample.inspectRow", { index: 1 }),
+      }),
+    );
+
+    expect(
+      await screen.findByText(translate("catalog.sample.rowDrawerTitle", { index: 1 })),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: copy["catalog.sample.copyRowJson"] }),
+    );
+    expect(copyText).toHaveBeenCalledWith(
+      JSON.stringify({ id: 101, region: "west" }, null, 2),
+    );
+
+    const copyCellButtons = screen.getAllByRole("button", {
+      name: copy["catalog.sample.copyCell"],
+    });
+    fireEvent.click(copyCellButtons[1]!);
+    expect(copyText).toHaveBeenCalledWith("west");
   });
 });

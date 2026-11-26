@@ -67,14 +67,15 @@ A route that names one Source, or a child that resolves to one Source, checks th
       "is_present": true
     }
   ],
-  "foreign_keys": [
+    "foreign_keys": [
     {
       "name": "fk_orders_customer",
       "columns": ["customer_id"],
       "ref_schema": "public",
       "ref_table": "customers",
       "ref_columns": ["id"],
-      "is_present": true
+      "is_present": true,
+      "ref_object_id": "obj_02"
     }
   ],
   "indexes": [
@@ -87,7 +88,15 @@ A route that names one Source, or a child that resolves to one Source, checks th
   ],
   "ddl": null,
   "is_present": true,
-  "collected_at": "2026-08-05T02:05:00Z"
+  "collected_at": "2026-08-05T02:05:00Z",
+  "source": {
+    "id": "src_demo",
+    "key": "demo-src",
+    "name": "Demo Source",
+    "engine": "postgresql"
+  },
+  "source_size_bytes": 8192,
+  "estimated_rows": 23
 }
 ```
 
@@ -95,7 +104,7 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 `normalized_type` is the closed coarse physical type assigned by **Type Mapping** (`string` | `integer` | `number` | `decimal` | `boolean` | `date` | `timestamp` | `time` | `interval` | `binary` | `json` | `array` | `unknown`). `number` is approximate; `decimal` is exact. It is a snapshot from the last successful structure Job, not a live lookup. Native `data_type` is unchanged. MCP catalog tools omit this field.
 `field_kind` is read-only on semantics writes (structure-held). `model_routing_hint` is not in this phase.
 `time_semantics`, `status_semantics`, `relation_summary`, and `confidence` are removed from read and write contracts (ADR 0015); time/status meaning lives on column descriptions (and optional free-text `semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016); object relationships live in join edges. `business_domain` is removed from read and write contracts (ADR 0064).
-`foreign_keys` and `indexes` are included on object detail (`GET /objects/{id}` and semantics write responses); list/search endpoints return empty arrays for these fields and empty `ddl`.
+`foreign_keys` and `indexes` are included on object detail (`GET /objects/{id}`, `GET /catalog/objects/resolve`, and semantics write responses); list/search endpoints return empty arrays for these fields, empty `ddl`, and null `source` / `source_size_bytes` / `estimated_rows`. On object detail, `source` exposes the owning Source identity (`id`, `key`, `name`, `engine`), `source_size_bytes` and `estimated_rows` expose collected physical estimates when available, and `foreign_keys[].ref_object_id` resolves the referenced present Catalog Object id on the same Source when available.
 
 ## 3. Browse Endpoints (A+)
 
@@ -103,6 +112,7 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 | --- | --- | --- | --- |
 | `GET` | `/catalog/sources` | `metadata:read` | Page visible Source identities (id, key, name, engine), including Sources without collected objects. Accepts `source_id`, `q`, `limit`, and `offset`. A hidden or unknown id returns an empty page. |
 | `GET` | `/catalog/mirror-tables` | `metadata:read` | Offset Page of visible eligible tables and existing Mirror bindings. Accepts `source_id`, exact `object_id`, literal case-insensitive qualified-name substring `q`, `limit` (default 10, max 100), and `offset`. |
+| `GET` | `/catalog/objects/resolve` | `metadata:read` | Resolve an object id or full `locator_key` (`ref` query param) directly to full object detail (`CatalogObjectResponse`) |
 | `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: `q`, `object_type`, `include_absent`, `business_semantics_ready`, `limit`, `offset`) |
 | `GET` | `/objects/{id}` | `metadata:read` | Object detail including columns |
 | `GET` | `/objects/{id}/ddl` | `metadata:read` | DDL text when stored |
@@ -262,9 +272,9 @@ Process-wide overload: `PLATFORM_CAPACITY_EXCEEDED` (`503` + `Retry-After`) when
 
 ### `GET /objects/{id}/semantics-changes`
 
-Permission: `metadata:read` on the object's Source. No level is `404` `CATALOG_OBJECT_NOT_FOUND`. A level without the key is `403` `AUTH_FORBIDDEN`. **Offset Page** of **Semantics Change** events for that Catalog Object (object-level and column-level patches), newest first: `{ "items", "total", "limit", "offset" }`. `limit` default **50**, max **200**.
+Permission: `metadata:read` on the object's Source. No level is `404` `CATALOG_OBJECT_NOT_FOUND`. A level without the key is `403` `AUTH_FORBIDDEN`. **Offset Page** of **Semantics Change** events for that Catalog Object (object-level and column-level patches), newest first: `{ "items", "total", "limit", "offset" }`. `limit` default **50**, max **200**. Optional query filters: `scope` (`object` | `column`), `column_id`, `field_name`, `semantic_source` (`mcp` | `user_input`).
 
-Item: `{ "id", "object_id", "column_id", "field_name", "old_value", "new_value", "semantic_source", "actor_user_id", "created_at" }`. `column_id` is null for object-level fields. Last write still wins; this list does not restore.
+Item: `{ "id", "object_id", "column_id", "column_name", "field_name", "old_value", "new_value", "semantic_source", "actor_user_id", "actor_display_name", "created_at" }`. `column_id` and `column_name` are null for object-level fields (`column_name` is also null if the column was later removed). `actor_display_name` resolves the actor's display name or account when available without requiring `users:read`. Last write still wins; this list does not restore.
 
 ## 7. Controlled Query (D)
 

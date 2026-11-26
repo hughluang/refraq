@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
@@ -14,7 +15,7 @@ from backend.admin.deps import get_actor_token_id, require_permission, resolve_u
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.permissions import permissions_include
 from backend.admin.errors import AuthForbidden
-from backend.admin.user_store import UserRecord
+from backend.admin.user_store import UserRecord, get_user_store
 from backend.core.admission import await_admitted
 from backend.core.pagination import (
     CATALOG_OBJECT_LIST,
@@ -76,6 +77,7 @@ from backend.metadata.schemas.catalog import (
     JoinResponse,
     JoinUpsertRequest,
     ObjectSemanticsPatchRequest,
+    SemanticSource,
     SemanticsChangeListResponse,
     SemanticsChangeOut,
 )
@@ -139,6 +141,14 @@ def _object_out(view: catalog_views.ObjectView) -> CatalogObjectOut:
 
 def _object_detail_out(view: catalog_views.ObjectView, user: UserRecord, roles: RoleStore) -> CatalogObjectOut:
     payload = present_object(view, profile=ObjectPresentProfile.HTTP_DETAIL)
+    src = get_source_store().get_source(view.source_id)
+    if src is not None:
+        payload["source"] = {
+            "id": src.id,
+            "key": src.key,
+            "name": src.name,
+            "engine": src.engine,
+        }
     try:
         can_read_catalog = allows(user.id, view.source_id, "metadata:read")
     except AuthForbidden:
@@ -287,6 +297,16 @@ async def search_columns(
         truncated=found.truncated,
     )
 
+@router.get("/catalog/objects/resolve", response_model=CatalogObjectResponse)
+def resolve_object_detail(
+    ref: str = Query(..., min_length=1),
+    user: UserRecord = Depends(require_permission("metadata:read")),
+    roles: RoleStore = Depends(get_role_store),
+) -> CatalogObjectResponse:
+    record = _require_object_permission(user.id, ref, "metadata:read")
+    return CatalogObjectResponse(object=_object_detail_out(catalog_reads.get_object(record.id), user, roles))
+
+
 @router.get("/objects/{object_id}", response_model=CatalogObjectResponse)
 def get_object(
     object_id: str,
@@ -364,24 +384,47 @@ def get_object_ddl(
 )
 def list_object_semantics_changes(
     object_id: str,
+    scope: Literal["object", "column"] | None = Query(default=None),
+    column_id: str | None = Query(default=None),
+    field_name: str | None = Query(default=None),
+    semantic_source: SemanticSource | None = Query(default=None),
     page: PageParams = Depends(page_params(SEMANTICS_CHANGE_LIST)),
     user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> SemanticsChangeListResponse:
-    _require_object_permission(user.id, object_id, "metadata:read")
+    record = _require_object_permission(user.id, object_id, "metadata:read")
     items, total = catalog_reads.list_semantics_changes(
-        object_id, limit=page.limit, offset=page.offset
+        record.id,
+        scope=scope,
+        column_id=column_id,
+        field_name=field_name,
+        semantic_source=semantic_source,
+        limit=page.limit,
+        offset=page.offset,
     )
+    column_names = {col.id: col.name for col in record.columns}
+    actor_names: dict[str, str | None] = {}
+    user_store = get_user_store()
+    for c in items:
+        if c.actor_user_id and c.actor_user_id not in actor_names:
+            actor = user_store.get_by_id(c.actor_user_id)
+            actor_names[c.actor_user_id] = (
+                (actor.display_name or actor.account) if actor is not None else None
+            )
     return SemanticsChangeListResponse(
         items=[
             SemanticsChangeOut(
                 id=c.id,
                 object_id=c.object_id,
                 column_id=c.column_id,
+                column_name=column_names.get(c.column_id) if c.column_id else None,
                 field_name=c.field_name,
                 old_value=c.old_value,
                 new_value=c.new_value,
                 semantic_source=c.semantic_source,
                 actor_user_id=c.actor_user_id,
+                actor_display_name=(
+                    actor_names.get(c.actor_user_id) if c.actor_user_id else None
+                ),
                 created_at=c.created_at,
             )
             for c in items

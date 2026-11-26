@@ -10,6 +10,7 @@ import type { CatalogObject, CatalogJoin } from "@/features/sources/types";
 import { JoinsTab } from "./JoinsTab";
 
 const api = vi.hoisted(() => ({ search: vi.fn(), get: vi.fn(), list: vi.fn(), create: vi.fn(), patch: vi.fn(), reject: vi.fn(), restore: vi.fn(), delete: vi.fn(), path: vi.fn() }));
+const clipboard = vi.hoisted(() => ({ copyText: vi.fn() }));
 const notice = vi.hoisted(() => vi.fn());
 const feedback = vi.hoisted(() => vi.fn());
 vi.mock("@/providers/notification-provider", () => ({ presentConsoleNotification: feedback, dismissConsoleNotification: vi.fn() }));
@@ -17,6 +18,7 @@ vi.mock("@refinedev/core", () => ({ useTranslate: () => (key: string, options?: 
 vi.mock("@/features/sources/api/catalog", () => ({ searchCatalogObjects: api.search, getCatalogObject: api.get }));
 vi.mock("@/features/sources/api/joins", () => ({ listObjectJoins: api.list, createJoin: api.create, patchJoin: api.patch, deleteJoin: api.delete, rejectJoin: api.reject, restoreJoin: api.restore, getJoinPath: api.path }));
 vi.mock("@/components/navigation/ConsoleLink", () => ({ ConsoleLink: ({ children, href }: { children: ReactNode; href: string }) => createElement("a", { href }, children) }));
+vi.mock("@/lib/copy-text", () => ({ copyText: clipboard.copyText }));
 
 export const object: CatalogObject = {
   id: "orders", name: "orders", schema_name: "public", source_id: "source", locator_key: "obj/pg/demo/public/table/orders", object_type: "table", business_name: null, business_description: null, ddl: null, is_present: true, collected_at: null,
@@ -30,6 +32,7 @@ const incoming: CatalogJoin = { id: "edge", from_column_id: "remote", to_column_
 function mount(writable = true) { return render(createElement(MantineProvider, { env: "test" }, createElement(JoinsTab, { object, writable }))); }
 beforeEach(() => {
   vi.clearAllMocks();
+  clipboard.copyText.mockResolvedValue(undefined);
   api.search.mockResolvedValue({ items: [], truncated: false });
   api.list.mockResolvedValue({ items: [incoming], total: 1, limit: 50, offset: 0 });
   Object.defineProperty(window, "matchMedia", { value: (query: string) => ({ matches: false, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }), configurable: true });
@@ -723,4 +726,124 @@ it("keeps a failed relation read distinct from empty and allows retry", async ()
   expect(screen.queryByText(en["catalog.joins.empty"])).toBeNull();
   fireEvent.click(retry);
   expect(await screen.findByText("lines.order_id")).toBeTruthy();
+});
+
+it("filters loaded relations by direction, state, and origin", async () => {
+  const outgoingAuto: CatalogJoin = {
+    id: "edge-out",
+    from_column_id: "id",
+    to_column_id: "cust-id",
+    from_column_locator_key: object.columns[0].locator_key,
+    to_column_locator_key: "col/pg/other/public/table/customers/column/id",
+    evidence: "Outgoing auto",
+    join_kind: "INNER",
+    join_expression: "orders.id = customers.id",
+    created_by_user_id: null,
+    created_at: "2026-11-01T00:00:00Z",
+    is_rejected: false,
+  };
+  const sameRejected: CatalogJoin = {
+    id: "edge-same",
+    from_column_id: "id",
+    to_column_id: "parent",
+    from_column_locator_key: object.columns[0].locator_key,
+    to_column_locator_key: object.columns[1].locator_key,
+    evidence: "Self rejected",
+    join_kind: "LEFT",
+    join_expression: "orders.id = orders.parent_id",
+    created_by_user_id: "actor",
+    created_at: "2026-11-01T00:00:00Z",
+    is_rejected: true,
+  };
+  api.list.mockResolvedValue({ items: [incoming, outgoingAuto, sameRejected], total: 3, limit: 50, offset: 0 });
+  mount(false);
+  const index = await screen.findByRole("region", { name: "Relation index" });
+  expect(within(index).getAllByRole("row").slice(1)).toHaveLength(3);
+
+  fireEvent.click(within(index).getByRole("combobox", { name: en["catalog.joins.filterDirection"] }));
+  fireEvent.click(await screen.findByRole("option", { name: `${en["catalog.joins.filterDirection"]}: ${en["catalog.joins.outgoing"]}` }));
+  expect(within(index).getAllByRole("row").slice(1)).toHaveLength(1);
+  expect(within(index).getByText("customers.id")).toBeTruthy();
+
+  fireEvent.click(within(index).getByRole("combobox", { name: en["catalog.joins.filterDirection"] }));
+  fireEvent.click(await screen.findByRole("option", { name: `${en["catalog.joins.filterDirection"]}: ${en["catalog.joins.filterAll"]}` }));
+  expect(within(index).getAllByRole("row").slice(1)).toHaveLength(3);
+
+  fireEvent.click(within(index).getByRole("combobox", { name: en["catalog.joins.filterStatus"] }));
+  fireEvent.click(await screen.findByRole("option", { name: `${en["catalog.joins.filterStatus"]}: ${en["catalog.joins.state.rejected"]}` }));
+  expect(within(index).getAllByRole("row").slice(1)).toHaveLength(1);
+  expect(within(index).getByText("orders.parent_id")).toBeTruthy();
+
+  fireEvent.click(within(index).getByRole("combobox", { name: en["catalog.joins.filterProvenance"] }));
+  fireEvent.click(await screen.findByRole("option", { name: `${en["catalog.joins.filterProvenance"]}: ${en["catalog.joins.state.automated"]}` }));
+  expect(within(index).getByText(en["common.noMatch"])).toBeTruthy();
+
+  fireEvent.click(within(index).getByRole("button", { name: en["common.filters.clear"] }));
+  expect(within(index).getAllByRole("row").slice(1)).toHaveLength(3);
+});
+
+it("supports target object, question, and copyable SQL skeleton in path exploration", async () => {
+  const customers = { ...object, id: "cust-obj", name: "customers", locator_key: "obj/pg/demo/public/table/customers" };
+  api.search.mockResolvedValue({ items: [customers], truncated: false });
+  api.path.mockResolvedValue({
+    paths_found: 1,
+    direct_joins: [],
+    paths: [
+      {
+        target_object_id: "cust-obj",
+        path_summary: "orders → customers",
+        hops: [
+          {
+            join_id: "edge-out",
+            from_column_id: "id",
+            to_column_id: "cust-id",
+            from_column_locator_key: object.columns[0].locator_key,
+            to_column_locator_key: "col/pg/demo/public/table/customers/column/id",
+            join_kind: "LEFT",
+            join_expression: "orders.id = customers.id",
+            evidence: "FK match",
+          },
+        ],
+      },
+    ],
+  });
+  mount(false);
+  fireEvent.click(screen.getByRole("button", { name: "Explore paths" }));
+  const paths = await screen.findByRole("region", { name: "Join paths" });
+
+  expect(await within(paths).findByText(en["catalog.joins.path.sqlPreview"])).toBeTruthy();
+  expect(within(paths).getByText(/LEFT JOIN public\.customers ON orders\.id = customers\.id/)).toBeTruthy();
+
+  fireEvent.click(within(paths).getByRole("button", { name: en["catalog.joins.path.copySql"] }));
+  await waitFor(() =>
+    expect(clipboard.copyText).toHaveBeenCalledWith(
+      "SELECT *\nFROM public.orders\nLEFT JOIN public.customers ON orders.id = customers.id",
+    ),
+  );
+  expect(notice).toHaveBeenLastCalledWith({
+    type: "success",
+    message: en["common.copy.success"],
+  });
+
+  const targetInput = within(paths).getByRole("combobox", { name: en["catalog.joins.path.targetObject"] });
+  targetInput.focus();
+  fireEvent.change(targetInput, { target: { value: "customers" } });
+  await waitFor(() =>
+    expect(api.search).toHaveBeenCalledWith("customers", { source_id: "source", limit: 20 }),
+  );
+  fireEvent.click(await screen.findByRole("option", { name: "public.customers · obj/pg/demo/public/table/customers" }));
+
+  const questionInput = within(paths).getByRole("textbox", { name: en["catalog.joins.path.question"] });
+  fireEvent.change(questionInput, { target: { value: "customer revenue" } });
+
+  fireEvent.click(within(paths).getByRole("button", { name: "Explore paths" }));
+  await waitFor(() =>
+    expect(api.path).toHaveBeenLastCalledWith({
+      start: "orders",
+      max_hops: 2,
+      top_targets: 10,
+      target: "cust-obj",
+      q: "customer revenue",
+    }),
+  );
 });

@@ -1,31 +1,54 @@
 "use client";
 
 import {
+  ActionIcon,
   Badge,
   Button,
+  Code,
+  Drawer,
   Group,
   Loader,
+  Paper,
   Stack,
+  Switch,
   Table,
   Text,
+  Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
-import { useMemo } from "react";
+import { useNotification, useTranslate } from "@refinedev/core";
+import { useEffect, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/display/StatusBadge";
+import { EmptyState } from "@/components/feedback/EmptyState";
+import { MultiSelectField } from "@/components/form/MultiSelectField";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
-import { EmptyState } from "@/components/feedback/EmptyState";
 import {
+  AlertIcon,
+  CloseIcon,
+  CopyIcon,
+  EyeIcon,
+  KeyIcon,
+  PlusIcon,
+  SortAscIcon,
+  SortDescIcon,
+  SortIcon,
+} from "@/components/icons";
+import {
+  binaryByteLength,
+  cellExceedsDeclaredPrecision,
   formatSampleCell,
+  isBinaryCell,
   isSampleFilterOp,
 } from "@/features/sources/catalog-detail/sampleFilters";
 import {
   DEFAULT_SAMPLE_LIMIT,
   useCatalogSample,
 } from "@/features/sources/catalog-detail/useCatalogSample";
-import type { CatalogObject } from "@/features/sources/types";
+import type { CatalogObject, ColumnDeclaration } from "@/features/sources/types";
+import { copyText } from "@/lib/copy-text";
 
 type SampleTabProps = {
   object: CatalogObject;
@@ -33,6 +56,7 @@ type SampleTabProps = {
 
 export function SampleTab({ object }: SampleTabProps) {
   const t = useTranslate();
+  const { open } = useNotification();
   const sample = useCatalogSample(object);
   const {
     canSamplePending,
@@ -41,12 +65,20 @@ export function SampleTab({ object }: SampleTabProps) {
     limit,
     setLimit,
     setOffset,
-    filter,
-    setFilter,
+    filters,
+    addFilter,
+    removeFilter,
+    updateFilter,
+    clearFilters,
+    selectedColumns,
+    setSelectedColumns,
+    includeSql,
+    setIncludeSql,
     orderColumn,
     setOrderColumn,
     orderDirection,
     setOrderDirection,
+    toggleSort,
     result,
     stale,
     unstableOrder,
@@ -54,12 +86,27 @@ export function SampleTab({ object }: SampleTabProps) {
     run,
   } = sample;
 
-  const columnOptions = useMemo(
-    () =>
-      object.columns
-        .filter((c) => c.is_present)
-        .map((c) => ({ value: c.name, label: c.name })),
+  const [inspectedRowIdx, setInspectedRowIdx] = useState<number | null>(null);
+
+  useEffect(() => {
+    setInspectedRowIdx(null);
+  }, [result]);
+
+  const presentColumns = useMemo(
+    () => object.columns.filter((c) => c.is_present).map((c) => c.name),
     [object.columns],
+  );
+
+  const pkColumns = useMemo(() => {
+    const presentSet = new Set(presentColumns);
+    return (object.primary_key ?? []).filter((name) => presentSet.has(name));
+  }, [object.primary_key, presentColumns]);
+
+  const pkSet = useMemo(() => new Set(pkColumns), [pkColumns]);
+
+  const columnOptions = useMemo(
+    () => presentColumns.map((name) => ({ value: name, label: name })),
+    [presentColumns],
   );
 
   const opOptions = useMemo(
@@ -71,6 +118,23 @@ export function SampleTab({ object }: SampleTabProps) {
     ],
     [t],
   );
+
+  const declarationMap = useMemo(() => {
+    const map = new Map<string, ColumnDeclaration>();
+    for (const decl of result?.declarations ?? []) {
+      map.set(decl.name, decl);
+    }
+    return map;
+  }, [result?.declarations]);
+
+  const handleCopy = async (text: string) => {
+    try {
+      await copyText(text);
+      open?.({ type: "success", message: t("common.copy.success") });
+    } catch {
+      open?.({ type: "error", message: t("common.copy.failed") });
+    }
+  };
 
   if (canSamplePending) {
     return <Loader size="sm" />;
@@ -84,7 +148,122 @@ export function SampleTab({ object }: SampleTabProps) {
     );
   }
 
-  const needsValue = filter.op !== "is_null" && filter.column != null;
+  const hasActiveFilter =
+    filters.length > 1 ||
+    filters.some((f) => f.column != null || f.value !== "");
+
+  const inspectedRow =
+    inspectedRowIdx != null && result ? result.rows[inspectedRowIdx] ?? null : null;
+  const inspectedRowNumber =
+    inspectedRowIdx != null && result ? result.offset + inspectedRowIdx + 1 : 0;
+
+  const renderCellContent = (
+    cell: unknown,
+    declaration?: ColumnDeclaration,
+    truncateText = true,
+  ) => {
+    if (cell === null || cell === undefined) {
+      return (
+        <Badge size="xs" variant="light" color="gray">
+          {t("catalog.sample.nullBadge")}
+        </Badge>
+      );
+    }
+    if (cell === "") {
+      return (
+        <Badge size="xs" variant="outline" color="gray">
+          {t("catalog.sample.emptyStringBadge")}
+        </Badge>
+      );
+    }
+    if (typeof cell === "boolean") {
+      return (
+        <Badge size="xs" variant="light" color={cell ? "teal" : "gray"}>
+          {String(cell)}
+        </Badge>
+      );
+    }
+    if (isBinaryCell(cell)) {
+      return (
+        <Badge size="xs" variant="light" color="blue">
+          {t("catalog.sample.binaryBadge", {
+            bytes: binaryByteLength(cell.data),
+          })}
+        </Badge>
+      );
+    }
+    const precisionExceeded = cellExceedsDeclaredPrecision(cell, declaration);
+    if (typeof cell === "number") {
+      return (
+        <Group gap={4} wrap="nowrap">
+          <Text size="xs" style={{ fontVariantNumeric: "tabular-nums" }}>
+            {String(cell)}
+          </Text>
+          {precisionExceeded ? (
+            <Tooltip label={t("catalog.sample.precision")}>
+              <AlertIcon
+                size={14}
+                aria-label={t("catalog.sample.precision")}
+                color="var(--refraq-tone-warning)"
+              />
+            </Tooltip>
+          ) : null}
+        </Group>
+      );
+    }
+    if (typeof cell === "object") {
+      const formatted = JSON.stringify(cell);
+      return (
+        <Code
+          style={
+            truncateText
+              ? {
+                  display: "inline-block",
+                  maxWidth: 280,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  verticalAlign: "bottom",
+                }
+              : { whiteSpace: "pre-wrap", wordBreak: "break-word" }
+          }
+          title={truncateText ? formatted : undefined}
+        >
+          {formatted}
+        </Code>
+      );
+    }
+    const text = String(cell);
+    return (
+      <Group gap={4} wrap="nowrap">
+        <Text
+          size="xs"
+          style={
+            truncateText
+              ? {
+                  maxWidth: 320,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }
+              : { whiteSpace: "pre-wrap", wordBreak: "break-word" }
+          }
+          title={truncateText ? text : undefined}
+        >
+          {text}
+        </Text>
+        {precisionExceeded ? (
+          <Tooltip label={t("catalog.sample.precision")}>
+            <AlertIcon
+              size={14}
+              aria-label={t("catalog.sample.precision")}
+              color="var(--refraq-tone-warning)"
+            />
+          </Tooltip>
+        ) : null}
+      </Group>
+    );
+  };
 
   return (
     <Stack gap="sm">
@@ -99,46 +278,48 @@ export function SampleTab({ object }: SampleTabProps) {
           }}
           min={1}
           max={500}
-          w={140}
+          w={120}
         />
-        <SelectField
+        <MultiSelectField
           editable
-          label={t("catalog.sample.filterColumn")}
-          placeholder={t("catalog.sample.filterColumnPlaceholder")}
+          label={t("catalog.sample.columnsLabel")}
+          placeholder={t("catalog.sample.columnsAll", {
+            count: presentColumns.length,
+          })}
           data={columnOptions}
-          value={filter.column}
-          onChange={(v) => {
-            setFilter((prev) => ({ ...prev, column: v }));
+          value={selectedColumns}
+          onChange={(cols) => {
+            setSelectedColumns(cols);
             setOffset(0);
           }}
-          clearable
           searchable
-          w={200}
+          clearable
+          w={260}
         />
-        <SelectField
-          editable={filter.column != null}
-          label={t("catalog.sample.filterOp")}
-          data={opOptions}
-          value={filter.op}
-          onChange={(v) => {
-            if (v == null || !isSampleFilterOp(v)) return;
-            setFilter((prev) => ({ ...prev, op: v }));
-            setOffset(0);
-          }}
-          allowDeselect={false}
-          w={140}
-        />
-        <TextField
-          editable={needsValue}
-          label={t("catalog.sample.filterValue")}
-          value={filter.value}
-          onChange={(e) => {
-            const value = e.currentTarget.value;
-            setFilter((prev) => ({ ...prev, value }));
-            setOffset(0);
-          }}
-          w={200}
-        />
+        {pkColumns.length > 0 ? (
+          <Button
+            size="xs"
+            variant="subtle"
+            onClick={() => {
+              setSelectedColumns(pkColumns);
+              setOffset(0);
+            }}
+          >
+            {t("catalog.sample.columnsPkOnly")}
+          </Button>
+        ) : null}
+        {selectedColumns.length > 0 ? (
+          <Button
+            size="xs"
+            variant="subtle"
+            onClick={() => {
+              setSelectedColumns([]);
+              setOffset(0);
+            }}
+          >
+            {t("catalog.sample.columnsReset")}
+          </Button>
+        ) : null}
         <SelectField
           editable
           label={t("catalog.sample.orderColumn")}
@@ -168,7 +349,16 @@ export function SampleTab({ object }: SampleTabProps) {
             }
           }}
           allowDeselect={false}
-          w={120}
+          w={130}
+        />
+        <Switch
+          label={t("catalog.sample.showSql")}
+          checked={includeSql}
+          onChange={(e) => {
+            setIncludeSql(e.currentTarget.checked);
+            setOffset(0);
+          }}
+          pb={6}
         />
         <Button
           loading={running}
@@ -179,6 +369,98 @@ export function SampleTab({ object }: SampleTabProps) {
           {result ? t("catalog.sample.reload") : t("catalog.sample.load")}
         </Button>
       </Group>
+
+      <Stack gap="xs">
+        {filters.map((row, idx) => {
+          const needsValue = row.op !== "is_null" && row.column != null;
+          return (
+            <Group key={row.id} align="flex-end" wrap="wrap">
+              <SelectField
+                editable
+                label={idx === 0 ? t("catalog.sample.filterColumn") : undefined}
+                aria-label={t("catalog.sample.filterColumn")}
+                placeholder={t("catalog.sample.filterColumnPlaceholder")}
+                data={columnOptions}
+                value={row.column}
+                onChange={(v) => {
+                  updateFilter(row.id, { column: v });
+                }}
+                clearable
+                searchable
+                w={200}
+              />
+              <SelectField
+                editable={row.column != null}
+                label={idx === 0 ? t("catalog.sample.filterOp") : undefined}
+                aria-label={t("catalog.sample.filterOp")}
+                data={opOptions}
+                value={row.op}
+                onChange={(v) => {
+                  if (v == null || !isSampleFilterOp(v)) return;
+                  updateFilter(row.id, { op: v });
+                }}
+                allowDeselect={false}
+                w={140}
+              />
+              <TextField
+                editable={needsValue}
+                label={idx === 0 ? t("catalog.sample.filterValue") : undefined}
+                aria-label={t("catalog.sample.filterValue")}
+                value={row.value}
+                onChange={(e) => {
+                  updateFilter(row.id, { value: e.currentTarget.value });
+                }}
+                w={200}
+              />
+              {filters.length > 1 || row.column != null || row.value !== "" ? (
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  aria-label={t("catalog.sample.removeFilter")}
+                  onClick={() => removeFilter(row.id)}
+                  mb={4}
+                >
+                  <CloseIcon size={16} />
+                </ActionIcon>
+              ) : null}
+            </Group>
+          );
+        })}
+        <Group gap="xs">
+          <Button
+            size="xs"
+            variant="subtle"
+            leftSection={<PlusIcon size={14} />}
+            onClick={addFilter}
+          >
+            {t("catalog.sample.addFilter")}
+          </Button>
+          {hasActiveFilter ? (
+            <Button size="xs" variant="subtle" color="gray" onClick={clearFilters}>
+              {t("catalog.sample.clearFilters")}
+            </Button>
+          ) : null}
+        </Group>
+      </Stack>
+
+      {result?.sql ? (
+        <Paper withBorder p="xs" radius="sm">
+          <Group justify="space-between" mb={4}>
+            <Text size="xs" fw={600} c="dimmed">
+              {t("catalog.sample.compiledSql")}
+            </Text>
+            <ActionIcon
+              size="sm"
+              variant="subtle"
+              aria-label={t("catalog.sample.copySql")}
+              onClick={() => void handleCopy(result.sql ?? "")}
+            >
+              <CopyIcon size={14} />
+            </ActionIcon>
+          </Group>
+          <Code block>{result.sql}</Code>
+        </Paper>
+      ) : null}
 
       {!result ? (
         <EmptyState message={t("catalog.sample.empty")} />
@@ -191,7 +473,7 @@ export function SampleTab({ object }: SampleTabProps) {
               </Text>
               <Text size="sm" c="dimmed">
                 {t("catalog.sample.pageRange", {
-                  from: result.offset + 1,
+                  from: result.rows.length === 0 ? 0 : result.offset + 1,
                   to: result.offset + result.rows.length,
                 })}
               </Text>
@@ -244,35 +526,146 @@ export function SampleTab({ object }: SampleTabProps) {
               {t("catalog.sample.zeroRows")}
             </Text>
           ) : (
-            <div style={{ overflowX: "auto" }}>
-              <Table striped highlightOnHover withTableBorder>
+            <Table.ScrollContainer minWidth={600}>
+              <Table striped highlightOnHover withTableBorder stickyHeader>
                 <Table.Thead>
                   <Table.Tr>
-                    {result.columns.map((col) => (
-                      <Table.Th key={col}>
-                        <Text size="sm">{col}</Text>
-                      </Table.Th>
-                    ))}
+                    <Table.Th w={64}>#</Table.Th>
+                    {result.columns.map((col) => {
+                      const isSorted = orderColumn === col;
+                      return (
+                        <Table.Th key={col}>
+                          <UnstyledButton
+                            aria-label={t("catalog.sample.sortBy", {
+                              column: col,
+                            })}
+                            onClick={() => toggleSort(col)}
+                          >
+                            <Group gap={4} wrap="nowrap">
+                              {pkSet.has(col) ? <KeyIcon size={14} /> : null}
+                              <Text size="sm" fw={600}>
+                                {col}
+                              </Text>
+                              {isSorted ? (
+                                orderDirection === "asc" ? (
+                                  <SortAscIcon size={14} />
+                                ) : (
+                                  <SortDescIcon size={14} />
+                                )
+                              ) : (
+                                <SortIcon size={14} />
+                              )}
+                            </Group>
+                          </UnstyledButton>
+                        </Table.Th>
+                      );
+                    })}
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {result.rows.map((row, rowIdx) => (
-                    <Table.Tr key={rowIdx}>
-                      {row.map((cell, cellIdx) => (
-                        <Table.Td key={`${rowIdx}-${cellIdx}`}>
-                          <Text size="xs" style={{ whiteSpace: "pre-wrap" }}>
-                            {formatSampleCell(cell)}
-                          </Text>
+                  {result.rows.map((row, rowIdx) => {
+                    const displayIndex = result.offset + rowIdx + 1;
+                    return (
+                      <Table.Tr key={rowIdx}>
+                        <Table.Td>
+                          <Group gap={4} wrap="nowrap">
+                            <Text
+                              size="xs"
+                              c="dimmed"
+                              style={{ fontVariantNumeric: "tabular-nums" }}
+                            >
+                              {displayIndex}
+                            </Text>
+                            <ActionIcon
+                              size="sm"
+                              variant="subtle"
+                              aria-label={t("catalog.sample.inspectRow", {
+                                index: displayIndex,
+                              })}
+                              onClick={() => setInspectedRowIdx(rowIdx)}
+                            >
+                              <EyeIcon size={14} />
+                            </ActionIcon>
+                          </Group>
                         </Table.Td>
-                      ))}
-                    </Table.Tr>
-                  ))}
+                        {row.map((cell, cellIdx) => {
+                          const colName = result.columns[cellIdx];
+                          const decl =
+                            colName != null
+                              ? declarationMap.get(colName)
+                              : undefined;
+                          return (
+                            <Table.Td key={`${rowIdx}-${cellIdx}`}>
+                              {renderCellContent(cell, decl, true)}
+                            </Table.Td>
+                          );
+                        })}
+                      </Table.Tr>
+                    );
+                  })}
                 </Table.Tbody>
               </Table>
-            </div>
+            </Table.ScrollContainer>
           )}
         </Stack>
       )}
+
+      <Drawer
+        opened={inspectedRow != null}
+        onClose={() => setInspectedRowIdx(null)}
+        position="right"
+        size="md"
+        title={t("catalog.sample.rowDrawerTitle", {
+          index: inspectedRowNumber,
+        })}
+      >
+        {inspectedRow != null && result != null ? (
+          <Stack gap="sm">
+            <Group justify="flex-end">
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<CopyIcon size={14} />}
+                onClick={() => {
+                  const payload = Object.fromEntries(
+                    result.columns.map((col, idx) => [col, inspectedRow[idx]]),
+                  );
+                  void handleCopy(JSON.stringify(payload, null, 2));
+                }}
+              >
+                {t("catalog.sample.copyRowJson")}
+              </Button>
+            </Group>
+            <Stack gap="xs">
+              {result.columns.map((col, idx) => {
+                const cell = inspectedRow[idx];
+                const decl = declarationMap.get(col);
+                return (
+                  <Paper key={col} withBorder p="xs" radius="sm">
+                    <Group justify="space-between" mb={4}>
+                      <Group gap={4}>
+                        {pkSet.has(col) ? <KeyIcon size={14} /> : null}
+                        <Text size="xs" fw={600}>
+                          {col}
+                        </Text>
+                      </Group>
+                      <ActionIcon
+                        size="xs"
+                        variant="subtle"
+                        aria-label={t("catalog.sample.copyCell")}
+                        onClick={() => void handleCopy(formatSampleCell(cell))}
+                      >
+                        <CopyIcon size={14} />
+                      </ActionIcon>
+                    </Group>
+                    {renderCellContent(cell, decl, false)}
+                  </Paper>
+                );
+              })}
+            </Stack>
+          </Stack>
+        ) : null}
+      </Drawer>
     </Stack>
   );
 }

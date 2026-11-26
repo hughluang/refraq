@@ -1098,3 +1098,83 @@ def test_mirror_picker_pages_after_qualified_name_filter(catalog_store, monkeypa
         )
         assert page["total"] == 1
         assert [row["qualified_table"] for row in page["items"]] == ["public.orders full"]
+
+
+def test_semantics_changes_filters_conformance(catalog_store):
+    from backend.metadata.catalog.semantics_changes import semantics_change_for_field
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.sources.service import require_source
+
+    _seed_source()
+    now = utc_now()
+    obj = _object("orders", ready=False, business_name=None, columns=[("col_a", "a"), ("col_b", "b")])
+    apply_structure_snapshot(
+        source=require_source(SOURCE_ID),
+        job_id="j_hist",
+        collected=[obj],
+        schema_scope=None,
+    )
+    catalog_store.append_semantics_change(
+        semantics_change_for_field(
+            object_id=obj.id,
+            field_name="business_name",
+            old_value=None,
+            new_value="Orders",
+            semantic_source="user_input",
+            actor_user_id="u_1",
+            created_at=now,
+        )
+    )
+    catalog_store.append_semantics_change(
+        semantics_change_for_field(
+            object_id=obj.id,
+            column_id=obj.columns[0].id,
+            field_name="business_description",
+            old_value=None,
+            new_value="Primary col",
+            semantic_source="mcp",
+            actor_user_id="u_2",
+            created_at=now,
+        )
+    )
+    catalog_store.append_semantics_change(
+        semantics_change_for_field(
+            object_id=obj.id,
+            column_id=obj.columns[1].id,
+            field_name="enum_catalog",
+            old_value=None,
+            new_value=[{"code": "A", "label": "Active"}],
+            semantic_source="user_input",
+            actor_user_id="u_1",
+            created_at=now,
+        )
+    )
+
+    all_items, total_all = catalog_store.list_semantics_changes(obj.id)
+    assert total_all == 3
+    assert len(all_items) == 3
+
+    obj_items, total_obj = catalog_store.list_semantics_changes(obj.id, scope="object")
+    assert total_obj == 1
+    assert obj_items[0].column_id is None
+
+    col_items, total_col = catalog_store.list_semantics_changes(obj.id, scope="column")
+    assert total_col == 2
+
+    col_a_items, total_col_a = catalog_store.list_semantics_changes(
+        obj.id, column_id=obj.columns[0].id
+    )
+    assert total_col_a == 1
+    assert col_a_items[0].field_name == "business_description"
+
+    mcp_items, total_mcp = catalog_store.list_semantics_changes(
+        obj.id, semantic_source="mcp"
+    )
+    assert total_mcp == 1
+    assert mcp_items[0].actor_user_id == "u_2"
+
+    enum_items, total_enum = catalog_store.list_semantics_changes(
+        obj.id, field_name="enum_catalog"
+    )
+    assert total_enum == 1
+    assert enum_items[0].column_id == obj.columns[1].id

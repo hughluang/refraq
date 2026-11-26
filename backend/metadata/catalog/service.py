@@ -225,12 +225,22 @@ def get_object_ddl(object_ref: str) -> ObjectDdlView:
 def list_semantics_changes(
     object_ref: str,
     *,
+    scope: str | None = None,
+    column_id: str | None = None,
+    field_name: str | None = None,
+    semantic_source: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[CatalogSemanticsChangeRecord], int]:
     obj = resolve_object_ref(object_ref)
     return get_catalog_store().list_semantics_changes(
-        obj.id, limit=limit, offset=offset
+        obj.id,
+        scope=scope,
+        column_id=column_id,
+        field_name=field_name,
+        semantic_source=semantic_source,
+        limit=limit,
+        offset=offset,
     )
 
 

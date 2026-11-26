@@ -111,11 +111,19 @@ export type ColumnSemanticsPatch = {
   enum_catalog?: EnumCatalogEntry[] | null;
 };
 
+export type CatalogSourceSummary = {
+  id: string;
+  key: string;
+  name: string;
+  engine: string | null;
+};
+
 export type CatalogObject = {
   mirror?: {
     enabled: boolean; can_enable: boolean; can_disable: boolean; mirror_id: string | null;
     delete_token?: string | null; deletion_pending?: boolean;
   } | null;
+  source?: CatalogSourceSummary | null;
   id: string;
   locator_key: string;
   source_id: string;
@@ -140,6 +148,8 @@ export type CatalogObject = {
   ddl: string | null;
   is_present: boolean;
   collected_at: string | null;
+  source_size_bytes?: number | null;
+  estimated_rows?: number | null;
 };
 
 export type CatalogColumn = {
@@ -168,6 +178,7 @@ export type CatalogForeignKey = {
   ref_table: string;
   ref_columns: string[];
   is_present: boolean;
+  ref_object_id?: string | null;
 };
 
 export type CatalogIndex = {
@@ -289,11 +300,22 @@ export type SemanticsChange = {
   id: string;
   object_id: string;
   column_id: string | null;
+  column_name?: string | null;
   field_name: string;
   old_value: unknown;
   new_value: unknown;
   semantic_source: string;
   actor_user_id: string | null;
+  actor_display_name?: string | null;
   created_at: string;
+};
+
+export type SemanticsChangeQuery = {
+  scope?: "object" | "column" | null;
+  column_id?: string | null;
+  field_name?: string | null;
+  semantic_source?: string | null;
+  limit?: number;
+  offset?: number;
 };
 

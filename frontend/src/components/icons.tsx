@@ -24,6 +24,7 @@ import {
   IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
+  IconChevronUp,
   IconCircleDashed,
   IconCircleFilled,
   IconCircleX,
@@ -39,6 +40,7 @@ import {
   IconDatabaseSearch,
   IconDeviceDesktop,
   IconDotsVertical,
+  IconEye,
   IconFilter,
   IconForms,
   IconHandFinger,
@@ -135,6 +137,12 @@ export const SearchIcon = withDefaults(IconSearch);
 export const NavCollapseIcon = withDefaults(IconChevronLeft);
 export const NavExpandIcon = withDefaults(IconChevronRight);
 export const ChevronDownIcon = withDefaults(IconChevronDown);
+export const ChevronUpIcon = withDefaults(IconChevronUp);
+export const EyeIcon = withDefaults(IconEye);
+export const KeyIcon = withDefaults(IconKey);
+export const TableIcon = withDefaults(IconTable);
+export const UserIcon = withDefaults(IconUserCircle);
+export const AgentIcon = withDefaults(IconBrain);
 export const FitViewIcon = withDefaults(IconArrowsMaximize);
 export const KeyboardIcon = withDefaults(IconKeyboard);
 export const MinimapIcon = withDefaults(IconMap);

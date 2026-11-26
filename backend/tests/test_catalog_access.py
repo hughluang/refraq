@@ -380,6 +380,7 @@ def test_viewer_lists_objects_on_visible_source_only(world: _World) -> None:
         "/objects/{object_id}/ddl",
         "/objects/{object_id}/semantics-changes",
         "/objects/{object_id}/joins",
+        "/catalog/objects/resolve?ref={object_id}",
     ],
 )
 def test_hidden_object_reads_match_unknown_object(world: _World, path: str) -> None:

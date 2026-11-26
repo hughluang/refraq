@@ -34,6 +34,18 @@ vi.mock("@/features/sources/api/semantics", () => ({
   patchObjectSemantics: (...args: unknown[]) => semanticsApi.patch(...args),
 }));
 
+vi.mock("next/link", () => ({
+  default: ({ href, children, ...props }: { href: string; children: ReactNode; [key: string]: unknown }) =>
+    createElement("a", { href, ...props }, children),
+  useLinkStatus: () => ({ pending: false }),
+}));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => window.location.pathname,
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+
 const OBJECT: CatalogObject = {
   id: "obj-1",
   locator_key: "public.orders",
@@ -181,5 +193,124 @@ describe("OverviewTab save", () => {
     expect(disclosure?.textContent).toContain("retired: Unknown field");
     expect(disclosure?.textContent).not.toContain("Name was rejected");
     expect(overviewForm().textContent).not.toContain("Unknown field");
+  });
+});
+
+describe("OverviewTab workbench interactions", () => {
+  beforeEach(() => {
+    stubDomApis();
+    semanticsApi.patch.mockReset();
+    resetNotifications();
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetNotifications();
+  });
+
+  it("populates business_description from table comment and business_primary_key from physical PK", async () => {
+    const { OverviewTab } = await import("@/features/sources/catalog-detail/OverviewTab");
+    const richObject: CatalogObject = {
+      ...OBJECT,
+      comment: "Raw order ledger",
+      business_description: "",
+      primary_key: ["id"],
+      columns: [
+        {
+          id: "col-id",
+          locator_key: "col/id",
+          name: "id",
+          data_type: "bigint",
+          nullable: false,
+          business_name: null,
+          business_description: null,
+          ordinal: 1,
+          is_present: true,
+        },
+      ],
+    };
+    semanticsApi.patch.mockResolvedValue({
+      ...richObject,
+      business_description: "Raw order ledger",
+      business_primary_key: ["id"],
+    });
+
+    render(
+      shell(
+        createElement(OverviewTab, {
+          object: richObject,
+          writable: true,
+          onSaved: () => {},
+        }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: messages["catalog.overview.useDbComment"] }));
+    fireEvent.click(screen.getByRole("button", { name: messages["catalog.overview.usePhysicalPk"] }));
+    fireEvent.click(screen.getByRole("button", { name: messages["catalog.semantics.saveObject"] }));
+
+    expect(semanticsApi.patch).toHaveBeenCalledWith(
+      "obj-1",
+      expect.objectContaining({
+        business_description: "Raw order ledger",
+        business_primary_key: ["id"],
+      }),
+    );
+  });
+
+  it("calls onOpenColumn when clicking a PK column chip and renders FK links and open questions callout", async () => {
+    const { OverviewTab } = await import("@/features/sources/catalog-detail/OverviewTab");
+    const onOpenColumn = vi.fn();
+    const richObject: CatalogObject = {
+      ...OBJECT,
+      open_questions: ["Which timezone is created_at?"],
+      primary_key: ["id"],
+      columns: [
+        {
+          id: "col-id",
+          locator_key: "col/id",
+          name: "id",
+          data_type: "bigint",
+          nullable: false,
+          business_name: null,
+          business_description: null,
+          ordinal: 1,
+          is_present: true,
+        },
+      ],
+      foreign_keys: [
+        {
+          name: "fk_orders_customer",
+          columns: ["customer_id"],
+          ref_schema: "public",
+          ref_table: "customers",
+          ref_columns: ["id"],
+          is_present: false,
+          ref_object_id: "obj-customers",
+        },
+      ],
+    };
+
+    render(
+      shell(
+        createElement(OverviewTab, {
+          object: richObject,
+          writable: true,
+          onSaved: () => {},
+          onOpenColumn,
+        }),
+      ),
+    );
+
+    const callout = screen.getByRole("group");
+    expect(callout.textContent).toContain("1 open question(s) block semantics readiness until resolved.");
+
+    const pkBtn = screen.getByRole("button", { name: "Inspect column id" });
+    fireEvent.click(pkBtn);
+    expect(onOpenColumn).toHaveBeenCalledWith("col-id");
+
+    const fkLink = screen.getByRole("link", { name: "Open public.customers" });
+    expect(fkLink.getAttribute("href")).toBe("/console/catalog/obj-customers");
+    expect(screen.getByText(messages["catalog.overview.fkRemoved"])).toBeTruthy();
   });
 });
