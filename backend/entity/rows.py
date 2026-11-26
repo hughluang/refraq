@@ -275,20 +275,21 @@ def _clear_in_transaction(
             attribute=key_name,
             reason="column",
         )
-    per_grant = " UNION ALL ".join(
-        "SELECT ("
-        f"SELECT min(t.{ident('row_id')}) FROM {target.qualified_table} AS t "
-        f"WHERE NOT ({_image_predicate(access, grant, 't')})"
-        ") AS fail_id"
-        for grant in covered
-    )
-    failed = _first_ord(
-        conn,
-        pulse,
-        f"SELECT min(fail_id) FROM ({per_grant}) AS per_grant HAVING count(*) = count(fail_id)",
-    )
-    if failed is not None:
-        raise EntityRowWriteFailed("Row rule rejected the write", reason="row_rule")
+    if not _has_unconditional_grant(access, covered):
+        per_grant = " UNION ALL ".join(
+            "SELECT ("
+            f"SELECT min(t.{ident('row_id')}) FROM {target.qualified_table} AS t "
+            f"WHERE NOT ({_image_predicate(access, grant, 't')})"
+            ") AS fail_id"
+            for grant in covered
+        )
+        failed = _first_ord(
+            conn,
+            pulse,
+            f"SELECT min(fail_id) FROM ({per_grant}) AS per_grant HAVING count(*) = count(fail_id)",
+        )
+        if failed is not None:
+            raise EntityRowWriteFailed("Row rule rejected the write", reason="row_rule")
     _tick(conn, pulse)
     return data_sql.clear_target_rows(conn, target.qualified_table)
 
@@ -338,7 +339,10 @@ def _write_in_transaction(
         if not paired:
             ordinal += len(chunk)
     _tick(conn, pulse)
-    data_sql.index_write_stage(conn, stage, key_name)
+    if mode == "create":
+        data_sql.analyze_write_stage(conn, stage)
+    else:
+        data_sql.index_write_stage(conn, stage, key_name)
     _validate(conn, pulse, access, target, stage, mode, key_name, columns, column_ords)
     _tick(conn, pulse)
     present_columns = (
@@ -604,7 +608,7 @@ def _validate(
                         "column",
                     )
                 )
-        else:
+        elif not _has_unconditional_grant(access, covered):
             failed = _first_ord(
                 conn,
                 pulse,
@@ -706,11 +710,9 @@ def _first_ord(conn: Any, pulse: Callable[[], int], sql: str) -> int | None:
 
 def _duplicate_sql(stage: str, key: str) -> str:
     return (
-        f"SELECT s.{ident('_ord')}, s.{ident(key)} FROM {stage} AS s "
-        f"JOIN (SELECT {ident(key)} AS {ident('match_key')} FROM {stage} "
-        f"GROUP BY {ident(key)} HAVING count(*) > 1) AS d "
-        f"ON d.{ident('match_key')} IS NOT DISTINCT FROM s.{ident(key)} "
-        f"ORDER BY s.{ident('_ord')} LIMIT 1"
+        f"SELECT min(s.{ident('_ord')}), s.{ident(key)} FROM {stage} AS s "
+        f"GROUP BY s.{ident(key)} HAVING count(*) > 1 "
+        f"ORDER BY 1 LIMIT 1"
     )
 
 
@@ -791,7 +793,7 @@ def _replace_delete_rule_sql(
         "SELECT ("
         f"SELECT min(t.{ident('row_id')}) FROM {target.qualified_table} AS t "
         f"WHERE NOT EXISTS ("
-        f"SELECT 1 FROM {stage} AS s WHERE s.{ident(key)} IS NOT DISTINCT FROM t.{ident(key)}"
+        f"SELECT 1 FROM {stage} AS s WHERE s.{ident(key)} = t.{ident(key)}"
         f") AND NOT ({_image_predicate(access, grant, 't')})"
         ") AS fail_id"
         for grant in grants
@@ -800,6 +802,15 @@ def _replace_delete_rule_sql(
         f"SELECT min(fail_id) FROM ({per_grant}) AS per_grant "
         "HAVING count(*) = count(fail_id)"
     )
+
+
+def _has_unconditional_grant(access: Any, grants: list[Any]) -> bool:
+    for item in access.policy.restrictions:
+        if "write" not in item.actions or item.id in access.compiled.broken_restrictions:
+            continue
+        if item.mode == "all" or _restriction_applies(item, access.person):
+            return False
+    return any(grant.row_rule is None for grant in grants)
 
 
 def _distinct_sql(key: str, columns: list[str]) -> str:

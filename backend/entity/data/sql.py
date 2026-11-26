@@ -46,6 +46,7 @@ from backend.entity.errors import (
 )
 
 __all__ = [
+    "analyze_write_stage",
     "clear_target_rows",
     "copy_write_stage",
     "create_write_stage",
@@ -295,6 +296,11 @@ def create_write_stage(conn: Connection, columns: list[tuple[str, str]]) -> str:
     return qualified
 
 
+def analyze_write_stage(conn: Connection, table: str) -> None:
+    """Refresh planner stats on the stage table without building a key index."""
+    conn.execute(text(f"ANALYZE {table}"))
+
+
 def index_write_stage(conn: Connection, table: str, key: str) -> None:
     """Index the staged match key and refresh planner stats before validation/write."""
     conn.execute(text(f"CREATE INDEX ON {table} ({ident(key)})"))
@@ -409,13 +415,12 @@ SELECT
 """
 
 
-def _upsert_sql(
-    target: str,
+def _upsert_clauses(
     stage: str,
     key: str,
     columns: list[str],
     present_columns: Mapping[str, bool],
-) -> str:
+) -> tuple[str, str, str, str]:
     others = [
         name
         for name in columns
@@ -424,13 +429,24 @@ def _upsert_sql(
     col_sql = ", ".join(ident(name) for name in columns)
     select_sql = ", ".join(_stage_expr(name, present_columns) for name in columns)
     if others:
-        assigns = ", ".join(
-            _upsert_assign(stage, key, name, present_columns) for name in others
-        )
+        assigns = _upsert_assigns(stage, key, others, present_columns)
         guard = _upsert_guard(stage, key, others, present_columns)
     else:
         assigns = f"{ident(key)} = excluded.{ident(key)}"
         guard = "FALSE"
+    return col_sql, select_sql, assigns, guard
+
+
+def _upsert_sql(
+    target: str,
+    stage: str,
+    key: str,
+    columns: list[str],
+    present_columns: Mapping[str, bool],
+) -> str:
+    col_sql, select_sql, assigns, guard = _upsert_clauses(
+        stage, key, columns, present_columns
+    )
     return f"""
 WITH written AS (
     INSERT INTO {target} AS t ({col_sql})
@@ -464,21 +480,9 @@ def _replace_sql(
     columns: list[str],
     present_columns: Mapping[str, bool],
 ) -> str:
-    others = [
-        name
-        for name in columns
-        if name != key and name in present_columns
-    ]
-    col_sql = ", ".join(ident(name) for name in columns)
-    select_sql = ", ".join(_stage_expr(name, present_columns) for name in columns)
-    if others:
-        assigns = ", ".join(
-            _upsert_assign(stage, key, name, present_columns) for name in others
-        )
-        guard = _upsert_guard(stage, key, others, present_columns)
-    else:
-        assigns = f"{ident(key)} = excluded.{ident(key)}"
-        guard = "FALSE"
+    col_sql, select_sql, assigns, guard = _upsert_clauses(
+        stage, key, columns, present_columns
+    )
     return f"""
 WITH written AS (
     INSERT INTO {target} AS t ({col_sql})
@@ -498,7 +502,7 @@ removed AS (
     WHERE NOT EXISTS (
         SELECT 1
         FROM {stage} AS s
-        WHERE s.{ident(key)} IS NOT DISTINCT FROM t.{ident(key)}
+        WHERE s.{ident(key)} = t.{ident(key)}
     )
     RETURNING old.{ident('row_id')}
 )
@@ -514,15 +518,18 @@ SELECT
 """
 
 
-def _upsert_assign(
+def _upsert_assigns(
     stage: str,
     key: str,
-    name: str,
+    others: list[str],
     present_columns: Mapping[str, bool],
 ) -> str:
-    if present_columns.get(name):
-        return f"{ident(name)} = excluded.{ident(name)}"
-    return _conflict_assign(stage, key, name)
+    uniform = [name for name in others if present_columns.get(name)]
+    heterogeneous = [name for name in others if not present_columns.get(name)]
+    parts = [f"{ident(name)} = excluded.{ident(name)}" for name in uniform]
+    if heterogeneous:
+        parts.append(_conflict_assign(stage, key, heterogeneous))
+    return ", ".join(parts)
 
 
 def _upsert_guard(
@@ -541,10 +548,18 @@ def _upsert_guard(
     return " OR ".join(terms)
 
 
-def _conflict_assign(stage: str, key: str, name: str) -> str:
+def _conflict_assign(stage: str, key: str, names: list[str]) -> str:
+    cases = ", ".join(
+        f"CASE WHEN {_sql_lit(name)} = ANY(g.{ident('_present')}) "
+        f"THEN g.{ident(name)} ELSE t.{ident(name)} END"
+        for name in names
+    )
+    if len(names) == 1:
+        lhs = ident(names[0])
+    else:
+        lhs = "(" + ", ".join(ident(name) for name in names) + ")"
     return (
-        f"{ident(name)} = (SELECT CASE WHEN {_sql_lit(name)} = ANY(g.{ident('_present')}) "
-        f"THEN g.{ident(name)} ELSE t.{ident(name)} END "
+        f"{lhs} = (SELECT {cases} "
         f"FROM {stage} AS g "
         f"WHERE g.{ident(key)} = excluded.{ident(key)})"
     )

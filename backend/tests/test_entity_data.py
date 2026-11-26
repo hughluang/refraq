@@ -2350,3 +2350,325 @@ def test_un_narrowed_combination_pages_the_most_revealing_level(data_client) -> 
         assert invalid.json()["code"] == "ENTITY_ROW_INVALID"
         assert invalid.json()["detail"] == f"Unknown sort field '{field}'"
 
+
+def test_heterogeneous_partial_upsert_and_replace_preserve_omitted_and_clear_null(
+    data_client,
+) -> None:
+    from backend.admin.user_store import get_user_store
+    from backend.entity.lifecycle import latest_published_of
+    from backend.entity.rows import read_rows, write_rows
+    from backend.entity.store import get_entity_store
+
+    attrs = [
+        AttributeRecord(
+            name="sku",
+            type="string",
+            required=True,
+            unique=True,
+            business_key=True,
+            max_length=32,
+        ),
+        AttributeRecord(name="qty", type="integer"),
+        AttributeRecord(name="note", type="text"),
+        AttributeRecord(name="extra", type="text"),
+    ]
+    entity_id = _publish_entity(attrs)
+    entity = get_entity_store().get_entity(entity_id)
+    assert entity is not None
+    version = latest_published_of(get_entity_store().list_all_versions(entity_id))
+    assert version is not None
+    physical, _ = compose_physical(entity.table_name, version.version, version.id)
+    _arm_change_log(entity_id, physical, recording=True)
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+
+    seed = write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="sku",
+        rows=[
+            {"sku": "H1", "qty": 1, "note": "keep-1", "extra": "ex-1"},
+            {"sku": "H2", "qty": 2, "note": "keep-2", "extra": "ex-2"},
+            {"sku": "H3", "qty": 3, "note": "keep-3", "extra": "ex-3"},
+        ],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (seed.inserted, seed.updated, seed.unchanged) == (3, 0, 0)
+
+    upserted = write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="sku",
+        rows=[
+            {"sku": "H1", "qty": 1, "note": "keep-1", "extra": "ex-1"},
+            {"sku": "H2", "qty": 20},
+            {"sku": "H3", "note": None, "extra": "new-3"},
+            {"sku": "H4", "qty": 4},
+        ],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (
+        upserted.inserted,
+        upserted.updated,
+        upserted.unchanged,
+        upserted.deleted,
+        upserted.unmatched,
+    ) == (1, 2, 1, 0, 0)
+
+    rows, _ = read_rows(entity_id, filters=None, user=admin, limit=20)
+    by_sku = {row["sku"]: row for row in rows}
+    assert by_sku["H1"] == {**by_sku["H1"], "qty": 1, "note": "keep-1", "extra": "ex-1"}
+    assert by_sku["H2"] == {**by_sku["H2"], "qty": 20, "note": "keep-2", "extra": "ex-2"}
+    assert by_sku["H3"] == {**by_sku["H3"], "qty": 3, "note": None, "extra": "new-3"}
+    assert by_sku["H4"] == {**by_sku["H4"], "qty": 4, "note": None, "extra": None}
+
+    entries = _change_log(entity_id, attrs)
+    # 3 initial inserts + 1 insert (H4) + 2 updates (H2, H3); H1 was unchanged.
+    assert len(entries) == 6
+    assert sum(1 for entry in entries if entry.operation == "update") == 2
+
+    replaced = write_rows(
+        entity_id,
+        mode="replace",
+        match_key="sku",
+        rows=[
+            {"sku": "H1", "qty": 1, "note": "keep-1", "extra": "ex-1"},
+            {"sku": "H2", "extra": None},
+        ],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (
+        replaced.inserted,
+        replaced.updated,
+        replaced.unchanged,
+        replaced.deleted,
+        replaced.unmatched,
+    ) == (0, 1, 1, 2, 0)
+    after_rows, _ = read_rows(entity_id, filters=None, user=admin, limit=20)
+    after_by_sku = {row["sku"]: row for row in after_rows}
+    assert set(after_by_sku) == {"H1", "H2"}
+    assert after_by_sku["H2"]["qty"] == 20
+    assert after_by_sku["H2"]["note"] == "keep-2"
+    assert after_by_sku["H2"]["extra"] is None
+
+
+def test_replace_nullable_unique_match_key_and_row_rule_delete(data_client) -> None:
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.plan import load_head
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    entity_id = _publish_entity(
+        [
+            AttributeRecord(
+                name="code",
+                type="string",
+                required=True,
+                unique=True,
+                business_key=True,
+                max_length=32,
+            ),
+            AttributeRecord(
+                name="tag",
+                type="string",
+                unique=True,
+                max_length=32,
+            ),
+            AttributeRecord(name="qty", type="integer"),
+        ]
+    )
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+
+    write_rows(
+        entity_id,
+        mode="create",
+        match_key="tag",
+        rows=[
+            {"code": "A", "tag": "t1", "qty": 1},
+            {"code": "B", "tag": None, "qty": 2},
+        ],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    replaced = write_rows(
+        entity_id,
+        mode="replace",
+        match_key="tag",
+        rows=[{"code": "C", "tag": None, "qty": 3}],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (
+        replaced.inserted,
+        replaced.updated,
+        replaced.unchanged,
+        replaced.deleted,
+        replaced.unmatched,
+    ) == (1, 0, 0, 2, 0)
+    rows, _ = read_rows(entity_id, filters=None, user=admin, limit=20)
+    assert [row["code"] for row in rows] == ["C"]
+
+    ids = {attr.name: attr.attribute_id for attr in load_head(entity_id).attributes}
+    writer = _writer(
+        entity_id,
+        account="rep_ruled",
+        columns=[
+            {"attribute_id": ids["code"], "level": "clear"},
+            {"attribute_id": ids["tag"], "level": "clear"},
+            {"attribute_id": ids["qty"], "level": "clear"},
+        ],
+        row_rule={"lte": {"attr": ids["qty"], "value": 5}},
+    )
+    write_rows(
+        entity_id,
+        mode="replace",
+        match_key="code",
+        rows=[
+            {"code": "OK", "tag": "ok", "qty": 1},
+            {"code": "LOCKED", "tag": "lk", "qty": 9},
+        ],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write_rows(
+            entity_id,
+            mode="replace",
+            match_key="code",
+            rows=[{"code": "OK", "tag": "ok", "qty": 1}],
+            user=writer,
+            statement_timeout_ms=5000,
+        )
+    assert raised.value.reason == "row_rule"
+    kept, _ = read_rows(entity_id, filters=None, user=admin, limit=20)
+    assert sorted(row["code"] for row in kept) == ["LOCKED", "OK"]
+
+
+def test_staged_write_explain_plans_avoid_subplan_seq_scans(data_client) -> None:
+    from backend.admin.user_store import get_user_store
+    from backend.entity.data import sql as data_sql
+    from backend.entity.data.head import resolve_head
+    from backend.entity.entity_db import get_entity_engine
+    from backend.entity.rows import write_rows
+    from backend.entity.store import get_entity_store
+
+    attrs = [
+        AttributeRecord(
+            name="sku",
+            type="string",
+            required=True,
+            unique=True,
+            business_key=True,
+            max_length=32,
+        ),
+        AttributeRecord(name="qty", type="integer"),
+        AttributeRecord(name="note", type="text"),
+        AttributeRecord(name="extra", type="text"),
+    ]
+    entity_id = _publish_entity(attrs)
+    entity = get_entity_store().get_entity(entity_id)
+    assert entity is not None
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+
+    n_rows = 1000
+    seed_rows = [
+        {"sku": f"S{i:05d}", "qty": i, "note": None, "extra": f"e{i}"}
+        for i in range(n_rows)
+    ]
+    write_rows(
+        entity_id,
+        mode="create",
+        match_key="sku",
+        rows=seed_rows,
+        user=admin,
+        statement_timeout_ms=10000,
+    )
+
+    target = resolve_head(entity.table_name, for_write=True)
+    columns = ["sku", "qty", "note", "extra"]
+
+    def collect_nodes(node: dict[str, Any]) -> list[dict[str, Any]]:
+        out = [node]
+        for child in node.get("Plans") or []:
+            out.extend(collect_nodes(child))
+        return out
+
+    with get_entity_engine().begin() as conn:
+        conn.execute(text(f"ANALYZE {target.qualified_table}"))
+        stage = data_sql.create_write_stage(
+            conn,
+            [
+                ("sku", "varchar(32)"),
+                ("qty", "bigint"),
+                ("note", "text"),
+                ("extra", "text"),
+            ],
+        )
+        data_sql.copy_write_stage(
+            conn,
+            stage,
+            columns,
+            [
+                (i, ["sku", "qty", "note", "extra"], f"S{i:05d}", i, f"filled-{i}", f"e{i}")
+                for i in range(n_rows)
+            ],
+        )
+        data_sql.index_write_stage(conn, stage, "sku")
+
+        uniform_sql = data_sql._staged_sql(
+            target.qualified_table,
+            stage,
+            "upsert",
+            "sku",
+            columns,
+            {"sku": True, "qty": True, "note": True, "extra": True},
+        )
+        uniform_plan = conn.execute(text(f"EXPLAIN (FORMAT JSON) {uniform_sql}")).scalar_one()[0]["Plan"]
+        uniform_nodes = collect_nodes(uniform_plan)
+        assert not any(
+            node.get("Parent Relationship") == "SubPlan"
+            and node.get("Relation Name", "").startswith("wstage_")
+            for node in uniform_nodes
+        )
+
+        hetero_sql = data_sql._staged_sql(
+            target.qualified_table,
+            stage,
+            "upsert",
+            "sku",
+            columns,
+            {"sku": True, "qty": True, "note": False, "extra": False},
+        )
+        hetero_plan = conn.execute(text(f"EXPLAIN (FORMAT JSON) {hetero_sql}")).scalar_one()[0]["Plan"]
+        hetero_nodes = collect_nodes(hetero_plan)
+        subplan_wstage_scans = [
+            node
+            for node in hetero_nodes
+            if node.get("Relation Name", "").startswith("wstage_")
+            and node.get("Parent Relationship") == "SubPlan"
+        ]
+        assert len(subplan_wstage_scans) <= 2
+        assert all(node.get("Node Type") != "Seq Scan" for node in subplan_wstage_scans)
+
+        replace_sql = data_sql._staged_sql(
+            target.qualified_table,
+            stage,
+            "replace",
+            "sku",
+            columns,
+            {"sku": True, "qty": True, "note": True, "extra": True},
+        )
+        replace_plan = conn.execute(text(f"EXPLAIN (FORMAT JSON) {replace_sql}")).scalar_one()[0]["Plan"]
+        replace_nodes = collect_nodes(replace_plan)
+        assert any(
+            node.get("Join Type") == "Anti"
+            and node.get("Node Type") in {"Hash Join", "Merge Join"}
+            for node in replace_nodes
+        )
+        conn.rollback()
+
