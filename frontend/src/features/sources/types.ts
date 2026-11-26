@@ -277,7 +277,6 @@ export type SampleFilterOp =
 
 export type SampleRequestBody = {
   columns?: string[] | null;
-  match?: "all" | "any";
   filters?: Array<{
     column: string | null;
     op: SampleFilterOp;

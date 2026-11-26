@@ -173,13 +173,12 @@ describe("entity data viewer queries", () => {
 
   it("respects advertised leaf, total membership value, and group depth limits", () => {
     const conditions = [
-      { field: "due", op: "between", values: ["2026-01-01", "2026-01-31"] },
+      { field: "due", op: "between", values: ["2026-01-01", "2026-01-31"], negate: true },
       { field: "state", op: "in", values: ["open", "old"] },
     ];
     const query = {
       lookup: { field: "row_id", value: "23" },
       match: "any" as const,
-      negate: true,
       conditions,
     };
     for (const limit of [

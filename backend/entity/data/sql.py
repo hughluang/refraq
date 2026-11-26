@@ -105,7 +105,11 @@ def entity_connection() -> Iterator[Connection]:
 
 
 @contextmanager
-def entity_read_connection(ctx: str | None) -> Iterator[Connection]:
+def entity_read_connection(
+    ctx: str | None,
+    *,
+    statement_timeout_ms: int | None = None,
+) -> Iterator[Connection]:
     """``refraq_reader`` connection with the signed access context set for this transaction.
 
     Profile views are granted only to the reader role; the owner cannot select them.
@@ -117,6 +121,11 @@ def entity_read_connection(ctx: str | None) -> Iterator[Connection]:
                 text("SELECT set_config('app.ctx', :token, true)"),
                 {"token": ctx or ""},
             )
+            if statement_timeout_ms is not None:
+                conn.execute(
+                    text("SELECT set_config('statement_timeout', :ms, true)"),
+                    {"ms": str(max(1, int(statement_timeout_ms)))},
+                )
             yield conn
     except Exception as exc:
         raise _translate(exc) from exc

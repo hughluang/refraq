@@ -87,6 +87,7 @@ def read_rows(
     sort: Mapping[str, Any] | None = None,
     user: UserRecord,
     limit: int,
+    statement_timeout_ms: int | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     entity = get_entity_store().get_entity(entity_id)
     if entity is None:
@@ -98,7 +99,9 @@ def read_rows(
     row_sort = resolve_sort({"sort": dict(sort)} if sort is not None else {}, target)
     fields = ["row_id", *[attr.name for attr in target.attributes]]
     ctx = read_context(access)
-    with data_sql.entity_read_connection(ctx) as conn:
+    with data_sql.entity_read_connection(
+        ctx, statement_timeout_ms=statement_timeout_ms
+    ) as conn:
         items, total = data_sql.query_offset(
             conn,
             target,

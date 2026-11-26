@@ -151,6 +151,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
     entity_id = str(config["entity_id"])
     limit = int(config.get("limit", _DEFAULT_LIMIT))
+    timeout_sec = int(config.get("statement_timeout_sec", _DEFAULT_TIMEOUT_SEC))
     match = "any" if config.get("match") == "any" else "all"
     clauses: list[dict[str, Any]] = []
 
@@ -208,6 +209,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             sort=sort_spec,
             user=hooks.user,
             limit=limit,
+            statement_timeout_ms=timeout_sec * 1000,
         )
     except EntityRowLimitExceeded as exc:
         return NodeResult(

@@ -61,7 +61,6 @@ class CompiledFilter:
     params: dict[str, Any]
     profile_json: str
     leakproof: bool
-    fields: frozenset[str]
 
 
 def escape_like(value: str) -> str:
@@ -86,7 +85,6 @@ def compile_filters(
     counter = _ParamCounter()
     leaves = [0]
     in_values = [0]
-    fields: set[str] = set()
     sql, profile_ir, leakproof = _compile_node(
         filters,
         target,
@@ -94,7 +92,6 @@ def compile_filters(
         depth=1,
         leaves=leaves,
         in_values=in_values,
-        fields=fields,
         allowed_fields=allowed_fields,
     )
     if require_leaf and leaves[0] == 0:
@@ -104,7 +101,6 @@ def compile_filters(
         params=counter.params,
         profile_json=json.dumps(profile_ir, separators=(",", ":")),
         leakproof=leakproof,
-        fields=frozenset(fields),
     )
 
 
@@ -128,7 +124,6 @@ def _compile_node(
     depth: int,
     leaves: list[int],
     in_values: list[int],
-    fields: set[str],
     allowed_fields: AbstractSet[str] | None,
 ) -> tuple[str, dict[str, Any], bool]:
     if depth > FILTER_DEPTH_MAX:
@@ -153,7 +148,6 @@ def _compile_node(
                 depth=depth + 1,
                 leaves=leaves,
                 in_values=in_values,
-                fields=fields,
                 allowed_fields=allowed_fields,
             )
             parts.append(part_sql)
@@ -168,7 +162,6 @@ def _compile_node(
             depth=depth + 1,
             leaves=leaves,
             in_values=in_values,
-            fields=fields,
             allowed_fields=allowed_fields,
         )
         return f"(NOT COALESCE({child_sql}, false))", {"not": child_ir}, child_lp
@@ -179,7 +172,6 @@ def _compile_node(
             counter=counter,
             leaves=leaves,
             in_values=in_values,
-            fields=fields,
             allowed_fields=allowed_fields,
         )
     raise EntityRowInvalid("filter node must be a leaf or all/any/not group")
@@ -192,7 +184,6 @@ def _compile_leaf(
     counter: _ParamCounter,
     leaves: list[int],
     in_values: list[int],
-    fields: set[str],
     allowed_fields: AbstractSet[str] | None,
 ) -> tuple[str, dict[str, Any], bool]:
     leaves[0] += 1
@@ -225,14 +216,13 @@ def _compile_leaf(
         raise EntityRowInvalid(
             f"Operator '{op}' is not allowed for field '{field}'"
         )
-    fields.add(field)
     spec = resolve_operator(op)
     assert spec is not None
     leakproof = spec.always_leakproof or (
         spec.btree_leakproof and comp_type in _LEAKPROOF_COMPARISON_TYPES
     )
 
-    if spec.arity == "none":
+    if spec.is_nullary:
         if "value" in node and node["value"] is not None:
             raise EntityRowInvalid(f"{op} must not carry a value")
         sql_null = "IS NULL" if op == "is_null" else "IS NOT NULL"

@@ -12,23 +12,6 @@ from sqlglot import exp, parse_one
 from backend.metadata.errors import SampleColumnUnknown, SampleFilterInvalid
 from backend.metadata.query.guards import dialect_for_engine
 
-SampleFilterOp = Literal[
-    "eq",
-    "ne",
-    "gt",
-    "gte",
-    "lt",
-    "lte",
-    "between",
-    "in",
-    "not_in",
-    "contains",
-    "not_contains",
-    "starts_with",
-    "ends_with",
-    "is_null",
-    "is_not_null",
-]
 SampleMatch = Literal["all", "any"]
 OrderDirection = Literal["asc", "desc"]
 

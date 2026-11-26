@@ -409,9 +409,7 @@ export function EntityDataQueryControls({
           {groups.map((grp, groupIndex) => (
             <Group key={`g-${groupIndex}`} gap={4} className={classes.chip}>
               <Text size="xs" fw={600}>
-                {(grp.negate ? t(key + "notPrefix") + " " : "") +
-                  t(key + (grp.match === "all" ? "all" : "any"))}
-                :
+                {t(key + (grp.match === "all" ? "all" : "any"))}:
               </Text>
               {grp.conditions.map((condition, condIndex) => {
                 const label = formatConditionLabel(condition);

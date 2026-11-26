@@ -12,14 +12,12 @@ export type QueryCondition = {
 
 export type QueryFilterGroup = {
   match: "all" | "any";
-  negate?: boolean;
   conditions: QueryCondition[];
 };
 
 export type EntityDataQuery = {
   lookup: { field: string; value: string } | null;
   match: "all" | "any";
-  negate?: boolean;
   conditions: QueryCondition[];
   groups?: QueryFilterGroup[];
 };
@@ -60,8 +58,7 @@ function isCondition(value: unknown): value is QueryCondition {
 }
 
 function isFilterGroup(value: unknown): value is QueryFilterGroup {
-  if (!hasExactOrSubsetKeys(value, ["match", "conditions"], ["negate"])) return false;
-  if (value.negate !== undefined && typeof value.negate !== "boolean") return false;
+  if (!hasExactOrSubsetKeys(value, ["match", "conditions"])) return false;
   return (
     (value.match === "all" || value.match === "any") &&
     Array.isArray(value.conditions) &&
@@ -76,12 +73,9 @@ export function readDataQuery(params: Pick<URLSearchParams, "getAll">): EntityDa
   if (encoded.length !== 1) return null;
   try {
     const parsed: unknown = JSON.parse(encoded[0]);
-    if (
-      !hasExactOrSubsetKeys(parsed, ["lookup", "match", "conditions"], ["negate", "groups"])
-    )
+    if (!hasExactOrSubsetKeys(parsed, ["lookup", "match", "conditions"], ["groups"]))
       return null;
-    const { lookup, match, conditions, negate, groups } = parsed;
-    if (negate !== undefined && typeof negate !== "boolean") return null;
+    const { lookup, match, conditions, groups } = parsed;
     if (
       lookup !== null &&
       !(
@@ -105,7 +99,6 @@ export function readDataQuery(params: Pick<URLSearchParams, "getAll">): EntityDa
       match,
       conditions,
     };
-    if (negate) result.negate = true;
     if (groups && groups.length > 0) result.groups = groups;
     return result;
   } catch {
@@ -278,8 +271,7 @@ export function compileDataQuery(query: EntityDataQuery, schema: DataSchema): Co
     if (!sub.conditions.length) continue;
     const subRes = compileConditionList(sub.conditions, fields, counters);
     if (!subRes.ok) return subRes;
-    const grouped = group(subRes.terms, sub.match);
-    rootParts.push(sub.negate ? { not: grouped } : grouped);
+    rootParts.push(group(subRes.terms, sub.match));
   }
 
   const combined: DataFilter[] = [];
@@ -302,8 +294,7 @@ export function compileDataQuery(query: EntityDataQuery, schema: DataSchema): Co
     return { ok: false, error: ERROR + "limit" };
 
   if (rootParts.length) {
-    const body = group(rootParts, query.match);
-    combined.push(query.negate ? { not: body } : body);
+    combined.push(group(rootParts, query.match));
   }
   if (!combined.length) return { ok: true };
   const filters = group(combined, "all");

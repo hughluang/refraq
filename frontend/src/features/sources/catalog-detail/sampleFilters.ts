@@ -193,7 +193,6 @@ export function buildSampleRequest(
   options?: {
     columns?: readonly string[] | null;
     includeSql?: boolean;
-    match?: "all" | "any";
   },
 ): SampleRequestBody | null {
   const rows = Array.isArray(filter) ? filter : [filter as SampleFilter];
@@ -210,9 +209,6 @@ export function buildSampleRequest(
     limit,
     include_sql: options?.includeSql ?? false,
   };
-  if (options?.match && options.match !== "all") {
-    body.match = options.match;
-  }
   if (options?.columns && options.columns.length > 0) {
     body.columns = [...options.columns];
   }

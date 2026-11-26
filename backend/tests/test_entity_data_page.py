@@ -138,7 +138,7 @@ def test_internal_read_keeps_its_own_probe_limit(monkeypatch, count) -> None:
         def execute(self, statement, params):
             calls.append((str(statement), params))
             return Result()
-    monkeypatch.setattr(rows.data_sql, "entity_read_connection", lambda ctx: nullcontext(Connection()))
+    monkeypatch.setattr(rows.data_sql, "entity_read_connection", lambda ctx, **kwargs: nullcontext(Connection()))
     if count == 301:
         with pytest.raises(EntityRowLimitExceeded, match="Read returned more than 300 rows"):
             rows.read_rows("ent", filters=None, user=None, limit=300)
@@ -166,7 +166,6 @@ def test_row_dependent_keyset_uses_one_direct_read(size) -> None:
             params={"p0": "%a%"},
             profile_json='{"field":"sku","op":"contains","value":"a"}',
             leakproof=False,
-            fields=frozenset({"sku"}),
         ),
         row_dependent=True, limit=250, after_row_id=500,
     )
@@ -238,7 +237,6 @@ def test_offset_total_uses_the_same_inline_gate() -> None:
             params={"p0": "%a%"},
             profile_json='{"field":"sku","op":"contains","value":"a"}',
             leakproof=False,
-            fields=frozenset({"sku"}),
         ),
         row_dependent=True,
         limit=2,
