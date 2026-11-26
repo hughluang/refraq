@@ -16,7 +16,13 @@ from typing import Any, Mapping, Sequence
 from jsonschema import Draft202012Validator
 
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import NodeType, Problem, ReferenceResolver
+from backend.channel.nodes.spec import (
+    NodeType,
+    Problem,
+    ReferenceResolver,
+    SubchannelContract,
+)
+from backend.channel.subchannel import param_input_schema
 from backend.channel.template import (
     TemplateSyntaxError,
     TemplateTypeError,
@@ -91,10 +97,12 @@ def validate(
     problems.extend(_edge_problems(edges, by_id, by_type))
     problems.extend(_trigger_problems(nodes, edges, by_id, by_type))
     problems.extend(_respond_problems(nodes, edges, by_id, by_type))
+    problems.extend(_return_problems(nodes, by_type))
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
     problems.extend(_cycle_problems(nodes, edges, by_id))
     problems.extend(_container_frame_problems(nodes, edges, by_id, by_type))
     problems.extend(_reference_problems(nodes, by_type, resolver))
+    problems.extend(_subchannel_call_problems(nodes, by_type, resolver))
     problems.extend(_settings_problems(graph["settings"], resolver))
     return problems
 
@@ -353,41 +361,72 @@ def _template_fields(
     entity_id: str | None,
     resolver: ReferenceResolver,
     path: tuple[str | int, ...] = (),
+    subchannel_id: str | None = None,
 ) -> list[tuple[str, dict[str, Any] | None, tuple[str | int, ...]]]:
     found: list[tuple[str, dict[str, Any] | None, tuple[str | int, ...]]] = []
     marker = schema.get("x-refraq-template")
     if isinstance(marker, dict) and isinstance(value, str):
-        found.append((value, _declared_schema(marker, None, entity_id, resolver), path))
+        found.append(
+            (
+                value,
+                _declared_schema(
+                    marker, None, entity_id, resolver, subchannel_id=subchannel_id, path=path
+                ),
+                path,
+            )
+        )
     if schema.get("type") == "object" and isinstance(value, dict):
         properties = schema.get("properties")
         local_entity = entity_id
+        local_subchannel = subchannel_id
         if isinstance(properties, dict):
             for key, subschema in properties.items():
-                if (
-                    isinstance(subschema, dict)
-                    and subschema.get("x-refraq-ref") == "entity"
-                    and isinstance(value.get(key), str)
-                ):
+                if not isinstance(subschema, dict) or not isinstance(value.get(key), str):
+                    continue
+                if subschema.get("x-refraq-ref") == "entity":
                     local_entity = str(value[key])
+                elif subschema.get("x-refraq-ref") == "subchannel":
+                    local_subchannel = str(value[key])
             for key, subschema in properties.items():
                 if not isinstance(subschema, dict) or key not in value:
                     continue
                 item = value[key]
+                if (
+                    subschema.get("x-refraq-ref") == "entity"
+                    and subschema.get("x-refraq-resolve") == "execution"
+                    and isinstance(item, str)
+                    and ("{{" in item or "}}" in item)
+                ):
+                    found.append(
+                        (item, {"type": "string", "minLength": 1}, (*path, str(key)))
+                    )
+                    continue
                 nested_marker = subschema.get("x-refraq-template")
                 if isinstance(nested_marker, dict) and isinstance(item, str):
+                    next_path = (*path, str(key))
                     found.append(
                         (
                             item,
                             _declared_schema(
-                                nested_marker, value, local_entity, resolver
+                                nested_marker,
+                                value,
+                                local_entity,
+                                resolver,
+                                subchannel_id=local_subchannel,
+                                path=next_path,
                             ),
-                            (*path, str(key)),
+                            next_path,
                         )
                     )
                     continue
                 found.extend(
                     _template_fields(
-                        subschema, item, local_entity, resolver, (*path, str(key))
+                        subschema,
+                        item,
+                        local_entity,
+                        resolver,
+                        (*path, str(key)),
+                        subchannel_id=local_subchannel,
                     )
                 )
         additional = schema.get("additionalProperties")
@@ -405,6 +444,7 @@ def _template_fields(
                         local_entity,
                         resolver,
                         (*path, str(key)),
+                        subchannel_id=local_subchannel,
                     )
                 )
     if schema.get("type") == "array" and isinstance(value, list):
@@ -413,10 +453,39 @@ def _template_fields(
             for index, item in enumerate(value):
                 found.extend(
                     _template_fields(
-                        item_schema, item, entity_id, resolver, (*path, index)
+                        item_schema,
+                        item,
+                        entity_id,
+                        resolver,
+                        (*path, index),
+                        subchannel_id=subchannel_id,
                     )
                 )
     return found
+
+
+def _resolver_has_cycle(resolver: ReferenceResolver, target_channel_id: str) -> bool:
+    self_id = resolver.self_channel_id
+    if not self_id:
+        return False
+    if target_channel_id == self_id:
+        return True
+    visited: set[str] = set()
+    stack = [target_channel_id]
+    while stack:
+        current = stack.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        contract = resolver.published_subchannel_contract(current)
+        if contract is None:
+            continue
+        for callee in contract.callees:
+            if callee == self_id:
+                return True
+            if callee not in visited:
+                stack.append(callee)
+    return False
 
 
 def _declared_schema(
@@ -424,8 +493,26 @@ def _declared_schema(
     parent: Mapping[str, Any] | None,
     entity_id: str | None,
     resolver: ReferenceResolver,
+    *,
+    subchannel_id: str | None = None,
+    path: tuple[str | int, ...] = (),
 ) -> dict[str, Any] | None:
-    if marker.get("from") != "entity_attribute":
+    source = marker.get("from")
+    if source == "subchannel_input":
+        if (
+            not subchannel_id
+            or not path
+            or not resolver.channel_exists(subchannel_id)
+            or resolver.published_trigger_type(subchannel_id) != "trigger.subchannel"
+        ):
+            return None
+        contract = resolver.published_subchannel_contract(subchannel_id)
+        if contract is None:
+            return None
+        param_name = str(path[-1])
+        param = next((item for item in contract.inputs if item.name == param_name), None)
+        return None if param is None else param_input_schema(param)
+    if source != "entity_attribute":
         return dict(marker)
     if parent is None or not isinstance(parent.get("attribute"), str) or not entity_id:
         return None
@@ -724,6 +811,24 @@ def _respond_problems(
     ]
 
 
+def _return_problems(
+    nodes: list[dict[str, Any]],
+    by_type: dict[str, NodeType],
+) -> list[Problem]:
+    returns = [node for node in nodes if node.get("type") == "action.return"]
+    triggers = [node for node in nodes if _is_trigger(node, by_type)]
+    if len(triggers) == 1 and triggers[0].get("type") == "trigger.subchannel":
+        return []
+    return [
+        Problem(
+            "CHANNEL_NODE_CONFIG_INVALID",
+            "Return requires a Sub-channel Trigger",
+            node_id=str(node["id"]),
+        )
+        for node in returns
+    ]
+
+
 def _reachability_problems(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
@@ -826,6 +931,86 @@ def _reference_problems(
     return problems
 
 
+def _subchannel_call_problems(
+    nodes: list[dict[str, Any]],
+    by_type: dict[str, NodeType],
+    resolver: ReferenceResolver,
+) -> list[Problem]:
+    problems: list[Problem] = []
+    for node in nodes:
+        if node.get("type") != "action.call_channel":
+            continue
+        spec = by_type.get("action.call_channel")
+        config = node.get("config")
+        if spec is None or _config_errors(spec.config_schema, config):
+            continue
+        node_id = str(node["id"])
+        channel_id = str(config["channel_id"])
+        if not resolver.channel_exists(channel_id):
+            problems.append(
+                Problem(
+                    "CHANNEL_REFERENCE_UNRESOLVED",
+                    f"Data Channel does not resolve: {channel_id}",
+                    node_id=node_id,
+                    path=("channel_id",),
+                )
+            )
+            continue
+        if resolver.published_trigger_type(channel_id) != "trigger.subchannel":
+            problems.append(
+                Problem(
+                    "CHANNEL_SUBCHANNEL_TRIGGER_REQUIRED",
+                    "Sub-channel must have a published version using trigger.subchannel",
+                    node_id=node_id,
+                    path=("channel_id",),
+                )
+            )
+            continue
+        if _resolver_has_cycle(resolver, channel_id):
+            problems.append(
+                Problem(
+                    "CHANNEL_SUBCHANNEL_CYCLE",
+                    f"Sub-channel call forms a cycle: {channel_id}",
+                    node_id=node_id,
+                    path=("channel_id",),
+                )
+            )
+            continue
+        contract = resolver.published_subchannel_contract(channel_id)
+        if contract is None:
+            continue
+        params = contract.inputs
+        raw_inputs = config.get("inputs") if isinstance(config.get("inputs"), dict) else {}
+        by_name = {param.name: param for param in params}
+        for param in params:
+            if not param.required:
+                continue
+            raw_val = raw_inputs.get(param.name)
+            if param.name not in raw_inputs or (
+                isinstance(raw_val, str) and raw_val.strip() == ""
+            ):
+                problems.append(
+                    Problem(
+                        "CHANNEL_NODE_CONFIG_INVALID",
+                        f"Missing required sub-channel input: {param.name}",
+                        node_id=node_id,
+                        path=("inputs", param.name),
+                    )
+                )
+        for key in raw_inputs:
+            name = str(key)
+            if name not in by_name:
+                problems.append(
+                    Problem(
+                        "CHANNEL_NODE_CONFIG_INVALID",
+                        f"Sub-channel does not declare input parameter: {name}",
+                        node_id=node_id,
+                        path=("inputs", name),
+                    )
+                )
+    return problems
+
+
 def _settings_problems(
     settings: Mapping[str, Any],
     resolver: ReferenceResolver,
@@ -860,7 +1045,7 @@ def _refs(
     if (
         isinstance(ref, str)
         and isinstance(value, str)
-        and ref not in {"match_key", "expression", "json"}
+        and ref not in {"match_key", "expression", "json", "subchannel"}
     ):
         resolve_at = schema.get("x-refraq-resolve")
         found.append(

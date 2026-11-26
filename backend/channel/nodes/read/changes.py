@@ -11,6 +11,7 @@ from backend.channel.change_range import (
     read_change_range,
 )
 from backend.channel.checkpoints import CheckpointPosition
+from backend.channel.node_support import resolve_execution_entity_id
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
     MAIN_INPUT,
@@ -61,7 +62,12 @@ class _GroupingUnsafe(Exception):
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    entity_id = str(config["entity_id"])
+    entity_id, entity_failure = resolve_execution_entity_id(
+        str(config["entity_id"]), hooks
+    )
+    if entity_failure is not None:
+        return entity_failure
+    assert entity_id is not None
     node_id = str(node["id"])
     limit = int(config.get("limit") or _DEFAULT_LIMIT)
     shape = str(config.get("shape") or "entries")

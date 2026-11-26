@@ -791,24 +791,12 @@ function ChannelExisting({
   };
   const loadErrorChannels = () => {
     setErrorChannelsFailed(false);
-    void listChannels({ limit: 200 })
-      .then(async (page) => {
-        const found = await Promise.all(
-          page.items
-            .filter((item) => item.id !== channelId && item.latest_version)
-            .map(async (item) => {
-              const loaded = await getVersion(item.id, item.latest_version!.number);
-              const triggers = (loaded.version.graph?.nodes ?? []).filter((node) =>
-                node.type.startsWith("trigger."),
-              );
-              if (triggers.length === 1 && triggers[0]?.type === "trigger.error") {
-                return { value: item.id, label: item.name };
-              }
-              return null;
-            }),
-        );
+    void listChannels({ published_trigger_type: "trigger.error", limit: 200 })
+      .then((page) => {
         setErrorChannels(
-          found.filter((item): item is { value: string; label: string } => item != null),
+          page.items
+            .filter((item) => item.id !== channelId)
+            .map((item) => ({ value: item.id, label: item.name })),
         );
         setErrorChannelsFailed(false);
       })

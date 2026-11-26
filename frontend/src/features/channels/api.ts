@@ -66,6 +66,7 @@ export function listChannels(params?: {
   q?: string;
   active?: boolean;
   tag_id?: readonly string[];
+  published_trigger_type?: string;
   limit?: number;
   offset?: number;
 }) {

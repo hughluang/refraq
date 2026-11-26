@@ -10,7 +10,9 @@ import {
   type SelfScope,
 } from "@/features/channels/templateScope";
 
-export type TemplateValueSchema = SchemaObject | { from: "entity_attribute" };
+export type TemplateValueSchema =
+  | SchemaObject
+  | { from: "entity_attribute" | "subchannel_input" };
 
 export type TemplatePreview =
   | { state: "deferred" }

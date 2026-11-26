@@ -65,6 +65,7 @@ class SandboxSession:
         self._timeout = timeout_sec
         self._context: dict[str, Any] = {}
         self._outputs: list[dict[str, Any]] = []
+        self._frame_stack: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
         self._proc: subprocess.Popen[str] | None = None
         self._seq = 0
 
@@ -78,6 +79,19 @@ class SandboxSession:
     def set_context(self, *, channel: dict, run: dict, platform: dict) -> None:
         self._context = {"channel": channel, "run": run, "platform": platform}
         self._send({"op": "put_context", **self._context})
+
+    def push_frame(self, *, channel: dict, run: dict, platform: dict) -> None:
+        self._frame_stack.append((dict(self._context), list(self._outputs)))
+        self._context = {"channel": channel, "run": run, "platform": platform}
+        self._outputs = []
+        self._send({"op": "push_frame", **self._context})
+
+    def pop_frame(self) -> None:
+        self._context, self._outputs = self._frame_stack.pop()
+        try:
+            self._send({"op": "pop_frame"})
+        except SandboxFailed:
+            self._restart()
 
     def put_output(self, *, ref: str, name: str, output: Any) -> None:
         message = {"op": "put_output", "ref": ref, "name": name, "output": output}
@@ -171,8 +185,21 @@ class SandboxSession:
     def _restart(self) -> None:
         self.close()
         self._start()
-        if self._context:
-            self._send({"op": "put_context", **self._context})
+        if not self._frame_stack:
+            if self._context:
+                self._send({"op": "put_context", **self._context})
+            for message in self._outputs:
+                self._send(message)
+            return
+        first_ctx, first_outputs = self._frame_stack[0]
+        self._send({"op": "put_context", **first_ctx})
+        for message in first_outputs:
+            self._send(message)
+        for frame_ctx, frame_outputs in self._frame_stack[1:]:
+            self._send({"op": "push_frame", **frame_ctx})
+            for message in frame_outputs:
+                self._send(message)
+        self._send({"op": "push_frame", **self._context})
         for message in self._outputs:
             self._send(message)
 

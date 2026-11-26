@@ -61,7 +61,10 @@ export type Channel = {
   active: boolean;
   draft_revision: number;
   draft_updated_at: string;
-  latest_version: { number: number; published_at: string } | null;
+  latest_version: {
+    number: number;
+    published_at: string;
+  } | null;
   failure_streak: number;
   persistently_failing: boolean;
   tags: ChannelTag[];
@@ -105,6 +108,11 @@ export type ChannelRun = {
   trigger_node_id: string;
   trigger_actor_name: string | null;
   trigger_schedule_name: string | null;
+  caller?: {
+    channel_id: string;
+    channel_name: string;
+    job_id: string;
+  } | null;
   ignore_checkpoints: boolean;
   stop_at_node_id?: string | null;
   failed_node_id: string | null;

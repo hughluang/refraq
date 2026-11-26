@@ -12,6 +12,7 @@ from backend.admin.user_store import get_user_store
 from backend.channel.errors import (
     ChannelDraftConflict,
     ChannelGraphInvalid,
+    ChannelInUse,
     ChannelNotFound,
     ChannelRequestInvalid,
     ChannelVersionNotFound,
@@ -40,6 +41,12 @@ from backend.channel.store import (
     ChannelVersionRecord,
     empty_graph,
     get_channel_store,
+)
+from backend.channel.subchannel import (
+    channel_referenced_by_published_callers,
+    channel_referenced_by_published_error_settings,
+    channel_referenced_for_delete,
+    graph_trigger_type,
 )
 from backend.channel.variables import get_variable_store
 from backend.core.time import format_instant, utc_now
@@ -142,14 +149,16 @@ def list_channels(
     q: str | None,
     active: bool | None,
     tag_ids: list[str] | None = None,
+    published_trigger_type: str | None = None,
     limit: int,
     offset: int,
-) -> tuple[list[tuple[ChannelRecord, tuple[int, datetime] | None]], int]:
+) -> tuple[list[tuple[ChannelRecord, tuple[int, datetime, str | None] | None]], int]:
     needle = (q or "").strip() or None
     records, total = get_channel_store().list_channels(
         q=needle,
         active=active,
         subject_ids=_tag_subject_ids(tag_ids),
+        published_trigger_type=published_trigger_type,
         limit=limit,
         offset=offset,
     )
@@ -159,7 +168,7 @@ def list_channels(
 
 def get_channel(
     channel_id: str,
-) -> tuple[ChannelRecord, tuple[int, datetime] | None]:
+) -> tuple[ChannelRecord, tuple[int, datetime, str | None] | None]:
     record = _require(channel_id)
     latest = get_channel_store().latest_versions([channel_id]).get(channel_id)
     return record, latest
@@ -300,7 +309,7 @@ def patch_channel(
     description_set: bool,
     actor_user_id: str,
     actor_token_id: str | None,
-) -> tuple[ChannelRecord, tuple[int, datetime] | None]:
+) -> tuple[ChannelRecord, tuple[int, datetime, str | None] | None]:
     record = _require(channel_id)
     changed = False
     if name is not None and name != record.name:
@@ -331,7 +340,7 @@ def set_channel_active(
     active: bool,
     actor_user_id: str,
     actor_token_id: str | None,
-) -> tuple[ChannelRecord, tuple[int, datetime] | None]:
+) -> tuple[ChannelRecord, tuple[int, datetime, str | None] | None]:
     record = _require(channel_id)
     if record.active != active:
         record.active = active
@@ -357,6 +366,8 @@ def delete_channel(
 ) -> None:
     if get_channel_store().get(channel_id) is None:
         raise ChannelNotFound()
+    if channel_referenced_for_delete(channel_id):
+        raise ChannelInUse()
     withdraw_schedules_by_owner_ref(owner_ref_for(channel_id))
     get_inbound_path_store().withdraw_channel(channel_id)
     cancel_channel_jobs(channel_id)
@@ -440,6 +451,20 @@ def publish_channel(
     errors = [problem for problem in problems if problem.severity == "error"]
     if errors:
         raise ChannelGraphInvalid(errors[0].detail, problems=errors)
+    next_trigger = graph_trigger_type(record.draft_graph)
+    if next_trigger != "trigger.subchannel" and channel_referenced_by_published_callers(
+        channel_id
+    ):
+        raise ChannelInUse(
+            "Data Channel is called by another published Data Channel and must keep trigger.subchannel"
+        )
+    if (
+        next_trigger != "trigger.error"
+        and channel_referenced_by_published_error_settings(channel_id)
+    ):
+        raise ChannelInUse(
+            "Data Channel is used as an error workflow by another published Data Channel and must keep trigger.error"
+        )
     require_inbound_publish(channel_id, record.draft_graph)
     confirmation = _confirmation(record)
     version = get_channel_store().publish_version(

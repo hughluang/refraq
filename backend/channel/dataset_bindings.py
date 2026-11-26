@@ -11,7 +11,11 @@ from sqlglot.errors import SqlglotError
 from sqlglot.optimizer.scope import Scope, traverse_scope
 
 from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA
-from backend.channel.dataset_registry import DatasetRegistry, get_dataset_store
+from backend.channel.dataset_registry import (
+    DatasetRegistry,
+    dataset_belongs_to_run,
+    get_dataset_store,
+)
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import EngineHooks, NodeResult, Problem
 from backend.core.time import utc_now
@@ -110,7 +114,7 @@ def resolve_dataset_bindings(
         record = store.get(dataset_id)
         if record is None:
             return {}, _unavailable("not_found")
-        if record.job_id != hooks.run_id:
+        if not dataset_belongs_to_run(record, hooks.run_id):
             return {}, _unavailable("foreign_run")
         if record.expires_at is not None and record.expires_at <= utc_now():
             return {}, _unavailable("expired")

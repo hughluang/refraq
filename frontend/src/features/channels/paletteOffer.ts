@@ -15,3 +15,9 @@ export function respondNodeOffered(nodes: readonly PaletteNode[]): boolean {
   if (trigger == null || trigger.type !== "trigger.inbound") return false;
   return record(trigger.config.response)?.mode === "respond_node";
 }
+
+/** Return belongs in the palette only while the graph trigger is trigger.subchannel. */
+export function returnNodeOffered(nodes: readonly PaletteNode[]): boolean {
+  const trigger = nodes.find((node) => node.trigger === true || node.type.startsWith("trigger."));
+  return trigger != null && trigger.type === "trigger.subchannel";
+}

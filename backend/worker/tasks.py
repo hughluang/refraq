@@ -12,7 +12,7 @@ from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.time import utc_now
 
-from backend.channel.tasks import seal_dataset_expiry
+from backend.channel.tasks import seal_dataset_expiry, settle_orphaned_subchannel_runs
 from backend.entity.tasks import (
     ACCESS_LOG_SCHEDULE_KEY,
     CHANGE_LOG_SCHEDULE_KEY,
@@ -62,6 +62,7 @@ def reap_stuck_jobs() -> dict[str, int]:
     running_ids = [item.id for item in get_job_store().list(status="running")[0]]
     count = reap_stuck_running_jobs()
     for job_id in running_ids:
+        settle_orphaned_subchannel_runs(job_id)
         seal_dataset_expiry(job_id)
     return {"reaped": count}
 

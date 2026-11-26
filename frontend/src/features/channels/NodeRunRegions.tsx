@@ -587,6 +587,7 @@ function UpstreamEntry({
       <RunExecutionOutput
         channelId={channelId}
         jobId={jobId}
+        nodeType={entry.type_id}
         value={entry.value}
         view={view}
         truncated={entry.truncated}
@@ -727,6 +728,7 @@ export function ResultRegion({
           <RunExecutionOutput
           channelId={channelId}
           jobId={jobId ?? ""}
+          nodeType={nodes.find((node) => node.id === nodeId)?.type ?? null}
           value={output}
           view={view}
           error={

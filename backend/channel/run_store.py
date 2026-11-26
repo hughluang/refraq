@@ -51,6 +51,13 @@ class ChannelRunRecord:
     context: dict[str, Any] | None = None
     # node id -> stream -> {"xact", "seq"}. None until a node proposes a position.
     checkpoint_proposals: dict[str, Any] | None = None
+    parent_job_id: str | None = None
+    root_job_id: str | None = None
+    return_value: Any = None
+
+    def __post_init__(self) -> None:
+        if self.root_job_id is None:
+            self.root_job_id = self.job_id
 
 
 @dataclass
@@ -211,6 +218,16 @@ class MemoryRunStore:
     def get_run(self, job_id: str) -> ChannelRunRecord | None:
         with self._lock:
             return self._runs.get(job_id)
+
+    def list_runs_for_root(self, root_job_id: str) -> list[ChannelRunRecord]:
+        with self._lock:
+            items = [
+                item
+                for item in self._runs.values()
+                if item.root_job_id == root_job_id
+            ]
+        items.sort(key=lambda item: (item.created_at, item.job_id))
+        return items
 
     def list_runs(
         self,
@@ -457,6 +474,7 @@ class SqlRunStore:
             row.skipped_node_ids = list(record.skipped_node_ids)
             row.context = record.context
             row.checkpoint_proposals = record.checkpoint_proposals
+            row.return_value = record.return_value
 
     def set_checkpoint_proposals(self, job_id: str, proposals: dict[str, Any]) -> None:
         with session_scope() as session:
@@ -469,6 +487,15 @@ class SqlRunStore:
         with session_scope() as session:
             row = session.get(ChannelRunRow, job_id)
             return None if row is None else _run_record(row)
+
+    def list_runs_for_root(self, root_job_id: str) -> list[ChannelRunRecord]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(ChannelRunRow)
+                .where(ChannelRunRow.root_job_id == root_job_id)
+                .order_by(ChannelRunRow.created_at, ChannelRunRow.job_id)
+            ).all()
+            return [_run_record(row) for row in rows]
 
     def list_runs(
         self,
@@ -805,6 +832,9 @@ def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
         skipped_node_ids=list(record.skipped_node_ids),
         context=record.context,
         checkpoint_proposals=record.checkpoint_proposals,
+        parent_job_id=record.parent_job_id,
+        root_job_id=record.root_job_id,
+        return_value=record.return_value,
         created_at=record.created_at,
     )
 
@@ -827,6 +857,9 @@ def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
         stop_at_node_id=row.stop_at_node_id,
         context=row.context,
         checkpoint_proposals=row.checkpoint_proposals,
+        parent_job_id=row.parent_job_id,
+        root_job_id=row.root_job_id,
+        return_value=row.return_value,
     )
 
 
@@ -989,14 +1022,9 @@ def _cut(value: Any, cap: int) -> tuple[Any, bool]:
     return value, False
 
 
-def note_killed_run(job_id: str) -> None:
-    """Record the node a killed child left running, when one exists."""
-    store = get_run_store()
-    run = store.get_run(job_id)
-    if run is None:
-        return
+def _note_one_killed_run(store: MemoryRunStore | SqlRunStore, run: ChannelRunRecord) -> None:
     running = [
-        item for item in store.list_executions(job_id) if item.status == "running"
+        item for item in store.list_executions(run.job_id) if item.status == "running"
     ]
     if not running:
         return
@@ -1009,6 +1037,18 @@ def note_killed_run(job_id: str) -> None:
     if run.stopped_node_id is None:
         run.stopped_node_id = current.node_id
         store.update_run(run)
+
+
+def note_killed_run(job_id: str) -> None:
+    """Record the node a killed child left running across the call tree."""
+    store = get_run_store()
+    run = store.get_run(job_id)
+    if run is None:
+        return
+    root_id = run.root_job_id
+    tree = store.list_runs_for_root(root_id) if root_id == job_id else [run]
+    for item in tree:
+        _note_one_killed_run(store, item)
 
 
 def output_size(output: Any) -> int:

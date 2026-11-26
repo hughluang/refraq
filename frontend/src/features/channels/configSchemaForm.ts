@@ -15,7 +15,8 @@ export type SchemaObject = {
   "x-refraq-dataset-reference"?: boolean;
   allOf?: { if?: SchemaObject; then?: SchemaObject }[];
   "x-refraq-ref"?: string;
-  "x-refraq-template"?: SchemaObject | { from: "entity_attribute" };
+  "x-refraq-resolve"?: string;
+  "x-refraq-template"?: SchemaObject | { from: "entity_attribute" | "subchannel_input" };
 };
 
 /**
@@ -30,7 +31,13 @@ export type FieldWhen =
 export type FieldSpec = (
   | { kind: "string"; key: string; required: boolean; nullable: boolean }
   | { kind: "enum"; key: string; required: boolean; options: string[]; fallback: string }
-  | { kind: "entity"; key: string; required: boolean; description: string }
+  | {
+      kind: "entity";
+      key: string;
+      required: boolean;
+      description: string;
+      executionResolved?: boolean;
+    }
   | { kind: "attribute"; key: string; required: boolean; allowEmpty: boolean }
   | { kind: "objectList"; key: string; required: boolean; description: string; fields: FieldSpec[] }
   | { kind: "stringList"; key: string; required: boolean; description: string }
@@ -39,7 +46,7 @@ export type FieldSpec = (
       key: string;
       required: boolean;
       description: string;
-      valueSchema: SchemaObject | { from: "entity_attribute" };
+      valueSchema: SchemaObject | { from: "entity_attribute" | "subchannel_input" };
       itemDescription: string;
     }
   | { kind: "json"; key: string; required: boolean }
@@ -62,7 +69,7 @@ export type FieldSpec = (
       kind: "template";
       key: string;
       required: boolean;
-      valueSchema: SchemaObject | { from: "entity_attribute" };
+      valueSchema: SchemaObject | { from: "entity_attribute" | "subchannel_input" };
       description: string;
     }
   | {
@@ -70,7 +77,7 @@ export type FieldSpec = (
       key: string;
       required: boolean;
       description: string;
-      valueSchema: SchemaObject | { from: "entity_attribute" };
+      valueSchema: SchemaObject | { from: "entity_attribute" | "subchannel_input" };
     }
 ) & { when?: FieldWhen };
 
@@ -155,7 +162,13 @@ function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSp
   const ref = schema["x-refraq-ref"];
   if (ref === "json") return { kind: "json", key, required };
   if (ref === "entity") {
-    return { kind: "entity", key, required, description: schema.description ?? "" };
+    return {
+      kind: "entity",
+      key,
+      required,
+      description: schema.description ?? "",
+      executionResolved: schema["x-refraq-resolve"] === "execution",
+    };
   }
   if (ref === "source") {
     return { kind: "source", key, required, description: schema.description ?? "" };

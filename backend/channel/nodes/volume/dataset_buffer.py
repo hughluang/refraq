@@ -12,6 +12,7 @@ from backend.channel.dataset_registry import (
     DatasetColumnSpec,
     DatasetQuotaExceeded,
     DatasetRegistry,
+    dataset_belongs_to_run,
     get_dataset_store,
 )
 from backend.channel.errors import TemporalTargetIncompatible
@@ -147,7 +148,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         src_record = store.get(dataset_id)
         if src_record is None:
             return _unavailable("not_found")
-        if src_record.job_id != hooks.run_id:
+        if not dataset_belongs_to_run(src_record, hooks.run_id):
             return _unavailable("foreign_run")
         if src_record.expires_at is not None and src_record.expires_at <= utc_now():
             return _unavailable("expired")

@@ -6,7 +6,11 @@ import time
 from typing import Any, Iterator, Mapping
 
 from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA
-from backend.channel.dataset_registry import DatasetRegistry, get_dataset_store
+from backend.channel.dataset_registry import (
+    DatasetRegistry,
+    dataset_belongs_to_run,
+    get_dataset_store,
+)
 from backend.channel.item_limit import ITEM_LIMIT
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
@@ -201,7 +205,7 @@ def _dataset_rows(
     record = get_dataset_store().get(dataset_id)
     if record is None:
         return None, _unavailable("not_found")
-    if record.job_id != hooks.run_id:
+    if not dataset_belongs_to_run(record, hooks.run_id):
         return None, _unavailable("foreign_run")
     if record.expires_at is not None and record.expires_at <= utc_now():
         return None, _unavailable("expired")

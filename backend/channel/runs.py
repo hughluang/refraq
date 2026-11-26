@@ -107,6 +107,9 @@ def rerun_failed(
     version = store.get_version(channel_id, run.version)
     assert version is not None
     trigger = trigger_node_id(version.graph) or run.trigger_node_id
+    extra_input: dict[str, Any] | None = None
+    if isinstance(job.input, dict) and "subchannel_input" in job.input:
+        extra_input = {"subchannel_input": job.input["subchannel_input"]}
     queued, record = mint_on_demand_run(
         channel_id=channel_id,
         channel_name=channel.name,
@@ -119,6 +122,7 @@ def rerun_failed(
         graph=None,
         stop_at_node_id=None,
         pin_version=True,
+        extra_input=extra_input,
     )
     dispatch(queued.id)
     persist_audit_event(

@@ -1,4 +1,12 @@
+import {
+  SUBCHANNEL_PARAM_NAME_RE,
+  subchannelParamSchema,
+} from "@/features/channels/CallChannelFields";
 import { omitUnsetIntegers, type SchemaObject } from "@/features/channels/configSchemaForm";
+import {
+  SUBCHANNEL_PARAM_TYPES,
+  type SubchannelParamType,
+} from "@/features/channels/SubchannelTriggerFields";
 import type {
   ContainerDeclaration,
   Graph,
@@ -366,4 +374,216 @@ export function refusedProblems(error: unknown): GraphProblem[] {
   if (!(error instanceof ApiError) || error.code !== "CHANNEL_GRAPH_INVALID") return [];
   const problems = error.extensions.problems;
   return Array.isArray(problems) ? (problems as GraphProblem[]) : [];
+}
+
+const SUBCHANNEL_TYPES = new Set<string>(SUBCHANNEL_PARAM_TYPES);
+
+const CALL_CHANNEL_OUTPUT_SCHEMA: SchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["job_id", "channel_id", "version", "outcome", "result"],
+  properties: {
+    job_id: { type: "string" },
+    channel_id: { type: "string" },
+    version: { type: "integer" },
+    outcome: { type: "string", enum: ["completed", "skipped"] },
+    result: {},
+  },
+};
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function matchesSubchannelType(value: unknown, type: SubchannelParamType): boolean {
+  switch (type) {
+    case "string":
+      return typeof value === "string";
+    case "integer":
+      return typeof value === "number" && Number.isInteger(value);
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "object":
+      return isPlainRecord(value);
+    case "array":
+      return Array.isArray(value);
+    case "dataset":
+      return (
+        isPlainRecord(value) &&
+        typeof value.dataset_id === "string" &&
+        Array.isArray(value.columns) &&
+        typeof value.count === "number" &&
+        Number.isInteger(value.count)
+      );
+  }
+}
+
+/** Client-side output schema refinement for instant `templateScope` autocomplete before server validation resolves. */
+export function localSubchannelOutputSchema(
+  nodeType: string,
+  config: Record<string, unknown>,
+): SchemaObject | null {
+  if (nodeType === "action.call_channel") return CALL_CHANNEL_OUTPUT_SCHEMA;
+  if (nodeType !== "trigger.subchannel") return null;
+  const raw = Array.isArray(config.input) ? config.input : [];
+  const properties: Record<string, SchemaObject> = {};
+  const required: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!isPlainRecord(item)) continue;
+    const name = typeof item.name === "string" ? item.name : "";
+    const type = typeof item.type === "string" ? item.type : "";
+    if (!SUBCHANNEL_PARAM_NAME_RE.test(name) || seen.has(name) || !SUBCHANNEL_TYPES.has(type)) continue;
+    seen.add(name);
+    const isReq = item.required !== false;
+    const hasDefault =
+      !isReq && type !== "dataset" && Object.prototype.hasOwnProperty.call(item, "default");
+    properties[name] = subchannelParamSchema({
+      name,
+      type: type as (typeof SUBCHANNEL_PARAM_TYPES)[number],
+      required: isReq,
+      hasDefault,
+      defaultValue: item.default,
+      description: "",
+    });
+    if (isReq || hasDefault) required.push(name);
+  }
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties,
+    required,
+  };
+}
+
+/** Instant client-side subchannel validation problems mirrored prior to server round-trip. */
+export function localSubchannelProblems(
+  nodes: readonly Pick<GraphNode, "id" | "type" | "config">[],
+  currentChannelId?: string | null,
+): GraphProblem[] {
+  const found: GraphProblem[] = [];
+  const triggers = nodes.filter((node) => node.type.startsWith("trigger."));
+  const hasSubchannelTrigger =
+    triggers.length === 1 && triggers[0]?.type === "trigger.subchannel";
+
+  for (const node of nodes) {
+    if (node.type === "action.return" && !hasSubchannelTrigger) {
+      found.push({
+        code: "CHANNEL_NODE_CONFIG_INVALID",
+        node_id: node.id,
+        edge_id: null,
+        path: [],
+        detail: "Return requires a Sub-channel Trigger",
+        severity: "error",
+      });
+    } else if (node.type === "trigger.subchannel") {
+      const raw = Array.isArray(node.config.input) ? node.config.input : [];
+      const seen = new Map<string, { type: string; required: boolean; hasDefault: boolean }>();
+      raw.forEach((item, index) => {
+        if (!isPlainRecord(item)) return;
+        const name = typeof item.name === "string" ? item.name : "";
+        const type = typeof item.type === "string" ? item.type : "";
+        const isReq = item.required !== false;
+        const hasDefault = !isReq && type !== "dataset" && Object.prototype.hasOwnProperty.call(item, "default");
+        if (!SUBCHANNEL_PARAM_NAME_RE.test(name)) {
+          found.push({
+            code: "CHANNEL_NODE_CONFIG_INVALID",
+            node_id: node.id,
+            edge_id: null,
+            path: ["input", index, "name"],
+            detail: "Parameter name must match ^[A-Za-z_][A-Za-z0-9_]*$ (1 to 64 characters)",
+            severity: "error",
+          });
+        } else if (seen.has(name)) {
+          found.push({
+            code: "CHANNEL_NODE_CONFIG_INVALID",
+            node_id: node.id,
+            edge_id: null,
+            path: ["input", index, "name"],
+            detail: `Duplicate sub-channel parameter name: ${name}`,
+            severity: "error",
+          });
+        } else if (SUBCHANNEL_TYPES.has(type)) {
+          seen.set(name, { type: type as SubchannelParamType, required: isReq, hasDefault });
+        }
+        if (Object.prototype.hasOwnProperty.call(item, "default")) {
+          if (isReq || type === "dataset") {
+            found.push({
+              code: "CHANNEL_NODE_CONFIG_INVALID",
+              node_id: node.id,
+              edge_id: null,
+              path: ["input", index, "default"],
+              detail: isReq
+                ? "Required parameter may not declare a default value"
+                : "Dataset parameter may not declare a default value",
+              severity: "error",
+            });
+          } else if (
+            SUBCHANNEL_TYPES.has(type) &&
+            !matchesSubchannelType(item.default, type as SubchannelParamType)
+          ) {
+            found.push({
+              code: "CHANNEL_NODE_CONFIG_INVALID",
+              node_id: node.id,
+              edge_id: null,
+              path: ["input", index, "default"],
+              detail: `Default value for '${name}' does not match type ${type}`,
+              severity: "error",
+            });
+          }
+        }
+      });
+      if (isPlainRecord(node.config.sample_input)) {
+        for (const [paramName, sampleVal] of Object.entries(node.config.sample_input)) {
+          const decl = seen.get(paramName);
+          if (!decl) {
+            found.push({
+              code: "CHANNEL_NODE_CONFIG_INVALID",
+              node_id: node.id,
+              edge_id: null,
+              path: ["sample_input", paramName],
+              detail: `sample_input names an undeclared parameter: ${paramName}`,
+              severity: "error",
+            });
+            continue;
+          }
+          if (sampleVal === null && !decl.required && !decl.hasDefault) continue;
+          if (!matchesSubchannelType(sampleVal, decl.type as SubchannelParamType)) {
+            found.push({
+              code: "CHANNEL_NODE_CONFIG_INVALID",
+              node_id: node.id,
+              edge_id: null,
+              path: ["sample_input", paramName],
+              detail: `sample_input.${paramName} does not match declared type ${decl.type}`,
+              severity: "error",
+            });
+          }
+        }
+      }
+    } else if (node.type === "action.call_channel") {
+      const target = typeof node.config.channel_id === "string" ? node.config.channel_id.trim() : "";
+      if (!target) {
+        found.push({
+          code: "CHANNEL_NODE_CONFIG_INVALID",
+          node_id: node.id,
+          edge_id: null,
+          path: ["channel_id"],
+          detail: "Sub-channel is required",
+          severity: "error",
+        });
+      } else if (currentChannelId && target === currentChannelId) {
+        found.push({
+          code: "CHANNEL_REFERENCE_UNRESOLVED",
+          node_id: node.id,
+          edge_id: null,
+          path: ["channel_id"],
+          detail: "A Data Channel cannot call itself as a sub-channel",
+          severity: "error",
+        });
+      }
+    }
+  }
+  return found;
 }

@@ -340,6 +340,7 @@ class ValidateRequest(BaseModel):
 class LatestVersionOut(BaseModel):
     number: int
     published_at: Instant
+    trigger_type: str | None = None
 
 
 class ChannelTagOut(BaseModel):

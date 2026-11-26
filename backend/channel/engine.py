@@ -284,6 +284,16 @@ class _Run:
         stopped, seq, result = self._tries(node_id)
         if stopped is not None:
             return stopped, result
+        if result.status == "cancelled":
+            self.hooks.on_finish(seq, self.nodes[node_id], result)
+            return (
+                RunOutcome(
+                    status="cancelled",
+                    stopped_node_id=node_id,
+                    skipped_node_ids=list(self.skipped),
+                ),
+                result,
+            )
         outcome = self._policy(node_id, result)
         self.hooks.on_finish(seq, self.nodes[node_id], result)
         if outcome is not None:

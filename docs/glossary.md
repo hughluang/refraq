@@ -634,6 +634,26 @@ Avoid **Webhook**, an HTTP request node, and a second public URL.
 A record of one request an **Inbound Trigger** refused. It is not a **Channel Run**. A repeat that receives an answer already stored is counted and is not one of these records.
 Avoid a **Channel Run**, a **Management Audit Event**, and a log of accepted calls.
 
+### Sub Data Channel
+
+A **Data Channel** whose single trigger is a **Sub-channel Trigger** (`trigger.subchannel`). It keeps the full Data Channel lifecycle, versions, **Channel Variable**s, **Checkpoint**s, concurrency policy, run retention settings, error workflow, and standalone test runs, and is invoked synchronously by **Call Channel** (`action.call_channel`) from another Data Channel.
+Avoid a second workflow resource type, a copy-pasted node macro, an asynchronous fire-and-forget queue dispatch, or sharing `self`, **Channel Variable**s, or **Run Variable**s with its caller.
+
+### Sub-channel Trigger
+
+A **Data Channel** trigger (`trigger.subchannel`) that declares a typed input parameter contract (`string`, `integer`, `number`, `boolean`, `object`, `array`, or `dataset`) and an optional `sample_input` object for on-demand editor runs.
+Avoid **Inbound Trigger**, **Manual** trigger, or untyped passthrough of undeclared caller keys.
+
+### Call Channel
+
+A **Data Channel** action node (`action.call_channel`) that invokes a published **Sub Data Channel** synchronously in the current worker process, creating a child **Channel Run** (`trigger_kind` `subchannel`) and returning `{job_id, channel_id, version, outcome, result}`. Within one root run, the first resolution of a target channel fixes that published version number for later calls to the same channel in that run.
+Avoid calling a draft, calling a channel whose published trigger is not `trigger.subchannel`, or forming a static or runtime call cycle.
+
+### Return
+
+A **Data Channel** action node (`action.return`) valid only when the graph's trigger is `trigger.subchannel`. It evaluates one template expression (any JSON value or a **Dataset Reference**) and stores the result returned to a **Call Channel** caller. Omitting Return, or executing no Return node, yields `result: null`.
+Avoid **Respond** (`action.respond`, which builds an HTTP response for an **Inbound Trigger**) and early-exit control flow that skips sibling branches.
+
 ### Channel Note
 
 Explanatory text on a **Data Channel** graph. It has an id, a canvas position, a size, and text. It is saved with the draft and published with the **Channel Version**. It has no effect on execution or validation.

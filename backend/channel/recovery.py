@@ -55,6 +55,12 @@ def settle_failure(
             _bump_streak(run.channel_id)
         discard_unkept_run(job.id)
         return
+    if job.trigger_kind == "subchannel":
+        if run.target == "published":
+            _bump_streak(run.channel_id)
+        _start_error_workflow(job, run, error_code, error_message, node_id)
+        discard_unkept_run(job.id)
+        return
     if (
         run.target == "published"
         and run.version is not None

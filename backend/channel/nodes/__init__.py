@@ -22,6 +22,8 @@ from backend.channel.nodes.trigger.error import NODE_TYPE as TRIGGER_ERROR
 from backend.channel.nodes.trigger.inbound import NODE_TYPE as TRIGGER_INBOUND
 from backend.channel.nodes.trigger.manual import NODE_TYPE as TRIGGER_MANUAL
 from backend.channel.nodes.trigger.scheduled import NODE_TYPE as TRIGGER_SCHEDULED
+from backend.channel.nodes.trigger.subchannel import NODE_TYPE as TRIGGER_SUBCHANNEL
+from backend.channel.nodes.action.call_channel import NODE_TYPE as ACTION_CALL_CHANNEL
 from backend.channel.nodes.action.email import NODE_TYPE as ACTION_EMAIL
 from backend.channel.nodes.action.http import NODE_TYPE as ACTION_HTTP
 from backend.channel.nodes.action.respond import NODE_TYPE as ACTION_RESPOND
@@ -34,9 +36,10 @@ from backend.channel.nodes.volume.materialize import NODE_TYPE as VOLUME_MATERIA
 from backend.channel.nodes.volume.until import NODE_TYPE as VOLUME_UNTIL
 from backend.channel.nodes.write.entity import NODE_TYPE as WRITE_ENTITY
 
-# `if` and `for` are keywords, so those modules load by name.
+# `if`, `for`, and `return` are keywords, so those modules load by name.
 _IF = importlib.import_module("backend.channel.nodes.transform.if").NODE_TYPE
 _FOR = importlib.import_module("backend.channel.nodes.volume.for").NODE_TYPE
+_RETURN = importlib.import_module("backend.channel.nodes.action.return").NODE_TYPE
 
 __all__ = [
     "list_node_types",
@@ -57,6 +60,7 @@ _CATALOG: tuple[NodeType, ...] = (
     TRIGGER_INBOUND,
     TRIGGER_MANUAL,
     TRIGGER_SCHEDULED,
+    TRIGGER_SUBCHANNEL,
     READ_CHANGES,
     READ_SQL,
     READ_SOURCE_QUERY,
@@ -75,9 +79,11 @@ _CATALOG: tuple[NodeType, ...] = (
     VOLUME_UNTIL,
     STATE_VARIABLE,
     WRITE_ENTITY,
+    ACTION_CALL_CHANNEL,
     ACTION_EMAIL,
     ACTION_HTTP,
     ACTION_RESPOND,
+    _RETURN,
     ACTION_WEBHOOK,
 )
 

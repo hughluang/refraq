@@ -215,6 +215,7 @@ class SelfProxy:
 
 
 SELF = SelfProxy()
+_FRAME_STACK: list[tuple[Any, Any, Any, dict[str, NodeView]]] = []
 
 # RFC 3986 unreserved bytes. Slash is outside this set, so it is encoded.
 _UNRESERVED = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
@@ -299,6 +300,23 @@ def _handle(message: dict[str, Any]) -> dict[str, Any]:
         SELF.channel = _wrap(message.get("channel") or {})
         SELF.run = _wrap(message.get("run") or {})
         SELF.platform = _wrap(message.get("platform") or {})
+        return {"op": "ok"}
+    if kind == "push_frame":
+        _FRAME_STACK.append(
+            (SELF.channel, SELF.run, SELF.platform, dict(SELF._by_ref))
+        )
+        SELF._by_ref.clear()
+        SELF.channel = _wrap(message.get("channel") or {})
+        SELF.run = _wrap(message.get("run") or {})
+        SELF.platform = _wrap(message.get("platform") or {})
+        return {"op": "ok"}
+    if kind == "pop_frame":
+        channel, run, platform, saved_refs = _FRAME_STACK.pop()
+        SELF.channel = channel
+        SELF.run = run
+        SELF.platform = platform
+        SELF._by_ref.clear()
+        SELF._by_ref.update(saved_refs)
         return {"op": "ok"}
     if kind == "put_output":
         _put_output(message)

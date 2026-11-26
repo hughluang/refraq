@@ -90,6 +90,8 @@ import {
   emptyNodeData,
   flowFromGraph,
   insertableTypes,
+  localSubchannelOutputSchema,
+  localSubchannelProblems,
   nodeRef,
   graphFromFlow,
   newGraphId,
@@ -99,7 +101,7 @@ import {
 } from "@/features/channels/graphValidation";
 import { publishedInboundPath } from "@/features/channels/inboundPath";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
-import { respondNodeOffered } from "@/features/channels/paletteOffer";
+import { respondNodeOffered, returnNodeOffered } from "@/features/channels/paletteOffer";
 import { familyTint, nodeTypeIcon } from "@/features/channels/nodeVisual";
 import { MOTION_MS } from "@/theme/tokens";
 import { listExecutions } from "@/features/channels/api";
@@ -532,7 +534,7 @@ function ChannelCanvasBody({
   appearance,
   mutable,
   adoptToken = 0,
-  problems,
+  problems: serverProblems,
   ports = [],
   context = null,
   onChange,
@@ -662,6 +664,29 @@ function ChannelCanvasBody({
   );
   const settingsRef = useRef(graph.settings);
   settingsRef.current = graph.settings;
+  const problems = useMemo(() => {
+    if (!mutable) return serverProblems;
+    const local = localSubchannelProblems(
+      nodes.flatMap((node) =>
+        isChannelNode(node)
+          ? [{ id: node.id, type: node.data.nodeType, config: node.data.config }]
+          : [],
+      ),
+      channelId,
+    );
+    if (local.length === 0) return serverProblems;
+    const seen = new Set(
+      serverProblems.map(
+        (item) => `${item.node_id ?? ""}:${item.path.join(".")}:${item.code}`,
+      ),
+    );
+    return [
+      ...serverProblems,
+      ...local.filter(
+        (item) => !seen.has(`${item.node_id ?? ""}:${item.path.join(".")}:${item.code}`),
+      ),
+    ];
+  }, [mutable, nodes, serverProblems]);
   const problemKey = problems.map((problem) => problemIdentity(problem)).join("|");
   const highlightKey = highlight?.key ?? "";
   useEffect(() => {
@@ -1683,6 +1708,14 @@ function ChannelCanvasBody({
     outputSchemas.set(`${port.node_id}:${port.port}`, port.schema);
     if (port.port === "main") outputSchemas.set(port.node_id, port.schema);
   }
+  for (const node of nodes) {
+    if (!isChannelNode(node)) continue;
+    const local = localSubchannelOutputSchema(node.data.nodeType, node.data.config);
+    if (local && (node.data.nodeType === "trigger.subchannel" || !outputSchemas.has(node.id))) {
+      outputSchemas.set(`${node.id}:main`, local);
+      outputSchemas.set(node.id, local);
+    }
+  }
   const summaryKey = sessionRun ? recordedKey(sessionRun) : "";
   const [latestExecutions, setLatestExecutions] = useState<NodeExecution[]>([]);
   const latestExecutionKey = useRef("");
@@ -1964,16 +1997,17 @@ function ChannelCanvasBody({
   const hasTrigger = nodes.some((node) => isChannelNode(node) && node.data.trigger);
   const pickerTypes = (): NodeTypeSpec[] => {
     if (!picker) return [];
-    const respondOffered = respondNodeOffered(
-      nodes.flatMap((node) =>
-        isChannelNode(node)
-          ? [{ type: node.data.nodeType, trigger: node.data.trigger, config: node.data.config }]
-          : [],
-      ),
+    const paletteNodes = nodes.flatMap((node) =>
+      isChannelNode(node)
+        ? [{ type: node.data.nodeType, trigger: node.data.trigger, config: node.data.config }]
+        : [],
     );
+    const respondOffered = respondNodeOffered(paletteNodes);
+    const returnOffered = returnNodeOffered(paletteNodes);
     const visible = catalog.filter((item) => {
       if (hasTrigger && item.trigger) return false;
       if (item.type === "action.respond" && !respondOffered) return false;
+      if (item.type === "action.return" && !returnOffered) return false;
       return true;
     });
     const place = picker.place;
@@ -2698,6 +2732,7 @@ function ChannelCanvasBody({
               onPointerDown={(event) => event.stopPropagation()}
             >
               <NodeConfigPanel
+                  channelId={channelId}
                   nodeId={selected.id}
                   data={selected.data}
                   spec={selectedSpec ?? null}

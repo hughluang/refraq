@@ -10,10 +10,12 @@ import threading
 
 from celery.signals import worker_ready, worker_shutdown
 
+from backend.channel.tasks import seal_dataset_expiry, settle_orphaned_subchannel_runs
 from backend.jobs.parameters import job_lost_detection_sec
 from backend.jobs.store import (
     UNKNOWN_WORKER_ID,
     fail_leftover_occupancy,
+    get_job_store,
     occupancy_worker_id,
     touch_occupancy,
 )
@@ -50,7 +52,15 @@ def on_worker_ready(sender=None, **_kwargs) -> None:
     # Unknown is a shared slot — abandoning it would be a global reap.
     # Same id already abandoned this process generation: do not kill this gen's claims.
     if _worker_id != UNKNOWN_WORKER_ID and _abandoned_for != _worker_id:
+        leftover_ids = [
+            record.id
+            for record in get_job_store().list(status="running")[0]
+            if record.claimed_by == _worker_id
+        ]
         abandoned = fail_leftover_occupancy(_worker_id)
+        for job_id in leftover_ids:
+            settle_orphaned_subchannel_runs(job_id)
+            seal_dataset_expiry(job_id)
         _abandoned_for = _worker_id
         if abandoned:
             logger.info(

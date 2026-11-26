@@ -1,8 +1,8 @@
 "use client";
 
-import { ActionIcon, Button, CloseButton, Group, Stack, Text } from "@mantine/core";
+import { ActionIcon, Button, CloseButton, Group, SegmentedControl, Stack, Text } from "@mantine/core";
 import { usePermissions, useTranslate } from "@refinedev/core";
-import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentNodeStatus } from "@/components/display/statusTone";
@@ -18,9 +18,11 @@ import { RegisteredSourceField } from "@/features/channels/RegisteredSourceField
 import { WebhookField } from "@/features/webhooks/WebhookField";
 import { EmailAccountField } from "@/features/email-accounts/EmailAccountField";
 import { HttpAccountField } from "@/features/http-accounts/HttpAccountField";
+import { CallChannelFields } from "@/features/channels/CallChannelFields";
 import { InboundTriggerFields } from "@/features/channels/InboundTriggerFields";
 import { MapEditor } from "@/features/channels/MapEditor";
 import { ScheduledCadenceFields } from "@/features/channels/ScheduledCadenceFields";
+import { SubchannelTriggerFields } from "@/features/channels/SubchannelTriggerFields";
 import { SqlSourceField } from "@/features/channels/SqlSourceField";
 import {
   emptyRow,
@@ -60,6 +62,7 @@ import type { EntityAttribute } from "@/features/entities/types";
 import { TargetEntityField } from "@/features/entities/TargetEntityField";
 
 type Props = {
+  channelId?: string | null;
   nodeId: string;
   data: FlowNodeData;
   spec: NodeTypeSpec | null;
@@ -149,6 +152,7 @@ type HeadState = {
 };
 
 export function NodeConfigPanel({
+  channelId = null,
   nodeId,
   data,
   spec,
@@ -181,7 +185,11 @@ export function NodeConfigPanel({
   const configEditable = editable && !configLocked;
   const typeLabel = spec ? nodeTypeLabel(t, spec) : data.nodeType;
   const summary = spec ? nodeTypeSummary(t, spec) : "";
-  const fields = (schema && data.nodeType !== "trigger.inbound" ? fieldsFromSchema(schema) : []).filter((field) => {
+  const customEditor =
+    data.nodeType === "trigger.inbound" ||
+    data.nodeType === "trigger.subchannel" ||
+    data.nodeType === "action.call_channel";
+  const fields = (schema && !customEditor ? fieldsFromSchema(schema) : []).filter((field) => {
     if (
       data.nodeType === "trigger.scheduled" &&
       ["cron", "interval_seconds", "start_at"].includes(field.key)
@@ -194,13 +202,22 @@ export function NodeConfigPanel({
     }
     return fieldVisible(field, data.config);
   });
-  const entityId = typeof data.config.entity_id === "string" ? data.config.entity_id : "";
+  const rawEntityId = typeof data.config.entity_id === "string" ? data.config.entity_id : "";
+  const entityId = rawEntityId.includes("{{") || rawEntityId.includes("}}") ? "" : rawEntityId;
   const head = useEntityHeadAttributes(entityId);
   const attached = new Set<string>(fields.map((field) => field.key));
   if (data.nodeType === "trigger.scheduled") {
     attached.add("cron");
     attached.add("interval_seconds");
     attached.add("start_at");
+  }
+  if (data.nodeType === "trigger.subchannel") {
+    attached.add("input");
+    attached.add("sample_input");
+  }
+  if (data.nodeType === "action.call_channel") {
+    attached.add("channel_id");
+    attached.add("inputs");
   }
   const nameProblems = problems.filter((problem) => problem.code === "CHANNEL_NODE_NAME_DUP");
   const refProblems = problems.filter((problem) => problem.code === "CHANNEL_NODE_REF_INVALID");
@@ -357,6 +374,61 @@ export function NodeConfigPanel({
               onChange={(config) => update({ config })}
             />
           ) : null}
+          {data.nodeType === "trigger.subchannel" ? (
+            <SubchannelTriggerFields
+              config={data.config}
+              editable={configEditable}
+              notes={toNotes([
+                ...fieldMessages(t, problems, "input", graph),
+                ...fieldMessages(t, problems, "sample_input", graph),
+              ])}
+              onChange={(config) => update({ config })}
+            />
+          ) : null}
+          {data.nodeType === "action.call_channel" ? (
+            <CallChannelFields
+              currentChannelId={channelId}
+              config={data.config}
+              editable={configEditable}
+              channelNotes={toNotes(fieldMessages(t, problems, "channel_id", graph))}
+              renderTemplateInput={({
+                name,
+                label,
+                description,
+                required,
+                omitted,
+                value,
+                valueSchema,
+                onChange: onInputChange,
+              }) => (
+                <SubchannelInputField
+                  name={name}
+                  label={label}
+                  description={description}
+                  required={required}
+                  omitted={omitted}
+                  value={value}
+                  valueSchema={valueSchema}
+                  editable={configEditable}
+                  templateScope={scope}
+                  messages={problems
+                    .filter(
+                      (problem) =>
+                        problem.path[0] === "inputs" && problem.path[1] === name,
+                    )
+                    .map((problem) => ({
+                      text: formatGraphProblem(t, problem, graph, { nodeName: false }),
+                      severity:
+                        problem.severity === "warning"
+                          ? ("warning" as const)
+                          : ("error" as const),
+                    }))}
+                  onChange={onInputChange}
+                />
+              )}
+              onChange={(config) => update({ config })}
+            />
+          ) : null}
           {data.nodeType === "trigger.scheduled" ? (
             <ScheduledCadenceFields
               config={data.config}
@@ -471,7 +543,7 @@ function TemplateMapValue({
   fieldKey: string;
   rowName: string;
   value: string;
-  valueSchema: SchemaObject | { from: "entity_attribute" };
+  valueSchema: SchemaObject | { from: "entity_attribute" | "subchannel_input" };
   editable: boolean;
   templateScope: SelfScope;
   label: string;
@@ -608,6 +680,23 @@ function ConfigField({
     );
   }
   if (field.kind === "entity") {
+    if (field.executionResolved) {
+      return (
+        <ExecutionEntityField
+          label={caption}
+          description={fieldDescription(t, nodeType, field.key, field.description)}
+          value={typeof value === "string" ? value : ""}
+          editable={editable}
+          templateScope={templateScope}
+          messages={messages}
+          notes={notes}
+          openSignal={openSignal}
+          bare={bare}
+          binding={binding}
+          onChange={(next) => onChange(next)}
+        />
+      );
+    }
     return (
       <TargetEntityField
         label={caption}
@@ -1391,4 +1480,145 @@ function attributeSchema(scope: Record<string, unknown>, head: HeadState) {
   const name = typeof scope.attribute === "string" ? scope.attribute : "";
   const attribute = head.attributes.find((item) => item.name === name);
   return attribute ? attributeValueSchema(attribute.type) : null;
+}
+
+function SubchannelInputField({
+  name,
+  label,
+  description,
+  required = false,
+  omitted = false,
+  value,
+  valueSchema,
+  editable,
+  templateScope,
+  messages,
+  onChange,
+}: {
+  name: string;
+  label: string;
+  description: string;
+  required?: boolean;
+  omitted?: boolean;
+  value: string;
+  valueSchema: SchemaObject;
+  editable: boolean;
+  templateScope: SelfScope;
+  messages: readonly FieldMessage[];
+  onChange: (next: string) => void;
+}) {
+  const binding = useTemplateBinding(["inputs", name], value);
+  return (
+    <TemplateField
+      label={label}
+      description={description}
+      required={required}
+      valueSchema={valueSchema}
+      value={value}
+      omitted={omitted}
+      editable={editable}
+      scope={templateScope}
+      messages={messages}
+      runPreview={binding.runPreview}
+      recorded={binding.recorded}
+      edited={binding.edited}
+      caretKey={binding.caretKey}
+      onCaret={binding.onCaret}
+      onCaretGone={binding.onCaretGone}
+      onChange={onChange}
+    />
+  );
+}
+
+function ExecutionEntityField({
+  label,
+  description,
+  value,
+  editable,
+  templateScope,
+  messages,
+  notes,
+  openSignal,
+  bare,
+  binding,
+  onChange,
+}: {
+  label: string;
+  description: string | undefined;
+  value: string;
+  editable: boolean;
+  templateScope: SelfScope;
+  messages: readonly FieldMessage[];
+  notes: readonly FieldNote[];
+  openSignal: string | null;
+  bare: boolean;
+  binding: ReturnType<typeof useTemplateBinding>;
+  onChange: (next: string) => void;
+}) {
+  const t = useTranslate();
+  const isTemplateValue = value.includes("{{") || value.includes("}}");
+  const [mode, setMode] = useState<"picker" | "template">(
+    isTemplateValue ? "template" : "picker",
+  );
+  useEffect(() => {
+    if (isTemplateValue) setMode("template");
+  }, [isTemplateValue]);
+  return (
+    <Stack gap={6}>
+      {editable ? (
+        <Group justify="flex-end">
+          <SegmentedControl
+            size="xs"
+            value={mode}
+            data={[
+              { value: "picker", label: t("channels.config.entityMode.picker") },
+              { value: "template", label: t("channels.config.entityMode.template") },
+            ]}
+            onChange={(next) => {
+              const chosen = next === "template" ? "template" : "picker";
+              setMode(chosen);
+              if (chosen === "picker" && isTemplateValue) onChange("");
+            }}
+          />
+        </Group>
+      ) : null}
+      {mode === "template" || isTemplateValue ? (
+        <TemplateField
+          label={bare ? undefined : label}
+          ariaLabel={bare ? label : undefined}
+          description={description}
+          valueSchema={{ type: "string" }}
+          value={value}
+          editable={editable}
+          scope={templateScope}
+          messages={messages}
+          openSignal={openSignal}
+          runPreview={binding.runPreview}
+          recorded={binding.recorded}
+          edited={binding.edited}
+          caretKey={binding.caretKey}
+          onCaret={binding.onCaret}
+          onCaretGone={binding.onCaretGone}
+          onChange={onChange}
+        />
+      ) : (
+        <TargetEntityField
+          label={label}
+          description={description}
+          value={value}
+          selfEntityId={null}
+          selfName=""
+          selfTableName=""
+          includeSelf={false}
+          editable={editable}
+          cachedName=""
+          cachedTableName=""
+          notes={notes}
+          openSignal={openSignal}
+          bare={bare}
+          onChange={(next) => onChange(next.target_entity_id)}
+        />
+      )}
+    </Stack>
+  );
 }

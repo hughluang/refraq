@@ -103,6 +103,31 @@ class FakeHooks:
             raise AssertionError(source)
         return self._run_code(source, timeout_sec)
 
+    def set_return_value(self, value: Any) -> None:
+        del value
+
+    def prepare_subchannel_call(
+        self, channel_id: str
+    ) -> tuple[Any, NodeResult | None]:
+        del channel_id
+        from types import SimpleNamespace
+
+        return SimpleNamespace(params=[]), None
+
+    def call_subchannel(
+        self,
+        *,
+        prepared: Any,
+        inputs: Mapping[str, Any],
+        caller_node_id: str,
+    ) -> NodeResult:
+        del prepared, inputs, caller_node_id
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_SUBCHANNEL_UNAVAILABLE",
+            error_message="Sub-channel execution is not available in FakeHooks",
+        )
+
 
 def _user() -> UserRecord:
     return UserRecord(

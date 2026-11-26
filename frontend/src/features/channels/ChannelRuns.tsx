@@ -139,8 +139,8 @@ export function ChannelRuns({ channelId, origin = "show" }: { channelId: string;
           const failedNode = run.status === "failed" ? formatFailedNode(nodes, run.failed_node_id) : null;
           const stoppedNode = run.status === "cancelled" ? nodeDisplayName(nodes, run.stopped_node_id) : null;
           const showError = run.status === "failed" || run.status === "cancelled";
-          const trigger = run.trigger_kind === "retry" || run.trigger_kind === "error"
-            ? `${t(`channels.runs.trigger.${run.trigger_kind}`)}${run.trigger_ref ? ` · ${run.trigger_ref}` : ""}`
+          const trigger = run.trigger_kind === "retry" || run.trigger_kind === "error" || run.trigger_kind === "subchannel"
+            ? `${t(`channels.runs.trigger.${run.trigger_kind}`)}${run.caller ? ` · ${run.caller.channel_name}` : run.trigger_ref ? ` · ${run.trigger_ref}` : ""}`
             : inboundRunLabel(run, t) ?? formatJobTrigger(run, t);
           const name = showInstant(run.started_at ?? run.created_at);
           const copyLabel = t("channels.runs.copyId", { id: run.job_id });

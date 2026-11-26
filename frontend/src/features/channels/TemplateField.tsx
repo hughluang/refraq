@@ -52,8 +52,11 @@ type Props = {
   label?: string;
   ariaLabel?: string;
   description?: string;
+  required?: boolean;
   valueSchema: TemplateValueSchema | null;
   value: string;
+  /** True when an optional parameter key is absent from config (falls back to default/null). */
+  omitted?: boolean;
   editable: boolean;
   scope: SelfScope;
   messages?: readonly FieldMessage[];
@@ -114,8 +117,10 @@ export function TemplateField({
   label,
   ariaLabel,
   description,
+  required = false,
   valueSchema,
   value,
+  omitted = false,
   editable,
   scope,
   messages = [],
@@ -257,7 +262,8 @@ export function TemplateField({
     syncing.current = false;
   }, [value]);
 
-  const preview = templatePreview(value, schema);
+  const preview: TemplatePreview =
+    omitted && value === "" ? { state: "unknown" } : templatePreview(value, schema);
   const rule = templateRule(schema);
   const showPreview = edited && runPreview != null;
   const t = useTranslate();
@@ -288,7 +294,12 @@ export function TemplateField({
         <Group gap={4} wrap="nowrap">
           {label ? (
             <Text component="label" htmlFor={fieldId} size="sm" fw={500}>
-              {label}{" "}
+              {label}
+              {editable && required ? (
+                <Text component="span" c="red" aria-hidden="true">
+                  {" *"}
+                </Text>
+              ) : null}{" "}
               <Text span size="xs" c="dimmed">
                 {badge}
               </Text>

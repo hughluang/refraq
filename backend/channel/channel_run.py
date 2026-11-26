@@ -53,11 +53,13 @@ __all__ = [
     "dispatch",
     "trigger_node_id",
     "execute_channel_run",
+    "execute_subchannel_graph",
     "expression_context",
     "mint_followup_run",
     "mint_inbound_run",
     "mint_on_demand_run",
     "mint_scheduled_run",
+    "mint_subchannel_run",
     "schedule_context",
     "schedule_key_for",
     "set_dispatcher",
@@ -65,8 +67,8 @@ __all__ = [
 ]
 
 
-# trigger_ref on these kinds is a path or schedule id, not a user id.
-SYSTEM_TRIGGER_KINDS = frozenset({"schedule", "retry", "error", "inbound"})
+# trigger_ref on these kinds is a path, schedule id, or parent job id, not a user id.
+SYSTEM_TRIGGER_KINDS = frozenset({"schedule", "retry", "error", "inbound", "subchannel"})
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,7 @@ def mint_on_demand_run(
     graph: dict[str, Any] | None,
     stop_at_node_id: str | None,
     pin_version: bool = False,
+    extra_input: Mapping[str, Any] | None = None,
 ) -> tuple[JobRecord, ChannelRunRecord]:
     payload: dict[str, Any] = {
         "channel_id": channel_id,
@@ -110,6 +113,8 @@ def mint_on_demand_run(
     if pin_version and version is not None:
         payload["pin_version"] = True
         payload["version"] = version
+    if extra_input:
+        payload.update(copy.deepcopy(dict(extra_input)))
     return _mint_run(
         channel_id=channel_id, channel_name=channel_name, target=target,
         version=version, draft_revision=draft_revision, graph=graph,
@@ -119,9 +124,51 @@ def mint_on_demand_run(
     )
 
 
+def mint_subchannel_run(
+    *,
+    channel_id: str,
+    channel_name: str,
+    version: int,
+    trigger_node_id: str,
+    ignore_checkpoints: bool,
+    parent_job_id: str,
+    root_job_id: str,
+    caller_channel_id: str,
+    caller_node_id: str,
+    subchannel_input: Mapping[str, Any],
+) -> tuple[JobRecord, ChannelRunRecord]:
+    payload: dict[str, Any] = {
+        "channel_id": channel_id,
+        "target": "published",
+        "ignore_checkpoints": ignore_checkpoints,
+        "pin_version": True,
+        "version": version,
+        "subchannel_input": copy.deepcopy(dict(subchannel_input)),
+        "caller_channel_id": caller_channel_id,
+        "caller_node_id": caller_node_id,
+    }
+    return _mint_run(
+        channel_id=channel_id,
+        channel_name=channel_name,
+        target="published",
+        version=version,
+        draft_revision=None,
+        graph=None,
+        trigger_node=trigger_node_id,
+        ignore_checkpoints=ignore_checkpoints,
+        stop_at_node_id=None,
+        payload=payload,
+        trigger_kind="subchannel",
+        trigger_ref=parent_job_id,
+        parent_job_id=parent_job_id,
+        root_job_id=root_job_id,
+    )
+
+
 def _mint_run(*, channel_id, channel_name, target, version, draft_revision,
               graph, trigger_node, ignore_checkpoints, stop_at_node_id,
-              payload, trigger_kind, trigger_ref):
+              payload, trigger_kind, trigger_ref,
+              parent_job_id: str | None = None, root_job_id: str | None = None):
     with _mint_session() as session:
         if session is not None:
             channel = session.get(ChannelRow, channel_id, with_for_update=True)
@@ -150,6 +197,8 @@ def _mint_run(*, channel_id, channel_name, target, version, draft_revision,
             draft_revision=draft_revision, graph=graph if target == "draft" else None,
             trigger_node_id=trigger_node, ignore_checkpoints=ignore_checkpoints,
             created_at=utc_now(), stop_at_node_id=stop_at_node_id,
+            parent_job_id=parent_job_id,
+            root_job_id=root_job_id or job.id,
         )
         get_run_store().insert_run(record, session=session)
     return job, record
@@ -314,6 +363,8 @@ def _channel_run_record(
     ignore_checkpoints: bool,
     created_at: datetime,
     stop_at_node_id: str | None = None,
+    parent_job_id: str | None = None,
+    root_job_id: str | None = None,
 ) -> ChannelRunRecord:
     return ChannelRunRecord(
         job_id=job_id,
@@ -329,6 +380,8 @@ def _channel_run_record(
         skipped_node_ids=[],
         created_at=created_at,
         stop_at_node_id=stop_at_node_id,
+        parent_job_id=parent_job_id,
+        root_job_id=root_job_id or job_id,
     )
 
 
@@ -403,9 +456,12 @@ def execute_channel_run(
     actor: dict[str, str],
     started_at: str,
     job: JobRecord,
-    timeout_sec: int | None,
+    timeout_sec: float | int | None,
     started: float | None,
     pinned: bool = False,
+    claimed_by: str | None = None,
+    subchannel_preparer: Callable[..., tuple[Any, NodeResult | None]] | None = None,
+    subchannel_invoker: Callable[..., NodeResult] | None = None,
 ) -> RunOutcome:
     user = ensure_system_user(get_user_store())
     schedule = schedule_context(
@@ -415,6 +471,11 @@ def execute_channel_run(
         when=job.created_at,
         trigger_ref=job.trigger_ref,
         scheduled_for=job.scheduled_for,
+    )
+    deadline = (
+        started + float(timeout_sec)
+        if started is not None and timeout_sec is not None
+        else None
     )
     with _sandbox_session(context) as sandbox:
         hooks = _RunHooks(
@@ -429,6 +490,10 @@ def execute_channel_run(
             run_version=run.version,
             pinned=pinned,
             run=run,
+            deadline=deadline,
+            claimed_by=claimed_by,
+            subchannel_preparer=subchannel_preparer,
+            subchannel_invoker=subchannel_invoker,
         )
         return _execute_graph(
             graph,
@@ -439,6 +504,73 @@ def execute_channel_run(
             started=started,
             stop_at_node_id=run.stop_at_node_id,
         )
+
+
+def execute_subchannel_graph(
+    *,
+    parent_hooks: _RunHooks,
+    graph: Mapping[str, Any],
+    trigger_node_id: str,
+    trigger_node: Mapping[str, Any],
+    run: ChannelRunRecord,
+    context: dict[str, Any],
+    started_at: str,
+    job: JobRecord,
+    timeout_sec: float | int | None,
+    started: float | None,
+) -> RunOutcome:
+    schedule = schedule_context(
+        channel_id=run.channel_id,
+        node=trigger_node,
+        trigger_kind=job.trigger_kind,
+        when=job.created_at,
+        trigger_ref=job.trigger_ref,
+        scheduled_for=job.scheduled_for,
+    )
+    deadline = (
+        started + float(timeout_sec)
+        if started is not None and timeout_sec is not None
+        else parent_hooks.deadline
+    )
+    sandbox = parent_hooks._sandbox
+    sandbox.push_frame(
+        channel=context["channel"],
+        run=context["run"],
+        platform=context["platform"],
+    )
+    try:
+        child_hooks = _RunHooks(
+            sandbox,
+            run_id=run.job_id,
+            actor=dict(parent_hooks.actor),
+            started_at=started_at,
+            user=parent_hooks.user,
+            schedule=schedule,
+            target="published",
+            channel_id=run.channel_id,
+            run_version=run.version,
+            pinned=True,
+            run=run,
+            root_job_id=parent_hooks.root_job_id,
+            active_channel_ids=(*parent_hooks.active_channel_ids, run.channel_id),
+            resolved_subchannel_versions=parent_hooks.resolved_subchannel_versions,
+            deadline=deadline,
+            claimed_by=parent_hooks.claimed_by,
+            parent_hooks=parent_hooks,
+            subchannel_preparer=parent_hooks.subchannel_preparer,
+            subchannel_invoker=parent_hooks.subchannel_invoker,
+        )
+        return _execute_graph(
+            graph,
+            trigger_node_id,
+            run.channel_id,
+            child_hooks,
+            timeout_sec=timeout_sec,
+            started=started,
+            stop_at_node_id=None,
+        )
+    finally:
+        sandbox.pop_frame()
 
 
 class _RunHooks:
@@ -456,6 +588,14 @@ class _RunHooks:
         run_version: int | None,
         pinned: bool = False,
         run: Any | None = None,
+        root_job_id: str | None = None,
+        active_channel_ids: tuple[str, ...] | None = None,
+        resolved_subchannel_versions: dict[str, int] | None = None,
+        deadline: float | None = None,
+        claimed_by: str | None = None,
+        parent_hooks: _RunHooks | None = None,
+        subchannel_preparer: Callable[..., tuple[Any, NodeResult | None]] | None = None,
+        subchannel_invoker: Callable[..., NodeResult] | None = None,
     ) -> None:
         self._sandbox = sandbox
         self.run_id = run_id
@@ -467,11 +607,58 @@ class _RunHooks:
         self._target = target
         self._run_version = run_version
         self._pinned = pinned
+        self._run = run
         self._inputs: dict[int, InputCapture] = {}
         self.run_variables: dict[str, Any] = {}
         self.ignore_checkpoints = bool(getattr(run, "ignore_checkpoints", False))
         self.checkpoints = (
             RunCheckpoints(channel_id, run) if run is not None else LocalCheckpoints()
+        )
+        self.root_job_id = (
+            root_job_id
+            or (getattr(run, "root_job_id", None) if run is not None else None)
+            or run_id
+        )
+        self.active_channel_ids: tuple[str, ...] = active_channel_ids or (channel_id,)
+        self.resolved_subchannel_versions: dict[str, int] = (
+            resolved_subchannel_versions
+            if resolved_subchannel_versions is not None
+            else {}
+        )
+        self.deadline = deadline
+        self.claimed_by = claimed_by
+        self._parent_hooks = parent_hooks
+        self.subchannel_preparer = subchannel_preparer
+        self.subchannel_invoker = subchannel_invoker
+
+    def set_return_value(self, value: Any) -> None:
+        copied = copy.deepcopy(value)
+        assert self._run is not None
+        self._run.return_value = copied
+        get_run_store().update_run(self._run)
+
+    def prepare_subchannel_call(
+        self, channel_id: str
+    ) -> tuple[Any, NodeResult | None]:
+        assert self.subchannel_preparer is not None
+        return self.subchannel_preparer(
+            parent_hooks=self,
+            target_channel_id=channel_id,
+        )
+
+    def call_subchannel(
+        self,
+        *,
+        prepared: Any,
+        inputs: Mapping[str, Any],
+        caller_node_id: str,
+    ) -> NodeResult:
+        assert self.subchannel_invoker is not None
+        return self.subchannel_invoker(
+            parent_hooks=self,
+            prepared=prepared,
+            inputs=inputs,
+            caller_node_id=caller_node_id,
         )
 
     def evaluate(self, expression: str) -> Any:
@@ -492,7 +679,11 @@ class _RunHooks:
 
     def cancelled(self) -> bool:
         record = get_job_store().get(self.run_id)
-        return record is not None and record.status == "cancelled"
+        if record is not None and record.status == "cancelled":
+            return True
+        if self._parent_hooks is not None:
+            return self._parent_hooks.cancelled()
+        return False
 
     def superseded(self) -> bool:
         if self._pinned or self._target != "published" or self._run_version is None:
@@ -623,7 +814,7 @@ def _execute_graph(
     channel_id: str,
     hooks: EngineHooks,
     *,
-    timeout_sec: int | None,
+    timeout_sec: float | int | None,
     started: float | None,
     stop_at_node_id: str | None,
 ) -> RunOutcome:

@@ -29,6 +29,7 @@ __all__ = [
     "ReferenceResolver",
     "ResolvedAttribute",
     "ResolvedEntity",
+    "SubchannelContract",
     "object_schema",
 ]
 
@@ -113,6 +114,20 @@ class EngineHooks(Protocol):
     @property
     def checkpoints(self) -> CheckpointView: ...
 
+    def set_return_value(self, value: Any) -> None: ...
+
+    def prepare_subchannel_call(
+        self, channel_id: str
+    ) -> tuple[Any, NodeResult | None]: ...
+
+    def call_subchannel(
+        self,
+        *,
+        prepared: Any,
+        inputs: Mapping[str, Any],
+        caller_node_id: str,
+    ) -> NodeResult: ...
+
 
 class CheckpointView(Protocol):
     """Positions one run reads and proposes. The node decides when a run may advance."""
@@ -169,12 +184,25 @@ class Problem:
     path: tuple[str | int, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class SubchannelContract:
+    inputs: tuple[Any, ...]
+    callees: tuple[str, ...]
+
+
 class ReferenceResolver(Protocol):
+    @property
+    def self_channel_id(self) -> str: ...
+
     def entity_head(self, entity_id: str) -> ResolvedEntity | None: ...
 
     def channel_exists(self, channel_id: str) -> bool: ...
 
     def published_trigger_type(self, channel_id: str) -> str | None: ...
+
+    def published_subchannel_contract(
+        self, channel_id: str
+    ) -> SubchannelContract | None: ...
 
     def source_exists(self, source_id: str) -> bool: ...
 

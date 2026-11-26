@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -86,6 +86,7 @@ class ChannelStore(Protocol):
         q: str | None,
         active: bool | None,
         subject_ids: frozenset[str] | None = None,
+        published_trigger_type: str | None = None,
         limit: int,
         offset: int,
     ) -> tuple[list[ChannelRecord], int]: ...
@@ -119,7 +120,7 @@ class ChannelStore(Protocol):
 
     def latest_versions(
         self, channel_ids: list[str]
-    ) -> dict[str, tuple[int, datetime]]: ...
+    ) -> dict[str, tuple[int, datetime, str | None]]: ...
 
     def list_versions(
         self, channel_id: str, *, limit: int, offset: int
@@ -153,6 +154,22 @@ def _clone_version(record: ChannelVersionRecord) -> ChannelVersionRecord:
         published_at=record.published_at,
         published_by_user_id=record.published_by_user_id,
     )
+
+
+def _graph_trigger_type(graph: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(graph, Mapping):
+        return None
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return None
+    triggers = [
+        str(node.get("type") or "")
+        for node in nodes
+        if isinstance(node, Mapping) and str(node.get("type") or "").startswith("trigger.")
+    ]
+    if len(triggers) != 1:
+        return None
+    return triggers[0]
 
 
 class MemoryChannelStore:
@@ -190,11 +207,13 @@ class MemoryChannelStore:
         q: str | None,
         active: bool | None,
         subject_ids: frozenset[str] | None = None,
+        published_trigger_type: str | None = None,
         limit: int,
         offset: int,
     ) -> tuple[list[ChannelRecord], int]:
         with self._lock:
             rows = list(self._channels.values())
+            versions = list(self._versions.values())
         needle = (q or "").strip()
         if needle:
             folded = needle.lower()
@@ -203,6 +222,18 @@ class MemoryChannelStore:
             rows = [row for row in rows if row.active is active]
         if subject_ids is not None:
             rows = [row for row in rows if row.id in subject_ids]
+        if published_trigger_type is not None:
+            best: dict[str, ChannelVersionRecord] = {}
+            for version in versions:
+                current = best.get(version.channel_id)
+                if current is None or version.number > current.number:
+                    best[version.channel_id] = version
+            rows = [
+                row
+                for row in rows
+                if row.id in best
+                and _graph_trigger_type(best[row.id].graph) == published_trigger_type
+            ]
         rows.sort(key=lambda row: (row.created_at, row.id), reverse=True)
         total = len(rows)
         page = rows[offset : offset + limit]
@@ -297,7 +328,7 @@ class MemoryChannelStore:
 
     def latest_versions(
         self, channel_ids: list[str]
-    ) -> dict[str, tuple[int, datetime]]:
+    ) -> dict[str, tuple[int, datetime, str | None]]:
         wanted = set(channel_ids)
         best: dict[str, ChannelVersionRecord] = {}
         with self._lock:
@@ -309,7 +340,11 @@ class MemoryChannelStore:
             if current is None or version.number > current.number:
                 best[version.channel_id] = version
         return {
-            channel_id: (version.number, version.published_at)
+            channel_id: (
+                version.number,
+                version.published_at,
+                _graph_trigger_type(version.graph),
+            )
             for channel_id, version in best.items()
         }
 
@@ -396,6 +431,7 @@ class SqlChannelStore:
         q: str | None,
         active: bool | None,
         subject_ids: frozenset[str] | None = None,
+        published_trigger_type: str | None = None,
         limit: int,
         offset: int,
     ) -> tuple[list[ChannelRecord], int]:
@@ -410,6 +446,25 @@ class SqlChannelStore:
                 stmt = stmt.where(
                     false() if not subject_ids else ChannelRow.id.in_(subject_ids)
                 )
+            if published_trigger_type is not None:
+                latest_versions = (
+                    select(
+                        ChannelVersionRow.channel_id.label("channel_id"),
+                        ChannelVersionRow.graph.label("graph"),
+                    )
+                    .distinct(ChannelVersionRow.channel_id)
+                    .order_by(
+                        ChannelVersionRow.channel_id,
+                        ChannelVersionRow.number.desc(),
+                    )
+                    .subquery()
+                )
+                matching_channels = select(latest_versions.c.channel_id).where(
+                    latest_versions.c.graph["nodes"].contains(
+                        [{"type": published_trigger_type}]
+                    )
+                )
+                stmt = stmt.where(ChannelRow.id.in_(matching_channels))
             total = int(
                 session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
             )
@@ -503,7 +558,7 @@ class SqlChannelStore:
 
     def latest_versions(
         self, channel_ids: list[str]
-    ) -> dict[str, tuple[int, datetime]]:
+    ) -> dict[str, tuple[int, datetime, str | None]]:
         if not channel_ids:
             return {}
         with session_scope() as session:
@@ -512,6 +567,7 @@ class SqlChannelStore:
                     ChannelVersionRow.channel_id,
                     ChannelVersionRow.number,
                     ChannelVersionRow.published_at,
+                    ChannelVersionRow.graph,
                 )
                 .where(ChannelVersionRow.channel_id.in_(channel_ids))
                 .distinct(ChannelVersionRow.channel_id)
@@ -521,8 +577,12 @@ class SqlChannelStore:
                 )
             ).all()
         return {
-            str(channel_id): (int(number), published_at)
-            for channel_id, number, published_at in rows
+            str(channel_id): (
+                int(number),
+                published_at,
+                _graph_trigger_type(graph if isinstance(graph, dict) else None),
+            )
+            for channel_id, number, published_at, graph in rows
         }
 
     def list_versions(

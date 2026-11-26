@@ -58,7 +58,7 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
   "persistently_failing": false,
   "draft_revision": 12,
   "draft_updated_at": "2026-10-09T08:00:00Z",
-  "latest_version": { "number": 3, "published_at": "2026-10-08T09:30:00Z" },
+  "latest_version": { "number": 3, "published_at": "2026-10-08T09:30:00Z", "trigger_type": "trigger.manual" },
   "tags": [{ "id": "tag_01ABC", "name": "finance" }],
   "tag_revision": 2,
   "created_at": "2026-10-01T02:00:00Z",
@@ -70,7 +70,7 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
 - `active` is the activation switch. It starts `false` and changes only through §5.10.
 - `failure_streak` is the count of published failure episodes (§6.8 of the business rules). It starts at 0.
 - `persistently_failing` is true when `failure_streak` is at least 3.
-- `latest_version` is `null` until the first publish.
+- `latest_version` is `null` until the first publish. When present, `trigger_type` is the `type` of the single trigger node in that published graph (or `null` if a stored graph has none).
 - `tags` is `{ "id", "name" }[]`, ordered by comparison form, then id. `tag_revision` starts at 1 and increases by 1 only when the set changes. List items, detail, and the create response include both. Comparison form is not a response field. Replacing Tags does not change `draft_revision`, `draft_updated_at`, or `updated_at`.
 
 ### 3.2 Graph
@@ -388,6 +388,12 @@ Respond configuration (`action.respond`):
 
 Ports: input `main`, outputs `main` and `error`. The node may be a direct child of a container. The output is `{status, headers, body, delivered}`. `delivered` is true only when this execution produced the caller's HTTP response. It is false after the fallback, for a later execution, and in a test run. The first Respond, including one after the fallback, is the stored answer a later duplicate receives. A later Respond does not replace it. `permission` is null.
 
+Sub-channel Trigger configuration (`trigger.subchannel`): `input` is an optional array of `{name, type, required, default?, description?}`, default `[]`, at most 100 items, where `name` matches `^[A-Za-z_][A-Za-z0-9_]*$` (1 to 64 characters) and is unique in the list, `type` is `string`, `integer`, `number`, `boolean`, `object`, `array`, or `dataset`, and `default` is allowed only when `required` is `false` and `type` is not `dataset` and must match `type`. `sample_input` is an optional static JSON object, default `{}`, used by on-demand runs (`trigger_kind` `user`) and validated against `input` (`dataset` parameters may be omitted from `sample_input` at static validation). Ports: no input, output `main` (refined object schema from `input`). `permission` is `null`.
+
+Return configuration (`action.return`): `value` is a required template evaluated to any JSON value or a **Dataset Reference**. Valid only when the graph trigger is `trigger.subchannel`. Ports: input `main`, outputs `main` and `error`. Output view is `value`. May be a direct child of a container. Output on `main` is the evaluated `value` itself. `permission` is `null`.
+
+Call Channel configuration (`action.call_channel`): `channel_id` is a required Data Channel id (`x-refraq-ref: "subchannel"`) whose target must exist and whose current published trigger must be `trigger.subchannel`, with no static or runtime sub-channel cycle. `inputs` is an object mapping declared parameter names to template strings (`x-refraq-template: { "from": "subchannel_input" }`), where required parameters without defaults must be present and undeclared keys are rejected. Ports: input `main`, outputs `main` and `error`. May be a direct child of a container. Output is `{job_id, channel_id, version, outcome, result}`. `permission` is `null`.
+
 `config_schema` may carry the custom keyword `x-refraq-ref`. It is ignored by JSON Schema validation and tells the Console which control to render, and tells validation how to resolve the value:
 
 | Value | Meaning |
@@ -398,10 +404,11 @@ Ports: input `main`, outputs `main` and `error`. The node may be a direct child 
 | `json` | A JSON object. Used by the Manual trigger payload |
 | `sql_source` | The SQL node's `source` object. The Console renders one control listing the entity database and registered Sources |
 | `source` | A registered Source id. A value that does not resolve is `CHANNEL_REFERENCE_UNRESOLVED` |
+| `subchannel` | A Data Channel id whose current published trigger is `trigger.subchannel` |
 
-`x-refraq-resolve` set to `execution` on a field that also has `x-refraq-ref` keeps the Console picker and skips the publish-time existence check. The node resolves that reference when it runs. `read.changes` and `volume.changes_dataset` set it on `entity_id`. Other entity references, including Write Entity, and every Source reference, stay publish-time checks.
+`x-refraq-resolve` set to `execution` on a field that also has `x-refraq-ref` keeps the Console picker (alongside expression mode when `{{ }}` is used) and skips the publish-time existence check. The node resolves that reference when it runs. `read.changes` and `volume.changes_dataset` set it on `entity_id`. Other entity references, including Write Entity, and every Source reference, stay publish-time checks.
 
-`config_schema` may also carry `x-refraq-template`. It is ignored by JSON Schema validation. Its value is the declared value type as a JSON Schema object, or `{ "from": "entity_attribute" }` when the type is the sibling attribute's **Attribute Type**. The stored value is always the template text. A template that does not parse is `CHANNEL_EXPRESSION_INVALID`. Text with no `{{ }}` that does not match the declared type is `CHANNEL_TEMPLATE_TYPE_MISMATCH`. A `self.<ref>` or `self.nodes["<name>"]` that is missing or not upstream is `CHANNEL_TEMPLATE_REF_INVALID`. A result whose type cannot be known until run time is `CHANNEL_TEMPLATE_TYPE_UNKNOWN` with severity `warning`.
+`config_schema` may also carry `x-refraq-template`. It is ignored by JSON Schema validation. Its value is the declared value type as a JSON Schema object, `{ "from": "entity_attribute" }` when the type is the sibling attribute's **Attribute Type**, or `{ "from": "subchannel_input" }` when each key's type comes from the target sub-channel's published `trigger.subchannel` parameter declaration. The stored value is always the template text. A template that does not parse is `CHANNEL_EXPRESSION_INVALID`. Text with no `{{ }}` that does not match the declared type is `CHANNEL_TEMPLATE_TYPE_MISMATCH`. A `self.<ref>` or `self.nodes["<name>"]` that is missing or not upstream is `CHANNEL_TEMPLATE_REF_INVALID`. A result whose type cannot be known until run time is `CHANNEL_TEMPLATE_TYPE_UNKNOWN` with severity `warning`.
 
 ### 3.3 Channel Version
 
@@ -465,6 +472,10 @@ Sections are empty lists, or `false`, when there is nothing to show.
   "trigger_node_id": "nd_trigger",
   "trigger_actor_name": "Alice",
   "trigger_schedule_name": null,
+  "parent_job_id": null,
+  "root_job_id": "job_01HZX",
+  "caller": null,
+  "return_value": null,
   "ignore_checkpoints": false,
   "stop_at_node_id": null,
   "failed_node_id": null,
@@ -487,7 +498,8 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - `failed_node_id` names the node whose `on_error` `stop` failed the run, or `null`. A `continue` or `error_output` execution does not set it.
 - `stop_at_node_id` is the optional on-demand stop node, or `null` when the run executes every node reachable from the trigger.
 - `stopped_node_id` names the node that was next when a timeout or a newer version stopped the run between nodes, or the node a user cancel interrupted, or `null` when cancel killed the process before that node was recorded.
-- `trigger_kind` is `user` for an on-demand run or a rerun, `schedule` for a Scheduled node, `retry` for a Job minted by `run_retry_limit`, `error` for an error workflow, `system` for platform-event and change-arrival triggers, and `inbound` for an accepted **Inbound Trigger** call. `trigger_ref` is the acting User for `user`, the source Job id for `error`, the published path for `inbound`, and otherwise follows the Job contract. `trigger_actor_name` and `trigger_schedule_name` follow the Job contract. An inbound run's actor is the **System Identity**. The path is not looked up as a user id.
+- `trigger_kind` is `user` for an on-demand run or a rerun, `schedule` for a Scheduled node, `retry` for a Job minted by `run_retry_limit`, `error` for an error workflow, `system` for platform-event and change-arrival triggers, `inbound` for an accepted **Inbound Trigger** call, and `subchannel` for a child run invoked by **Call Channel**. `trigger_ref` is the acting User for `user`, the source Job id for `error`, the published path for `inbound`, the parent Job id for `subchannel`, and otherwise follows the Job contract. `trigger_actor_name` and `trigger_schedule_name` follow the Job contract. An inbound or subchannel run's actor is the **System Identity**.
+- `parent_job_id` is the caller Job id on a `subchannel` child run, otherwise `null`. `root_job_id` is the top-level ancestor Job id (`job_id` on a root run). `caller` is `{ "job_id", "channel_id", "channel_name", "node_id" }` when `parent_job_id` resolves to a caller run, otherwise `null`. `return_value` is the JSON value set by `action.return`, or `null`.
 - `is_delayed_recovery` is a required Boolean and `scheduled_for` a required nullable Instant in Run list/detail projections. Both come from the associated Job; they are not duplicated on the Channel Run record. The planned time preserves the original consumed due identity; manual runs have null. Recovery is classified only at a new enabled-cron mint at least 60 seconds after due, using the Clock sampled after the schedule row lock. Interval, manual runs, retries, and paused/deleted cancelled mints are not classified by this mechanism. Later failure/cancellation preserves true; historical false does not prove no delay. Full rules: `docs/api-contracts-jobs.md`.
 - `created_at` is actual creation; `started_at` is the actual successful Job execution claim, not scheduled time or a creation-time fallback. Queued and cancelled-before-claim runs have null start; failure/cancellation after claim retains start. Duration is derived from `started_at` and `finished_at` (or now while running), excludes scheduling delay and queue wait, and is absent before start.
 - Console Run lists show the same visible Delayed recovery badge as Job lists only for true, independent of status. One Time column contains labeled Created and Started lines, with "Not started" for null start; no separate planned-time column. Run detail shows original Scheduled, Created, Started, and Finished times separately, with a placeholder for null scheduled time. Use Display Timezone, shared `jobs.*` copy, and keyboard/hover badge explanation (`docs/business-jobs.md` §3). Preserve existing list ordering and filters.
@@ -633,7 +645,7 @@ An omitted `tags`, or both arrays empty, leaves the new channel with no Tags and
 
 ### 5.3 `GET /channels`
 
-Query: `q` (optional case-insensitive substring of `name`; a blank or whitespace-only value is the same as omitting it; `%` and `_` match themselves), `active` (`true` | `false` | omitted), `tag_id` (repeatable), `limit` (default 50, max 200), `offset` (default 0). Ordered by `created_at DESC`, `id DESC`. `total` counts the filtered set.
+Query: `q` (optional case-insensitive substring of `name`; a blank or whitespace-only value is the same as omitting it; `%` and `_` match themselves), `active` (`true` | `false` | omitted), `published_trigger_type` (optional node type string matching the trigger of each channel's latest published version, such as `trigger.subchannel`), `tag_id` (repeatable), `limit` (default 50, max 200), `offset` (default 0). Ordered by `created_at DESC`, `id DESC`. `total` counts the filtered set.
 
 Repeat `tag_id` to keep channels that carry any listed Tag. The condition combines with `q` and `active`: a channel must match every condition that is present. Omit `tag_id` to apply no Tag predicate. An id that is not a live Tag matches no channel and does not fail the list; other ids in the same query still match. The predicate is applied with `q` and `active` before paging. `total` counts that filtered set. Omitted `active` does not hide inactive channels.
 
@@ -695,7 +707,7 @@ The call is allowed while a draft run is queued or running, and while the channe
 
 ### 5.5 `DELETE /channels/{id}`
 
-`204`. Withdraws schedule rows whose `owner_ref` is `channel:{id}`, withdraws the published inbound path, requests cancel of the channel's other unfinished runs, and removes the channel, its draft, its versions, its checkpoints, its run records, its **Channel Variable**s, and its Tag assignments. A refused delete leaves the assignments. Historical Jobs remain. Rows already written to Entity Tables stay. **Global Variable**s stay.
+`204`. Refused with `409 CHANNEL_IN_USE` when another Data Channel's draft or any published version references `{id}` via `action.call_channel` or `error_channel_id`. Otherwise withdraws schedule rows whose `owner_ref` is `channel:{id}`, withdraws the published inbound path, requests cancel of the channel's other unfinished runs, and removes the channel, its draft, its versions, its checkpoints, its run records, its **Channel Variable**s, and its Tag assignments. A refused delete leaves the assignments. Historical Jobs remain. Rows already written to Entity Tables stay. **Global Variable**s stay.
 
 ### 5.6 `GET` and `PUT /channels/{id}/draft`
 
@@ -755,7 +767,7 @@ Publish body:
 - An invalid draft is refused with `422 CHANNEL_GRAPH_INVALID`; `detail` names the first error. The body carries `problems`, the errors that blocked the request, each shaped as in §5.7. The full list, including warnings, comes from validate.
 - The caller must hold every Permission declared by node types present in the draft, including nodes that did not change. Missing one is `403 AUTH_FORBIDDEN`; `detail` names the node.
 - `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` lists the running published runs the new version will stop between nodes. Publish stores the version, reconciles the schedule row, and reconciles the inbound path. It does not change `active` and it does not cancel Jobs itself.
-- A published **Inbound Trigger** whose path another channel holds is `409` `CHANNEL_INBOUND_PATH_TAKEN`. One whose **Inbound Credential** does not exist is `422` `CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND`. Both are refused before the version is stored. Saving the draft does not change the path row. A later publish whose trigger is not inbound withdraws the row. Deactivation does not.
+- A published **Inbound Trigger** whose path another channel holds is `409` `CHANNEL_INBOUND_PATH_TAKEN`. One whose **Inbound Credential** does not exist is `422` `CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND`. Replacing a published `trigger.subchannel` while another channel's latest published version calls this channel via `action.call_channel`, or replacing a published `trigger.error` while another channel's latest published settings name this channel in `error_channel_id`, is `409` `CHANNEL_IN_USE`. All are refused before the version is stored. Saving the draft does not change the path row. A later publish whose trigger is not inbound withdraws the row. Deactivation does not.
 
 ### 5.9 `GET /channels/{id}/versions` and `GET /channels/{id}/versions/{number}`
 
@@ -875,7 +887,7 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 
 ### 5.16 `POST /channels/{id}/runs/{job_id}/rerun`
 
-Empty body. Requires `channel:write`. The source run must be `failed` and `target` `published`, and it must have a version number. `202` `{ "run": { … } }` for a new Job pinned to that version (`pin_version` true, `trigger_kind` `user`). The new run does not set `retry_of_job_id`. `422` `CHANNEL_RUN_NOT_RERUNNABLE` otherwise. `404` `CHANNEL_RUN_NOT_FOUND` when the Job is not a run of this channel.
+Empty body. Requires `channel:write`. The source run must be `failed` and `target` `published`, and it must have a version number. `202` `{ "run": { … } }` for a new Job pinned to that version (`pin_version` true, `trigger_kind` `user`). When the source run had `subchannel_input`, the new Job replays that stored `subchannel_input` (failing with `CHANNEL_DATASET_UNAVAILABLE` if a referenced dataset is missing or expired). The new run does not set `retry_of_job_id`. `422` `CHANNEL_RUN_NOT_RERUNNABLE` otherwise. `404` `CHANNEL_RUN_NOT_FOUND` when the Job is not a run of this channel.
 
 ### 5.17 `GET /channels/{id}/runs/{job_id}/executions`
 
@@ -1144,6 +1156,7 @@ The read does not create, drop, or change a dataset, and it does not raise `CHAN
 | `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, a Template Preview `node_id` and `path` that name no template field, a Node Sample `node_id` that is not in `graph`, a Node Sample or Template Preview `scope` that is not that node's outer-to-inner container chain, a rounds `seq` that is not a container execution, or a body that contains `pinned` |
 | `CHANNEL_RUN_NOT_RERUNNABLE` | 422 | Rerun of a run that is not `failed` or whose `target` is not `published` |
 | `CHANNEL_INBOUND_PATH_TAKEN` | 409 | Publish of an **Inbound Trigger** whose path another channel holds. Refused before the version is stored |
+| `CHANNEL_IN_USE` | 409 | Delete of a channel referenced by another channel's draft or any published version (`action.call_channel` or `error_channel_id`), or publish that replaces `trigger.subchannel` or `trigger.error` while another published channel still depends on that trigger |
 | `CHANNEL_INBOUND_CREDENTIAL_NOT_FOUND` | 422 | Publish of an Inbound Trigger whose **Inbound Credential** does not exist. Distinct from a catalog `404`. Refused before the version is stored |
 | `CHANNEL_INBOUND_INACTIVE` | 503 | The public hook's channel is inactive |
 | `CHANNEL_INBOUND_BUSY` | 503 | The public hook is at `max_in_flight`. The response carries `Retry-After: 5` |
@@ -1181,6 +1194,8 @@ The read does not create, drop, or change a dataset, and it does not raise `CHAN
 | `CHANNEL_NODE_TYPE_VERSION` | A node's `type_version` is not the node type's current version |
 | `CHANNEL_NODE_POLICY_UNSUPPORTED` | `on_error` is `error_output` and the node type does not declare an `error` output |
 | `CHANNEL_ERROR_TRIGGER_REQUIRED` | `error_channel_id` names a channel whose current published version does not use `trigger.error` as its only trigger |
+| `CHANNEL_SUBCHANNEL_TRIGGER_REQUIRED` | `action.call_channel` names a channel with no published version or whose current published version does not use `trigger.subchannel` as its only trigger |
+| `CHANNEL_SUBCHANNEL_CYCLE` | `action.call_channel` forms a direct or transitive sub-channel call cycle |
 
 ### 6.3 Job Error Codes
 
@@ -1202,6 +1217,11 @@ The read does not create, drop, or change a dataset, and it does not raise `CHAN
 | `CHANNEL_VALUE_TYPE_MISMATCH` | A template result does not match its declared value type |
 | `CHANNEL_OUTPUT_SCHEMA_MISMATCH` | A successful node output does not match its refined schema |
 | `CHANNEL_SANDBOX_FAILED` | The expression sandbox crashed or could not be restarted |
+| `CHANNEL_SUBCHANNEL_INACTIVE` | `action.call_channel` targeted an inactive **Sub Data Channel** |
+| `CHANNEL_SUBCHANNEL_UNAVAILABLE` | `action.call_channel` targeted a channel that is missing, unpublished, or no longer uses `trigger.subchannel` |
+| `CHANNEL_SUBCHANNEL_INPUT_INVALID` | Inputs passed to `trigger.subchannel` failed contract or live-dataset validation |
+| `CHANNEL_SUBCHANNEL_DEPTH_EXCEEDED` | Nested `action.call_channel` depth exceeded 8 |
+| `CHANNEL_SUBCHANNEL_FAILED` | The child **Sub Data Channel** run ended `failed` or was cancelled directly while the parent run was not cancelled (`reason: "cancelled"`). `error_detail` carries `{job_id, channel_id, version, error_code, error_message, failed_node_id}` |
 
 `JOB_WORKER_LOST` applies as for every Job. `JOB_RUNNING_TIMEOUT` does not occur, because channel schedule rows carry no **Running Time Limit**.
 

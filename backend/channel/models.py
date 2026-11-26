@@ -64,6 +64,16 @@ class ChannelRunRow(Base):
     checkpoint_proposals: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
     )
+    parent_job_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    root_job_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+        default=lambda ctx: ctx.get_current_parameters()["job_id"],
+    )
+    return_value: Mapped[Any] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
@@ -293,6 +303,12 @@ class ChannelDatasetRow(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    root_job_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+        default=lambda ctx: ctx.get_current_parameters()["job_id"],
+    )
     node_id: Mapped[str] = mapped_column(String(64), nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     relation: Mapped[str] = mapped_column(Text, nullable=False)

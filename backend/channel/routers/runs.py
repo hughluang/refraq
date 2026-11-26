@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.errors import AuthForbidden
 from backend.admin.user_store import UserRecord, get_user_store
-from backend.channel.dataset_registry import get_dataset_store
+from backend.channel.dataset_registry import dataset_belongs_to_run, get_dataset_store
 from backend.channel.errors import (
     ChannelDatasetUnavailable,
     ChannelRequestInvalid,
@@ -29,6 +29,7 @@ from backend.channel.run_store import (
 )
 from backend.channel.runs import rerun_failed, start_run
 from backend.channel.sql_read import jsonable_cell
+from backend.channel.store import get_channel_store
 from backend.channel.values import temporal_kinds_by_name
 from backend.channel.schemas.channels import GraphIn
 from backend.channel.template_preview import node_sample, preview_template
@@ -253,7 +254,7 @@ def http_get_run(
         for item in get_run_store().execution_summaries(job_id)
     ]
     return {
-        "run": _present(job, record, _trigger_names([job])),
+        "run": _present(job, record, _trigger_names([job]), include_detail=True),
         "graph": record.graph,
         "node_summaries": summaries,
     }
@@ -351,7 +352,7 @@ def http_dataset_rows(
     record = get_dataset_store().get(dataset_id)
     if record is None:
         raise ChannelDatasetUnavailable("not_found")
-    if record.job_id != job_id:
+    if not dataset_belongs_to_run(record, job_id):
         raise ChannelDatasetUnavailable("foreign_run")
     if record.expires_at is not None and record.expires_at <= utc_now():
         raise ChannelDatasetUnavailable("expired")
@@ -533,12 +534,47 @@ def _trigger_names(
     }
 
 
+def _caller_info(job: JobRecord, record: Any) -> dict[str, Any] | None:
+    parent_job_id = record.parent_job_id
+    if not isinstance(parent_job_id, str) or not parent_job_id:
+        return None
+    job_input = job.input if isinstance(job.input, Mapping) else {}
+    parent_run = get_run_store().get_run(parent_job_id)
+    caller_channel_id = (
+        parent_run.channel_id
+        if parent_run is not None
+        else job_input.get("caller_channel_id")
+    )
+    if not isinstance(caller_channel_id, str) or not caller_channel_id:
+        return None
+    caller_channel = get_channel_store().get(caller_channel_id)
+    caller_name = (
+        caller_channel.name if caller_channel is not None else caller_channel_id
+    )
+    caller_node_id = job_input.get("caller_node_id")
+    return {
+        "channel_id": caller_channel_id,
+        "channel_name": caller_name,
+        "job_id": parent_job_id,
+        "node_id": caller_node_id if isinstance(caller_node_id, str) else None,
+    }
+
+
 def _present(
     job: JobRecord,
     record: Any,
     names: Mapping[str, tuple[str | None, str | None]],
+    *,
+    include_detail: bool = False,
 ) -> dict[str, Any]:
     actor_name, schedule_name = names[job.id]
+    return_preview: Any = None
+    caller_info: dict[str, Any] | None = None
+    if include_detail:
+        raw_return = record.return_value
+        if raw_return is not None:
+            return_preview = output_preview_with_truncated(raw_return)[0]
+        caller_info = _caller_info(job, record)
     return {
         "job_id": job.id,
         "status": job.status,
@@ -551,6 +587,10 @@ def _present(
         "trigger_node_id": record.trigger_node_id,
         "trigger_actor_name": actor_name,
         "trigger_schedule_name": schedule_name,
+        "parent_job_id": record.parent_job_id,
+        "root_job_id": record.root_job_id,
+        "caller": caller_info,
+        "return_value": return_preview,
         "ignore_checkpoints": record.ignore_checkpoints,
         "stop_at_node_id": record.stop_at_node_id,
         "failed_node_id": record.failed_node_id,

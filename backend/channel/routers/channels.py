@@ -91,13 +91,17 @@ CHANNEL_PAGE = PageBounds(default_limit=50, max_limit=200)
 
 def _channel_out(
     record: ChannelRecord,
-    latest: tuple[int, datetime] | None,
+    latest: tuple[int, datetime, str | None] | None,
 ) -> ChannelOut:
     assignment = read_assignment(KIND_CHANNEL, record.id)
     latest_out = None
     if latest is not None:
-        number, published_at = latest
-        latest_out = LatestVersionOut(number=number, published_at=published_at)
+        number, published_at, trigger_type = latest
+        latest_out = LatestVersionOut(
+            number=number,
+            published_at=published_at,
+            trigger_type=trigger_type,
+        )
     return ChannelOut(
         id=record.id,
         name=record.name,
@@ -308,6 +312,7 @@ def http_list_channels(
     q: str | None = Query(default=None),
     active: bool | None = Query(default=None),
     tag_id: list[str] | None = Query(default=None),
+    published_trigger_type: str | None = Query(default=None),
     page: PageParams = Depends(page_params(CHANNEL_PAGE)),
     user: UserRecord = Depends(require_permission("channel:read")),
 ) -> ChannelListResponse:
@@ -316,6 +321,7 @@ def http_list_channels(
         q=q,
         active=active,
         tag_ids=tag_id,
+        published_trigger_type=published_trigger_type,
         limit=page.limit,
         offset=page.offset,
     )

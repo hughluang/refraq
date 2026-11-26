@@ -534,6 +534,12 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
             )
         ),
     )
+    monkeypatch.setattr(
+        "backend.channel.nodes.trigger.subchannel.get_job_store",
+        lambda: SimpleNamespace(
+            get=lambda job_id: SimpleNamespace(input={}, trigger_kind="manual")
+        ),
+    )
     rows = "{{ rows }}"
     same = "{{ n }}"
     samples = {
@@ -551,8 +557,17 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         },
         "trigger.manual": {},
         "trigger.scheduled": {},
+        "trigger.subchannel": {
+            "input": [{"name": "text", "type": "string", "required": True}],
+            "sample_input": {"text": "hello"},
+        },
         "read.changes": {"entity_id": "ent_1"},
         "volume.changes_dataset": {"entity_id": "ent_1"},
+        "volume.dataset_buffer": {
+            "mode": "create",
+            "items": "{{ empty }}",
+            "columns": [{"name": "n", "type": "integer"}],
+        },
         "read.sql": {"source": {"kind": "entity"}, "sql": "{{ sql }}"},
         "read.source_query": {"source_id": "src_1", "sql": "{{ sql }}"},
         "transform.set_fields": {
@@ -609,6 +624,11 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
             "headers": {"X-Test": "{{ text }}"},
             "body": "{{ body }}",
         },
+        "action.return": {"value": "{{ value }}"},
+        "action.call_channel": {
+            "channel_id": "chn_sub",
+            "inputs": {"text": "{{ text }}"},
+        },
         "action.webhook": {"webhook_id": "hook", "body": "{{ body }}"},
     }
     expected = {
@@ -616,8 +636,10 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "trigger.inbound": set(),
         "trigger.manual": set(),
         "trigger.scheduled": set(),
+        "trigger.subchannel": set(),
         "read.changes": set(),
         "volume.changes_dataset": set(),
+        "volume.dataset_buffer": set(),
         "read.sql": {"sql"},
         "read.source_query": {"sql"},
         "transform.set_fields": {"fields.0.value", "fields.1.value"},
@@ -644,6 +666,8 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
             "content_type",
         },
         "action.respond": {"status", "content_type", "headers.X-Test", "body"},
+        "action.return": {"value"},
+        "action.call_channel": {"inputs.text"},
         "action.webhook": {"body"},
     }
     values = {

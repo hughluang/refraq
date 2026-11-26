@@ -23,6 +23,7 @@ from backend.channel.dataset_registry import (
     DatasetRegistry,
     get_dataset_store,
 )
+from backend.channel.node_support import resolve_execution_entity_id
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
     MAIN_INPUT,
@@ -95,7 +96,12 @@ def _refine(
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    entity_id = str(config["entity_id"])
+    entity_id, entity_failure = resolve_execution_entity_id(
+        str(config["entity_id"]), hooks
+    )
+    if entity_failure is not None:
+        return entity_failure
+    assert entity_id is not None
     node_id = str(node["id"])
     limit = int(config.get("limit", _DEFAULT_LIMIT))
     timeout_sec = int(config.get("statement_timeout_sec", _DEFAULT_TIMEOUT_SEC))

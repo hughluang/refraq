@@ -10,6 +10,7 @@ __all__ = [
     "ChannelDatasetUnavailable",
     "ChannelDraftConflict",
     "ChannelGraphInvalid",
+    "ChannelInUse",
     "ChannelInboundBusy",
     "ChannelInboundCredentialNotFound",
     "ChannelInboundInactive",
@@ -89,6 +90,14 @@ class ChannelDraftConflict(AppError):
 
     def _default_message(self) -> str:
         return "Draft revision does not match the stored draft"
+
+
+class ChannelInUse(AppError):
+    code = "CHANNEL_IN_USE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Data Channel is still referenced by another Data Channel"
 
 
 class ChannelGraphInvalid(AppError):

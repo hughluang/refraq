@@ -26,9 +26,9 @@ from backend.channel.parameters import (
     channel_run_record_retention_days,
     inbound_rejection_retention_days,
 )
-from backend.channel.run_store import get_run_store, note_killed_run
+from backend.channel.run_store import get_run_store, note_killed_run as _store_note_killed_run
 from backend.core.time import utc_now
-from backend.jobs.store import TERMINAL, get_job_store, mark_failed
+from backend.jobs.store import TERMINAL, get_job_store, mark_cancelled, mark_failed
 from backend.jobs.supervise import supervise
 from backend.worker.due import consume_due_tick
 from backend.worker.schedules import get_schedule_store
@@ -40,9 +40,9 @@ logger = logging.getLogger(__name__)
 def run_job(job_id: str) -> dict[str, str]:
     try:
         result = supervise(job_id, "backend.channel.runner:run_channel_job")
+        if result.get("status") in {"cancelled", "failed"}:
+            settle_orphaned_subchannel_runs(job_id)
         seal_dataset_expiry(job_id)
-        if result.get("status") == "cancelled":
-            note_killed_run(job_id)
         _release_settled_inbound_dedup(job_id, result.get("status"))
         return result
     except Exception as exc:  # noqa: BLE001
@@ -51,13 +51,44 @@ def run_job(job_id: str) -> dict[str, str]:
         if current is not None and current.status not in TERMINAL:
             summary = str(exc)[:400]
             mark_failed(job_id, error_code="JOB_EXECUTION_FAILED", error_summary=summary)
+            settle_orphaned_subchannel_runs(job_id)
             seal_dataset_expiry(job_id)
             _release_settled_inbound_dedup(job_id, "failed")
             return {"status": "failed"}
         if current is not None and current.status in TERMINAL:
+            settle_orphaned_subchannel_runs(job_id)
             seal_dataset_expiry(job_id)
             _release_settled_inbound_dedup(job_id, current.status)
         raise
+
+
+def settle_orphaned_subchannel_runs(root_job_id: str) -> None:
+    """Settle non-terminal child channel_run Jobs when their root Job is terminal."""
+    jobs = get_job_store()
+    root_job = jobs.get(root_job_id)
+    if root_job is None or root_job.status not in TERMINAL:
+        return
+    if root_job.status == "cancelled" or root_job.error_code == "JOB_WORKER_LOST":
+        _store_note_killed_run(root_job_id)
+    error_code = root_job.error_code or "JOB_WORKER_LOST"
+    error_summary = (
+        root_job.error_summary or "Worker lost before sub-channel run finished"
+    )
+    for child in get_run_store().list_runs_for_root(root_job_id):
+        if child.job_id == root_job_id:
+            continue
+        record = jobs.get(child.job_id)
+        if record is None or record.status in TERMINAL:
+            continue
+        _store_note_killed_run(child.job_id)
+        if root_job.status == "cancelled":
+            mark_cancelled(child.job_id)
+        else:
+            mark_failed(
+                child.job_id,
+                error_code=error_code,
+                error_summary=error_summary,
+            )
 
 
 def _release_settled_inbound_dedup(job_id: str, status: object) -> None:

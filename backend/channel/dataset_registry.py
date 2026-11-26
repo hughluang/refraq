@@ -57,6 +57,7 @@ __all__ = [
     "DatasetRegistry",
     "MemoryDatasetStore",
     "SqlDatasetStore",
+    "dataset_belongs_to_run",
     "get_dataset_store",
     "reset_dataset_store",
     "seal_dataset_expiry",
@@ -82,6 +83,11 @@ class DatasetRecord:
     status: str
     created_at: datetime
     expires_at: datetime | None = None
+    root_job_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.root_job_id is None:
+            self.root_job_id = self.job_id
 
 
 @dataclass(frozen=True)
@@ -128,16 +134,20 @@ class MemoryDatasetStore:
                 row.size_bytes for row in self._rows.values() if row.status in _CAPACITY_STATUSES
             )
 
-    def seal_null_expiry(self, job_id: str, expires_at: datetime) -> None:
+    def seal_null_expiry(self, root_job_id: str, expires_at: datetime) -> None:
         with self._lock:
             for record in self._rows.values():
-                if record.job_id == job_id and record.expires_at is None:
+                if record.root_job_id == root_job_id and record.expires_at is None:
                     record.expires_at = expires_at
 
     def unsealed_job_ids(self) -> list[str]:
         with self._lock:
             return list(
-                {record.job_id for record in self._rows.values() if record.expires_at is None}
+                {
+                    record.root_job_id
+                    for record in self._rows.values()
+                    if record.expires_at is None
+                }
             )
 
     def list_for_jobs(self, job_ids: Sequence[str]) -> list[DatasetRecord]:
@@ -148,7 +158,7 @@ class MemoryDatasetStore:
             return [
                 copy.deepcopy(record)
                 for record in self._rows.values()
-                if record.job_id in wanted
+                if record.job_id in wanted or record.root_job_id in wanted
             ]
 
     def page_active(self, *, limit: int, offset: int) -> tuple[list[DatasetRecord], int]:
@@ -209,12 +219,12 @@ class SqlDatasetStore:
             )
             return int(value)
 
-    def seal_null_expiry(self, job_id: str, expires_at: datetime) -> None:
+    def seal_null_expiry(self, root_job_id: str, expires_at: datetime) -> None:
         with session_scope() as session:
             session.execute(
                 update(ChannelDatasetRow)
                 .where(
-                    ChannelDatasetRow.job_id == job_id,
+                    ChannelDatasetRow.root_job_id == root_job_id,
                     ChannelDatasetRow.expires_at.is_(None),
                 )
                 .values(expires_at=expires_at)
@@ -223,7 +233,7 @@ class SqlDatasetStore:
     def unsealed_job_ids(self) -> list[str]:
         with session_scope() as session:
             rows = session.scalars(
-                select(ChannelDatasetRow.job_id)
+                select(ChannelDatasetRow.root_job_id)
                 .where(ChannelDatasetRow.expires_at.is_(None))
                 .distinct()
             ).all()
@@ -232,9 +242,13 @@ class SqlDatasetStore:
     def list_for_jobs(self, job_ids: Sequence[str]) -> list[DatasetRecord]:
         if not job_ids:
             return []
+        wanted = tuple(job_ids)
         with session_scope() as session:
             rows = session.scalars(
-                select(ChannelDatasetRow).where(ChannelDatasetRow.job_id.in_(tuple(job_ids)))
+                select(ChannelDatasetRow).where(
+                    ChannelDatasetRow.job_id.in_(wanted)
+                    | ChannelDatasetRow.root_job_id.in_(wanted)
+                )
             ).all()
             return [_from_row(row) for row in rows]
 
@@ -283,6 +297,7 @@ def _to_row(record: DatasetRecord) -> ChannelDatasetRow:
     return ChannelDatasetRow(
         id=record.id,
         job_id=record.job_id,
+        root_job_id=record.root_job_id,
         node_id=record.node_id,
         seq=record.seq,
         relation=record.relation,
@@ -297,6 +312,7 @@ def _to_row(record: DatasetRecord) -> ChannelDatasetRow:
 
 def _apply(row: ChannelDatasetRow, record: DatasetRecord) -> None:
     row.job_id = record.job_id
+    row.root_job_id = record.root_job_id
     row.node_id = record.node_id
     row.seq = record.seq
     row.relation = record.relation
@@ -312,6 +328,7 @@ def _from_row(row: ChannelDatasetRow) -> DatasetRecord:
     return DatasetRecord(
         id=row.id,
         job_id=row.job_id,
+        root_job_id=row.root_job_id,
         node_id=row.node_id,
         seq=row.seq,
         relation=row.relation,
@@ -500,9 +517,12 @@ class DatasetRegistry:
     def _begin(self, *, job_id: str, node_id: str, seq: int) -> DatasetRecord:
         self._ensure_capacity()
         dataset_id = "d" + uuid.uuid4().hex
+        run = get_run_store().get_run(job_id)
+        root_job_id = run.root_job_id if run is not None else job_id
         record = DatasetRecord(
             id=dataset_id,
             job_id=job_id,
+            root_job_id=root_job_id,
             node_id=node_id,
             seq=seq,
             relation=physical_relation(dataset_id),
@@ -607,18 +627,30 @@ def _pg_column(column: DatasetColumnSpec) -> tuple[str, str]:
     )
 
 
+def dataset_belongs_to_run(record: DatasetRecord, run_id: str) -> bool:
+    """True when ``record`` belongs to ``run_id`` or shares its call-tree root."""
+    if record.job_id == run_id:
+        return True
+    run = get_run_store().get_run(run_id)
+    if run is None:
+        return False
+    return record.root_job_id == run.root_job_id
+
+
 def seal_dataset_expiry(job_id: str) -> None:
-    """Write ``expires_at`` once, anchored on the job's ``finished_at``.
+    """Write ``expires_at`` once, anchored on the root job's ``finished_at``.
 
     A succeeded run whose target is not ``draft`` uses success retention hours.
     Zero hours is due at ``finished_at``. Every other terminal run, including
     every draft, uses retention days. An existing timestamp is left alone.
-    A non-terminal job is left null.
+    A non-terminal job, or a child sub-run whose root is separate, is left null.
     """
+    run = get_run_store().get_run(job_id)
+    if run is not None and run.root_job_id != job_id:
+        return
     job = get_job_store().get(job_id)
     if job is None or job.status not in TERMINAL or job.finished_at is None:
         return
-    run = get_run_store().get_run(job_id)
     target = run.target if run is not None else None
     if job.status == "succeeded" and target != "draft":
         expires_at = job.finished_at + timedelta(
@@ -663,19 +695,38 @@ def drop_orphan_dataset_tables() -> None:
 
 def drop_datasets_for_due_runs(cutoff: datetime) -> None:
     """Drop physical tables for runs the retention purge is about to delete."""
-    _drop_registered(get_run_store().job_ids_due(cutoff))
-
-
-def drop_datasets_for_jobs(job_ids: Sequence[str]) -> None:
-    """Drop physical tables for runs the keeper is about to delete."""
-    _drop_registered(job_ids)
-
-
-def _drop_registered(job_ids: Sequence[str]) -> None:
-    for record in get_dataset_store().list_for_jobs(job_ids):
+    due = set(get_run_store().job_ids_due(cutoff))
+    if not due:
+        return
+    for record in get_dataset_store().list_for_jobs(tuple(due)):
         if record.status not in _CAPACITY_STATUSES:
             continue
         _drop_and_mark(record)
+
+
+def drop_datasets_for_jobs(job_ids: Sequence[str]) -> None:
+    """Drop physical tables for runs the keeper is about to delete.
+
+    A child sub-run does not drop datasets while its root run still owns the
+    call tree. When a root run is discarded, datasets of already-deleted child
+    runs under that root go with it, while datasets of kept child runs remain
+    to be sealed at root completion.
+    """
+    runs = get_run_store()
+    roots: list[str] = []
+    for job_id in job_ids:
+        run = runs.get_run(job_id)
+        if run is not None and run.root_job_id != job_id:
+            continue
+        roots.append(job_id)
+    if not roots:
+        return
+    root_set = set(roots)
+    for record in get_dataset_store().list_for_jobs(roots):
+        if record.status not in _CAPACITY_STATUSES:
+            continue
+        if record.job_id in root_set or runs.get_run(record.job_id) is None:
+            _drop_and_mark(record)
 
 
 def _drop_and_mark(record: DatasetRecord) -> None:

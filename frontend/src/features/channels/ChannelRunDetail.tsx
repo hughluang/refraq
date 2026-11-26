@@ -251,10 +251,13 @@ export function ChannelRunDetail({
   }
   const subject = formatRunSubject(detail.run, t);
   const inbound = inboundRunLabel(detail.run, t);
+  const caller = detail.run.caller ?? null;
   const triggerLabel =
     detail.run.trigger_kind === "retry" || detail.run.trigger_kind === "error"
       ? t(`channels.runs.trigger.${detail.run.trigger_kind}`)
-      : inbound ?? formatJobTrigger(detail.run, t);
+      : detail.run.trigger_kind === "subchannel"
+        ? t("channels.runs.trigger.subchannel")
+        : inbound ?? formatJobTrigger(detail.run, t);
   const copyLabel = t("channels.runs.copyId", { id: detail.run.job_id });
   const runError = formatRunError(t, detail.run.error_code, detail.run.error_message);
   const explanation =
@@ -314,6 +317,18 @@ export function ChannelRunDetail({
         <JobTimes job={detail.run} detail />
         <Text size="xs" c="dimmed">{t("jobs.fields.duration")}: {formatJobDuration(detail.run)}</Text>
         <Text size="xs" c="dimmed">{triggerLabel}</Text>
+        {caller ? (
+          <ConsoleLink
+            href={`/console/channels/${encodeURIComponent(caller.channel_id)}/runs/${encodeURIComponent(caller.job_id)}`}
+          >
+            <Text size="xs" span>
+              {t("channels.runDetail.calledBy", {
+                channel: caller.channel_name,
+                job: caller.job_id,
+              })}
+            </Text>
+          </ConsoleLink>
+        ) : null}
         {detail.run.target === "draft" && detail.run.draft_revision != null ? (
           <Text size="xs" c="dimmed">{t("channels.runs.revision", { number: detail.run.draft_revision })}</Text>
         ) : null}

@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy.exc import DBAPIError
 
 from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA
-from backend.channel.dataset_registry import get_dataset_store
+from backend.channel.dataset_registry import dataset_belongs_to_run, get_dataset_store
 from backend.channel.item_limit import ITEM_LIMIT
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
@@ -142,7 +142,7 @@ def _load_dataset(
     record = get_dataset_store().get(dataset_id)
     if record is None:
         return None, _unavailable("not_found")
-    if record.job_id != run_id:
+    if not dataset_belongs_to_run(record, run_id):
         return None, _unavailable("foreign_run")
     if record.status == "dropped" or (
         record.expires_at is not None and record.expires_at <= utc_now()

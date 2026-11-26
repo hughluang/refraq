@@ -6,7 +6,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
-import { getExecutionOutput, listRounds } from "@/features/channels/api";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { getExecutionOutput, getRun, listRounds } from "@/features/channels/api";
 import { BatchRoundRows } from "@/features/channels/BatchRoundRows";
 import { DatasetCard, DatasetRowTable } from "@/features/channels/DatasetRows";
 import {
@@ -85,6 +86,7 @@ export function RunExecutionOutput({
   channelId,
   jobId,
   item,
+  nodeType = null,
   value,
   view = null,
   error,
@@ -111,6 +113,7 @@ export function RunExecutionOutput({
   jobId: string;
   /** Execution-browser row. The panel passes `value` instead. */
   item?: NodeExecution;
+  nodeType?: string | null;
   value?: unknown;
   view?: OutputView | null;
   error?: ShownError;
@@ -151,9 +154,11 @@ export function RunExecutionOutput({
     <OutputBody
       channelId={channelId}
       jobId={jobId}
+      nodeType={nodeType}
       value={shownValue}
       view={view}
       error={shownError}
+      errorDetail={item?.error_detail ?? null}
       truncated={shownTruncated}
       totals={shownTotals}
       previewOnly={shownPreview}
@@ -184,9 +189,11 @@ function errorOf(item: NodeExecution | undefined): ShownError {
 type BodyProps = {
   channelId: string;
   jobId: string;
+  nodeType: string | null;
   value: unknown;
   view: OutputView | null;
   error: ShownError;
+  errorDetail?: Record<string, unknown> | null;
   truncated: boolean;
   totals: Record<string, number>;
   previewOnly: boolean;
@@ -207,9 +214,65 @@ type BodyProps = {
   recordedKey?: string;
 };
 
+function childRunLink(
+  nodeType: string | null,
+  value: unknown,
+): { channelId: string; jobId: string } | null {
+  if (nodeType !== "action.call_channel" || !isRecord(value)) return null;
+  if (
+    typeof value.channel_id === "string" &&
+    value.channel_id !== "" &&
+    typeof value.job_id === "string" &&
+    value.job_id !== ""
+  ) {
+    return { channelId: value.channel_id, jobId: value.job_id };
+  }
+  return null;
+}
+
+function SubchannelRunLink({ channelId, jobId }: { channelId: string; jobId: string }) {
+  const t = useTranslate();
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    void getRun(channelId, jobId, { signal: controller.signal })
+      .then(() => {
+        if (active) setStatus("ready");
+      })
+      .catch(() => {
+        if (active) setStatus("error");
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [channelId, jobId]);
+
+  if (status === "loading") return null;
+  if (status === "error") {
+    return (
+      <Text size="xs" c="dimmed" span>
+        {jobId}
+      </Text>
+    );
+  }
+  return (
+    <ConsoleLink
+      href={`/console/channels/${encodeURIComponent(channelId)}/runs/${encodeURIComponent(jobId)}`}
+    >
+      <Text size="xs" span>
+        {t("channels.runDetail.openSubchannelRun", { job: jobId })}
+      </Text>
+    </ConsoleLink>
+  );
+}
+
 function OutputBody(props: BodyProps) {
   const t = useTranslate();
-  const { error, previewOnly, totals } = props;
+  const { error, errorDetail, nodeType, previewOnly, totals, value } = props;
+  const subRun = childRunLink(nodeType, value) ?? childRunLink(nodeType, errorDetail);
   return (
     <Stack gap={4}>
       {previewOnly ? (
@@ -224,6 +287,9 @@ function OutputBody(props: BodyProps) {
       ) : null}
       {error && (error.code || error.message) ? (
         <RunErrorText code={error.code} message={error.message} />
+      ) : null}
+      {subRun ? (
+        <SubchannelRunLink channelId={subRun.channelId} jobId={subRun.jobId} />
       ) : null}
       <ViewSwitch {...props} />
     </Stack>
@@ -949,6 +1015,7 @@ function BatchExpansion({
     <RowsTable
       channelId={channelId}
       jobId={jobId}
+      nodeType={null}
       value={round.step_preview}
       view={null}
       error={null}

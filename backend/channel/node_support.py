@@ -14,8 +14,10 @@ __all__ = [
     "bind_execution_input",
     "canonical_json",
     "output_schema",
+    "record_execution_input_error",
     "render_field",
     "reset_execution_input",
+    "resolve_execution_entity_id",
 ]
 
 
@@ -69,7 +71,7 @@ def render_field(
             raise TemplateTypeError("Template value must be text")
         value = render(raw, hooks.evaluate, schema)
     except TemplateTypeError as exc:
-        _record_error(path, "CHANNEL_VALUE_TYPE_MISMATCH", str(exc))
+        record_execution_input_error(path, "CHANNEL_VALUE_TYPE_MISMATCH", str(exc))
         return None, NodeResult(
             status="failed",
             error_code="CHANNEL_VALUE_TYPE_MISMATCH",
@@ -77,7 +79,7 @@ def render_field(
             error_detail={"expression": raw},
         )
     except Exception as exc:  # noqa: BLE001
-        _record_error(path, "CHANNEL_NODE_FAILED", str(exc))
+        record_execution_input_error(path, "CHANNEL_NODE_FAILED", str(exc))
         return None, NodeResult(
             status="failed",
             error_code="CHANNEL_NODE_FAILED",
@@ -94,7 +96,30 @@ def _record_value(path: str, value: Any) -> None:
         capture.record_value(path, value)
 
 
-def _record_error(path: str, code: str, message: str) -> None:
+def record_execution_input_error(path: str, code: str, message: str) -> None:
     capture = _active.get()
     if capture is not None:
         capture.record_error(path, code, message)
+
+
+def resolve_execution_entity_id(
+    raw_entity: str, hooks: EngineHooks
+) -> tuple[str | None, NodeResult | None]:
+    if "{{" not in raw_entity and "}}" not in raw_entity:
+        return raw_entity, None
+    rendered, failure = render_field(
+        hooks,
+        raw_entity,
+        {"type": "string", "minLength": 1},
+        path="entity_id",
+    )
+    if failure is not None:
+        return None, failure
+    entity_id = str(rendered).strip()
+    if not entity_id:
+        return None, NodeResult(
+            status="failed",
+            error_code="CHANNEL_VALUE_TYPE_MISMATCH",
+            error_message="entity_id must be a non-empty string",
+        )
+    return entity_id, None
