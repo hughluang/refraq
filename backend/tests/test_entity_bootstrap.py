@@ -9,6 +9,7 @@ from backend.entity.bootstrap import (
     LegacyRelation,
     acl_statements,
     move_statements,
+    open_entity_sql_statements,
     profile_page_statements,
     retire_channel_reader_statements,
     role_statements,
@@ -20,6 +21,7 @@ from backend.entity.ddl import (
     ENTITY_OWNER_ROLE,
     ENTITY_SCHEMAS,
     EXPOSURE_OWNER_ROLE,
+    OPEN_READER_ROLE,
     READER_ROLE,
     ident,
 )
@@ -63,7 +65,10 @@ def test_schema_statements_hide_entity_data_from_the_reader() -> None:
     for name in ENTITY_SCHEMAS:
         assert f"CREATE SCHEMA IF NOT EXISTS {ident(name)}" in sql
     assert f'REVOKE ALL ON SCHEMA "entity_data" FROM "{READER_ROLE}"' in sql
+    assert f'REVOKE ALL ON SCHEMA "entity_data", "channel_dataset", "entity_change_log" FROM "{OPEN_READER_ROLE}"' in sql
+    assert f'REVOKE ALL ON SCHEMA "entity_exposure" FROM "{READER_ROLE}"' in sql
     assert f'GRANT USAGE ON SCHEMA "entity_access" TO "{READER_ROLE}"' in sql
+    assert f'GRANT USAGE ON SCHEMA "entity_access", "entity_exposure", "acl" TO "{OPEN_READER_ROLE}"' in sql
     assert "refraq_channel_reader" not in sql
     assert 'CREATE ON SCHEMA "entity_data"' not in sql
 
@@ -101,6 +106,14 @@ def test_acl_statements_are_definer_stable_and_fail_closed() -> None:
     assert not any(
         stmt.startswith("GRANT EXECUTE ON FUNCTION acl.ctx_payload()") for stmt in sql
     )
+    sig_ok_grant = next(
+        stmt
+        for stmt in sql
+        if stmt.startswith("GRANT EXECUTE ON FUNCTION acl.sql_sig_ok(")
+    )
+    assert OPEN_READER_ROLE in sig_ok_grant
+    assert READER_ROLE not in sig_ok_grant
+    assert EXPOSURE_OWNER_ROLE not in sig_ok_grant
     assert f'OWNER TO "{ACL_OWNER_ROLE}"' in text
     moved = "\n".join(acl_statements(pgcrypto_schema="public"))
     assert "ALTER EXTENSION pgcrypto SET SCHEMA \"acl\"" in moved
@@ -117,13 +130,12 @@ def test_profile_page_is_definer_and_granted_only_to_the_reader() -> None:
     assert "p_limit >" not in text
     assert "p_offset < 0" in text
     assert "p_offset >" not in text
-    granted = [
-        stmt
+    assert any(
+        stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_page(")
+        and "text, text)" in stmt
+        and READER_ROLE in stmt
         for stmt in sql
-        if stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_page(")
-    ]
-    assert len(granted) == 1
-    assert READER_ROLE in granted[0]
+    )
     granted_count = [
         stmt
         for stmt in sql
@@ -137,6 +149,16 @@ def test_profile_page_is_definer_and_granted_only_to_the_reader() -> None:
         or stmt.startswith("GRANT EXECUTE ON FUNCTION entity_access.profile_filter")
         for stmt in sql
     )
+
+
+def test_open_entity_sql_is_owned_by_open_reader_and_granted_to_reader() -> None:
+    sql = open_entity_sql_statements()
+    text = "\n".join(sql)
+    assert "SECURITY DEFINER" in text
+    assert "cursor_tuple_fraction = 1.0" in text
+    assert "acl.sql_sig_ok(" in text
+    assert f'OWNER TO "{OPEN_READER_ROLE}"' in text
+    assert f'GRANT EXECUTE ON FUNCTION entity_access.open_entity_sql(text, text, text[], text, bigint, bytea) TO "{READER_ROLE}"' in text
 
 
 def test_move_and_secure_statements() -> None:

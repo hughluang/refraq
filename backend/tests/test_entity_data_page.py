@@ -251,6 +251,65 @@ def test_offset_total_uses_the_same_inline_gate() -> None:
     assert "profile_count" not in counts[0]
 
 
+def test_custom_sort_routing_for_non_row_dependent_and_row_dependent() -> None:
+    from backend.entity.data.paging import RowSort
+
+    target = _target()
+    # Non-row-dependent: any sort + any filter uses profile_page and profile_count.
+    open_conn = _Recording()
+    query_offset(
+        open_conn,  # type: ignore[arg-type]
+        target,
+        fields=["row_id", "sku"],
+        compiled=CompiledFilter(
+            sql='"sku" ILIKE :p0',
+            params={"p0": "%a%"},
+            profile_json='{"field":"sku","op":"contains","value":"a"}',
+            leakproof=False,
+        ),
+        row_dependent=False,
+        limit=10,
+        offset=0,
+        include_total=True,
+        sort=RowSort("sku", descending=True),
+    )
+    assert '"profile_page"' in open_conn.statements[0]
+    assert '"profile_count"' in open_conn.statements[1]
+
+    # Row-dependent + leakproof filter + row_id DESC: uses profile_page and profile_count.
+    id_desc_conn = _Recording()
+    query_offset(
+        id_desc_conn,  # type: ignore[arg-type]
+        target,
+        fields=["row_id"],
+        compiled=compile_filters({"field": "sku", "op": "eq", "value": "a"}, target),
+        row_dependent=True,
+        limit=10,
+        offset=0,
+        include_total=True,
+        sort=RowSort("row_id", descending=True),
+    )
+    assert '"profile_page"' in id_desc_conn.statements[0]
+    assert '"profile_count"' in id_desc_conn.statements[1]
+
+    # Row-dependent + leakproof filter + attribute sort: barrier view for rows, profile_count for total.
+    attr_conn = _Recording()
+    query_offset(
+        attr_conn,  # type: ignore[arg-type]
+        target,
+        fields=["row_id", "sku"],
+        compiled=compile_filters({"field": "sku", "op": "eq", "value": "a"}, target),
+        row_dependent=True,
+        limit=10,
+        offset=0,
+        include_total=True,
+        sort=RowSort("sku", descending=False),
+    )
+    assert "profile_page" not in attr_conn.statements[0]
+    assert '"entity_access"."widget_v"' in attr_conn.statements[0]
+    assert '"profile_count"' in attr_conn.statements[1]
+
+
 def test_row_rule_marks_the_predicate_row_dependent() -> None:
     grant = _grant(None)
     shape = _shape(grant)

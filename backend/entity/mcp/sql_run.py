@@ -8,6 +8,7 @@ with no parameters.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import time
 from typing import Any
 
@@ -16,15 +17,18 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from backend.admin.user_store import UserRecord
 from backend.core.db import map_platform_db_error
 from backend.core.errors import AppError, PlatformCapacityExceeded
-from backend.entity.access.context import CONTEXT_TTL_SEC, issue_contexts
+from backend.entity.access.compiler import predicate_depends_on_row
+from backend.entity.access.context import CONTEXT_TTL_SEC, KeyRing, SigningKey, issue_contexts
 from backend.entity.access.enforce import _signing_ring, append_sql_log
 from backend.entity.access.membership import person_of
+from backend.entity.ddl import ENTITY_EXPOSURE_SCHEMA, qualified_table
 from backend.entity.entity_db import get_entity_reader_engine
 from backend.entity.errors import EntitySqlFailed, EntitySqlTimeout
 from backend.entity.mcp.sql_encode import encode_sql_value
 from backend.entity.mcp.sql_errors import rewrite_sql_message
 from backend.entity.mcp.sql_prepare import PreparedSql, prepare_entity_sql
 from backend.entity.parameters import entity_query_max_rows, entity_query_timeout_sec
+from backend.entity.sql_gate import bind_entity_sql
 
 _SKIP_AUDIT = frozenset(
     {
@@ -55,10 +59,10 @@ def run_entity_sql(
     cap = int(entity_query_max_rows())
     limit = cap if max_rows is None else min(cap, max(1, int(max_rows)))
     ttl_sec = max(CONTEXT_TTL_SEC, timeout_sec + 30)
-    token = _sign(prepared, user, request_id or "", ttl_sec)
+    token, ring = _sign(prepared, user, request_id or "", ttl_sec)
     started = time.perf_counter()
     try:
-        presented = _execute(prepared, token, limit, timeout_sec)
+        presented = _execute(prepared, token, ring, limit, timeout_sec, ttl_sec)
     except AppError as exc:
         if exc.code not in _SKIP_AUDIT:
             _audit(prepared, user, pat_id, request_id, exc.code, None, started)
@@ -79,7 +83,7 @@ def _sign(
     user: UserRecord,
     request_id: str,
     ttl_sec: int,
-) -> str:
+) -> tuple[str, KeyRing]:
     person = prepared.decisions[0].person if prepared.decisions else person_of(user)
     try:
         ring = _signing_ring()
@@ -89,7 +93,7 @@ def _sign(
             raise mapped from exc
         raise
     policies = tuple((access.policy, access.compiled) for access in prepared.decisions)
-    return issue_contexts(
+    token = issue_contexts(
         policies,
         person,
         ring,
@@ -97,13 +101,16 @@ def _sign(
         request_id=request_id,
         ttl_sec=ttl_sec,
     )
+    return token, ring
 
 
 def _execute(
     prepared: PreparedSql,
     token: str,
+    ring: KeyRing,
     limit: int,
     timeout_sec: int,
+    ttl_sec: int,
 ) -> dict[str, Any]:
     engine = get_entity_reader_engine()
     try:
@@ -112,7 +119,7 @@ def _execute(
         mapped = map_platform_db_error(exc)
         raise (mapped or PlatformCapacityExceeded()) from exc
     try:
-        return _query(sa_conn, prepared, token, limit, timeout_sec)
+        return _query(sa_conn, prepared, token, ring, limit, timeout_sec, ttl_sec)
     finally:
         sa_conn.close()
 
@@ -121,8 +128,10 @@ def _query(
     sa_conn: Any,
     prepared: PreparedSql,
     token: str,
+    ring: KeyRing,
     limit: int,
     timeout_sec: int,
+    ttl_sec: int,
 ) -> dict[str, Any]:
     transaction = None
     body_error: BaseException | None = None
@@ -136,10 +145,9 @@ def _query(
         timeout_ms = int(timeout_sec) * 1000
         sa_conn.exec_driver_sql(f"SET LOCAL statement_timeout = {timeout_ms}")
         raw = _driver(sa_conn)
-        with raw.cursor() as cursor:
-            _execute_bound(cursor, prepared.bound_sql)
-            description = cursor.description
-            fetched = cursor.fetchmany(limit + 1) if description else []
+        description, fetched = execute_prepared_sql(
+            raw, prepared, ring, limit=limit, ttl_sec=ttl_sec
+        )
         type_names = _load_type_names(raw, description)
         columns, rows, truncated = _present(
             description, fetched, type_names, prepared, limit
@@ -167,6 +175,81 @@ def _query(
             except Exception:
                 if body_error is None:
                     raise
+
+
+def execute_prepared_sql(
+    raw: Any,
+    prepared: PreparedSql,
+    ring: KeyRing,
+    *,
+    limit: int,
+    ttl_sec: int,
+) -> tuple[Any, list[Any]]:
+    """Run ``prepared`` through ``open_entity_sql`` when any shape is inlineable."""
+    inlineable = [
+        access
+        for access in prepared.decisions
+        if access.outcome.shape is not None
+        and not access.outcome.shape.force_empty
+        and not predicate_depends_on_row(access.outcome.shape)
+    ]
+    if not inlineable:
+        with raw.cursor() as cursor:
+            _execute_bound(cursor, prepared.bound_sql)
+            description = cursor.description
+            fetched = cursor.fetchmany(limit + 1) if description else []
+        return description, list(fetched)
+
+    inline_ids = {access.target.entity.table_name for access in inlineable}
+    open_relations = {
+        access.target.entity.table_name: (
+            qualified_table(ENTITY_EXPOSURE_SCHEMA, access.outcome.shape.view_name)
+            if access.target.entity.table_name in inline_ids
+            and access.outcome.shape is not None
+            else access.target.read_relation
+        )
+        for access in prepared.decisions
+    }
+    open_sql = bind_entity_sql(prepared.submitted_sql, relations=open_relations).bound_sql
+    inline_views = tuple(
+        access.outcome.shape.view_name
+        for access in inlineable
+        if access.outcome.shape is not None
+    )
+    exp = int(time.time()) + int(ttl_sec)
+    key = ring.current()
+    sig = _sign_open_sql(key, exp, open_sql, prepared.bound_sql, inline_views)
+    with raw.cursor() as cursor:
+        cursor.execute(
+            "SELECT entity_access.open_entity_sql(%s, %s, %s, %s, %s, %s)",
+            (open_sql, prepared.bound_sql, list(inline_views), key.kid, exp, sig),
+        )
+        row = cursor.fetchone()
+        if row is None or not row[0]:
+            raise RuntimeError("open_entity_sql returned no cursor")
+        portal = _quote_portal(str(row[0]))
+        cursor.execute(f"FETCH FORWARD {int(limit) + 1} FROM {portal}", binary=True)
+        description = cursor.description
+        fetched = cursor.fetchall()
+        cursor.execute(f"CLOSE {portal}")
+    return description, list(fetched)
+
+
+def _quote_portal(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _sign_open_sql(
+    key: SigningKey,
+    exp: int,
+    open_sql: str,
+    barrier_sql: str,
+    views: tuple[str, ...],
+) -> bytes:
+    open_hash = hashlib.sha256(open_sql.encode("utf-8")).hexdigest()
+    barrier_hash = hashlib.sha256(barrier_sql.encode("utf-8")).hexdigest()
+    msg = f"{key.kid}:{exp}:{open_hash}:{barrier_hash}:{','.join(views)}"
+    return hmac.new(key.secret, msg.encode("utf-8"), hashlib.sha256).digest()
 
 
 def _execute_bound(cursor: Any, sql: str) -> None:

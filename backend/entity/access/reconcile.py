@@ -7,6 +7,7 @@ import logging
 from backend.entity.access.jobs import enqueue_view_job
 from backend.entity.access.plan import load_head
 from backend.entity.access.store import get_access_store
+from backend.entity.ddl import OPEN_READER_ROLE
 from backend.entity.errors import EntityNotFound
 from backend.entity.records import BusinessEntityRecord
 from backend.entity.store import get_entity_store
@@ -44,7 +45,12 @@ def _reconcile_one(entity: BusinessEntityRecord) -> int:
     revision = store.revision(entity.id)
     if revision == 0 and not store.profiles(entity.id):
         return 0
-    if store.views_revision(entity.id) == revision and store.bindings(entity.id):
+    bindings = store.bindings(entity.id)
+    if (
+        store.views_revision(entity.id) == revision
+        and bindings
+        and all(OPEN_READER_ROLE in (item.sql or "") for item in bindings)
+    ):
         return 0
     enqueue_view_job(
         entity.id,

@@ -34,9 +34,11 @@ from backend.entity.ddl import (
     ENTITY_ACCESS_SCHEMA,
     ENTITY_CHANGE_LOG_SCHEMA,
     ENTITY_DATA_SCHEMA,
+    ENTITY_EXPOSURE_SCHEMA,
     ENTITY_OWNER_ROLE,
     EXPOSURE_OWNER_ROLE,
     EXPOSURE_POLICY,
+    OPEN_READER_ROLE,
     OWNER_POLICY,
     READER_ROLE,
     SIGNER_ROLE,
@@ -53,6 +55,7 @@ __all__ = [
     "ensure_database",
     "main",
     "move_statements",
+    "open_entity_sql_statements",
     "profile_page_statements",
     "retire_channel_reader_statements",
     "role_statements",
@@ -118,6 +121,7 @@ def role_statements(
     specs = (
         (ENTITY_OWNER_ROLE, f"LOGIN {common} NOINHERIT", owner_password),
         (EXPOSURE_OWNER_ROLE, f"NOLOGIN {common} NOINHERIT", None),
+        (OPEN_READER_ROLE, f"NOLOGIN {common} NOINHERIT", None),
         (ACL_OWNER_ROLE, f"NOLOGIN {common} NOINHERIT", None),
         (READER_ROLE, f"LOGIN {common} NOINHERIT", reader_password),
         (SIGNER_ROLE, f"LOGIN {common} NOINHERIT", signer_password),
@@ -164,33 +168,41 @@ def database_statements(database: str, *, has_public_schema: bool) -> list[str]:
 def schema_statements() -> list[str]:
     owner = ident(ENTITY_OWNER_ROLE)
     exposure = ident(EXPOSURE_OWNER_ROLE)
+    open_reader = ident(OPEN_READER_ROLE)
     reader = ident(READER_ROLE)
     signer = ident(SIGNER_ROLE)
     data = ident(ENTITY_DATA_SCHEMA)
     access = ident(ENTITY_ACCESS_SCHEMA)
+    entity_exposure = ident(ENTITY_EXPOSURE_SCHEMA)
     acl = ident(ACL_SCHEMA)
     dataset = ident(CHANNEL_DATASET_SCHEMA)
     change_log = ident(ENTITY_CHANGE_LOG_SCHEMA)
     return [
         f"CREATE SCHEMA IF NOT EXISTS {data} AUTHORIZATION {owner}",
         f"CREATE SCHEMA IF NOT EXISTS {access} AUTHORIZATION {owner}",
+        f"CREATE SCHEMA IF NOT EXISTS {entity_exposure} AUTHORIZATION {owner}",
         f"CREATE SCHEMA IF NOT EXISTS {acl} AUTHORIZATION {ident(ACL_OWNER_ROLE)}",
         f"CREATE SCHEMA IF NOT EXISTS {dataset} AUTHORIZATION {owner}",
         f"CREATE SCHEMA IF NOT EXISTS {change_log} AUTHORIZATION {owner}",
         f"ALTER SCHEMA {data} OWNER TO {owner}",
         f"ALTER SCHEMA {access} OWNER TO {owner}",
+        f"ALTER SCHEMA {entity_exposure} OWNER TO {owner}",
         f"ALTER SCHEMA {acl} OWNER TO {ident(ACL_OWNER_ROLE)}",
         f"ALTER SCHEMA {dataset} OWNER TO {owner}",
         f"ALTER SCHEMA {change_log} OWNER TO {owner}",
-        f"REVOKE ALL ON SCHEMA {data}, {access}, {acl}, {change_log} FROM PUBLIC",
+        f"REVOKE ALL ON SCHEMA {data}, {access}, {entity_exposure}, {acl}, {change_log} FROM PUBLIC",
         f"REVOKE ALL ON SCHEMA {dataset} FROM PUBLIC",
         f"REVOKE ALL ON SCHEMA {data} FROM {reader}",
+        f"REVOKE ALL ON SCHEMA {entity_exposure} FROM {reader}",
         f"REVOKE ALL ON SCHEMA {dataset} FROM {reader}",
         f"REVOKE ALL ON SCHEMA {change_log} FROM {reader}",
-        f"REVOKE ALL ON SCHEMA {data}, {access}, {dataset}, {change_log} FROM {signer}",
+        f"REVOKE ALL ON SCHEMA {data}, {access}, {entity_exposure}, {dataset}, {change_log} FROM {signer}",
+        f"REVOKE ALL ON SCHEMA {data}, {dataset}, {change_log} FROM {open_reader}",
         f"GRANT USAGE ON SCHEMA {data} TO {exposure}",
         f"GRANT USAGE, CREATE ON SCHEMA {access} TO {exposure}",
+        f"GRANT USAGE, CREATE ON SCHEMA {entity_exposure} TO {exposure}",
         f"GRANT USAGE ON SCHEMA {access} TO {reader}",
+        f"GRANT USAGE ON SCHEMA {access}, {entity_exposure}, {acl} TO {open_reader}",
         f"GRANT USAGE ON SCHEMA {acl} TO {owner}, {exposure}, {reader}",
         f"REVOKE ALL ON SCHEMA {acl} FROM {signer}",
         f"GRANT USAGE ON SCHEMA {acl} TO {signer}",
@@ -215,6 +227,9 @@ _READER_FUNCTIONS = (
     "acl.mask_bucket(double precision, numeric)",
 )
 _PRIVATE_FUNCTIONS = ("acl.ctx_payload()", "acl.subject_id()")
+_OPEN_READER_FUNCTIONS = (
+    "acl.sql_sig_ok(text, bigint, text, text, text[], bytea)",
+)
 _OWNER_FUNCTIONS = (
     "acl.install_key(text, bytea)",
     "acl.ensure_signing_key()",
@@ -442,6 +457,43 @@ BEGIN
 END
 $fn$
 """,
+    f"""
+CREATE OR REPLACE FUNCTION acl.sql_sig_ok(
+  p_kid text,
+  p_exp bigint,
+  p_open_sql text,
+  p_barrier_sql text,
+  p_views text[],
+  p_sig bytea
+) RETURNS boolean
+LANGUAGE plpgsql {_GUARD} AS $fn$
+DECLARE
+  signing_secret bytea;
+  msg text;
+BEGIN
+  IF p_kid IS NULL OR p_exp IS NULL OR p_open_sql IS NULL
+     OR p_barrier_sql IS NULL OR p_views IS NULL OR p_sig IS NULL THEN
+    RETURN false;
+  END IF;
+  IF p_exp::numeric <= extract(epoch FROM now()) THEN
+    RETURN false;
+  END IF;
+  SELECT k.secret INTO signing_secret
+  FROM acl.signing_keys AS k WHERE k.kid = p_kid;
+  IF signing_secret IS NULL THEN
+    RETURN false;
+  END IF;
+  msg := p_kid
+    || ':' || p_exp::text
+    || ':' || encode(acl.digest(convert_to(p_open_sql, 'UTF8'), 'sha256'), 'hex')
+    || ':' || encode(acl.digest(convert_to(p_barrier_sql, 'UTF8'), 'sha256'), 'hex')
+    || ':' || coalesce(array_to_string(p_views, ','), '');
+  RETURN acl.hmac(convert_to(msg, 'UTF8'), signing_secret, 'sha256') = p_sig;
+EXCEPTION WHEN OTHERS THEN
+  RETURN false;
+END
+$fn$
+""",
 )
 
 
@@ -474,14 +526,23 @@ def acl_statements(*, pgcrypto_schema: str | None) -> list[str]:
         f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {acl} TO {acl_owner}",
     ]
     statements += [body.strip() for body in _FUNCTION_BODIES]
-    for signature in (*_PRIVATE_FUNCTIONS, *_READER_FUNCTIONS, *_OWNER_FUNCTIONS):
+    for signature in (
+        *_PRIVATE_FUNCTIONS,
+        *_OPEN_READER_FUNCTIONS,
+        *_READER_FUNCTIONS,
+        *_OWNER_FUNCTIONS,
+    ):
         statements.append(f"ALTER FUNCTION {signature} OWNER TO {acl_owner}")
         statements.append(f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC")
     readers = f"{ident(EXPOSURE_OWNER_ROLE)}, {ident(READER_ROLE)}"
+    open_reader = ident(OPEN_READER_ROLE)
     for signature in _PRIVATE_FUNCTIONS:
+        statements.append(f"REVOKE EXECUTE ON FUNCTION {signature} FROM {readers}, {open_reader}")
+    for signature in _OPEN_READER_FUNCTIONS:
         statements.append(f"REVOKE EXECUTE ON FUNCTION {signature} FROM {readers}")
+        statements.append(f"GRANT EXECUTE ON FUNCTION {signature} TO {open_reader}")
     for signature in _READER_FUNCTIONS:
-        statements.append(f"GRANT EXECUTE ON FUNCTION {signature} TO {readers}")
+        statements.append(f"GRANT EXECUTE ON FUNCTION {signature} TO {readers}, {open_reader}")
     for signature in _OWNER_FUNCTIONS:
         statements.append(
             f"GRANT EXECUTE ON FUNCTION {signature} TO {ident(ENTITY_OWNER_ROLE)}"
@@ -490,7 +551,12 @@ def acl_statements(*, pgcrypto_schema: str | None) -> list[str]:
     statements.append(
         f"GRANT EXECUTE ON FUNCTION acl.ensure_signing_key() TO {signer}"
     )
-    for signature in (*_PRIVATE_FUNCTIONS, *_READER_FUNCTIONS, "acl.install_key(text, bytea)"):
+    for signature in (
+        *_PRIVATE_FUNCTIONS,
+        *_OPEN_READER_FUNCTIONS,
+        *_READER_FUNCTIONS,
+        "acl.install_key(text, bytea)",
+    ):
         statements.append(f"REVOKE EXECUTE ON FUNCTION {signature} FROM {signer}")
     statements.append(
         f"ALTER DEFAULT PRIVILEGES FOR ROLE {acl_owner} IN SCHEMA {acl} "
@@ -734,7 +800,9 @@ CREATE OR REPLACE FUNCTION entity_access.profile_page_sql(
   p_limit integer,
   p_offset integer,
   p_after bigint,
-  p_filter jsonb
+  p_filter jsonb,
+  p_sort_column text DEFAULT 'row_id',
+  p_sort_direction text DEFAULT 'asc'
 ) RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -750,6 +818,9 @@ DECLARE
   filt text;
   where_sql text := '';
   skip_filter boolean;
+  sort_col text;
+  sort_dir text;
+  order_sql text;
 BEGIN
   IF p_limit IS NULL OR p_limit < 1 THEN
     RAISE EXCEPTION 'page limit out of range' USING ERRCODE = '22023';
@@ -762,6 +833,17 @@ BEGIN
   END IF;
   IF p_columns IS NULL OR cardinality(p_columns) < 1 OR cardinality(p_columns) > 512 THEN
     RAISE EXCEPTION 'page columns out of range' USING ERRCODE = '22023';
+  END IF;
+  sort_col := COALESCE(p_sort_column, 'row_id');
+  sort_dir := lower(COALESCE(p_sort_direction, 'asc'));
+  IF sort_col !~ '^[A-Za-z_][A-Za-z0-9_]*$' THEN
+    RAISE EXCEPTION 'sort column is not an identifier' USING ERRCODE = '22023';
+  END IF;
+  IF sort_dir NOT IN ('asc', 'desc') THEN
+    RAISE EXCEPTION 'sort direction must be asc or desc' USING ERRCODE = '22023';
+  END IF;
+  IF p_after IS NOT NULL AND (sort_col <> 'row_id' OR sort_dir <> 'asc') THEN
+    RAISE EXCEPTION 'after_row_id requires row_id asc sort' USING ERRCODE = '22023';
   END IF;
   SELECT c.relkind, n.nspname, r.rolname
     INTO kind, nsp, rel_owner
@@ -782,6 +864,12 @@ BEGIN
     WHERE a.attrelid = p_view AND a.attname = 'row_id' AND a.attnum > 0 AND NOT a.attisdropped
   ) THEN
     RAISE EXCEPTION 'page view has no row_id' USING ERRCODE = '22023';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_attribute a
+    WHERE a.attrelid = p_view AND a.attname = sort_col AND a.attnum > 0 AND NOT a.attisdropped
+  ) THEN
+    RAISE EXCEPTION 'sort column is not on the view' USING ERRCODE = '22023';
   END IF;
   FOREACH col IN ARRAY p_columns LOOP
     IF col IS NULL OR col !~ '^[A-Za-z_][A-Za-z0-9_]*$' THEN
@@ -815,10 +903,17 @@ BEGIN
       where_sql := where_sql || ' AND page.row_id > ' || p_after::text;
     END IF;
   END IF;
+  IF sort_col = 'row_id' THEN
+    order_sql := ' ORDER BY page.row_id ' || upper(sort_dir);
+  ELSE
+    order_sql := ' ORDER BY page.' || pg_catalog.quote_ident(sort_col)
+      || ' ' || upper(sort_dir) || ' NULLS LAST, page.row_id ASC';
+  END IF;
   RETURN 'SELECT ' || cols
     || ' FROM (' || def || ') AS page'
     || where_sql
-    || ' ORDER BY page.row_id ASC LIMIT ' || p_limit::text
+    || order_sql
+    || ' LIMIT ' || p_limit::text
     || ' OFFSET ' || p_offset::text;
 END
 $fn$
@@ -832,7 +927,9 @@ CREATE OR REPLACE FUNCTION entity_access.profile_page(
   p_limit integer,
   p_offset integer,
   p_after bigint,
-  p_filter jsonb
+  p_filter jsonb,
+  p_sort_column text DEFAULT 'row_id',
+  p_sort_direction text DEFAULT 'asc'
 ) RETURNS SETOF record
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -844,7 +941,8 @@ DECLARE
   skip_filter boolean;
 BEGIN
   query := entity_access.profile_page_sql(
-    p_view, p_columns, p_limit, p_offset, p_after, p_filter
+    p_view, p_columns, p_limit, p_offset, p_after, p_filter,
+    p_sort_column, p_sort_direction
   );
   skip_filter := p_filter IS NULL
     OR jsonb_typeof(p_filter) = 'null'
@@ -952,14 +1050,23 @@ def profile_page_statements() -> list[str]:
     )
     exposure = ident(EXPOSURE_OWNER_ROLE)
     reader = ident(READER_ROLE)
+    page_args = "regclass, text[], integer, integer, bigint, jsonb, text, text"
     signatures = (
         "entity_access.profile_filter(regclass, jsonb, text[], integer)",
-        "entity_access.profile_page_sql(regclass, text[], integer, integer, bigint, jsonb)",
-        "entity_access.profile_page(regclass, text[], integer, integer, bigint, jsonb)",
+        f"entity_access.profile_page_sql({page_args})",
+        f"entity_access.profile_page({page_args})",
         "entity_access.profile_count_sql(regclass, jsonb)",
         "entity_access.profile_count(regclass, jsonb)",
     )
-    statements = [body, _PROFILE_PAGE_SQL_FN, _PROFILE_PAGE_FN, _PROFILE_COUNT_SQL_FN, _PROFILE_COUNT_FN]
+    statements = [
+        "DROP FUNCTION IF EXISTS entity_access.profile_page(regclass, text[], integer, integer, bigint, jsonb)",
+        "DROP FUNCTION IF EXISTS entity_access.profile_page_sql(regclass, text[], integer, integer, bigint, jsonb)",
+        body,
+        _PROFILE_PAGE_SQL_FN,
+        _PROFILE_PAGE_FN,
+        _PROFILE_COUNT_SQL_FN,
+        _PROFILE_COUNT_FN,
+    ]
     for signature in signatures:
         statements.append(f"ALTER FUNCTION {signature} OWNER TO {exposure}")
         statements.append(f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC")
@@ -968,8 +1075,7 @@ def profile_page_statements() -> list[str]:
         f"FROM {reader}"
     )
     statements.append(
-        "REVOKE ALL ON FUNCTION entity_access.profile_page_sql"
-        "(regclass, text[], integer, integer, bigint, jsonb) "
+        f"REVOKE ALL ON FUNCTION entity_access.profile_page_sql({page_args}) "
         f"FROM {reader}"
     )
     statements.append(
@@ -977,8 +1083,7 @@ def profile_page_statements() -> list[str]:
         f"FROM {reader}"
     )
     statements.append(
-        "GRANT EXECUTE ON FUNCTION entity_access.profile_page"
-        "(regclass, text[], integer, integer, bigint, jsonb) "
+        f"GRANT EXECUTE ON FUNCTION entity_access.profile_page({page_args}) "
         f"TO {reader}"
     )
     statements.append(
@@ -986,6 +1091,124 @@ def profile_page_statements() -> list[str]:
         f"TO {reader}"
     )
     return statements
+
+
+_OPEN_ENTITY_SQL_FN = """
+CREATE OR REPLACE FUNCTION entity_access.open_entity_sql(
+  p_open_sql text,
+  p_barrier_sql text,
+  p_views text[],
+  p_kid text,
+  p_exp bigint,
+  p_sig bytea
+) RETURNS refcursor
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+SET row_security = on
+SET cursor_tuple_fraction = 1.0
+AS $fn$
+DECLARE
+  v text;
+  barrier_oid regclass;
+  open_oid regclass;
+  gate_oid regclass;
+  kind "char";
+  nsp text;
+  rel_owner text;
+  gate_ok boolean;
+  use_open boolean := true;
+  cur refcursor;
+BEGIN
+  IF pg_catalog.current_setting('transaction_read_only') IS DISTINCT FROM 'on' THEN
+    RAISE EXCEPTION 'entity sql requires a read-only transaction' USING ERRCODE = '25006';
+  END IF;
+  IF NOT acl.sql_sig_ok(p_kid, p_exp, p_open_sql, p_barrier_sql, p_views, p_sig) THEN
+    RAISE EXCEPTION 'entity sql signature is invalid' USING ERRCODE = '42501';
+  END IF;
+  IF p_views IS NULL OR pg_catalog.cardinality(p_views) = 0 THEN
+    use_open := false;
+  ELSE
+    FOREACH v IN ARRAY p_views LOOP
+      IF v IS NULL OR v !~ '^[A-Za-z_][A-Za-z0-9_]*$' THEN
+        RAISE EXCEPTION 'profile view name is not an identifier' USING ERRCODE = '22023';
+      END IF;
+      barrier_oid := pg_catalog.to_regclass('entity_access.' || pg_catalog.quote_ident(v));
+      IF barrier_oid IS NULL THEN
+        RAISE EXCEPTION 'profile view % does not exist', v USING ERRCODE = '42P01';
+      END IF;
+      SELECT c.relkind, n.nspname, r.rolname
+        INTO kind, nsp, rel_owner
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_catalog.pg_roles r ON r.oid = c.relowner
+      WHERE c.oid = barrier_oid;
+      IF kind IS DISTINCT FROM 'v'
+         OR nsp IS DISTINCT FROM 'entity_access'
+         OR rel_owner IS DISTINCT FROM 'refraq_exposure_owner' THEN
+        RAISE EXCEPTION 'view is not an exposure profile' USING ERRCODE = '42501';
+      END IF;
+      IF NOT pg_catalog.has_table_privilege(session_user, barrier_oid, 'SELECT') THEN
+        RAISE EXCEPTION 'profile view is not selectable' USING ERRCODE = '42501';
+      END IF;
+      open_oid := pg_catalog.to_regclass('entity_exposure.' || pg_catalog.quote_ident(v));
+      gate_oid := pg_catalog.to_regclass('entity_exposure.' || pg_catalog.quote_ident(v || '__gate'));
+      IF open_oid IS NULL OR gate_oid IS NULL THEN
+        use_open := false;
+        EXIT;
+      END IF;
+      SELECT c.relkind, n.nspname, r.rolname
+        INTO kind, nsp, rel_owner
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_catalog.pg_roles r ON r.oid = c.relowner
+      WHERE c.oid = open_oid;
+      IF kind IS DISTINCT FROM 'v'
+         OR nsp IS DISTINCT FROM 'entity_exposure'
+         OR rel_owner IS DISTINCT FROM 'refraq_exposure_owner' THEN
+        RAISE EXCEPTION 'companion exposure view is invalid' USING ERRCODE = '42501';
+      END IF;
+      SELECT c.relkind, n.nspname, r.rolname
+        INTO kind, nsp, rel_owner
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_catalog.pg_roles r ON r.oid = c.relowner
+      WHERE c.oid = gate_oid;
+      IF kind IS DISTINCT FROM 'v'
+         OR nsp IS DISTINCT FROM 'entity_exposure'
+         OR rel_owner IS DISTINCT FROM 'refraq_exposure_owner' THEN
+        RAISE EXCEPTION 'companion gate view is invalid' USING ERRCODE = '42501';
+      END IF;
+      EXECUTE 'SELECT ok FROM entity_exposure.' || pg_catalog.quote_ident(v || '__gate')
+        INTO gate_ok;
+      IF gate_ok IS NOT TRUE THEN
+        use_open := false;
+        EXIT;
+      END IF;
+    END LOOP;
+  END IF;
+  IF use_open THEN
+    OPEN cur NO SCROLL FOR EXECUTE p_open_sql;
+  ELSE
+    OPEN cur NO SCROLL FOR EXECUTE p_barrier_sql;
+  END IF;
+  RETURN cur;
+END
+$fn$
+""".strip()
+
+
+def open_entity_sql_statements() -> list[str]:
+    """Least-privilege cursor executor for signed non-row-dependent Entity SQL."""
+    open_reader = ident(OPEN_READER_ROLE)
+    reader = ident(READER_ROLE)
+    sig = "entity_access.open_entity_sql(text, text, text[], text, bigint, bytea)"
+    return [
+        _OPEN_ENTITY_SQL_FN,
+        f"ALTER FUNCTION {sig} OWNER TO {open_reader}",
+        f"REVOKE ALL ON FUNCTION {sig} FROM PUBLIC",
+        f"GRANT EXECUTE ON FUNCTION {sig} TO {reader}",
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1145,6 +1368,7 @@ def _converge(
                 "names": [
                     ENTITY_OWNER_ROLE,
                     EXPOSURE_OWNER_ROLE,
+                    OPEN_READER_ROLE,
                     ACL_OWNER_ROLE,
                     READER_ROLE,
                     SIGNER_ROLE,
@@ -1176,6 +1400,8 @@ def _converge(
     ).scalar()
     _apply(conn, acl_statements(pgcrypto_schema=pgcrypto_schema))
     _apply(conn, profile_page_statements())
+    _apply(conn, open_entity_sql_statements())
+    _grant_existing_exposure_views(conn)
     relations = _legacy_relations(conn, legacy_schema)
     occupied = frozenset(_relation_names(conn, ENTITY_DATA_SCHEMA, ("r", "v", "m", "p", "f")))
     _apply(conn, move_statements(legacy_schema, relations, occupied=occupied))
@@ -1196,6 +1422,25 @@ def _apply(conn: Connection, statements: list[str]) -> None:
     # placeholder, so a literal percent in a statement is written "%%".
     for sql in statements:
         conn.exec_driver_sql(sql)
+
+
+def _grant_existing_exposure_views(conn: Connection) -> None:
+    """Ensure refraq_open_reader can fall back to pre-existing barrier views."""
+    views = conn.execute(
+        text(
+            "SELECT c.relname FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "JOIN pg_roles r ON r.oid = c.relowner "
+            "WHERE n.nspname = :schema AND c.relkind = 'v' AND r.rolname = :owner "
+            "ORDER BY c.relname"
+        ),
+        {"schema": ENTITY_ACCESS_SCHEMA, "owner": EXPOSURE_OWNER_ROLE},
+    ).scalars()
+    open_reader = ident(OPEN_READER_ROLE)
+    for name in views:
+        conn.exec_driver_sql(
+            f"GRANT SELECT ON {qualified_table(ENTITY_ACCESS_SCHEMA, str(name))} TO {open_reader}"
+        )
 
 
 def _relation_names(conn: Connection, schema: str, kinds: tuple[str, ...]) -> list[str]:

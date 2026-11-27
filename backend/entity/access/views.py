@@ -16,7 +16,11 @@ from backend.entity.access.compiler import (
 from backend.entity.access.plan import Head, load_head, load_policy
 from backend.entity.access.records import BindingRecord
 from backend.entity.access.store import get_access_store
-from backend.entity.ddl import ENTITY_ACCESS_SCHEMA, qualified_table
+from backend.entity.ddl import (
+    ENTITY_ACCESS_SCHEMA,
+    ENTITY_EXPOSURE_SCHEMA,
+    qualified_table,
+)
 from backend.entity.table_port import get_entity_table_port
 
 __all__ = [
@@ -31,6 +35,14 @@ __all__ = [
 READY = "ready"
 
 
+def _drop_view_pair(name: str) -> list[str]:
+    return [
+        f"DROP VIEW IF EXISTS {qualified_table(ENTITY_EXPOSURE_SCHEMA, name + '__gate')}",
+        f"DROP VIEW IF EXISTS {qualified_table(ENTITY_EXPOSURE_SCHEMA, name)}",
+        f"DROP VIEW IF EXISTS {qualified_table(ENTITY_ACCESS_SCHEMA, name)}",
+    ]
+
+
 def profile_view_statements(
     compiled: CompiledPolicy, previous_names: list[str]
 ) -> list[str]:
@@ -41,10 +53,7 @@ def profile_view_statements(
         names.append(binding.view_name)
         creates.extend(script_statements(binding.view_name, binding.sql))
     drop_names = list(dict.fromkeys([*previous_names, *names]))
-    drops = [
-        f"DROP VIEW IF EXISTS {qualified_table(ENTITY_ACCESS_SCHEMA, name)}"
-        for name in drop_names
-    ]
+    drops = [stmt for name in drop_names for stmt in _drop_view_pair(name)]
     return [*drops, *creates]
 
 
@@ -101,8 +110,9 @@ def restore_profile_views(
 ) -> None:
     """Put the previous ``(view_name, create script)`` pairs back after a publish failure."""
     drops = [
-        f"DROP VIEW IF EXISTS {qualified_table(ENTITY_ACCESS_SCHEMA, name)}"
+        stmt
         for name in dict.fromkeys(drop_names)
+        for stmt in _drop_view_pair(name)
     ]
     creates: list[str] = []
     for view_name, script in scripts:

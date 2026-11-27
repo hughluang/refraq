@@ -158,7 +158,7 @@ def test_bootstrap_is_idempotent_and_reader_cannot_bypass_rls() -> None:
             with admin.connect() as conn:
                 definition = conn.execute(text(
                     "SELECT pg_get_functiondef('entity_access.profile_page_sql"
-                    "(regclass,text[],integer,integer,bigint,jsonb)'::regprocedure)"
+                    "(regclass,text[],integer,integer,bigint,jsonb,text,text)'::regprocedure)"
                 )).scalar_one()
                 assert "p_limit >" not in definition
         finally:
@@ -611,6 +611,16 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
             plan = "\n".join(conn.execute(text("EXPLAIN " + page_sql)).scalars())
             assert "Index" in plan, plan
             assert "Sort" not in plan, plan
+            desc_sql = conn.execute(
+                text(
+                    "SELECT entity_access.profile_page_sql("
+                    "'entity_access.page_probe'::regclass, ARRAY['row_id'], "
+                    "2, 0, NULL, NULL, 'row_id', 'desc')"
+                )
+            ).scalar_one()
+            desc_plan = "\n".join(conn.execute(text("EXPLAIN " + desc_sql)).scalars())
+            assert "Index" in desc_plan, desc_plan
+            assert "Sort" not in desc_plan, desc_plan
             count_sql = conn.execute(
                 text(
                     "SELECT entity_access.profile_count_sql("
@@ -628,6 +638,27 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
                 text("SELECT count(*) FROM entity_data.page_probe")
             ).scalar_one()
             assert int(count) == 4
+        with reader.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.ctx', :token, true)"), {"token": good}
+            )
+            desc_rows = conn.execute(
+                text(
+                    "SELECT row_id FROM entity_access.profile_page("
+                    "'entity_access.page_probe'::regclass, ARRAY['row_id'], "
+                    "2, 0, NULL, NULL, 'row_id', 'desc') AS page(row_id bigint)"
+                )
+            ).scalars().all()
+            assert [int(r) for r in desc_rows] == [40, 30]
+            with pytest.raises(ProgrammingError, match="signature is invalid"):
+                conn.execute(
+                    text(
+                        "SELECT entity_access.open_entity_sql("
+                        "'SELECT 1', 'SELECT 1', ARRAY['page_probe'], "
+                        "'k1', 9999999999, '\\x00'::bytea)"
+                    )
+                )
+            conn.rollback()
     finally:
         reader.dispose()
         admin.dispose()

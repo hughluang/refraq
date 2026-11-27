@@ -14,6 +14,7 @@ from sqlalchemy import text
 from backend.core.config import get_settings, require_entity_database_url
 from backend.entity.ddl import (
     ENTITY_ACCESS_SCHEMA,
+    ENTITY_EXPOSURE_SCHEMA,
     comment_table_sql,
     create_table_statements,
     create_view_sql,
@@ -187,6 +188,8 @@ class PostgresEntityTablePort:
             if is_table:
                 _lock_and_assert_empty(conn, qualified)
                 for name in _profile_views_on_table(conn, schema, table):
+                    conn.execute(text(drop_view_sql(ENTITY_EXPOSURE_SCHEMA, f"{name}__gate")))
+                    conn.execute(text(drop_view_sql(ENTITY_EXPOSURE_SCHEMA, name)))
                     conn.execute(text(drop_view_sql(ENTITY_ACCESS_SCHEMA, name)))
             if _relation_kind(conn, schema, view) == "v":
                 conn.execute(text(drop_view_sql(schema, view)))

@@ -33,6 +33,7 @@ from backend.entity.change_log import SOURCE_GUC, SUBJECT_GUC
 from backend.entity.ddl import (
     ENTITY_ACCESS_SCHEMA,
     ENTITY_DATA_SCHEMA,
+    ROW_ID_COLUMN,
     ident,
     qualified_table,
 )
@@ -722,7 +723,7 @@ def query_offset(
     include_total: bool,
     sort: RowSort = RowSort(),
 ) -> tuple[list[dict[str, Any]], int | None]:
-    if sort == RowSort() and _page_through_profile(compiled, row_dependent):
+    if _page_through_profile(compiled, row_dependent, sort):
         items = _profile_page_rows(
             conn,
             target,
@@ -731,6 +732,7 @@ def query_offset(
             limit=limit,
             offset=offset,
             after=None,
+            sort=sort,
         )
         total = _profile_count(conn, target, compiled) if include_total else None
         return items, total
@@ -746,7 +748,10 @@ def query_offset(
     items = [decode_row(fields, tuple(row), target) for row in rows]
     total: int | None = None
     if include_total:
-        total = int(conn.execute(text(f"SELECT count(*) {source}"), params).scalar_one())
+        if _count_through_profile(compiled, row_dependent):
+            total = _profile_count(conn, target, compiled)
+        else:
+            total = int(conn.execute(text(f"SELECT count(*) {source}"), params).scalar_one())
     return items, total
 
 
@@ -798,7 +803,19 @@ def query_keyset(
     return page, next_after
 
 
-def _page_through_profile(compiled: CompiledFilter | None, row_dependent: bool) -> bool:
+def _page_through_profile(
+    compiled: CompiledFilter | None,
+    row_dependent: bool,
+    sort: RowSort = RowSort(),
+) -> bool:
+    if not row_dependent:
+        return True
+    return (compiled is None or compiled.leakproof) and sort.field == ROW_ID_COLUMN
+
+
+def _count_through_profile(
+    compiled: CompiledFilter | None, row_dependent: bool
+) -> bool:
     return not row_dependent or compiled is None or compiled.leakproof
 
 
@@ -827,6 +844,7 @@ def _profile_page_rows(
     limit: int,
     offset: int,
     after: int | None,
+    sort: RowSort = RowSort(),
 ) -> list[dict[str, Any]]:
     """Read one page through the profile function."""
     if limit < 1:
@@ -837,7 +855,8 @@ def _profile_page_rows(
         f"SELECT {select_cols} FROM "
         f"{qualified_table(ENTITY_ACCESS_SCHEMA, 'profile_page')}("
         "CAST(:_view AS regclass), CAST(:_columns AS text[]), "
-        ":_limit, :_offset, :_after, CAST(:_filter AS jsonb)"
+        ":_limit, :_offset, :_after, CAST(:_filter AS jsonb), "
+        "CAST(:_sort_column AS text), CAST(:_sort_direction AS text)"
         f") AS page({record})"
     )
     rows = conn.execute(
@@ -849,6 +868,8 @@ def _profile_page_rows(
             "_offset": offset,
             "_after": after,
             "_filter": None if compiled is None else compiled.profile_json,
+            "_sort_column": sort.field,
+            "_sort_direction": "desc" if sort.descending else "asc",
         },
     ).all()
     return [decode_row(fields, tuple(row), target) for row in rows]

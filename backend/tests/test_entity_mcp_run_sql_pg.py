@@ -917,6 +917,93 @@ def _constant_select_writes_no_access_log(sql_world: dict[str, Any]) -> None:
     _assert_public(payload, sql_world)
 
 
+def _indexed_join_top_n_and_redteam_oracle(
+    sql_world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.entity.access.context import load_shared_ring, sign_payload
+    from backend.entity.access.store import get_access_store
+    from backend.entity.entity_db import get_entity_reader_engine, get_entity_signer_engine
+
+    orders = sql_world["orders"]
+    lines = sql_world["lines"]
+    run_sql = sql_world["run_sql"]
+    secret = sql_world["combo_secret"]
+
+    # Non-row-dependent Top-N and mixed join (row-dependent orders + non-row-dependent lines).
+    top_n = _ok(_call(run_sql, secret, sql=f"SELECT line_no FROM {lines} ORDER BY row_id DESC LIMIT 1"))
+    assert _records(top_n) == [{"line_no": "L3"}]
+    mixed = _ok(
+        _call(
+            run_sql,
+            secret,
+            sql=(
+                f"WITH r AS (SELECT sku FROM {orders} WHERE region = 'east') "
+                f"SELECT l.line_no FROM {lines} l JOIN r ON l.order_sku = r.sku "
+                "ORDER BY l.line_no"
+            ),
+        )
+    )
+    assert _records(mixed) == [{"line_no": "L1"}, {"line_no": "L3"}]
+
+    # LEFT JOIN cast error-oracle must not leak raw cell values under forged/expired/rev-mismatch ctx.
+    oracle_sql = (
+        f"SELECT o.sku, l.line_no FROM {orders} o "
+        f"LEFT JOIN {lines} l ON o.sku = l.order_sku AND (l.line_no::integer) = 1"
+    )
+    with get_entity_signer_engine().connect() as conn:
+        ring = load_shared_ring(conn)
+        conn.rollback()
+    key = ring.current()
+    expired_token = sign_payload(
+        {
+            "sub": sql_world["combo_id"],
+            "grants": ["grant-expired"],
+            "attrs": {},
+            "rev": {sql_world["orders_id"]: 1, sql_world["lines_id"]: 1},
+            "exp": 1,
+            "req": "",
+            "kid": key.kid,
+        },
+        key.secret,
+    )
+    rev_mismatch_token = sign_payload(
+        {
+            "sub": sql_world["combo_id"],
+            "grants": [
+                item.id
+                for item in get_access_store().grants(sql_world["lines_id"])
+            ],
+            "attrs": {},
+            "rev": {sql_world["orders_id"]: 999, sql_world["lines_id"]: 999},
+            "exp": int(datetime.now(timezone.utc).timestamp()) + 3600,
+            "req": "",
+            "kid": key.kid,
+        },
+        key.secret,
+    )
+    for bad_token in ("forged-token", expired_token, rev_mismatch_token):
+        monkeypatch.setattr(
+            "backend.entity.mcp.sql_run.issue_contexts",
+            lambda *args, _t=bad_token, **kwargs: _t,
+        )
+        res = _ok(_call(run_sql, secret, sql=oracle_sql))
+        assert res["rows"] == []
+        assert res["row_count"] == 0
+    monkeypatch.undo()
+
+    # refraq_reader cannot query entity_exposure directly or call open_entity_sql without valid sig.
+    line_views = [
+        item.view_name
+        for item in get_access_store().bindings(sql_world["lines_id"])
+        if item.view_name
+    ]
+    assert line_views
+    with get_entity_reader_engine().begin() as conn:
+        with pytest.raises(Exception):
+            conn.execute(text(f'SELECT * FROM entity_exposure."{line_views[0]}"'))
+        conn.rollback()
+
+
 def test_run_sql_on_postgresql(
     sql_world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -928,3 +1015,4 @@ def test_run_sql_on_postgresql(
     _timeout_truncation_and_row_cap(sql_world, monkeypatch)
     _database_error_names_the_entity_not_the_view(sql_world)
     _constant_select_writes_no_access_log(sql_world)
+    _indexed_join_top_n_and_redteam_oracle(sql_world, monkeypatch)

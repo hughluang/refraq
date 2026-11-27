@@ -42,7 +42,9 @@ from backend.entity.access.masks import CLEAR, mask_sql
 from backend.entity.attribute_type import resolve
 from backend.entity.ddl import (
     ENTITY_ACCESS_SCHEMA,
+    ENTITY_EXPOSURE_SCHEMA,
     EXPOSURE_OWNER_ROLE,
+    OPEN_READER_ROLE,
     READER_ROLE,
     ident,
 )
@@ -60,6 +62,7 @@ __all__ = [
     "compile_decisions",
     "compile_policy",
     "context_attribute_keys",
+    "exposure_view_statements",
     "predicate_depends_on_row",
 
 
@@ -382,7 +385,11 @@ def render_shape(
     )
     if not acl:
         return select
-    return ";\n".join(view_statements(shape.view_name, select)) + ";"
+    statements = view_statements(shape.view_name, select)
+    if not shape.force_empty and not predicate_depends_on_row(shape):
+        gate_select = _gate_select_sql(shape, policy)
+        statements.extend(exposure_view_statements(shape.view_name, select, gate_select))
+    return ";\n".join(statements) + ";"
 
 
 def view_statements(view_name: str, select: str) -> list[str]:
@@ -394,21 +401,70 @@ def view_statements(view_name: str, select: str) -> list[str]:
     view = f"{ident(ENTITY_ACCESS_SCHEMA)}.{ident(view_name)}"
     return [
         f"CREATE VIEW {view} WITH (security_barrier = true) AS\n{select}",
-        f"GRANT SELECT ON {view} TO {ident(READER_ROLE)}",
+        f"GRANT SELECT ON {view} TO {ident(READER_ROLE)}, {ident(OPEN_READER_ROLE)}",
         f"ALTER VIEW {view} OWNER TO {ident(EXPOSURE_OWNER_ROLE)}",
+    ]
+
+
+def exposure_view_statements(
+    view_name: str, select: str, gate_select: str
+) -> list[str]:
+    """Unbarriered companion view and tableless gate view in ``entity_exposure``."""
+    view = f"{ident(ENTITY_EXPOSURE_SCHEMA)}.{ident(view_name)}"
+    gate = f"{ident(ENTITY_EXPOSURE_SCHEMA)}.{ident(view_name + '__gate')}"
+    open_reader = ident(OPEN_READER_ROLE)
+    owner = ident(EXPOSURE_OWNER_ROLE)
+    return [
+        f"CREATE VIEW {view} AS\n{select}",
+        f"GRANT SELECT ON {view} TO {open_reader}",
+        f"ALTER VIEW {view} OWNER TO {owner}",
+        f"CREATE VIEW {gate} AS\n{gate_select}",
+        f"GRANT SELECT ON {gate} TO {open_reader}",
+        f"ALTER VIEW {gate} OWNER TO {owner}",
     ]
 
 
 def script_statements(view_name: str, script: str) -> list[str]:
     """Inverse of ``render_shape(acl=True)`` for a stored script.
 
-    Splits on the known grant/owner suffix, never on ``;``: rule literals may contain it.
+    Splits on the known grant/owner markers, never on ``;``: rule literals may contain it.
+    Accepts both legacy single-role scripts and current companion-exposure scripts.
     """
+    view = f"{ident(ENTITY_ACCESS_SCHEMA)}.{ident(view_name)}"
     create, grant, owner = view_statements(view_name, "")
-    suffix = f";\n{grant};\n{owner};"
-    if not script.startswith(create) or not script.endswith(suffix):
+    legacy_grant = f"GRANT SELECT ON {view} TO {ident(READER_ROLE)}"
+    if not script.startswith(create):
         raise ValueError(f"stored script is not a profile view script for '{view_name}'")
-    return [script[: -len(suffix)], grant, owner]
+    for active_grant in (grant, legacy_grant):
+        suffix = f";\n{active_grant};\n{owner};"
+        if script.endswith(suffix):
+            return [script[: -len(suffix)], active_grant, owner]
+    exp_create, exp_grant, exp_owner, gate_create, gate_grant, gate_owner = (
+        exposure_view_statements(view_name, "", "")
+    )
+    mid_one = f";\n{grant};\n{owner};\n{exp_create}"
+    mid_two = f";\n{exp_grant};\n{exp_owner};\n{gate_create}"
+    tail = f";\n{gate_grant};\n{gate_owner};"
+    pos_one = script.find(mid_one, len(create))
+    if pos_one < 0 or not script.endswith(tail):
+        raise ValueError(f"stored script is not a profile view script for '{view_name}'")
+    pos_two = script.find(mid_two, pos_one + len(mid_one))
+    if pos_two < 0:
+        raise ValueError(f"stored script is not a profile view script for '{view_name}'")
+    barrier_create = script[:pos_one]
+    open_create = exp_create + script[pos_one + len(mid_one) : pos_two]
+    gate_body = gate_create + script[pos_two + len(mid_two) : -len(tail)]
+    return [
+        barrier_create,
+        grant,
+        owner,
+        open_create,
+        exp_grant,
+        exp_owner,
+        gate_body,
+        gate_grant,
+        gate_owner,
+    ]
 
 
 def _shapes(
@@ -707,6 +763,38 @@ def _select_sql(
         grant_flags=grant_flags,
         carry=carry,
     )
+
+
+def _gate_select_sql(shape: Shape, policy: Policy) -> str:
+    """Tableless 1-row context guard for a non-row-dependent Profile View."""
+    attrs = {item.attribute_id: item for item in policy.attributes}
+    flags = [
+        _grant_flag(
+            grant,
+            policy,
+            attrs,
+            acl=True,
+            active=None,
+            subject_values={},
+            subject_id=None,
+            at=None,
+        )
+        for grant in shape.grants
+    ]
+    predicates = _predicates(
+        shape,
+        policy,
+        attrs,
+        acl=True,
+        person=None,
+        at=None,
+        subject_id=None,
+        subject_values={},
+        bind_subject=False,
+    )
+    grant_or = "(" + " OR ".join(flags) + ")" if flags else "FALSE"
+    where = " AND ".join([*predicates, grant_or])
+    return f"SELECT COALESCE(({where}), false) AS ok"
 
 
 def _single_sql(

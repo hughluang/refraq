@@ -119,7 +119,12 @@ def test_rule_literal_with_a_semicolon_stays_in_one_statement() -> None:
     compiled = compile_policy(_policy(grant, people=(person,)))
     statements = profile_view_statements(compiled, [])
     views = len(compiled.bindings)
-    assert len(statements) == views + 3 * views
+    # 3 DROP statements per view (gate, exposure, access) + 3 or 9 DDL statements per binding.
+    expected_creates = sum(
+        3 if ("entity_exposure" not in binding.sql) else 9
+        for binding in compiled.bindings
+    )
+    assert len(statements) == 3 * views + expected_creates
     carrying = [item for item in statements if "GRANT SELECT ON x TO y" in item]
     assert carrying
     assert all(item.startswith("CREATE VIEW") for item in carrying)
@@ -134,19 +139,42 @@ def test_profile_view_sql_drops_and_creates_and_fences_revision() -> None:
     sql = compiled.bindings[0].sql
     assert "CREATE OR REPLACE" not in sql
     assert "security_barrier = true" in sql
+    assert "entity_exposure" in sql
     assert "acl.rev_ok('ent_customer', 4)" in sql
     assert hashlib.sha256(sql.encode()).hexdigest() == compiled.bindings[0].ddl_sha256
     statements = profile_view_statements(compiled, ["customer__p_old"])
-    assert statements[0].startswith('DROP VIEW IF EXISTS "entity_access".')
+    assert statements[0].startswith('DROP VIEW IF EXISTS "entity_exposure"."customer__p_old__gate"')
+    assert any(item.startswith('DROP VIEW IF EXISTS "entity_access"."customer__p_old"') for item in statements)
     assert any("CREATE VIEW" in item and "CREATE OR REPLACE" not in item for item in statements)
     assert any('OWNER TO "refraq_exposure_owner"' in item for item in statements)
     assert any("GRANT SELECT" in item and '"refraq_reader"' in item for item in statements)
+    assert any("GRANT SELECT" in item and '"refraq_open_reader"' in item for item in statements)
     revised = compile_policy(replace(
         _policy(_grant("eag_user", "eap_a", "user", "user_1"), people=(person,)),
         revision=5,
     ))
     assert "acl.rev_ok('ent_customer', 5)" in revised.bindings[0].sql
     assert "acl.rev_ok('ent_customer', 4)" not in revised.bindings[0].sql
+
+
+def test_script_statements_accepts_legacy_and_companion_scripts() -> None:
+    from backend.entity.access.compiler import script_statements
+
+    person = Person("user_1", "role_1", ("grp_1",))
+    compiled = compile_policy(
+        _policy(_grant("eag_user", "eap_a", "user", "user_1"), people=(person,))
+    )
+    binding = compiled.bindings[0]
+    parsed = script_statements(binding.view_name, binding.sql)
+    assert len(parsed) == 9
+    assert ";\n".join(parsed) + ";" == binding.sql
+    legacy = (
+        f'CREATE VIEW "entity_access"."{binding.view_name}" WITH (security_barrier = true) AS\n'
+        "SELECT 1 AS row_id;\n"
+        f'GRANT SELECT ON "entity_access"."{binding.view_name}" TO "refraq_reader";\n'
+        f'ALTER VIEW "entity_access"."{binding.view_name}" OWNER TO "refraq_exposure_owner";'
+    )
+    assert len(script_statements(binding.view_name, legacy)) == 3
 
 
 def test_signed_context_roundtrip_and_key_rotation() -> None:

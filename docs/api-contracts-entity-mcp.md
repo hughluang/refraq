@@ -255,8 +255,8 @@ Execution uses a reader connection inside admission, not the Entity Data read he
 1. `BEGIN`, then `SET TRANSACTION READ ONLY`
 2. `set_config('app.ctx', token, true)` so the context is local to the transaction
 3. `SET LOCAL statement_timeout` to `timeout_sec` × 1000 milliseconds
-4. `cursor.execute(sql, binary=True)` on the bound text: one extended-protocol statement, no client parameters, so a second statement is rejected and `%` stays literal
-5. `fetchmany(max_rows + 1)`
+4. When every referenced Profile View is row-dependent, `cursor.execute(sql, binary=True)` runs directly on the bound text: one extended-protocol statement, no client parameters, so a second statement is rejected and `%` stays literal. When any referenced Profile View has no row-dependent predicate, `run_sql` also AST-binds those Entities to their companion `entity_exposure` views, signs `(open_sql, barrier_sql, views, exp)` with the shared signing key, opens a read-only cursor via `entity_access.open_entity_sql`, and fetches `max_rows + 1` rows with `binary=True` (falling back to the `security_barrier` statement inside PostgreSQL whenever `app.ctx` is invalid, expired, revision-mismatched, or pre-reconciliation)
+5. `fetchmany(max_rows + 1)` (or `FETCH FORWARD` from the cursor) and `CLOSE`
 6. `ROLLBACK` on success and on database failure. If rollback fails after a body error, the body error is the one raised
 
 The `pg_catalog.pg_type` lookup that turns column OIDs into type names runs in that same read-only transaction, before rollback. After five identical executions on one pooled connection, psycopg may `PREPARE`. That text can remain in `pg_prepared_statements` until the connection evicts it. The connection-level prepare threshold is unchanged. The SQL gate still rejects catalog reads, so the caller cannot read that text through `run_sql`.
