@@ -222,7 +222,8 @@ NODE_TYPE = NodeType(
     description=(
         "A named buffer lives for one Channel Run and stores rows in a dataset table. "
         "append adds rows from a list of objects or a dataset reference. "
-        "get returns the accumulated dataset reference, or an empty dataset if nothing was appended."
+        "get returns the accumulated dataset reference, or an empty dataset if nothing was appended. "
+        "Each append takes the next _ord values, so _ord follows append order."
     ),
     trigger=False,
     inputs=(MAIN_INPUT,),

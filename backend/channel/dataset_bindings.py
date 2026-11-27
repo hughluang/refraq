@@ -35,7 +35,8 @@ DATASETS_CONFIG_SCHEMA: dict[str, Any] = {
     "title": "Datasets",
     "description": (
         "SQL table aliases mapped to dataset references. "
-        "Available only when source is entity."
+        "Available only when source is entity. "
+        "Each alias exposes _ord (1 to count), the table's only index."
     ),
     "additionalProperties": {
         "type": "string",

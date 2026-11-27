@@ -193,6 +193,27 @@ def test_dataset_buffer_append_and_empty_get_in_pg(dataset_store) -> None:
     assert got.output["count"] == 3
     assert [c["name"] for c in got.output["dataset"]["columns"]] == ["sku", "qty"]
 
+    sql_node = _node("read.sql")
+    page_res = sql_node.execute(
+        {
+            "id": "n_ord_page",
+            "type": "read.sql",
+            "config": {
+                "source": {"kind": "entity"},
+                "sql": "SELECT b._ord, b.sku, b.qty FROM items AS b WHERE b._ord > 1 AND b._ord <= 3 ORDER BY b._ord",
+                "datasets": {
+                    "items": f'{{"dataset_id": "{got.output["dataset"]["dataset_id"]}", "columns": [], "count": 3}}',
+                },
+            },
+        },
+        hooks,
+    )
+    assert page_res.status == "succeeded", page_res.error_message
+    assert page_res.output["rows"] == [
+        {"_ord": 2, "sku": "S2", "qty": 2},
+        {"_ord": 3, "sku": "S3", "qty": 3},
+    ]
+
 
 def test_write_entity_replace_reconciles_and_clears_in_pg(dataset_store) -> None:
     from backend.admin.user_store import get_user_store

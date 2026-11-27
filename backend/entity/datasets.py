@@ -152,6 +152,11 @@ def create_empty_table(relation: str) -> tuple[int, int]:
     return 0, int(size)
 
 
+# Same trigger as PostgreSQL's default autovacuum analyze threshold.
+_ANALYZE_BASE_ROWS = 50
+_ANALYZE_SCALE = 0.1
+
+
 def append_from_dataset(
     target_relation: str,
     source_relation: str,
@@ -165,7 +170,9 @@ def append_from_dataset(
     with get_entity_engine().begin() as conn:
         source_cols = _column_types_on(conn, source_relation)
         if not source_cols:
-            return _count_on(conn, target_relation), _relation_size(conn, target_relation)
+            return _max_ord_on(conn, target_relation, ordinal), _relation_size(
+                conn, target_relation
+            )
         target_cols = _column_types_on(conn, target_relation)
         if not target_cols:
             for col in source_cols:
@@ -176,13 +183,9 @@ def append_from_dataset(
             (col["name"], col["type"]) for col in target_cols
         ] != [(col["name"], col["type"]) for col in source_cols]:
             raise ValueError("Buffer column schema does not match appended dataset")
-        base_ord = int(
-            conn.execute(
-                text(f"SELECT COALESCE(MAX({ordinal}), 0) FROM {target_relation}")
-            ).scalar_one()
-        )
+        base_ord = _max_ord_on(conn, target_relation, ordinal)
         col_sql = ", ".join(ident(col["name"]) for col in source_cols)
-        conn.execute(
+        result = conn.execute(
             text(
                 f"INSERT INTO {target_relation} ({ordinal}, {col_sql}) "
                 f"SELECT :base + row_number() OVER (ORDER BY {ordinal}), {col_sql} "
@@ -190,10 +193,12 @@ def append_from_dataset(
             ),
             {"base": base_ord},
         )
+        inserted = int(result.rowcount)
+        total = base_ord + inserted
         if on_size is not None:
             on_size(_relation_size(conn, target_relation))
-        conn.exec_driver_sql(f"ANALYZE {target_relation}")
-        total = _count_on(conn, target_relation)
+        if inserted > 0:
+            _analyze_if_grown(conn, target_relation, total)
         size = _relation_size(conn, target_relation)
     return total, int(size)
 
@@ -227,11 +232,7 @@ def append_chunks(
             (col["name"], col["type"]) for col in target_cols
         ] != [(name, pg_type) for name, pg_type in columns]:
             raise ValueError("Buffer column schema does not match appended rows")
-        base_ord = int(
-            conn.execute(
-                text(f"SELECT COALESCE(MAX({ordinal}), 0) FROM {relation}")
-            ).scalar_one()
-        )
+        base_ord = _max_ord_on(conn, relation, ordinal)
         raw = conn.connection.driver_connection
         appended = 0
         for chunk in chunks:
@@ -246,8 +247,9 @@ def append_chunks(
                 appended += len(rows)
             if on_chunk_size is not None:
                 on_chunk_size(_relation_size(conn, relation))
-        conn.exec_driver_sql(f"ANALYZE {relation}")
-        total = _count_on(conn, relation)
+        total = base_ord + appended
+        if appended > 0:
+            _analyze_if_grown(conn, relation, total)
         size = _relation_size(conn, relation)
     return total, int(size)
 
@@ -270,8 +272,23 @@ def _column_types_on(conn: Any, relation: str) -> list[dict[str, str]]:
     return [{"name": str(row["name"]), "type": str(row["type"])} for row in rows]
 
 
-def _count_on(conn: Any, relation: str) -> int:
-    return int(conn.execute(text(f"SELECT count(*) FROM {relation}")).scalar_one())
+def _max_ord_on(conn: Any, relation: str, ordinal: str) -> int:
+    return int(
+        conn.execute(
+            text(f"SELECT COALESCE(MAX({ordinal}), 0) FROM {relation}")
+        ).scalar_one()
+    )
+
+
+def _analyze_if_grown(conn: Any, relation: str, total: int) -> None:
+    analyzed = float(
+        conn.execute(
+            text("SELECT reltuples FROM pg_class WHERE oid = cast(:relation AS regclass)"),
+            {"relation": relation},
+        ).scalar_one()
+    )
+    if analyzed < 0 or total - analyzed > _ANALYZE_BASE_ROWS + _ANALYZE_SCALE * analyzed:
+        conn.exec_driver_sql(f"ANALYZE {relation}")
 
 
 def create_table_on(

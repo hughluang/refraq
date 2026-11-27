@@ -786,3 +786,111 @@ def test_sql_registry_persists_a_ready_dataset_and_ignores_dropped_bytes(
     assert store.used_bytes() == record.size_bytes
     page = read_keyset_page(record.relation, after_ord=0, limit=10)
     assert {(row["n"], row["label"]) for row in page} == {(1, "a"), (2, "b")}
+
+
+@pytest.mark.integration
+def test_buffer_appends_assign_contiguous_ord_blocks(
+    dataset_registry: tuple[DatasetRegistry, MemoryDatasetStore],
+) -> None:
+    registry, _store = dataset_registry
+    cols = [DatasetColumnSpec("sku", "string"), DatasetColumnSpec("qty", "integer")]
+
+    buf = registry.append_buffer_chunks(
+        job_id="job_ord",
+        buffer_name="buf_ord",
+        node_id="n1",
+        seq=1,
+        columns=cols,
+        chunks=[[("A", 1), ("B", 2)]],
+    )
+    assert buf.row_count == 2
+
+    src = registry.create_from_chunks(
+        job_id="job_ord",
+        node_id="n2",
+        seq=2,
+        columns=cols,
+        chunks=[[("C", 3), ("D", 4), ("E", 5)]],
+    )
+    buf = registry.append_buffer_dataset(
+        job_id="job_ord",
+        buffer_name="buf_ord",
+        node_id="n3",
+        seq=3,
+        source_id=src.id,
+    )
+    assert buf.row_count == 5
+
+    buf = registry.append_buffer_chunks(
+        job_id="job_ord",
+        buffer_name="buf_ord",
+        node_id="n4",
+        seq=4,
+        columns=cols,
+        chunks=[[("F", 6)]],
+    )
+    assert buf.row_count == 6
+
+    rows = read_keyset_page(buf.relation, after_ord=0, limit=10)
+    assert [(row["_ord"], row["sku"], row["qty"]) for row in rows] == [
+        (1, "A", 1),
+        (2, "B", 2),
+        (3, "C", 3),
+        (4, "D", 4),
+        (5, "E", 5),
+        (6, "F", 6),
+    ]
+
+
+@pytest.mark.integration
+def test_buffer_append_analyzes_only_after_growth_threshold(
+    dataset_registry: tuple[DatasetRegistry, MemoryDatasetStore],
+) -> None:
+    from backend.entity.entity_db import get_entity_engine
+
+    registry, _store = dataset_registry
+    cols = [DatasetColumnSpec("n", "integer")]
+
+    def reltuples(relation: str) -> float:
+        with get_entity_engine().connect() as conn:
+            return float(
+                conn.execute(
+                    text("SELECT reltuples FROM pg_class WHERE oid = cast(:relation AS regclass)"),
+                    {"relation": relation},
+                ).scalar_one()
+            )
+
+    buf = registry.append_buffer_chunks(
+        job_id="job_an",
+        buffer_name="buf_an",
+        node_id="n1",
+        seq=1,
+        columns=cols,
+        chunks=[[(i,) for i in range(100)]],
+    )
+    assert buf.row_count == 100
+    assert reltuples(buf.relation) == 100.0
+
+    # 10 rows is below 50 + 0.1 * 100 = 60, so ANALYZE is skipped.
+    buf = registry.append_buffer_chunks(
+        job_id="job_an",
+        buffer_name="buf_an",
+        node_id="n2",
+        seq=2,
+        columns=cols,
+        chunks=[[(i,) for i in range(100, 110)]],
+    )
+    assert buf.row_count == 110
+    assert reltuples(buf.relation) == 100.0
+
+    # 100 more rows brings delta to 110 > 60, triggering ANALYZE.
+    buf = registry.append_buffer_chunks(
+        job_id="job_an",
+        buffer_name="buf_an",
+        node_id="n3",
+        seq=3,
+        columns=cols,
+        chunks=[[(i,) for i in range(110, 210)]],
+    )
+    assert buf.row_count == 210
+    assert reltuples(buf.relation) == 210.0
