@@ -1,12 +1,12 @@
 """Checkpointed Change Log range for Read Changes and Changes Dataset.
 
 Recording, purge-mark validity, start, bound, and proposal live here.
-Open and read do not propose. The caller proposes after it succeeds.
+Open and read/land do not propose. The caller proposes after it succeeds.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -18,13 +18,15 @@ from backend.entity.changes import (
     purge_mark,
     recording_enabled,
 )
+from backend.entity.errors import EntityNotFound
+from backend.entity.heads import get_entity_head
 from backend.entity.history.service import (
+    IncrementalDatasetResult,
     IncrementalPage,
     IncrementalPosition,
+    materialize_incremental_dataset,
     read_incremental,
 )
-from backend.entity.heads import get_entity_head
-from backend.entity.errors import EntityNotFound
 
 if TYPE_CHECKING:
     from backend.channel.nodes.spec import CheckpointView
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ChangeRange",
     "ChangeRangeError",
+    "land_change_range",
     "open_change_range",
     "propose_change_range",
     "read_change_range",
@@ -115,8 +118,9 @@ def read_change_range(
     *,
     limit: int,
     after: IncrementalPosition | None = None,
+    sources: Collection[str] | None = None,
 ) -> IncrementalPage:
-    """One projected page through ``read_incremental``. Does not propose.
+    """Projected page through ``read_incremental``. Does not propose.
 
     The operation loads the platform System Identity. This function does not
     take a user. ``after`` none resumes at the opened start, including the
@@ -133,7 +137,47 @@ def read_change_range(
             after=cursor,
             bound=opened.bound,
             limit=limit,
+            sources=sources,
         )
+
+
+def land_change_range(
+    opened: ChangeRange,
+    relation: str,
+    *,
+    limit: int,
+    columns: Sequence[str] | None = None,
+    sources: Collection[str] | None = None,
+    page_size: int = 10_000,
+    before_page: Callable[[], int | None] | None = None,
+    on_page_size: Callable[[int], None] | None = None,
+) -> IncrementalDatasetResult:
+    """Materialize ``opened`` into ``relation`` with opening/closing purge checks."""
+    cursor = (
+        None
+        if opened.after is None
+        else IncrementalPosition(
+            commit_seq=opened.after.xact, seq=opened.after.seq
+        )
+    )
+    mark_before = purge_mark(opened.entity_id)
+    with _range_errors():
+        result = materialize_incremental_dataset(
+            opened.entity_id,
+            relation,
+            after=cursor,
+            bound=opened.bound,
+            limit=limit,
+            columns=columns,
+            sources=sources,
+            page_size=page_size,
+            before_page=before_page,
+            on_page_size=on_page_size,
+        )
+    mark_after = purge_mark(opened.entity_id)
+    if _purge_moved_past_start(opened.after, mark_before, mark_after):
+        raise ChangeRangeError("CHANNEL_CHECKPOINT_INVALID", _INVALID)
+    return result
 
 
 def propose_change_range(
@@ -153,6 +197,21 @@ def propose_change_range(
         opened.entity_id,
         CheckpointPosition(xact=progress.commit_seq, seq=progress.seq),
     )
+
+
+def _purge_moved_past_start(
+    start: ChangePosition | None,
+    before: ChangePosition | None,
+    after: ChangePosition | None,
+) -> bool:
+    """A purge that commits during the load and passes the start position."""
+    if after is None:
+        return False
+    if before is not None and (after.xact, after.seq) <= (before.xact, before.seq):
+        return False
+    if start is None:
+        return True
+    return (start.xact, start.seq) < (after.xact, after.seq)
 
 
 def _change_position(position: CheckpointPosition | None) -> ChangePosition | None:

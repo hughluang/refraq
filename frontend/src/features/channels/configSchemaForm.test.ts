@@ -344,11 +344,16 @@ const MERGE: SchemaObject = {
 };
 
 describe("reshape config schemas", () => {
-  it("maps string lists, template lists, nullable strings, and enum defaults", () => {
+  it("maps string lists, enum lists, template lists, nullable strings, and enum defaults", () => {
     const fields = fieldsFromSchema({
       type: "object",
       properties: {
         keys: { type: "array", description: "Field names.", items: { type: "string" } },
+        columns: {
+          type: "array",
+          description: "Column subset.",
+          items: { type: "string", enum: ["operation", "business_key"] },
+        },
         inputs: MERGE.properties?.inputs,
         key: MERGE.properties?.key,
         join: { type: "string", enum: ["inner", "left"], default: "left" },
@@ -356,12 +361,14 @@ describe("reshape config schemas", () => {
     });
     expect(fields.map((field) => field.kind)).toEqual([
       "stringList",
+      "enumList",
       "templateList",
       "string",
       "enum",
     ]);
-    expect(fields[2]).toMatchObject({ kind: "string", nullable: true });
-    expect(fields[3]).toMatchObject({ kind: "enum", fallback: "left" });
+    expect(fields[1]).toMatchObject({ kind: "enumList", options: ["operation", "business_key"] });
+    expect(fields[3]).toMatchObject({ kind: "string", nullable: true });
+    expect(fields[4]).toMatchObject({ kind: "enum", fallback: "left" });
     expect(defaultConfig(MERGE)).toEqual({
       mode: "append",
       inputs: [],

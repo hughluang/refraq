@@ -115,6 +115,8 @@ class ChangeLogTable:
     attributes: Sequence[AttributeRecord]
     reference_snapshots: Mapping[str, Any]
     business_key: str | None = None
+    version_id: str | None = None
+    version_number: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

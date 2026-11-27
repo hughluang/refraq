@@ -400,8 +400,15 @@ def _stub_change_log(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr("backend.channel.checkpoints.capture_bound", lambda _entity_id: 100)
 
-    def read_incremental(entity_id: str, *, after: object, bound: int, limit: int) -> IncrementalPage:
-        del entity_id, after, bound, limit
+    def read_incremental(
+        entity_id: str,
+        *,
+        after: object,
+        bound: int,
+        limit: int,
+        sources: object = None,
+    ) -> IncrementalPage:
+        del entity_id, after, bound, limit, sources
         return IncrementalPage(
             events=[],
             progress=IncrementalPosition(commit_seq=7, seq=3),

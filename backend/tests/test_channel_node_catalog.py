@@ -50,7 +50,7 @@ _OUTPUT_VIEWS = {
         kind="container", metrics=("count", "total", "batch_size"), item="rows"
     ),
     "volume.changes_dataset": OutputView(
-        kind="dataset", dataset="dataset", metrics=("count",)
+        kind="dataset", dataset="dataset", metrics=("count", "has_more")
     ),
     "volume.dataset_buffer": OutputView(
         kind="dataset", dataset="dataset", metrics=("count",)

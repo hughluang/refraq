@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time
 from decimal import Decimal
+import math
 from typing import Any, Literal, Mapping, Sequence
 
 from sqlalchemy import text
@@ -274,6 +275,7 @@ def _query(
         outcome.shape,
         replace(policy, source_sql=f"({source})"),
         acl=False,
+        active=frozenset(outcome.grant_ids),
         person=person,
         subject_values=policy.subject_values.get(person.user_id, {}),
         at=policy.now,
@@ -346,4 +348,6 @@ def _json(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, time):
         return value.isoformat()
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
     return value

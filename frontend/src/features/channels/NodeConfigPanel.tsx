@@ -9,6 +9,7 @@ import { presentNodeStatus } from "@/components/display/statusTone";
 import { FieldDisclosureContext, FieldMarks } from "@/components/form/FieldChrome";
 import type { FieldNote } from "@/components/form/fieldNotes";
 import { JsonField } from "@/components/form/JsonField";
+import { MultiSelectField } from "@/components/form/MultiSelectField";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
@@ -772,6 +773,39 @@ function ConfigField({
         notes={notes}
         openSignal={openSignal}
         onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "enumList") {
+    const options = field.options.map((option) => ({
+      value: option,
+      label: optionLabel(t, field.key, option),
+    }));
+    const selected = Array.isArray(value)
+      ? field.options.filter((option) => value.includes(option))
+      : [];
+    const placeholderKey = `channels.config.placeholder.${nodeType}.${field.key}`;
+    const placeholderText = t(placeholderKey);
+    const placeholder = placeholderText === placeholderKey ? undefined : placeholderText;
+    return (
+      <MultiSelectField
+        editable={editable}
+        {...labelProps}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
+        data={options}
+        value={selected}
+        placeholder={placeholder}
+        searchable
+        clearable={!field.required}
+        size={labeled ? undefined : "xs"}
+        w={labeled ? undefined : "100%"}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
+        onChange={(next) => {
+          const ordered = field.options.filter((option) => next.includes(option));
+          onChange(ordered.length === 0 && !field.required ? undefined : ordered);
+        }}
       />
     );
   }

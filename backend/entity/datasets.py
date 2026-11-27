@@ -28,13 +28,16 @@ from backend.entity.entity_db import get_entity_engine
 __all__ = [
     "CHANNEL_DATASET_SCHEMA",
     "ORD_COLUMN",
+    "analyze_on",
     "any_row_exists",
     "append_chunks",
     "append_from_dataset",
     "column_types",
     "copy_chunks",
+    "copy_rows_on",
     "create_empty_table",
     "create_table_from_query",
+    "create_table_on",
     "drop_relation",
     "format_type_declaration",
     "iter_dataset_chunks",
@@ -43,6 +46,7 @@ __all__ = [
     "physical_relation",
     "postgres_type",
     "read_keyset_page",
+    "relation_size_on",
     "temporal_target_conflict",
     "temporal_value_conflict",
 ]
@@ -270,17 +274,10 @@ def _count_on(conn: Any, relation: str) -> int:
     return int(conn.execute(text(f"SELECT count(*) FROM {relation}")).scalar_one())
 
 
-def copy_chunks(
-    relation: str,
-    columns: Sequence[tuple[str, str]],
-    chunks: Iterable[Sequence[Sequence[Any]]],
-    on_chunk_size: Callable[[int], None] | None = None,
-) -> tuple[int, int]:
-    """Create an UNLOGGED table and COPY each chunk. Returns row count and size.
-
-    ``on_chunk_size`` receives ``pg_total_relation_size`` after every chunk. If it
-    raises, the transaction rolls back and the table is gone.
-    """
+def create_table_on(
+    conn: Any, relation: str, columns: Sequence[tuple[str, str]]
+) -> str:
+    """Create an UNLOGGED dataset table on ``conn`` and return its quoted column list."""
     _require_relation(relation)
     if not columns:
         raise ValueError("dataset table needs at least one column")
@@ -293,26 +290,66 @@ def copy_chunks(
             raise ValueError(f"unsupported dataset column type: {pg_type}")
         definitions.append(f"{ident(name)} {pg_type}")
         names.append(name)
-    copy_columns = ", ".join([ordinal, *[ident(name) for name in names]])
+    conn.exec_driver_sql(
+        f"CREATE UNLOGGED TABLE {relation} ({', '.join(definitions)})"
+    )
+    return ", ".join([ordinal, *[ident(name) for name in names]])
+
+
+def copy_rows_on(
+    conn: Any,
+    relation: str,
+    copy_columns: str,
+    rows: Sequence[Sequence[Any]],
+    *,
+    start_ord: int,
+) -> None:
+    """COPY one non-empty batch of rows into ``relation`` on ``conn``."""
+    if not rows:
+        return
+    raw = conn.connection.driver_connection
+    with raw.cursor() as cursor:
+        with cursor.copy(
+            f"COPY {relation} ({copy_columns}) FROM STDIN"
+        ) as copy:
+            for offset, row in enumerate(rows, start=start_ord):
+                copy.write_row((offset, *row))
+
+
+def relation_size_on(conn: Any, relation: str) -> int:
+    """Total relation size in bytes on ``conn``."""
+    _require_relation(relation)
+    return _relation_size(conn, relation)
+
+
+def analyze_on(conn: Any, relation: str) -> None:
+    """Run ``ANALYZE`` on ``relation``."""
+    _require_relation(relation)
+    conn.exec_driver_sql(f"ANALYZE {relation}")
+
+
+def copy_chunks(
+    relation: str,
+    columns: Sequence[tuple[str, str]],
+    chunks: Iterable[Sequence[Sequence[Any]]],
+    on_chunk_size: Callable[[int], None] | None = None,
+) -> tuple[int, int]:
+    """Create an UNLOGGED table and COPY each chunk. Returns row count and size.
+
+    ``on_chunk_size`` receives ``pg_total_relation_size`` after every chunk. If it
+    raises, the transaction rolls back and the table is gone.
+    """
     with get_entity_engine().begin() as conn:
-        conn.exec_driver_sql(
-            f"CREATE UNLOGGED TABLE {relation} ({', '.join(definitions)})"
-        )
-        raw = conn.connection.driver_connection
+        copy_columns = create_table_on(conn, relation, columns)
         total = 0
         for chunk in chunks:
             rows = list(chunk)
             if rows:
-                with raw.cursor() as cursor:
-                    with cursor.copy(
-                        f"COPY {relation} ({copy_columns}) FROM STDIN"
-                    ) as copy:
-                        for offset, row in enumerate(rows, start=total + 1):
-                            copy.write_row((offset, *row))
+                copy_rows_on(conn, relation, copy_columns, rows, start_ord=total + 1)
                 total += len(rows)
             if on_chunk_size is not None:
                 on_chunk_size(_relation_size(conn, relation))
-        conn.exec_driver_sql(f"ANALYZE {relation}")
+        analyze_on(conn, relation)
         size = _relation_size(conn, relation)
     return total, size
 

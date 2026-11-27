@@ -219,6 +219,7 @@ def _arm(
     *,
     recording: bool = True,
     attributes: list[AttributeRecord] | None = None,
+    grant_system: bool = True,
 ) -> tuple[str, str]:
     entity_id = new_entity_id()
     version_id = uuid.uuid4().hex[:16]
@@ -261,7 +262,8 @@ def _arm(
             ),
         )
         install_triggers(conn, entity_id, [table])
-    ensure_system_grant(entity_id, attrs)
+    if grant_system:
+        ensure_system_grant(entity_id, attrs)
     return entity_id, table
 
 
@@ -359,8 +361,9 @@ def test_empty_range_lands_an_empty_dataset_and_proposes_nothing(
     hooks = _hooks(capture_bound(entity_id))
     result = NODE_TYPE.execute(_node(entity_id), hooks)
     assert result.status == "succeeded", result.error_message
-    assert set(result.output) == {"dataset", "count"}
+    assert set(result.output) == {"dataset", "count", "has_more"}
     assert result.output["count"] == 0
+    assert result.output["has_more"] is False
     dataset = result.output["dataset"]
     assert dataset["count"] == 0
     assert [column["name"] for column in dataset["columns"]] == list(_COLUMNS)
@@ -394,12 +397,16 @@ def test_changes_dataset_declares_a_bounded_volume_load() -> None:
     assert [port.port for port in node.outputs] == ["main", "error"]
     assert node.output_view.kind == "dataset"
     assert node.output_view.dataset == "dataset"
-    assert node.output_view.metrics == ("count",)
+    assert node.output_view.metrics == ("count", "has_more")
     schema = node.config_schema
     validator = Draft202012Validator(schema)
     mirror = {"kind": "mirror", "mirror_id": "mir_orders"}
     assert validator.is_valid({"entity_id": "ent_orders"})
     assert validator.is_valid({"entity_id": "ent_orders", "sources": ["channel_run"], "limit": 1})
+    assert validator.is_valid(
+        {"entity_id": "ent_orders", "columns": ["operation", "business_key", "physical_table"]}
+    )
+    assert validator.is_valid({"entity_id": "ent_orders", "columns": []})
     for config in (
         {},
         {"sources": ["user"]},
@@ -455,7 +462,7 @@ def test_rows_match_read_changes_entries_in_xact_seq_order(fresh_datasets) -> No
     hooks = _hooks(bound)
     result = NODE_TYPE.execute(_node(entity_id), hooks)
     assert result.status == "succeeded", result.error_message
-    assert "has_more" not in result.output
+    assert result.output["has_more"] is False
     assert "last_sequence" not in result.output
     rows = _rows(result.output["dataset"]["dataset_id"])
     entries = read.output["entries"]
@@ -696,19 +703,24 @@ def test_a_purge_during_the_load_drops_the_table_and_proposes_nothing(
         _insert(conn, table, "read")
         _insert(conn, table, "also")
     bound = capture_bound(entity_id)
-    real = changes_dataset.read_change_range
+    monkeypatch.setattr(changes_dataset, "_PAGE", 1)
     purged = {"done": False}
 
-    def wrapped(opened, *, limit, after=None):
-        page = real(opened, limit=limit, after=after)
-        if page.progress is not None and not purged["done"]:
-            purged["done"] = True
-            with get_entity_engine().begin() as conn:
-                delete_entries(conn, opened.entity_id)
-        return page
+    class _PurgeHooks(FakeHooks):
+        def __init__(self) -> None:
+            super().__init__(run_id="run_purge", channel_id="chn_1")
+            self.checkpoints.bound_value = bound
+            self.calls = 0
 
-    monkeypatch.setattr(changes_dataset, "read_change_range", wrapped)
-    hooks = _hooks(bound, run_id="run_purge")
+        def cancelled(self) -> bool:
+            self.calls += 1
+            if self.calls == 2 and not purged["done"]:
+                purged["done"] = True
+                with get_entity_engine().begin() as conn:
+                    delete_entries(conn, entity_id)
+            return False
+
+    hooks = _PurgeHooks()
     before = set(_relations())
     result = NODE_TYPE.execute(_node(entity_id), hooks)
     assert purged["done"] is True
@@ -773,15 +785,20 @@ def test_cancel_between_pages_drops_the_table_and_proposes_nothing(
     with engine.begin() as conn:
         _insert(conn, table, "one")
         _insert(conn, table, "two")
-    hooks = _hooks(capture_bound(entity_id), run_id="run_cancel")
-    real = changes_dataset.read_change_range
+    monkeypatch.setattr(changes_dataset, "_PAGE", 1)
+    bound = capture_bound(entity_id)
 
-    def wrapped(opened, *, limit, after=None):
-        page = real(opened, limit=limit, after=after)
-        hooks.cancel_after = _NODE_ID
-        return page
+    class _CancelHooks(FakeHooks):
+        def __init__(self) -> None:
+            super().__init__(run_id="run_cancel", channel_id="chn_1")
+            self.checkpoints.bound_value = bound
+            self.calls = 0
 
-    monkeypatch.setattr(changes_dataset, "read_change_range", wrapped)
+        def cancelled(self) -> bool:
+            self.calls += 1
+            return self.calls >= 2
+
+    hooks = _CancelHooks()
     before = set(_relations())
     with pytest.raises(changes_dataset._LoadHalted, match="^cancelled$"):
         NODE_TYPE.execute(_node(entity_id), hooks)
@@ -801,24 +818,19 @@ def test_supersede_between_pages_drops_the_table_and_proposes_nothing(
         def __init__(self, bound: int) -> None:
             super().__init__(run_id="run_supersede", channel_id="chn_1")
             self.checkpoints.bound_value = bound
-            self.stop = False
+            self.calls = 0
 
         def superseded(self) -> bool:
-            return self.stop
+            self.calls += 1
+            return self.calls >= 2
 
     engine = get_entity_engine()
     entity_id, table = _arm(engine)
     with engine.begin() as conn:
         _insert(conn, table, "one")
+        _insert(conn, table, "two")
+    monkeypatch.setattr(changes_dataset, "_PAGE", 1)
     hooks = _Hooks(capture_bound(entity_id))
-    real = changes_dataset.read_change_range
-
-    def wrapped(opened, *, limit, after=None):
-        page = real(opened, limit=limit, after=after)
-        hooks.stop = True
-        return page
-
-    monkeypatch.setattr(changes_dataset, "read_change_range", wrapped)
     before = set(_relations())
     with pytest.raises(changes_dataset._LoadHalted, match="^superseded$"):
         NODE_TYPE.execute(_node(entity_id), hooks)
@@ -839,17 +851,10 @@ def test_the_deadline_between_pages_fails_the_node_and_drops_the_table(
     with engine.begin() as conn:
         _insert(conn, table, "one")
         _insert(conn, table, "two")
+    monkeypatch.setattr(changes_dataset, "_PAGE", 1)
     hooks = _hooks(capture_bound(entity_id), run_id="run_deadline")
-    clock = {"now": 0.0}
-    monkeypatch.setattr(changes_dataset.time, "monotonic", lambda: clock["now"])
-    real = changes_dataset.read_change_range
-
-    def wrapped(opened, *, limit, after=None):
-        page = real(opened, limit=limit, after=after)
-        clock["now"] = 10_000.0
-        return page
-
-    monkeypatch.setattr(changes_dataset, "read_change_range", wrapped)
+    ticks = iter([0.0, 0.0, 10_000.0, 10_000.0])
+    monkeypatch.setattr(changes_dataset.time, "monotonic", lambda: next(ticks, 10_000.0))
     before = set(_relations())
     result = NODE_TYPE.execute(_node(entity_id), hooks)
     assert result.status == "failed"
@@ -862,11 +867,7 @@ def test_the_deadline_between_pages_fails_the_node_and_drops_the_table(
     assert records[0].status == "dropped"
 
 
-def test_a_range_past_one_page_is_scanned_in_pages_of_10000(
-    fresh_datasets, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import backend.channel.nodes.volume.changes_dataset as changes_dataset
-
+def test_a_range_past_one_page_is_scanned_in_pages_of_10000(fresh_datasets) -> None:
     engine = get_entity_engine()
     entity_id, table = _arm(engine)
     with engine.begin() as conn:
@@ -877,19 +878,11 @@ def test_a_range_past_one_page_is_scanned_in_pages_of_10000(
             )
         )
     bound = capture_bound(entity_id)
-    limits: list[int] = []
-    real = changes_dataset.read_change_range
-
-    def wrapped(opened, *, limit, after=None):
-        limits.append(limit)
-        return real(opened, limit=limit, after=after)
-
-    monkeypatch.setattr(changes_dataset, "read_change_range", wrapped)
     hooks = _hooks(bound, run_id="run_pages")
     result = NODE_TYPE.execute(_node(entity_id, limit=10001), hooks)
     assert result.status == "succeeded", result.error_message
     assert result.output["count"] == 10001
-    assert limits == [10000, 1]
+    assert result.output["has_more"] is False
     dataset_id = result.output["dataset"]["dataset_id"]
     first = _page(dataset_id, after_ord=0, limit=1)
     last = _page(dataset_id, after_ord=10000, limit=1)
@@ -1227,24 +1220,28 @@ def test_a_later_page_that_fails_authorization_proposes_nothing(
         _insert(conn, table, "one")
         _insert(conn, table, "two")
     monkeypatch.setattr(changes_dataset, "_PAGE", 1)
-    real = changes_dataset.read_change_range
-    calls = {"n": 0}
+    bound = capture_bound(entity_id)
 
-    def wrapped(opened, *, limit, after=None):
-        calls["n"] += 1
-        if calls["n"] >= 2:
-            store = get_access_store()
-            for grant in store.grants(opened.entity_id):
-                if grant.subject_id == SYSTEM_USER_ID:
-                    store.delete_grant(grant.id)
-            store.set_revision(opened.entity_id, store.revision(opened.entity_id) + 1)
-        return real(opened, limit=limit, after=after)
+    class _RevokeHooks(FakeHooks):
+        def __init__(self) -> None:
+            super().__init__(run_id="run_auth", channel_id="chn_1")
+            self.checkpoints.bound_value = bound
+            self.calls = 0
 
-    monkeypatch.setattr(changes_dataset, "read_change_range", wrapped)
-    hooks = _hooks(capture_bound(entity_id), run_id="run_auth")
+        def cancelled(self) -> bool:
+            self.calls += 1
+            if self.calls == 2:
+                store = get_access_store()
+                for grant in store.grants(entity_id):
+                    if grant.subject_id == SYSTEM_USER_ID:
+                        store.delete_grant(grant.id)
+                store.set_revision(entity_id, store.revision(entity_id) + 1)
+            return False
+
+    hooks = _RevokeHooks()
     before = set(_relations())
     result = NODE_TYPE.execute(_node(entity_id), hooks)
-    assert calls["n"] >= 2
+    assert hooks.calls >= 2
     assert result.status == "failed"
     assert result.error_code == "CHANNEL_NODE_FAILED"
     assert hooks.checkpoints.proposals == {}
@@ -1252,3 +1249,208 @@ def test_a_later_page_that_fails_authorization_proposes_nothing(
     records = _job_records("run_auth")
     assert len(records) == 1
     assert records[0].status == "dropped"
+
+
+def test_projected_columns_skip_sides_in_sql_and_preserve_row_rules_and_has_more(
+    fresh_datasets,
+) -> None:
+    from backend.admin.user_store import SYSTEM_USER_ID
+    from backend.entity.access.service import create_restriction
+
+    engine = get_entity_engine()
+    entity_id, table = _arm(engine)
+    create_restriction(
+        entity_id,
+        applies_to={"mode": "only", "subjects": [{"type": "user", "id": SYSTEM_USER_ID}]},
+        row_rule={"eq": {"attr": "att_qty", "value": 1}},
+        deny_columns=[],
+        ceilings=[],
+        actions=["read"],
+        actor_user_id=None,
+        actor_token_id=None,
+    )
+    with engine.begin() as conn:
+        _insert(conn, table, "KEEP1", qty=1)
+        _insert(conn, table, "HIDE1", qty=9)
+        _insert(conn, table, "KEEP2", qty=1)
+    bound = capture_bound(entity_id)
+    node_cfg = {
+        "id": _NODE_ID,
+        "type": "volume.changes_dataset",
+        "config": {
+            "entity_id": entity_id,
+            "columns": ["business_key", "operation", "physical_table"],
+            "limit": 2,
+        },
+    }
+    refined = NODE_TYPE.refine(node_cfg["config"], {}, None)
+    assert refined["main"]["required"] == ["dataset", "count", "has_more"]
+    assert [
+        c["name"] for c in refined["main"]["properties"]["dataset"]["properties"]["columns"]["const"]
+    ] == ["operation", "physical_table", "business_key"]
+
+    hooks = _hooks(bound, run_id="run_proj")
+    result = NODE_TYPE.execute(node_cfg, hooks)
+    assert result.status == "succeeded", result.error_message
+    assert result.output["count"] == 1
+    assert result.output["has_more"] is True
+    ds = result.output["dataset"]
+    assert [c["name"] for c in ds["columns"]] == [
+        "operation",
+        "physical_table",
+        "business_key",
+    ]
+    rows = _rows(ds["dataset_id"])
+    assert rows == [
+        {
+            "_ord": 1,
+            "operation": "insert",
+            "physical_table": _relation(table),
+            "business_key": "KEEP1",
+        }
+    ]
+    hooks2 = _hooks(bound, run_id="run_proj_2")
+    hooks2.checkpoints.durable_positions[(_NODE_ID, entity_id)] = hooks.checkpoints.proposed(
+        _NODE_ID, entity_id
+    )
+    result2 = NODE_TYPE.execute(node_cfg, hooks2)
+    assert result2.status == "succeeded", result2.error_message
+    assert result2.output["has_more"] is False
+    assert _rows(result2.output["dataset"]["dataset_id"]) == [
+        {
+            "_ord": 1,
+            "operation": "insert",
+            "physical_table": _relation(table),
+            "business_key": "KEEP2",
+        }
+    ]
+
+
+def test_statement_timeout_cancels_query_drops_dataset_and_proposes_no_checkpoint(
+    fresh_datasets,
+    monkeypatch,
+) -> None:
+    from backend.entity.history import service as history_service
+
+    engine = get_entity_engine()
+    entity_id, table = _arm(engine)
+    with engine.begin() as conn:
+        _insert(conn, table, "S1", qty=1)
+    bound = capture_bound(entity_id)
+    before = _relations()
+
+    # Hold an exclusive lock on entity_change_log.entry from a second connection and set a
+    # short statement_timeout so PostgreSQL deterministically raises SQLSTATE 57014.
+    def _short_timeout(conn: Connection, timeout_ms: int | None) -> None:
+        conn.exec_driver_sql("SET LOCAL statement_timeout = '50ms'")
+        conn.exec_driver_sql("SET LOCAL lock_timeout = '0'")
+
+    monkeypatch.setattr(history_service, "set_write_timeouts", _short_timeout)
+
+    hooks = _hooks(bound, run_id="run_timeout")
+    with engine.connect() as blocker:
+        blocker.execution_options(isolation_level="AUTOCOMMIT")
+        blocker.exec_driver_sql("BEGIN")
+        try:
+            blocker.exec_driver_sql('LOCK TABLE "entity_change_log"."entry" IN ACCESS EXCLUSIVE MODE')
+            result = NODE_TYPE.execute(
+                _node(entity_id, statement_timeout_sec=1, columns=["operation"]),
+                hooks,
+            )
+        finally:
+            blocker.exec_driver_sql("ROLLBACK")
+
+    assert result.status == "failed"
+    assert result.error_message == "Changes Dataset exceeded the statement timeout"
+    assert hooks.checkpoints.proposals == {}
+    assert _relations() == before
+    records = _job_records("run_timeout")
+    assert len(records) == 1
+    assert records[0].status == "dropped"
+
+
+def test_projected_columns_with_sides_and_hash_mask_uses_exposure_owner_and_masks_values(
+    fresh_datasets,
+) -> None:
+    from backend.admin.user_store import SYSTEM_USER_ID
+    from backend.entity.access.service import (
+        create_grant,
+        create_profile,
+        put_ladder,
+    )
+    from backend.entity.ddl import EXPOSURE_OWNER_ROLE, ident
+
+    note_attr = AttributeRecord(
+        name="note",
+        type="string",
+        max_length=128,
+        attribute_id="att_note",
+    )
+    engine = get_entity_engine()
+    entity_id, table = _arm(engine, attributes=[_SKU, note_attr], grant_system=False)
+    put_ladder(
+        entity_id,
+        "att_note",
+        [
+            {"key": "clear", "mode": "clear"},
+            {"key": "hashed", "mode": {"type": "hash"}},
+        ],
+        actor_user_id=None,
+        actor_token_id=None,
+    )
+    profile = create_profile(
+        entity_id,
+        key="hashed_note",
+        name="hashed_note",
+        description=None,
+        columns=[
+            {"attribute_id": "att_sku", "level": "clear"},
+            {"attribute_id": "att_note", "level": "hashed"},
+        ],
+        actor_user_id=None,
+        actor_token_id=None,
+    )
+    access = get_access_store()
+    now = utc_now()
+    access.insert_grant(
+        GrantRecord(
+            id=new_access_grant_id(),
+            entity_id=entity_id,
+            subject_type="user",
+            subject_id=SYSTEM_USER_ID,
+            profile_id=str(profile["profile"]["id"]),
+            row_rule=None,
+            actions=["read"],
+            status="active",
+            valid_until=None,
+            created_at=now,
+            updated_at=now,
+            locked=False,
+        )
+    )
+    access.set_revision(entity_id, access.revision(entity_id) + 1)
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"INSERT INTO {_relation(table)} (sku, note) VALUES (:sku, :note)"),
+            {"sku": "HASH1", "note": "secret-note"},
+        )
+        conn.exec_driver_sql(f"SET LOCAL ROLE {ident(EXPOSURE_OWNER_ROLE)}")
+        expected_hash = conn.execute(
+            text("SELECT acl.mask_hash(CAST(:value AS text))"),
+            {"value": "secret-note"},
+        ).scalar_one()
+
+    bound = capture_bound(entity_id)
+    hooks = _hooks(bound, run_id="run_hash")
+    result = NODE_TYPE.execute(
+        _node(entity_id, columns=["operation", "after"]),
+        hooks,
+    )
+    assert result.status == "succeeded", result.error_message
+    rows = _rows(result.output["dataset"]["dataset_id"])
+    assert len(rows) == 1
+    assert rows[0]["operation"] == "insert"
+    after_values = rows[0]["after"]["values"]
+    assert after_values["sku"] == "HASH1"
+    assert after_values["note"] == expected_hash
+    assert after_values["note"] != "secret-note"

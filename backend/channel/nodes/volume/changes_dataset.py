@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import json
+import math
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from sqlalchemy.exc import DBAPIError
 
 from backend.channel.change_range import (
-    ChangeRange,
     ChangeRangeError,
+    land_change_range,
     open_change_range,
     propose_change_range,
-    read_change_range,
 )
 from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA, dataset_reference
 from backend.channel.dataset_registry import (
@@ -35,12 +34,10 @@ from backend.channel.nodes.spec import (
     object_schema,
 )
 from backend.channel.run_store import get_run_store
-from backend.entity.changes import ChangePosition, purge_mark
 from backend.entity.history.service import (
-    HistorySide,
-    IncrementalEvent,
-    IncrementalPosition,
-    clear_cell,
+    CHANGES_DATASET_COLUMNS,
+    IncrementalDatasetResult,
+    normalize_dataset_columns,
 )
 
 __all__ = ["NODE_TYPE"]
@@ -50,19 +47,8 @@ _DEFAULT_LIMIT = 1000000
 _MAX_LIMIT = 10000000
 _DEFAULT_TIMEOUT_SEC = 300
 _SOURCES = ("user", "channel_run", "unattributed")
-_INVALID = "Checkpoint is behind deleted change-log entries."
 _TIMEOUT_MESSAGE = "Changes Dataset exceeded the statement timeout"
 _QUOTA_MESSAGE = "Dataset storage is already at the capacity ceiling"
-
-_OUTPUT: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["dataset", "count"],
-    "properties": {
-        "dataset": DATASET_REFERENCE_SCHEMA,
-        "count": {"type": "integer", "minimum": 0},
-    },
-}
 
 _COLUMNS: tuple[DatasetColumnSpec, ...] = (
     DatasetColumnSpec("sequence", "integer", nullable=False),
@@ -78,6 +64,9 @@ _COLUMNS: tuple[DatasetColumnSpec, ...] = (
     DatasetColumnSpec("before", "json", nullable=True),
     DatasetColumnSpec("after", "json", nullable=True),
 )
+_SPEC_BY_NAME: dict[str, DatasetColumnSpec] = {
+    spec.name: spec for spec in _COLUMNS
+}
 
 
 class _LoadHalted(Exception):
@@ -86,12 +75,58 @@ class _LoadHalted(Exception):
         self.kind = kind
 
 
+def _selected_specs(
+    raw: Any, *, fallback_on_invalid: bool = False
+) -> tuple[DatasetColumnSpec, ...]:
+    if not isinstance(raw, list) or not raw:
+        return _COLUMNS
+    try:
+        names = normalize_dataset_columns([str(item) for item in raw])
+    except ValueError:
+        if fallback_on_invalid:
+            return _COLUMNS
+        raise
+    return tuple(_SPEC_BY_NAME[name] for name in names)
+
+
 def _refine(
     config: Mapping[str, Any],
     upstream: Mapping[str, Any],
     resolver: Any,
 ) -> dict[str, Any]:
-    return {"main": _OUTPUT, "error": None}
+    del upstream, resolver
+    specs = _selected_specs(config.get("columns"), fallback_on_invalid=True)
+    const_columns = [
+        {
+            "name": spec.name,
+            "type": spec.normalized_type,
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": spec.nullable,
+        }
+        for spec in specs
+    ]
+    dataset_schema: dict[str, Any] = {
+        **DATASET_REFERENCE_SCHEMA,
+        "properties": {
+            **DATASET_REFERENCE_SCHEMA["properties"],
+            "columns": {
+                **DATASET_REFERENCE_SCHEMA["properties"]["columns"],
+                "const": const_columns,
+            },
+        },
+    }
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["dataset", "count", "has_more"],
+        "properties": {
+            "dataset": dataset_schema,
+            "count": {"type": "integer", "minimum": 0},
+            "has_more": {"type": "boolean"},
+        },
+    }
+    return {"main": output_schema, "error": None}
 
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
@@ -106,9 +141,22 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     limit = int(config.get("limit", _DEFAULT_LIMIT))
     timeout_sec = int(config.get("statement_timeout_sec", _DEFAULT_TIMEOUT_SEC))
     sources = _sources(config.get("sources"))
+    specs = _selected_specs(config.get("columns"))
+    selected_names = tuple(spec.name for spec in specs)
     session = hooks.checkpoints
     deadline = time.monotonic() + timeout_sec
-    evaluated: list[IncrementalPosition | None] = [None]
+    outcomes: list[IncrementalDatasetResult] = []
+
+    def before_page() -> int:
+        if hooks.cancelled():
+            raise _LoadHalted("cancelled")
+        if hooks.superseded():
+            raise _LoadHalted("superseded")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _LoadHalted("timeout")
+        return max(1, math.ceil(remaining * 1000))
+
     try:
         opened = open_change_range(
             entity_id,
@@ -116,12 +164,29 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             session,
             ignore_checkpoints=hooks.ignore_checkpoints,
         )
-        record = DatasetRegistry(get_dataset_store()).create_from_chunks(
+
+        def load(
+            relation: str, on_size: Callable[[int], None]
+        ) -> tuple[int, int]:
+            landed = land_change_range(
+                opened,
+                relation,
+                limit=limit,
+                columns=selected_names,
+                sources=sources,
+                page_size=_PAGE,
+                before_page=before_page,
+                on_page_size=on_size,
+            )
+            outcomes.append(landed)
+            return landed.row_count, landed.size_bytes
+
+        record = DatasetRegistry(get_dataset_store()).create_with_loader(
             job_id=hooks.run_id,
             node_id=node_id,
             seq=_execution_seq(node, hooks),
-            columns=_COLUMNS,
-            chunks=_pages(opened, hooks, sources, limit, deadline, evaluated),
+            columns=specs,
+            load=load,
         )
     except _LoadHalted as halted:
         if halted.kind == "timeout":
@@ -132,10 +197,14 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     except DatasetQuotaExceeded:
         return _failed(DatasetQuotaExceeded.code, _QUOTA_MESSAGE)
     except DBAPIError as exc:
+        if _is_query_canceled(exc):
+            return _failed("CHANNEL_NODE_FAILED", _TIMEOUT_MESSAGE)
         return _failed("CHANNEL_NODE_FAILED", _db_message(exc))
     except Exception as exc:  # noqa: BLE001
         return _failed("CHANNEL_NODE_FAILED", str(exc))
-    propose_change_range(session, opened, evaluated[0])
+
+    outcome = outcomes[0]
+    propose_change_range(session, opened, outcome.progress)
     reference = dataset_reference(
         dataset_id=record.id,
         columns=record.columns,
@@ -143,154 +212,18 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     )
     return NodeResult(
         status="succeeded",
-        output={"dataset": reference, "count": record.row_count},
+        output={
+            "dataset": reference,
+            "count": record.row_count,
+            "has_more": outcome.has_more,
+        },
     )
-
-
-def _pages(
-    opened: ChangeRange,
-    hooks: EngineHooks,
-    sources: set[str] | None,
-    limit: int,
-    deadline: float,
-    evaluated: list[IncrementalPosition | None],
-) -> Iterator[Sequence[Sequence[Any]]]:
-    """Yield one page of projected rows at a time.
-
-    Each ``read_change_range`` call authorizes the platform System Identity
-    and commits its own short transaction. The dataset copy stays the caller's
-    single transaction. The proposal is the last page's progress, and only
-    after the closing purge check passes. A page that scans nothing does not
-    replace that progress.
-    """
-    start = opened.after
-    mark_before = purge_mark(opened.entity_id)
-    cursor: IncrementalPosition | None = None
-    seen = 0
-    progress: IncrementalPosition | None = None
-    while seen < limit:
-        _halt(hooks, deadline)
-        page_limit = min(_PAGE, limit - seen)
-        page = read_change_range(opened, limit=page_limit, after=cursor)
-        if page.progress is None:
-            break
-        progress = page.progress
-        cursor = page.progress
-        visible = tuple(_row(entry) for entry in page.events if _kept(entry, sources))
-        if visible:
-            yield visible
-        if not page.has_more:
-            break
-        seen += page_limit
-    _halt(hooks, deadline)
-    mark_after = purge_mark(opened.entity_id)
-    if _purge_moved_past_start(start, mark_before, mark_after):
-        raise ChangeRangeError("CHANNEL_CHECKPOINT_INVALID", _INVALID)
-    evaluated[0] = progress
-
-
-def _purge_moved_past_start(
-    start: ChangePosition | None,
-    before: ChangePosition | None,
-    after: ChangePosition | None,
-) -> bool:
-    """A purge that commits during the load and passes the start position.
-
-    A mark that was already there at the start does not fail the load. That
-    keeps a historical purge, and ``ignore_checkpoints``, on the Read Changes
-    path. ``start`` none means the beginning: any new deletion passes it.
-    """
-    if after is None:
-        return False
-    if before is not None and (after.xact, after.seq) <= (before.xact, before.seq):
-        return False
-    if start is None:
-        return True
-    return (start.xact, start.seq) < (after.xact, after.seq)
-
-
-def _halt(hooks: EngineHooks, deadline: float) -> None:
-    if hooks.cancelled():
-        raise _LoadHalted("cancelled")
-    if hooks.superseded():
-        raise _LoadHalted("superseded")
-    if time.monotonic() >= deadline:
-        raise _LoadHalted("timeout")
 
 
 def _sources(raw: Any) -> set[str] | None:
     if not isinstance(raw, list) or not raw:
         return None
     return {str(item) for item in raw}
-
-
-def _kept(entry: IncrementalEvent, sources: set[str] | None) -> bool:
-    if sources is None:
-        return True
-    label = entry.source if entry.source is not None else "unattributed"
-    return label in sources
-
-
-def _row(entry: IncrementalEvent) -> tuple[Any, ...]:
-    return (
-        entry.sequence,
-        entry.operation,
-        entry.occurred_at,
-        entry.source,
-        entry.subject,
-        entry.physical_table,
-        entry.version_id,
-        entry.version_number,
-        _agreed(entry, "row_id", _integer_cell),
-        _json_cell(_agreed(entry, entry.business_key_name, clear_cell)),
-        _json_cell(_side(entry.before)),
-        _json_cell(_side(entry.after)),
-    )
-
-
-def _side(side: HistorySide) -> dict[str, Any]:
-    if side.state != "visible":
-        return {"state": side.state}
-    return {"state": "visible", "values": side.values}
-
-
-def _integer_cell(side: HistorySide, name: str) -> int | None:
-    """A clear integer on this side. A bool is not a row id."""
-    value = clear_cell(side, name)
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
-
-
-def _agreed(
-    entry: IncrementalEvent,
-    name: str | None,
-    cell: Callable[[HistorySide, str], Any],
-) -> Any:
-    """One value when every visible side yields that same cell, or none.
-
-    A missing name, a cell the predicate does not yield, or visible sides
-    that disagree leave the dataset cell empty. None of those fail the load.
-    """
-    if not name:
-        return None
-    found: list[Any] = []
-    for side in (entry.before, entry.after):
-        if side.state != "visible":
-            continue
-        value = cell(side, name)
-        if value is None:
-            return None
-        found.append(value)
-    if not found or any(item != found[0] for item in found[1:]):
-        return None
-    return found[0]
-
-
-def _json_cell(value: Any) -> str | None:
-    if value is None:
-        return None
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _execution_seq(node: Mapping[str, Any], hooks: EngineHooks) -> int:
@@ -307,6 +240,12 @@ def _execution_seq(node: Mapping[str, Any], hooks: EngineHooks) -> int:
 
 def _failed(code: str, message: str) -> NodeResult:
     return NodeResult(status="failed", error_code=code, error_message=message)
+
+
+def _is_query_canceled(exc: DBAPIError) -> bool:
+    orig = exc.orig
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    return code == "57014"
 
 
 def _db_message(exc: DBAPIError) -> str:
@@ -340,6 +279,20 @@ NODE_TYPE = NodeType(
                 "description": "Business Entity whose Change Log is loaded.",
                 "x-refraq-ref": "entity",
                 "x-refraq-resolve": "execution",
+            },
+            "columns": {
+                "type": "array",
+                "title": "Columns",
+                "description": (
+                    "Optional subset of dataset columns. Absent or empty writes "
+                    "all 12 columns. Omitting before and after skips full "
+                    "row-image projection."
+                ),
+                "items": {
+                    "type": "string",
+                    "enum": list(CHANGES_DATASET_COLUMNS),
+                },
+                "uniqueItems": True,
             },
             "sources": {
                 "type": "array",
@@ -380,7 +333,11 @@ NODE_TYPE = NodeType(
         },
         ["entity_id"],
     ),
-    output_view=OutputView(kind="dataset", dataset="dataset", metrics=("count",)),
+    output_view=OutputView(
+        kind="dataset",
+        dataset="dataset",
+        metrics=("count", "has_more"),
+    ),
     execute=_execute,
     refine=_refine,
 )

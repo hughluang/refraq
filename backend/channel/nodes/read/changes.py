@@ -80,7 +80,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             session,
             ignore_checkpoints=hooks.ignore_checkpoints,
         )
-        page = read_change_range(opened, limit=limit)
+        page = read_change_range(opened, limit=limit, sources=sources)
         visible = [entry for entry in page.events if _kept(entry, sources)]
         rows = (
             _net(visible) if shape == "net" else [_record(entry) for entry in visible]

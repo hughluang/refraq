@@ -13,7 +13,7 @@ import copy
 import logging
 import threading
 import uuid
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -365,6 +365,37 @@ class DatasetRegistry:
             raise
         return self._ready(record, columns=columns, row_count=row_count, size=size)
 
+    def create_with_loader(
+        self,
+        *,
+        job_id: str,
+        node_id: str,
+        seq: int,
+        columns: Sequence[DatasetColumnSpec],
+        load: Callable[[str, Callable[[int], None]], tuple[int, int]],
+    ) -> DatasetRecord:
+        """Create a dataset table via ``load(relation, on_size)`` under registry quota."""
+        _reject_temporal_target(columns)
+        record = self._begin(job_id=job_id, node_id=node_id, seq=seq)
+
+        def on_size(size: int) -> None:
+            record.size_bytes = size
+            self._store.save(record)
+            if self._store.used_bytes() >= _limit_bytes():
+                raise DatasetQuotaExceeded()
+
+        try:
+            row_count, size = load(record.relation, on_size)
+            stored_columns = _with_normalized_types(
+                column_types(record.relation), columns
+            )
+        except Exception:
+            self._drop_failed(record)
+            raise
+        return self._ready(
+            record, columns=stored_columns, row_count=row_count, size=size
+        )
+
     def create_from_chunks(
         self,
         *,
@@ -582,16 +613,28 @@ def _reject_temporal_values(
     columns: Sequence[DatasetColumnSpec],
     chunks: Iterable[Sequence[Sequence[Any]]],
 ) -> Iterator[Sequence[Sequence[Any]]]:
-    specs = list(columns)
+    checked = [
+        (index, spec)
+        for index, spec in enumerate(columns)
+        if spec.temporal_kind is not None
+        and not isinstance(spec.precision, bool)
+        and isinstance(spec.precision, int)
+    ]
+    if not checked:
+        yield from chunks
+        return
     for chunk in chunks:
         for row in chunk:
             if isinstance(row, (str, bytes)) or not isinstance(row, Sequence):
                 continue
-            for spec, cell in zip(specs, row):
+            row_len = len(row)
+            for index, spec in checked:
+                if index >= row_len:
+                    continue
                 conflict = temporal_value_conflict(
                     temporal_kind=spec.temporal_kind,
                     precision=spec.precision,
-                    value=cell,
+                    value=row[index],
                 )
                 if conflict is None:
                     continue

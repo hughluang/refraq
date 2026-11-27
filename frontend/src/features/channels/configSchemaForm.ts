@@ -40,6 +40,7 @@ export type FieldSpec = (
     }
   | { kind: "attribute"; key: string; required: boolean; allowEmpty: boolean }
   | { kind: "objectList"; key: string; required: boolean; description: string; fields: FieldSpec[] }
+  | { kind: "enumList"; key: string; required: boolean; options: string[]; description: string }
   | { kind: "stringList"; key: string; required: boolean; description: string }
   | {
       kind: "templateList";
@@ -246,6 +247,15 @@ function arrayField(key: string, schema: SchemaObject, required: boolean): Field
     };
   }
   if (item && schemaType(item) === "string") {
+    if (Array.isArray(item.enum) && item.enum.length > 0) {
+      return {
+        kind: "enumList",
+        key,
+        required,
+        options: item.enum,
+        description: schema.description ?? "",
+      };
+    }
     return { kind: "stringList", key, required, description: schema.description ?? "" };
   }
   return {
@@ -335,6 +345,7 @@ function defaultValue(field: FieldSpec): unknown {
     case "attribute":
       return field.allowEmpty ? null : "";
     case "objectList":
+    case "enumList":
     case "stringList":
     case "templateList":
       return [];

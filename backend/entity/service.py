@@ -296,6 +296,8 @@ def change_log_tables(entity_id: str) -> list[ChangeLogTable]:
                 attributes=attributes,
                 reference_snapshots=dict(version.reference_snapshots),
                 business_key=None if key is None else key.name,
+                version_id=version.id,
+                version_number=version.version,
             )
         )
     return tables
