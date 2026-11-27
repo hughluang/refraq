@@ -169,6 +169,7 @@ def test_bootstrap_is_idempotent_and_reader_cannot_bypass_rls() -> None:
         assert ("text", "=") in leakproof
         _assert_barrier_not_pierced(admin_url, reader_url)
         _assert_profile_page_stops_on_primary_key(admin_url, reader_url)
+        _assert_parallel_acl_and_barrier_scan(admin_url, reader_url)
     finally:
         with maintenance.connect() as conn:
             try:
@@ -653,9 +654,9 @@ def _assert_profile_page_stops_on_primary_key(admin_url: str, reader_url: str) -
             with pytest.raises(ProgrammingError, match="signature is invalid"):
                 conn.execute(
                     text(
-                        "SELECT entity_access.open_entity_sql("
+                        "SELECT * FROM entity_access.open_entity_sql("
                         "'SELECT 1', 'SELECT 1', ARRAY['page_probe'], "
-                        "'k1', 9999999999, '\\x00'::bytea)"
+                        "10, 'k1', 9999999999, '\\x00'::bytea) AS _q(\"c0\" integer)"
                     )
                 )
             conn.rollback()
@@ -724,3 +725,133 @@ def _leakproof_operators(admin_url: str) -> dict[tuple[str, str], bool]:
     finally:
         admin.dispose()
     return {(str(typ), str(op)): bool(flag) for typ, op, flag in rows}
+
+
+def _assert_parallel_acl_and_barrier_scan(admin_url: str, reader_url: str) -> None:
+    admin = create_engine(admin_url)
+    reader = create_engine(reader_url)
+    try:
+        with admin.begin() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT p.proname, p.proparallel::text "
+                    "FROM pg_proc p "
+                    "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = 'acl'"
+                )
+            ).all()
+            by_name: dict[str, set[str]] = {}
+            for name, parallel in rows:
+                by_name.setdefault(str(name), set()).add(str(parallel))
+            for fn_name in (
+                "ctx_payload",
+                "subject_id",
+                "grant_active",
+                "rev_ok",
+                "sql_sig_ok",
+                "subject_text",
+                "subject_text_array",
+                "mask_partial",
+                "mask_email",
+                "mask_hash",
+                "mask_redact",
+                "mask_truncate_date",
+                "mask_bucket",
+            ):
+                assert by_name.get(fn_name) == {"s"}, (fn_name, by_name.get(fn_name))
+            for fn_name in ("install_key", "ensure_signing_key"):
+                assert by_name.get(fn_name) == {"u"}, (fn_name, by_name.get(fn_name))
+
+            access_rows = conn.execute(
+                text(
+                    "SELECT p.proname, p.proparallel::text "
+                    "FROM pg_proc p "
+                    "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = 'entity_access' "
+                    "AND p.proname IN ('profile_page', 'profile_count', 'open_entity_sql')"
+                )
+            ).all()
+            assert {str(name): str(par) for name, par in access_rows} == {
+                "profile_page": "u",
+                "profile_count": "u",
+                "open_entity_sql": "u",
+            }
+
+            conn.execute(
+                text(
+                    "CREATE TABLE entity_data.par_probe ("
+                    "row_id bigint PRIMARY KEY, tag text, amount numeric)"
+                )
+            )
+            for statement in table_security_statements("entity_data", "par_probe"):
+                conn.exec_driver_sql(statement)
+            conn.execute(
+                text(
+                    "INSERT INTO entity_data.par_probe (row_id, tag, amount) "
+                    "SELECT g, 'tag_' || (g % 7)::text, (g % 100)::numeric "
+                    "FROM generate_series(1, 2000) AS g"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE VIEW entity_access.par_probe "
+                    "WITH (security_barrier = true) AS "
+                    "SELECT t.row_id, acl.mask_hash(t.tag) AS tag, acl.mask_bucket(t.amount, 10) AS bucket "
+                    "FROM entity_data.par_probe t "
+                    "WHERE (SELECT acl.rev_ok('ent_par', 1)) "
+                    "AND (SELECT acl.grant_active('g1')) "
+                    "AND acl.subject_text('dept') = 'eng'"
+                )
+            )
+            conn.execute(
+                text('ALTER VIEW entity_access.par_probe OWNER TO "refraq_exposure_owner"')
+            )
+            conn.execute(
+                text('GRANT SELECT ON entity_access.par_probe TO "refraq_reader"')
+            )
+        good = _sign(
+            b"k" * 32,
+            {
+                "sub": "user_1",
+                "grants": ["g1"],
+                "attrs": {"dept": "eng"},
+                "rev": {"ent_par": 1},
+                "exp": 4102444800,
+                "req": "req_par",
+                "kid": "k1",
+            },
+        )
+        with reader.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.ctx', :token, true)"), {"token": good}
+            )
+            conn.execute(text("SET LOCAL parallel_setup_cost = 0"))
+            conn.execute(text("SET LOCAL parallel_tuple_cost = 0"))
+            conn.execute(text("SET LOCAL min_parallel_table_scan_size = 0"))
+            conn.execute(text("SET LOCAL max_parallel_workers_per_gather = 2"))
+            plan = conn.execute(
+                text(
+                    "EXPLAIN (ANALYZE, FORMAT JSON) "
+                    "SELECT count(*), count(tag), count(bucket) FROM entity_access.par_probe"
+                )
+            ).scalar_one()
+        document = json.loads(plan) if isinstance(plan, str) else plan
+        nodes: list[dict[str, object]] = []
+
+        def walk(node: dict[str, object]) -> None:
+            nodes.append(node)
+            for child in node.get("Plans") or []:
+                if isinstance(child, dict):
+                    walk(child)
+
+        walk(document[0]["Plan"])
+        gather_nodes = [
+            node
+            for node in nodes
+            if node.get("Node Type") in ("Gather", "Gather Merge")
+        ]
+        assert gather_nodes, plan
+        assert any((node.get("Workers Launched") or 0) >= 1 for node in gather_nodes), plan
+    finally:
+        reader.dispose()
+        admin.dispose()

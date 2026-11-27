@@ -352,7 +352,7 @@ def test_database_error_hides_bound_sql_and_relation_names(
         "backend.entity.mcp.sql_run.entity_query_timeout_sec", lambda: 30
     )
     monkeypatch.setattr("backend.entity.mcp.sql_run.entity_query_max_rows", lambda: 100)
-    monkeypatch.setattr("backend.entity.mcp.sql_run._sign", lambda *args, **kwargs: "tok")
+    monkeypatch.setattr("backend.entity.mcp.sql_run._sign", lambda *args, **kwargs: ("tok", None))
 
     def _execute(*args: object, **kwargs: object) -> dict[str, Any]:
         raise _Bad()
@@ -411,7 +411,7 @@ def test_pool_timeout_writes_no_sql_log(monkeypatch: pytest.MonkeyPatch) -> None
         "backend.entity.mcp.sql_run.entity_query_timeout_sec", lambda: 30
     )
     monkeypatch.setattr("backend.entity.mcp.sql_run.entity_query_max_rows", lambda: 100)
-    monkeypatch.setattr("backend.entity.mcp.sql_run._sign", lambda *args, **kwargs: "tok")
+    monkeypatch.setattr("backend.entity.mcp.sql_run._sign", lambda *args, **kwargs: ("tok", None))
     monkeypatch.setattr(
         "backend.entity.mcp.sql_run.append_sql_log",
         lambda **kwargs: logs.append(kwargs),
@@ -439,8 +439,11 @@ def test_read_only_execution_rolls_back_and_hides_bound_sql() -> None:
     import json
     from types import SimpleNamespace
 
+    from backend.entity.access.context import KeyRing, SigningKey
     from backend.entity.mcp.sql_prepare import PreparedSql
     from backend.entity.mcp.sql_run import _query
+
+    ring = KeyRing((SigningKey(kid="k1", secret=b"k" * 32),))
 
     class _SqlFailure(Exception):
         pass
@@ -531,7 +534,7 @@ def test_read_only_execution_rolls_back_and_hides_bound_sql() -> None:
     )
     raw = _Raw()
     conn = _Conn(raw)
-    result = _query(conn, prepared, "signed-token", 10, 30)
+    result = _query(conn, prepared, "signed-token", ring, 10, 30, 60)
     rendered = json.dumps(result)
     assert conn.tx.rollbacks == 1
     assert ("SET TRANSACTION READ ONLY", None) in conn.calls
@@ -549,15 +552,264 @@ def test_read_only_execution_rolls_back_and_hides_bound_sql() -> None:
     raw.fail = True
     failed = _Conn(raw)
     with pytest.raises(_SqlFailure):
-        _query(failed, prepared, "signed-token", 10, 30)
+        _query(failed, prepared, "signed-token", ring, 10, 30, 60)
     assert failed.tx.rollbacks == 1
 
     raw.fail = True
     swallowed = _Conn(raw)
     swallowed.tx.error = _RollbackFailure()
     with pytest.raises(_SqlFailure):
-        _query(swallowed, prepared, "signed-token", 10, 30)
+        _query(swallowed, prepared, "signed-token", ring, 10, 30, 60)
     assert swallowed.tx.rollbacks == 1
+
+
+def test_execute_prepared_sql_falls_back_on_pseudo_or_access_composite_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from backend.entity.access.context import KeyRing, SigningKey
+    from backend.entity.mcp.sql_prepare import PreparedSql
+    from backend.entity.mcp.sql_run import execute_prepared_sql
+
+    ring = KeyRing((SigningKey(kid="k1", secret=b"k" * 32),))
+    decision = SimpleNamespace(
+        target=SimpleNamespace(
+            entity=SimpleNamespace(table_name="orders"),
+            read_relation='"entity_access"."orders__p_ab12cd34"',
+        ),
+        outcome=SimpleNamespace(
+            shape=SimpleNamespace(
+                view_name="orders__p_ab12cd34",
+                force_empty=False,
+                row_rules=(),
+                grants=(),
+            )
+        ),
+    )
+    prepared = PreparedSql(
+        submitted_sql="SELECT o FROM orders o",
+        bound_sql="SELECT o FROM entity_access.orders__p_ab12cd34 o",
+        entities=("orders",),
+        partial_columns=(),
+        decisions=(decision,),
+        views={"orders__p_ab12cd34": "orders"},
+    )
+
+    fallback_calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        "backend.entity.mcp.sql_run._execute_fallback",
+        lambda _raw, sql, limit: (fallback_calls.append((sql, limit)) or ([], [])),
+    )
+
+    for fake_types in (
+        {705: ("p", False, "unknown", "unknown")},
+        {99999: ("c", True, "entity_access.orders__p_ab12cd34", "orders__p_ab12cd34")},
+    ):
+        monkeypatch.setattr(
+            "backend.entity.mcp.sql_run._describe_statement",
+            lambda _raw, _sql: [("o", next(iter(fake_types)))],
+        )
+        monkeypatch.setattr(
+            "backend.entity.mcp.sql_run._load_open_sql_types",
+            lambda _raw, _oids, _t=fake_types: _t,
+        )
+        execute_prepared_sql(object(), prepared, ring, limit=10, ttl_sec=60)
+
+    assert fallback_calls == [
+        ("SELECT o FROM entity_access.orders__p_ab12cd34 o", 10),
+        ("SELECT o FROM entity_access.orders__p_ab12cd34 o", 10),
+    ]
+
+
+def test_describe_statement_reads_columns_and_propagates_prepare_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from psycopg import errors as pg_errors, pq as pg_pq
+
+    from backend.entity.mcp.sql_run import _describe_statement
+
+    class _FakePgResult:
+        def __init__(
+            self,
+            status: Any,
+            fields: list[tuple[bytes | None, int]] = (),
+        ) -> None:
+            self.status = status
+            self._fields = list(fields)
+            self.nfields = len(self._fields)
+
+        def fname(self, index: int) -> bytes | None:
+            return self._fields[index][0]
+
+        def ftype(self, index: int) -> int:
+            return self._fields[index][1]
+
+    class _FakePgConn:
+        def __init__(self) -> None:
+            self.actions: list[tuple[str, bytes]] = []
+
+        def send_prepare(self, name: bytes, sql: bytes) -> None:
+            self.actions.append(("prepare", name + b":" + sql))
+
+        def send_describe_prepared(self, name: bytes) -> None:
+            self.actions.append(("describe", name))
+
+    pgconn = _FakePgConn()
+    results = iter(
+        [
+            [_FakePgResult(pg_pq.ExecStatus.COMMAND_OK)],
+            [
+                _FakePgResult(
+                    pg_pq.ExecStatus.COMMAND_OK,
+                    [(b"row_id", 20), (None, 23)],
+                )
+            ],
+        ]
+    )
+    raw = SimpleNamespace(
+        pgconn=pgconn,
+        wait=lambda _gen: next(results),
+        info=SimpleNamespace(encoding="utf-8"),
+    )
+    monkeypatch.setattr("backend.entity.mcp.sql_run.pg_generators.execute", lambda c: c)
+    described = _describe_statement(raw, "SELECT row_id, 1 FROM orders")
+    assert described == [("row_id", 20), ("?column?", 23)]
+    assert pgconn.actions == [
+        ("prepare", b":SELECT row_id, 1 FROM orders"),
+        ("describe", b""),
+    ]
+
+    class _PrepareFailed(Exception):
+        pass
+
+    bad_result = _FakePgResult(pg_pq.ExecStatus.FATAL_ERROR)
+    monkeypatch.setattr(
+        "backend.entity.mcp.sql_run.pg_errors.error_from_result",
+        lambda res, encoding="utf-8": _PrepareFailed(f"{res.status}:{encoding}"),
+    )
+    raw_err = SimpleNamespace(
+        pgconn=_FakePgConn(),
+        wait=lambda _gen: [bad_result],
+        info=SimpleNamespace(encoding="utf-8"),
+    )
+    with pytest.raises(_PrepareFailed):
+        _describe_statement(raw_err, "SELECT bad")
+    assert pg_errors is not None
+
+
+def test_execute_prepared_sql_happy_path_skips_duplicate_pg_type_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from backend.entity.access.context import KeyRing, SigningKey
+    from backend.entity.mcp.sql_prepare import PreparedSql
+    from backend.entity.mcp.sql_run import _query
+
+    ring = KeyRing((SigningKey(kid="k1", secret=b"k" * 32),))
+    decision = SimpleNamespace(
+        target=SimpleNamespace(
+            entity=SimpleNamespace(id="ent_orders", table_name="orders"),
+            read_relation='"entity_access"."orders__p_ab12cd34"',
+            physical_table="orders__v1__deadbeef",
+        ),
+        full=SimpleNamespace(physical_table="orders__v1__deadbeef"),
+        head=SimpleNamespace(physical="orders__v1__deadbeef"),
+        revision=1,
+        outcome=SimpleNamespace(
+            grant_ids=("g1",),
+            shape=SimpleNamespace(
+                view_name="orders__p_ab12cd34",
+                force_empty=False,
+                row_rules=(),
+                grants=(),
+            ),
+        ),
+    )
+    prepared = PreparedSql(
+        submitted_sql="SELECT o.row_id, 1 FROM orders o",
+        bound_sql='SELECT o.row_id, 1 FROM "entity_access"."orders__p_ab12cd34" o',
+        entities=("orders",),
+        partial_columns=(),
+        decisions=(decision,),
+        views={"orders__p_ab12cd34": "orders"},
+    )
+
+    class _Tx:
+        def rollback(self) -> None:
+            pass
+
+    class _Cursor:
+        def __init__(self, raw: _Raw) -> None:
+            self.raw = raw
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def execute(self, sql: str, params: object = None, **kwargs: object) -> None:
+            self.raw.executed.append((sql, params, kwargs))
+
+        def fetchall(self) -> list[tuple[object, ...]]:
+            last_sql = self.raw.executed[-1][0]
+            if "pg_catalog.pg_type" in last_sql:
+                return [
+                    (20, "b", False, "bigint", "int8"),
+                    (23, "b", False, "integer", "int4"),
+                ]
+            return [(1, 1), (2, 1)]
+
+    class _Raw:
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, object, dict[str, Any]]] = []
+
+        def cursor(self) -> _Cursor:
+            return _Cursor(self)
+
+    class _Conn:
+        def __init__(self, raw: _Raw) -> None:
+            self.connection = SimpleNamespace(driver_connection=raw)
+
+        def begin(self) -> _Tx:
+            return _Tx()
+
+        def exec_driver_sql(self, _sql: str, _params: object = None) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "backend.entity.mcp.sql_run._describe_statement",
+        lambda _raw, _sql: [("row_id", 20), ("?column?", 23)],
+    )
+    raw = _Raw()
+    result = _query(_Conn(raw), prepared, "signed-token", ring, 10, 30, 60)
+
+    pg_type_queries = [
+        sql for sql, _p, _k in raw.executed if "pg_catalog.pg_type" in sql
+    ]
+    assert len(pg_type_queries) == 1
+    open_calls = [
+        (sql, params, kwargs)
+        for sql, params, kwargs in raw.executed
+        if "entity_access.open_entity_sql" in sql
+    ]
+    assert len(open_calls) == 1
+    open_sql_stmt, open_params, open_kwargs = open_calls[0]
+    assert 'AS _q("c0" bigint, "c1" integer)' in open_sql_stmt
+    assert open_params[2] == ["orders__p_ab12cd34"]
+    assert open_params[3] == 11
+    assert open_kwargs == {"binary": True}
+    assert result["columns"] == [
+        {"name": "row_id", "type": "int8"},
+        {"name": "?column?", "type": "int4"},
+    ]
+    assert result["rows"] == [[1, 1], [2, 1]]
+    assert result["row_count"] == 2
+    assert result["truncated"] is False
 
 
 def _user() -> Any:

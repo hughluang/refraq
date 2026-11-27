@@ -1004,6 +1004,94 @@ def _indexed_join_top_n_and_redteam_oracle(
         conn.rollback()
 
 
+def _parallel_open_sql_and_edge_shapes(sql_world: dict[str, Any]) -> None:
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.context import issue_contexts, load_shared_ring
+    from backend.entity.entity_db import get_entity_reader_engine, get_entity_signer_engine
+    from backend.entity.mcp.sql_prepare import prepare_entity_sql
+    from backend.entity.mcp.sql_run import _sign_open_sql
+
+    lines = sql_world["lines"]
+    run_sql = sql_world["run_sql"]
+    secret = sql_world["combo_secret"]
+
+    # Duplicate column names and anonymous expressions through open_entity_sql.
+    dup = _ok(_call(run_sql, secret, sql=f"SELECT l.row_id, l.row_id FROM {lines} l ORDER BY l.row_id"))
+    assert [col["name"] for col in dup["columns"]] == ["row_id", "row_id"]
+    assert len(dup["rows"]) == 3
+    assert dup["rows"][0][0] == dup["rows"][0][1]
+
+    anon = _ok(_call(run_sql, secret, sql=f"SELECT 1, 2 FROM {lines} l"))
+    assert [col["name"] for col in anon["columns"]] == ["?column?", "?column?"]
+    assert anon["rows"] == [[1, 2], [1, 2], [1, 2]]
+
+    empty = _ok(_call(run_sql, secret, sql=f"SELECT l.row_id FROM {lines} l WHERE 1 = 0"))
+    assert [col["name"] for col in empty["columns"]] == ["row_id"]
+    assert empty["rows"] == []
+    assert empty["row_count"] == 0
+
+    # Whole-view composite projection falls back cleanly to bound_sql.
+    comp = _ok(_call(run_sql, secret, sql=f"SELECT l FROM {lines} l ORDER BY l.row_id LIMIT 1"))
+    assert comp["row_count"] == 1
+
+    # Verify open_entity_sql launches a parallel worker for non-row-dependent views.
+    combo_user = get_user_store().get_user_by_id(sql_world["combo_id"])
+    assert combo_user is not None
+    prepared = prepare_entity_sql(f"SELECT count(*) FROM {lines}", combo_user)
+    shape = prepared.decisions[0].outcome.shape
+    assert shape is not None
+    view_name = shape.view_name
+    open_sql = f'SELECT DISTINCT pg_backend_pid() FROM entity_exposure."{view_name}"'
+    barrier_sql = f'SELECT DISTINCT pg_backend_pid() FROM entity_access."{view_name}"'
+    with get_entity_signer_engine().connect() as sconn:
+        ring = load_shared_ring(sconn)
+        sconn.rollback()
+    key = ring.current()
+    exp = int(datetime.now(timezone.utc).timestamp()) + 60
+    sig = _sign_open_sql(key, exp, 10, open_sql, barrier_sql, (view_name,))
+    policies = tuple((d.policy, d.compiled) for d in prepared.decisions)
+    token = issue_contexts(
+        policies,
+        prepared.decisions[0].person,
+        ring,
+        action="read",
+        request_id="",
+        ttl_sec=60,
+    )
+    with get_entity_reader_engine().begin() as conn:
+        leader_pid = int(conn.execute(text("SELECT pg_backend_pid()")).scalar_one())
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        conn.execute(text("SELECT set_config('app.ctx', :token, true)"), {"token": token})
+        conn.execute(text("SET LOCAL debug_parallel_query = on"))
+        conn.execute(text("SET LOCAL parallel_setup_cost = 0"))
+        conn.execute(text("SET LOCAL parallel_tuple_cost = 0"))
+        conn.execute(text("SET LOCAL min_parallel_table_scan_size = 0"))
+        conn.execute(text("SET LOCAL max_parallel_workers_per_gather = 2"))
+        worker_pids = [
+            int(pid)
+            for pid in conn.execute(
+                text(
+                    'SELECT c0 FROM entity_access.open_entity_sql('
+                    ':open_sql, :barrier_sql, :views, :limit, :kid, :exp, :sig'
+                    ') AS _q("c0" integer)'
+                ),
+                {
+                    "open_sql": open_sql,
+                    "barrier_sql": barrier_sql,
+                    "views": [view_name],
+                    "limit": 10,
+                    "kid": key.kid,
+                    "exp": exp,
+                    "sig": sig,
+                },
+            )
+            .scalars()
+            .all()
+        ]
+        conn.rollback()
+    assert worker_pids and any(pid != leader_pid for pid in worker_pids), (leader_pid, worker_pids)
+
+
 def test_run_sql_on_postgresql(
     sql_world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1016,3 +1104,4 @@ def test_run_sql_on_postgresql(
     _database_error_names_the_entity_not_the_view(sql_world)
     _constant_select_writes_no_access_log(sql_world)
     _indexed_join_top_n_and_redteam_oracle(sql_world, monkeypatch)
+    _parallel_open_sql_and_edge_shapes(sql_world)

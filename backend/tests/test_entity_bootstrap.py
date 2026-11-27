@@ -87,8 +87,11 @@ def test_acl_statements_are_definer_stable_and_fail_closed() -> None:
     text = "\n".join(sql)
     assert "CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA \"acl\"" in text
     assert "slot IN (1, 2)" in text
-    assert "SECURITY DEFINER STABLE" in text
+    assert "SECURITY DEFINER STABLE PARALLEL SAFE" in text
     assert "search_path = pg_catalog, pg_temp" in text
+    for fn_name in ("acl.install_key(", "acl.ensure_signing_key()"):
+        body = next(stmt for stmt in sql if f"FUNCTION {fn_name}" in stmt)
+        assert "PARALLEL SAFE" not in body
     for name in (
         "acl.grant_active(text)",
         "acl.rev_ok(text, integer)",
@@ -155,10 +158,11 @@ def test_open_entity_sql_is_owned_by_open_reader_and_granted_to_reader() -> None
     sql = open_entity_sql_statements()
     text = "\n".join(sql)
     assert "SECURITY DEFINER" in text
-    assert "cursor_tuple_fraction = 1.0" in text
+    assert "RETURNS SETOF record" in text
+    assert "RETURN QUERY EXECUTE" in text
     assert "acl.sql_sig_ok(" in text
     assert f'OWNER TO "{OPEN_READER_ROLE}"' in text
-    assert f'GRANT EXECUTE ON FUNCTION entity_access.open_entity_sql(text, text, text[], text, bigint, bytea) TO "{READER_ROLE}"' in text
+    assert f'GRANT EXECUTE ON FUNCTION entity_access.open_entity_sql(text, text, text[], integer, text, bigint, bytea) TO "{READER_ROLE}"' in text
 
 
 def test_move_and_secure_statements() -> None:

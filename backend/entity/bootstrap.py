@@ -209,7 +209,7 @@ def schema_statements() -> list[str]:
     ]
 
 
-_GUARD = "SECURITY DEFINER STABLE SET search_path = pg_catalog, pg_temp"
+_GUARD = "SECURITY DEFINER STABLE PARALLEL SAFE SET search_path = pg_catalog, pg_temp"
 
 _READER_FUNCTIONS = (
     "acl.grant_active(text)",
@@ -228,7 +228,7 @@ _READER_FUNCTIONS = (
 )
 _PRIVATE_FUNCTIONS = ("acl.ctx_payload()", "acl.subject_id()")
 _OPEN_READER_FUNCTIONS = (
-    "acl.sql_sig_ok(text, bigint, text, text, text[], bytea)",
+    "acl.sql_sig_ok(text, bigint, integer, text, text, text[], bytea)",
 )
 _OWNER_FUNCTIONS = (
     "acl.install_key(text, bytea)",
@@ -461,6 +461,7 @@ $fn$
 CREATE OR REPLACE FUNCTION acl.sql_sig_ok(
   p_kid text,
   p_exp bigint,
+  p_limit integer,
   p_open_sql text,
   p_barrier_sql text,
   p_views text[],
@@ -471,8 +472,8 @@ DECLARE
   signing_secret bytea;
   msg text;
 BEGIN
-  IF p_kid IS NULL OR p_exp IS NULL OR p_open_sql IS NULL
-     OR p_barrier_sql IS NULL OR p_views IS NULL OR p_sig IS NULL THEN
+  IF p_kid IS NULL OR p_exp IS NULL OR p_limit IS NULL OR p_limit < 1
+     OR p_open_sql IS NULL OR p_barrier_sql IS NULL OR p_views IS NULL OR p_sig IS NULL THEN
     RETURN false;
   END IF;
   IF p_exp::numeric <= extract(epoch FROM now()) THEN
@@ -485,6 +486,7 @@ BEGIN
   END IF;
   msg := p_kid
     || ':' || p_exp::text
+    || ':' || p_limit::text
     || ':' || encode(acl.digest(convert_to(p_open_sql, 'UTF8'), 'sha256'), 'hex')
     || ':' || encode(acl.digest(convert_to(p_barrier_sql, 'UTF8'), 'sha256'), 'hex')
     || ':' || coalesce(array_to_string(p_views, ','), '');
@@ -524,6 +526,7 @@ def acl_statements(*, pgcrypto_schema: str | None) -> list[str]:
         f"REVOKE ALL ON ALL TABLES IN SCHEMA {acl} FROM {ident(SIGNER_ROLE)}",
         f"REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {acl} FROM PUBLIC",
         f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {acl} TO {acl_owner}",
+        "DROP FUNCTION IF EXISTS acl.sql_sig_ok(text, bigint, text, text, text[], bytea)",
     ]
     statements += [body.strip() for body in _FUNCTION_BODIES]
     for signature in (
@@ -1098,15 +1101,15 @@ CREATE OR REPLACE FUNCTION entity_access.open_entity_sql(
   p_open_sql text,
   p_barrier_sql text,
   p_views text[],
+  p_limit integer,
   p_kid text,
   p_exp bigint,
   p_sig bytea
-) RETURNS refcursor
+) RETURNS SETOF record
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 SET row_security = on
-SET cursor_tuple_fraction = 1.0
 AS $fn$
 DECLARE
   v text;
@@ -1118,12 +1121,14 @@ DECLARE
   rel_owner text;
   gate_ok boolean;
   use_open boolean := true;
-  cur refcursor;
 BEGIN
   IF pg_catalog.current_setting('transaction_read_only') IS DISTINCT FROM 'on' THEN
     RAISE EXCEPTION 'entity sql requires a read-only transaction' USING ERRCODE = '25006';
   END IF;
-  IF NOT acl.sql_sig_ok(p_kid, p_exp, p_open_sql, p_barrier_sql, p_views, p_sig) THEN
+  IF p_limit IS NULL OR p_limit < 1 THEN
+    RAISE EXCEPTION 'entity sql limit must be positive' USING ERRCODE = '22023';
+  END IF;
+  IF NOT acl.sql_sig_ok(p_kid, p_exp, p_limit, p_open_sql, p_barrier_sql, p_views, p_sig) THEN
     RAISE EXCEPTION 'entity sql signature is invalid' USING ERRCODE = '42501';
   END IF;
   IF p_views IS NULL OR pg_catalog.cardinality(p_views) = 0 THEN
@@ -1188,22 +1193,23 @@ BEGIN
     END LOOP;
   END IF;
   IF use_open THEN
-    OPEN cur NO SCROLL FOR EXECUTE p_open_sql;
+    RETURN QUERY EXECUTE 'SELECT * FROM (' || p_open_sql || ') AS _q LIMIT ' || p_limit::text;
   ELSE
-    OPEN cur NO SCROLL FOR EXECUTE p_barrier_sql;
+    RETURN QUERY EXECUTE 'SELECT * FROM (' || p_barrier_sql || ') AS _q LIMIT ' || p_limit::text;
   END IF;
-  RETURN cur;
+  RETURN;
 END
 $fn$
 """.strip()
 
 
 def open_entity_sql_statements() -> list[str]:
-    """Least-privilege cursor executor for signed non-row-dependent Entity SQL."""
+    """Least-privilege set-returning executor for signed non-row-dependent Entity SQL."""
     open_reader = ident(OPEN_READER_ROLE)
     reader = ident(READER_ROLE)
-    sig = "entity_access.open_entity_sql(text, text, text[], text, bigint, bytea)"
+    sig = "entity_access.open_entity_sql(text, text, text[], integer, text, bigint, bytea)"
     return [
+        "DROP FUNCTION IF EXISTS entity_access.open_entity_sql(text, text, text[], text, bigint, bytea)",
         _OPEN_ENTITY_SQL_FN,
         f"ALTER FUNCTION {sig} OWNER TO {open_reader}",
         f"REVOKE ALL ON FUNCTION {sig} FROM PUBLIC",

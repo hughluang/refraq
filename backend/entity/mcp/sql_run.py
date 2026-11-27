@@ -7,11 +7,13 @@ with no parameters.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import hmac
 import time
 from typing import Any
 
+from psycopg import errors as pg_errors, generators as pg_generators, pq as pg_pq
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from backend.admin.user_store import UserRecord
@@ -177,6 +179,13 @@ def _query(
                     raise
 
 
+@dataclass(frozen=True, slots=True)
+class _DescribedColumn:
+    name: str
+    type_code: int
+    typname: str | None = None
+
+
 def execute_prepared_sql(
     raw: Any,
     prepared: PreparedSql,
@@ -193,12 +202,21 @@ def execute_prepared_sql(
         and not access.outcome.shape.force_empty
         and not predicate_depends_on_row(access.outcome.shape)
     ]
-    if not inlineable:
-        with raw.cursor() as cursor:
-            _execute_bound(cursor, prepared.bound_sql)
-            description = cursor.description
-            fetched = cursor.fetchmany(limit + 1) if description else []
-        return description, list(fetched)
+    described = _describe_statement(raw, prepared.bound_sql) if inlineable else None
+    projected: list[tuple[str, str]] = []
+    if described:
+        type_info = _load_open_sql_types(raw, [oid for _, oid in described])
+        for index, (_name, oid) in enumerate(described):
+            info = type_info.get(oid)
+            if info is None or info[0] == "p" or info[1]:
+                projected = []
+                break
+            formatted, typname = info[2], info[3]
+            projected.append((f'"c{index}" {formatted}', typname))
+    if described is None or not projected:
+        return _execute_fallback(raw, prepared.bound_sql, limit)
+    column_defs = [defn for defn, _typname in projected]
+    column_typnames = [typname for _defn, typname in projected]
 
     inline_ids = {access.target.entity.table_name for access in inlineable}
     open_relations = {
@@ -216,39 +234,101 @@ def execute_prepared_sql(
         for access in inlineable
         if access.outcome.shape is not None
     )
+    fetch_limit = int(limit) + 1
     exp = int(time.time()) + int(ttl_sec)
     key = ring.current()
-    sig = _sign_open_sql(key, exp, open_sql, prepared.bound_sql, inline_views)
+    sig = _sign_open_sql(key, exp, fetch_limit, open_sql, prepared.bound_sql, inline_views)
+    cols_sql = ", ".join(column_defs)
     with raw.cursor() as cursor:
         cursor.execute(
-            "SELECT entity_access.open_entity_sql(%s, %s, %s, %s, %s, %s)",
-            (open_sql, prepared.bound_sql, list(inline_views), key.kid, exp, sig),
+            f"SELECT * FROM entity_access.open_entity_sql(%s, %s, %s, %s, %s, %s, %s) AS _q({cols_sql})",
+            (
+                open_sql,
+                prepared.bound_sql,
+                list(inline_views),
+                fetch_limit,
+                key.kid,
+                exp,
+                sig,
+            ),
+            binary=True,
         )
-        row = cursor.fetchone()
-        if row is None or not row[0]:
-            raise RuntimeError("open_entity_sql returned no cursor")
-        portal = _quote_portal(str(row[0]))
-        cursor.execute(f"FETCH FORWARD {int(limit) + 1} FROM {portal}", binary=True)
-        description = cursor.description
         fetched = cursor.fetchall()
-        cursor.execute(f"CLOSE {portal}")
+    description = [
+        _DescribedColumn(name=name, type_code=oid, typname=typname)
+        for (name, oid), typname in zip(described, column_typnames, strict=True)
+    ]
     return description, list(fetched)
 
 
-def _quote_portal(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
+def _execute_fallback(raw: Any, sql: str, limit: int) -> tuple[Any, list[Any]]:
+    with raw.cursor() as cursor:
+        _execute_bound(cursor, sql)
+        description = cursor.description
+        fetched = cursor.fetchmany(limit + 1) if description else []
+    return description, list(fetched)
+
+
+def _describe_statement(raw: Any, sql: str) -> list[tuple[str, int]] | None:
+    pgconn = getattr(raw, "pgconn", None)
+    wait = getattr(raw, "wait", None)
+    if pgconn is None or wait is None:
+        return None
+    encoding = getattr(getattr(raw, "info", None), "encoding", None) or "utf-8"
+    pgconn.send_prepare(b"", sql.encode(encoding))
+    prep_results = wait(pg_generators.execute(pgconn))
+    if not prep_results or prep_results[-1].status != pg_pq.ExecStatus.COMMAND_OK:
+        if prep_results:
+            raise pg_errors.error_from_result(prep_results[-1], encoding=encoding)
+        raise RuntimeError("prepare returned no result")
+    pgconn.send_describe_prepared(b"")
+    desc_results = wait(pg_generators.execute(pgconn))
+    if not desc_results or desc_results[-1].status != pg_pq.ExecStatus.COMMAND_OK:
+        if desc_results:
+            raise pg_errors.error_from_result(desc_results[-1], encoding=encoding)
+        raise RuntimeError("describe returned no result")
+    result = desc_results[-1]
+    columns: list[tuple[str, int]] = []
+    for index in range(result.nfields):
+        raw_name = result.fname(index)
+        name = raw_name.decode(encoding, "replace") if raw_name is not None else "?column?"
+        columns.append((name, int(result.ftype(index))))
+    return columns
+
+
+def _load_open_sql_types(raw: Any, oids: list[int]) -> dict[int, tuple[str, bool, str, str]]:
+    unique = list(dict.fromkeys(oid for oid in oids if oid))
+    if not unique:
+        return {}
+    with raw.cursor() as meta:
+        meta.execute(
+            "SELECT t.oid, t.typtype::text, "
+            "n.nspname = 'entity_access', "
+            "pg_catalog.format_type(t.oid, -1), "
+            "t.typname::text "
+            "FROM pg_catalog.pg_type t "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace "
+            "WHERE t.oid = ANY(%s)",
+            (unique,),
+        )
+        rows = meta.fetchall()
+    return {
+        int(oid): (str(typtype), bool(is_access), str(formatted), str(typname))
+        for oid, typtype, is_access, formatted, typname in rows
+    }
 
 
 def _sign_open_sql(
     key: SigningKey,
     exp: int,
+    limit: int,
     open_sql: str,
     barrier_sql: str,
     views: tuple[str, ...],
 ) -> bytes:
     open_hash = hashlib.sha256(open_sql.encode("utf-8")).hexdigest()
     barrier_hash = hashlib.sha256(barrier_sql.encode("utf-8")).hexdigest()
-    msg = f"{key.kid}:{exp}:{open_hash}:{barrier_hash}:{','.join(views)}"
+    msg = f"{key.kid}:{exp}:{int(limit)}:{open_hash}:{barrier_hash}:{','.join(views)}"
     return hmac.new(key.secret, msg.encode("utf-8"), hashlib.sha256).digest()
 
 
@@ -278,16 +358,27 @@ def _driver(sa_conn: Any) -> Any:
 def _load_type_names(raw: Any, description: Any) -> dict[int, str]:
     if not description:
         return {}
-    oids = list(dict.fromkeys(oid for oid in (_column_oid(col) for col in description) if oid))
-    if not oids:
-        return {}
+    known: dict[int, str] = {}
+    missing: list[int] = []
+    for col in description:
+        oid = _column_oid(col)
+        if not oid:
+            continue
+        typname = getattr(col, "typname", None)
+        if isinstance(typname, str) and typname:
+            known[oid] = typname
+        elif oid not in known and oid not in missing:
+            missing.append(oid)
+    if not missing:
+        return known
     with raw.cursor() as meta:
         meta.execute(
             "SELECT oid, typname FROM pg_catalog.pg_type WHERE oid = ANY(%s)",
-            (oids,),
+            (missing,),
         )
         found = meta.fetchall()
-    return {int(oid): str(typname) for oid, typname in found}
+    known.update({int(oid): str(typname) for oid, typname in found})
+    return known
 
 
 def _present(
