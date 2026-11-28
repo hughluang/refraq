@@ -1,3 +1,7 @@
+import type en from "@/locales/en-US/common.json";
+
+export type LocaleKey = keyof typeof en;
+
 export const LOCALE_CATALOG = [
   { code: "zh-CN", nativeLabel: "中文" },
   { code: "en-US", nativeLabel: "English" },

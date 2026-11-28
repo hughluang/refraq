@@ -1,3 +1,5 @@
+import type { LocaleKey } from "@/providers/locale-catalog";
+
 export const TONES = [
   "neutral",
   "info",
@@ -11,7 +13,7 @@ export type Tone = (typeof TONES)[number];
 
 export type StatusTone = {
   tone: Tone;
-  labelKey: string;
+  labelKey: LocaleKey;
 };
 
 /** Mantine palette name for Badge and other `color` props. Matches the tone variables. */

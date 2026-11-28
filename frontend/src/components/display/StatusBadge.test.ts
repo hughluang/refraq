@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StatusBadge } from "@/components/display/StatusBadge";
 import en from "@/locales/en-US/common.json";
 import zh from "@/locales/zh-CN/common.json";
+import type { LocaleKey } from "@/providers/locale-catalog";
 import { resetSessionStoreForTests, useSessionStore, type CurrentUser } from "@/providers/session-store";
 
 const UPDATED_AT = "2026-10-11T06:00:29Z";
@@ -59,7 +60,7 @@ function badgeRoot(label: string): HTMLElement {
 function renderBadge(
   props: {
     tone: "running";
-    labelKey: string;
+    labelKey: LocaleKey;
     freshness?: { updatedAt: string | null; onRefresh: () => void } | null;
     explanation?: string | null;
   },

@@ -7,6 +7,7 @@ import type { ReactElement } from "react";
 import { ClockIcon } from "@/components/icons";
 import { toneMantineColor, toneVariable, type Tone } from "@/components/display/statusTone";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
+import type { LocaleKey } from "@/providers/locale-catalog";
 
 export type StatusFreshness = {
   /** Last successful update, as platform Instant text. */
@@ -16,7 +17,7 @@ export type StatusFreshness = {
 
 type Props = {
   tone: Tone;
-  labelKey: string;
+  labelKey: LocaleKey;
   size?: MantineSize;
   freshness?: StatusFreshness | null;
   /** Status explanation. Separate from the freshness marker. */
