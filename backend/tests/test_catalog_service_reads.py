@@ -38,7 +38,7 @@ from backend.metadata.errors import (  # noqa: E402
     CatalogSearchQueryRequired,
     JoinPathUnavailable,
 )
-from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import (  # noqa: E402
     find_join_path,
     get_object as mcp_get_object,

@@ -29,7 +29,7 @@ from backend.core.runtime import reset_runtime_capacity  # noqa: E402
 from backend.core.time import format_instant, utc_now  # noqa: E402
 from backend.entity.access.store import get_access_store  # noqa: E402
 from backend.entity.ids import new_entity_id, new_version_id  # noqa: E402
-from backend.entity.mcp.actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.entity.mcp.rows import get_row, query_rows  # noqa: E402
 from backend.entity.records import (  # noqa: E402
     AttributeRecord,

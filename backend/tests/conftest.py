@@ -36,6 +36,9 @@ from backend.admin.federation.handoff_store import reset_handoff_store
 from backend.admin.federation.pending_store import reset_pending_store
 from backend.admin.federation.provider_store import reset_provider_store
 from backend.admin.federation.protocols.oidc.jwks import reset_jwks_cache
+from backend.admin.oauth.runtime_store import reset_oauth_runtime_store
+from backend.admin.oauth.store import reset_oauth_client_store
+from backend.admin.scim.store import reset_scim_store
 from backend.jobs.store import reset_job_store
 from backend.metadata.catalog.index_state import reset_catalog_index_store
 from backend.metadata.catalog.store import reset_catalog_store

@@ -25,6 +25,10 @@ const nextConfig = {
         destination: `${apiUpstream}/openapi.json`,
       },
       {
+        source: "/.well-known/:path*",
+        destination: `${apiUpstream}/.well-known/:path*`,
+      },
+      {
         source: "/api/:path*",
         destination: `${apiUpstream}/:path*`,
       },

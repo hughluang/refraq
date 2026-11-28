@@ -177,6 +177,18 @@ Coexists with Console Session cookies; authenticates the same User and Role perm
 Console operator copy uses **personal access token**. Do not show PAT or User PAT on screen.
 Avoid calling it a Client token, a Session id reused as Bearer, or a machine principal.
 
+### OAuth Client
+
+A registered relying application bound to one **Identity Provider** that may exchange user identity assertions (`ID-JAG` JWT Authorization Grant or RFC 8693 Token Exchange) at `/oauth/token` for short-lived **Delegated Access Token**s. Authenticates with `private_key_jwt` (preferred) or a client secret.
+
+### Delegated Access Token
+
+A short-lived opaque Bearer token (`rfq_oat_...`) minted via `/oauth/token` on behalf of a resolved **User**. Strictly bound to allowed **Resource Surface**s (RFC 8707) and intersected **Permission**s (never `console:access`), stored in Redis with instant revocation on User disablement or OAuth Client disablement.
+
+### Resource Surface
+
+One of the closed RFC 8707 protected resource surfaces in `refraq`: `/api`, `/mcp` (Metadata MCP), or `/mcp/entity` (Entity MCP). Every authenticated `Principal` is bound to exactly one Resource Surface.
+
 ### Display Timezone
 
 An optional IANA zone on a **User** that the **Management Console** uses to format **Instants** for that operator. `null` means follow the browser’s system timezone. Not part of Instant storage or HTTP/MCP Instant JSON (those stay UTC `Z`). The stored id is a current name from the shared zone catalog; a historical alias is rewritten to that name on write.

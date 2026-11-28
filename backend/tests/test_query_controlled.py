@@ -433,8 +433,7 @@ def test_query_application_timeout(
 def test_mcp_run_sql_success_and_forbidden(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from backend.metadata import mcp_server as mcp_mod
-    from backend.admin.user_store import UserRecord
+    from backend.admin.token_store import generate_token_secret, get_token_store
 
     source = _make_source(client, key="mcp-src")
     connector = _RecordingConnector(rows=[["ok"]], columns=["c"])
@@ -445,7 +444,7 @@ def test_mcp_run_sql_success_and_forbidden(
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]
 
-    from backend.metadata.mcp_actor import mcp_authorization
+    from backend.admin.principal import mcp_authorization
 
     with mcp_authorization(f"Bearer {secret}"):
         raw = asyncio.run(
@@ -470,16 +469,22 @@ def test_mcp_run_sql_success_and_forbidden(
         status="active",
     )
 
-    def _fake_actor() -> tuple[UserRecord, str]:
-        return op_user, "tok_fake"
-
-    monkeypatch.setattr(mcp_mod, "current_actor", _fake_actor)
-    forbidden = asyncio.run(
-        run_sql(
-            source_locator_key=source["locator_key"],
-            sql="SELECT 1",
-        )
+    op_secret, op_prefix, op_hash = generate_token_secret()
+    get_token_store().create(
+        user_id=op_user.id,
+        name="ops2-pat",
+        token_hash=op_hash,
+        prefix=op_prefix,
+        expires_at=utc_now() + timedelta(days=7),
     )
+
+    with mcp_authorization(f"Bearer {op_secret}"):
+        forbidden = asyncio.run(
+            run_sql(
+                source_locator_key=source["locator_key"],
+                sql="SELECT 1",
+            )
+        )
     err = json.loads(forbidden)
     assert err["error"]["code"] == "AUTH_FORBIDDEN"
 

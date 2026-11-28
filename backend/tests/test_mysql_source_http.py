@@ -401,7 +401,7 @@ def test_mysql_mcp_query_preserves_binary_and_other_result_cells(
     client, mysql_result_source
 ):
     from backend.core.time import format_instant, utc_now
-    from backend.metadata.mcp_actor import mcp_authorization
+    from backend.admin.principal import mcp_authorization
     from backend.metadata.mcp_server import run_sql
 
     token = client.post(

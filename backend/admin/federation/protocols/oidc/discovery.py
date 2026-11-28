@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from backend.admin.federation.errors import SsoAssertionRejected, SsoProviderUnavailable
+from backend.admin.federation.http_port import OidcHttpPort
 from backend.admin.federation.protocols.oidc.jwks import permitted_signing_algs
 from backend.admin.federation.spec import ProviderRecord
 
@@ -22,18 +23,6 @@ class OidcDiscovery:
     jwks_uri: str
     authorization_response_iss_parameter_supported: bool
     id_token_signing_alg_values_supported: tuple[str, ...]
-
-
-def _get_json(url: str) -> dict[str, Any]:
-    try:
-        response = httpx.get(url, timeout=DISCOVERY_TIMEOUT_SEC)
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise SsoProviderUnavailable() from exc
-    data = response.json()
-    if not isinstance(data, dict):
-        raise SsoAssertionRejected("OIDC metadata is invalid")
-    return data
 
 
 def discovery_url(issuer: str) -> str:
@@ -53,8 +42,26 @@ def _signing_algs(data: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(item) for item in raw)
 
 
-def discover(provider: ProviderRecord) -> OidcDiscovery:
-    data = _get_json(discovery_url(provider.issuer))
+def _get_json(url: str, *, http: OidcHttpPort | None) -> dict[str, Any]:
+    if http is not None:
+        return http.get_json(url)
+    try:
+        response = httpx.get(url, timeout=DISCOVERY_TIMEOUT_SEC)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise SsoProviderUnavailable() from exc
+    data = response.json()
+    if not isinstance(data, dict):
+        raise SsoAssertionRejected("OIDC metadata is invalid")
+    return data
+
+
+def discover(
+    provider: ProviderRecord,
+    *,
+    http: OidcHttpPort | None = None,
+) -> OidcDiscovery:
+    data = _get_json(discovery_url(provider.issuer), http=http)
     issuer = data.get("issuer")
     if not isinstance(issuer, str) or issuer != provider.issuer:
         raise SsoAssertionRejected("OIDC discovery issuer does not match")

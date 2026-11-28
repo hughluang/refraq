@@ -7,12 +7,10 @@ from typing import Any
 
 from mcp.types import ToolAnnotations
 
-from backend.core.admission import await_admitted
-from backend.core.request_id import bind_request_id, get_request_id
-from backend.entity.access.actor_token import actor_token
-from backend.entity.mcp.actor import current_actor
+from backend.admin.principal import require_current_principal
+from backend.core.request_id import get_request_id
 from backend.entity.mcp.guidance import TOOL_DESCRIPTIONS
-from backend.entity.mcp.server import _err, _require, mcp
+from backend.entity.mcp.server import _err, mcp
 from backend.entity.mcp.sql_prepare import prepare_entity_sql
 from backend.entity.mcp.sql_run import run_entity_sql
 
@@ -24,9 +22,9 @@ from backend.entity.mcp.sql_run import run_entity_sql
 def validate_sql(sql: str) -> str:
     """Check one read-only statement. No entity connection and no access log."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "entity:data_read")
-        prepared = prepare_entity_sql(sql, user)
+        principal = require_current_principal()
+        principal.require("entity:data_read")
+        prepared = prepare_entity_sql(sql, principal.user)
         return json.dumps(
             {
                 "entities": list(prepared.entities),
@@ -47,21 +45,19 @@ def validate_sql(sql: str) -> str:
 async def run_sql(sql: str, max_rows: int | None = None) -> str:
     """Execute one prepared statement. The result echoes the submitted SQL."""
     try:
-        user, token_id = current_actor()
-        _require(user, "entity:data_read")
+        principal = require_current_principal()
+        principal.require("entity:data_read")
         request_id = get_request_id()
 
-        def _run() -> dict[str, Any]:
-            with actor_token(token_id), bind_request_id(request_id):
-                return run_entity_sql(
-                    sql,
-                    user,
-                    pat_id=token_id,
-                    request_id=request_id,
-                    max_rows=max_rows,
-                )
-
-        presented = await await_admitted(user.id, _run)
+        presented = await principal.admit(
+            lambda: run_entity_sql(
+                sql,
+                principal.user,
+                pat_id=principal.actor_token_id,
+                request_id=request_id,
+                max_rows=max_rows,
+            )
+        )
         return json.dumps(presented)
     except Exception as exc:  # noqa: BLE001 — tool failures stay in the envelope
         return _err(exc)

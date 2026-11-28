@@ -1,4 +1,4 @@
-"""Entity MCP HTTP process: Streamable HTTP, PAT Bearer only, reader pool only."""
+"""Entity MCP HTTP process: Streamable HTTP, Bearer PAT or Delegated OAuth, reader pool only."""
 
 from __future__ import annotations
 
@@ -12,76 +12,21 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
-from starlette.types import ASGIApp, Receive, Scope, Send
 
-from backend.admin.errors import AuthUnauthenticated
-from backend.core.config import get_settings
-from backend.core.errors import CODE_HTTP_METHOD_NOT_ALLOWED, problem_response
-from backend.core.health import readyz as core_readyz
+from backend.admin.mcp_gate import McpResourceGate
+from backend.admin.principal import ResourceSurface
 from backend.core.bulkhead import reset_peek_bulkhead
+from backend.core.config import get_settings
+from backend.core.health import readyz as core_readyz
 from backend.core.http_runtime import apply_http_runtime
 from backend.core.load_shed import LoadSheddingMiddleware
 from backend.core.metrics import metrics_response
 from backend.core.request_id import RequestIdMiddleware
 from backend.core.runtime import get_runtime_capacity, set_process_role
-from backend.entity.access.actor_token import actor_token
 from backend.entity.entity_db import open_entity_reader_pool_when_persistent
-from backend.entity.mcp.actor import (
-    actor_from_authorization_header,
-    reset_mcp_actor,
-    set_mcp_actor,
-)
 from backend.entity.mcp.catalog import MCP_PUBLIC_PATH
 from backend.entity.mcp.server import mcp
 from backend.worker.parameters import assemble_system_parameters
-
-
-class PatOnlyGate:
-    """Require User PAT on /mcp/entity, then accept POST only. Ignore cookies."""
-
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-        path = scope.get("path") or ""
-        if path != MCP_PUBLIC_PATH and not path.startswith(MCP_PUBLIC_PATH + "/"):
-            await self.app(scope, receive, send)
-            return
-
-        headers = {
-            key.decode("latin-1").lower(): value.decode("latin-1")
-            for key, value in scope.get("headers", [])
-        }
-        try:
-            user, token_id = actor_from_authorization_header(
-                headers.get("authorization")
-            )
-        except AuthUnauthenticated as exc:
-            response = problem_response(
-                status=exc.http_status, code=exc.code, detail=exc.message
-            )
-            await response(scope, receive, send)
-            return
-
-        if scope.get("method") != "POST":
-            response = problem_response(
-                status=405,
-                code=CODE_HTTP_METHOD_NOT_ALLOWED,
-                detail="Only POST is accepted",
-                headers={"Allow": "POST"},
-            )
-            await response(scope, receive, send)
-            return
-
-        token = set_mcp_actor(user, token_id)
-        try:
-            with actor_token(token_id):
-                await self.app(scope, receive, send)
-        finally:
-            reset_mcp_actor(token)
 
 
 async def readyz(_request: Request) -> JSONResponse:
@@ -94,9 +39,6 @@ async def metrics(_request: Request) -> Response:
 
 def _transport_security() -> TransportSecuritySettings | None:
     settings = get_settings()
-    # Loopback bind keeps the SDK Host whitelist (DNS-rebinding cover for a
-    # direct 127.0.0.1 client). Memory tests (Host: testserver) and compose
-    # (0.0.0.0, reached only through the Console proxy) disable the check.
     if (
         settings.store_backend != "memory"
         and settings.refraq_entity_mcp_host in ("127.0.0.1", "localhost", "::1")
@@ -106,10 +48,7 @@ def _transport_security() -> TransportSecuritySettings | None:
 
 
 def ensure_entity_reader_pool_or_abort() -> None:
-    """Start gate: probe the reader and signer pools, or abort before serving.
-
-    Probe failures raise Exception. SystemExit is the process close path.
-    """
+    """Start gate: probe the reader and signer pools, or abort before serving."""
     try:
         open_entity_reader_pool_when_persistent()
     except Exception as exc:  # noqa: BLE001 — process close path must exit
@@ -142,7 +81,7 @@ def create_mcp_http_app() -> Starlette:
         routes=[
             Route("/readyz", endpoint=readyz, methods=["GET"]),
             Route("/metrics", endpoint=metrics, methods=["GET"]),
-            Mount("/", app=PatOnlyGate(inner)),
+            Mount("/", app=McpResourceGate(inner, surface=ResourceSurface.ENTITY_MCP)),
         ],
         lifespan=lifespan,
         middleware=[

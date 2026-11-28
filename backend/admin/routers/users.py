@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from backend.core.pagination import PageParams, page_params
 
-from backend.admin.deps import require_permission
+from backend.admin.deps import get_actor_token_id, require_permission
+from backend.admin.lifecycle import disable_user, enable_user
+from backend.admin.oauth.runtime_store import (
+    OAuthRuntimeStore,
+    get_oauth_runtime_store,
+)
 from backend.admin.errors import (
     AccountInvalidLocale,
     UserInvalidRole,
@@ -116,29 +121,34 @@ def get_user(
 def update_user_status(
     user_id: str,
     payload: UpdateStatusRequest,
+    request: Request,
     caller: UserRecord = Depends(require_permission("users:write")),
     users: UserStore = Depends(get_user_store),
     roles: RoleStore = Depends(get_role_store),
     sessions: SessionStore = Depends(get_session_store),
+    oauth_runtime: OAuthRuntimeStore = Depends(get_oauth_runtime_store),
 ) -> UpdateStatusResponse:
     if payload.status not in VALID_STATUSES:
         raise UserInvalidStatus()
 
-    if user_id == caller.id and payload.status == "disabled":
-        raise UserSelfDisableForbidden()
-
-    record = users.get_by_id(user_id)
-    if record is None:
-        raise UserNotFound()
-    if record.identity_source == "system":
-        raise UserSystemImmutable()
-
-    updated = users.update_status(user_id, payload.status)
-    if updated is None:
-        raise UserNotFound()
-
     if payload.status == "disabled":
-        sessions.delete_by_user_id(user_id)
+        updated = disable_user(
+            user_id=user_id,
+            users=users,
+            roles=roles,
+            sessions=sessions,
+            oauth_runtime=oauth_runtime,
+            caller_user_id=caller.id,
+            actor_token_id=get_actor_token_id(request),
+            enforce_last_super_admin=False,
+        )
+    else:
+        updated = enable_user(
+            user_id=user_id,
+            users=users,
+            caller_user_id=caller.id,
+            actor_token_id=get_actor_token_id(request),
+        )
 
     return UpdateStatusResponse(user=build_user_summary(updated, roles))
 

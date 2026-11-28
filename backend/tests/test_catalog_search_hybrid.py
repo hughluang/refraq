@@ -43,7 +43,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
     reset_catalog_store,
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
-from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import (  # noqa: E402
     search_columns as mcp_search_columns,
     search_objects as mcp_search_objects,

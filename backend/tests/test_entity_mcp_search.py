@@ -51,7 +51,7 @@ from backend.entity.ids import (  # noqa: E402
     new_version_id,
 )
 from backend.entity.lifecycle import latest_published_of  # noqa: E402
-from backend.entity.mcp.actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.entity.mcp.catalog import MCP_TOOLS  # noqa: E402
 from backend.entity.mcp.search import search_entities  # noqa: E402
 from backend.entity.mcp.server import list_entities  # noqa: E402

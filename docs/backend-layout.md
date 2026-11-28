@@ -78,7 +78,12 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 
 | Module | Published for |
 |--------|----------------|
-| `backend.admin.deps` | Current user, permission, PAT resolution, actor token id, session cookie helpers |
+| `backend.admin.deps` | Current user, permission, PAT/Bearer resolution, actor token id, session cookie helpers |
+| `backend.admin.principal` | Sealed immutable `Principal`, `VerifiedOrigin`, `ResourceSurface`, `current_principal`, `current_actor_token_id` |
+| `backend.admin.mcp_gate` | Shared `McpResourceGate` ASGI gate for `/mcp` and `/mcp/entity` with RFC 9728 `WWW-Authenticate` challenges |
+| `backend.admin.lifecycle` | Single User disable/enable/cascade-revocation seam (`disable_user`, `enable_user`) |
+| `backend.admin.oauth.router` | OAuth Client admin HTTP, `POST /oauth/token`, and RFC 8414 / RFC 9728 `.well-known` metadata (mounted by `main` only) |
+| `backend.admin.scim.router` | Per-Identity-Provider SCIM 2.0 `/scim/v2` Service Provider HTTP (mounted by `main` only) |
 | `backend.admin.permissions` | Permission catalog helpers used by MCP and deps |
 | `backend.admin.errors` | Foundation error types (subclass `core.errors.AppError`) |
 | `backend.admin.audit` | `persist_audit_event` |

@@ -35,13 +35,16 @@ from backend.admin.federation.protocols.oidc.adapter import (
     pkce_challenge,
 )
 from backend.admin.federation.provider_store import ProviderStore
-from backend.admin.federation.provisioning import admit
+from backend.admin.federation.provisioning import admit_external_subject
 from backend.admin.federation.spec import BindingRecord, ProviderRecord, SUPPORTED_PROTOCOLS
 from backend.admin.federation.transaction import federation_transaction
+from backend.admin.lifecycle import disable_user
+from backend.admin.oauth.runtime_store import OAuthRuntimeStore
 from backend.admin.role_store import RoleStore
 from backend.admin.roles import is_last_local_active_super_admin
 from backend.admin.security import hash_password
 from backend.admin.session_store import SessionStore
+from backend.admin.subjects.store import SubjectStore
 from backend.admin.user_store import UserRecord, UserStore
 from backend.core.time import utc_now
 
@@ -121,7 +124,9 @@ def _cascade_disable_bound_users(
     *,
     bound: list[BindingRecord],
     users: UserStore,
+    roles: RoleStore,
     sessions: SessionStore,
+    oauth_runtime: OAuthRuntimeStore,
     provider_id: str,
     actor_user_id: str | None,
     actor_token_id: str | None,
@@ -130,19 +135,20 @@ def _cascade_disable_bound_users(
     for binding in bound:
         if actor_user_id is not None and binding.user_id == actor_user_id:
             continue
-        updated = users.update_status(binding.user_id, "disabled")
-        if updated is None:
+        try:
+            disable_user(
+                user_id=binding.user_id,
+                users=users,
+                roles=roles,
+                sessions=sessions,
+                oauth_runtime=oauth_runtime,
+                caller_user_id=actor_user_id,
+                actor_token_id=actor_token_id,
+                audit_detail={"cascade_from_provider": provider_id},
+                enforce_last_super_admin=False,
+            )
+        except UserNotFound:
             continue
-        sessions.delete_by_user_id(binding.user_id)
-        persist_audit_event(
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
-            resource_type="user",
-            resource_id=binding.user_id,
-            action="disable",
-            result="success",
-            detail={"cascade_from_provider": provider_id},
-        )
         disabled += 1
     return disabled
 
@@ -161,6 +167,7 @@ def patch_provider(
     bindings: BindingStore | None = None,
     users: UserStore | None = None,
     sessions: SessionStore | None = None,
+    oauth_runtime: OAuthRuntimeStore | None = None,
 ) -> ProviderRecord:
     existing = store.get(provider_id)
     if existing is None:
@@ -195,11 +202,18 @@ def patch_provider(
     if enabled is False and bindings is not None:
         bound = bindings.list_for_issuer(saved.issuer)
         disabled = 0
-        if disable_bound_users and users is not None and sessions is not None:
+        if (
+            disable_bound_users
+            and users is not None
+            and sessions is not None
+            and oauth_runtime is not None
+        ):
             disabled = _cascade_disable_bound_users(
                 bound=bound,
                 users=users,
+                roles=roles,
                 sessions=sessions,
+                oauth_runtime=oauth_runtime,
                 provider_id=provider_id,
                 actor_user_id=actor_user_id,
                 actor_token_id=actor_token_id,
@@ -228,7 +242,9 @@ def delete_provider(
     store: ProviderStore,
     bindings: BindingStore,
     users: UserStore,
+    roles: RoleStore,
     sessions: SessionStore,
+    oauth_runtime: OAuthRuntimeStore,
     provider_id: str,
     disable_bound_users: bool,
     actor_user_id: str | None,
@@ -243,7 +259,9 @@ def delete_provider(
         disabled = _cascade_disable_bound_users(
             bound=bound,
             users=users,
+            roles=roles,
             sessions=sessions,
+            oauth_runtime=oauth_runtime,
             provider_id=provider_id,
             actor_user_id=actor_user_id,
             actor_token_id=actor_token_id,
@@ -310,6 +328,7 @@ def complete_sso(
     roles: RoleStore,
     bindings: BindingStore,
     pending: PendingStore,
+    subjects: SubjectStore,
 ) -> UserRecord:
     if handoff.provider_id != provider.id:
         raise SsoHandoffInvalid()
@@ -321,13 +340,15 @@ def complete_sso(
         nonce=handoff.nonce,
         response_iss=response_iss,
     )
-    return admit(
+    return admit_external_subject(
         provider=provider,
         assertion=assertion,
         users=users,
         roles=roles,
         bindings=bindings,
+        subjects=subjects,
         pending=pending,
+        mode="console_sso",
     )
 
 

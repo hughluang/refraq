@@ -12,12 +12,13 @@ from mcp.server import CacheHint, MCPServer
 from mcp.types import Tool as MCPTool
 from mcp.types import ToolAnnotations
 
-from backend.admin.deps import resolve_user_permissions
 from backend.admin.errors import AuthForbidden
-from backend.admin.permissions import permissions_include
-from backend.admin.role_store import get_role_store
-from backend.admin.user_store import UserRecord
-from backend.metadata.mcp_actor import current_actor, mcp_authorization
+from backend.admin.principal import (
+    Principal,
+    ResourceSurface,
+    mcp_authorization,
+    require_current_principal,
+)
 from backend.metadata.mcp_catalog import Execution, TOOLS_LIST_TTL_MS, tools_for_permissions
 from backend.metadata.mcp_guidance import (
     ANALYZE_OBJECT_BODY,
@@ -72,15 +73,14 @@ def _with_execution(tool: MCPTool, execution: Execution) -> MCPTool:
 
 
 class RefraqMetadataMcp(MCPServer):
-    """Metadata MCP host: tools/list is cropped to the current PAT's Role."""
+    """Metadata MCP host: tools/list is cropped to the current Principal's effective permissions."""
 
     async def list_tools(self) -> list[MCPTool]:
         tools = {tool.name: tool for tool in await super().list_tools()}
-        user, _token_id = current_actor()
-        perms = resolve_user_permissions(user, get_role_store())
+        principal = require_current_principal()
         return [
             _with_execution(tools[spec.name], spec.execution)
-            for spec in tools_for_permissions(perms)
+            for spec in tools_for_permissions(principal.effective_permissions)
         ]
 
 
@@ -107,22 +107,15 @@ def _mcp_strip_empty(data: dict[str, Any]) -> dict[str, Any]:
         out[key] = value
     return out
 
-def _require(user: UserRecord, permission: str) -> None:
-    roles = get_role_store()
-    perms = resolve_user_permissions(user, roles)
-    if not permissions_include(perms, permission):
-        raise AuthForbidden(f"Missing permission {permission}")
-
-
 def _require_source(user_id: str, source_ref: str, permission: str):
     """Resolve a locator, then the same Source gate HTTP uses."""
     located = catalog_refs.resolve_source_ref(source_ref)
     return source_service.require_source_permission(user_id, located.id, permission)
 
 
-def _require_object(user_id: str, object_ref: str, permission: str):
+def _require_object(principal: Principal, object_ref: str, permission: str):
     record = catalog_refs.resolve_object_ref(object_ref)
-    if not allows(user_id, record.source_id, permission):
+    if not allows(principal, record.source_id, permission):
         raise CatalogObjectNotFound()
     return record
 
@@ -132,21 +125,21 @@ def _column_source_id(column_id: str) -> str:
     return catalog_refs.resolve_object_ref(column.object_id).source_id
 
 
-def _require_columns(user_id: str, column_ids: list[str], permission: str) -> None:
+def _require_columns(principal: Principal, column_ids: list[str], permission: str) -> None:
     if not column_ids:
         return
     source_ids = [_column_source_id(column_id) for column_id in column_ids]
-    if not allows(user_id, source_ids[0], permission, *source_ids[1:]):
+    if not allows(principal, source_ids[0], permission, *source_ids[1:]):
         raise CatalogColumnNotFound()
 
 
-def _require_join_write(user_id: str, join_id: str) -> None:
+def _require_join_write(principal: Principal, join_id: str) -> None:
     record = catalog_refs.require_join(join_id)
     source_ids = [
         _column_source_id(record.from_column_id),
         _column_source_id(record.to_column_id),
     ]
-    if not allows(user_id, source_ids[0], "metadata:write", *source_ids[1:]):
+    if not allows(principal, source_ids[0], "metadata:write", *source_ids[1:]):
         raise CatalogJoinNotFound()
 
 
@@ -210,9 +203,10 @@ def enrich_semantics(object_locator_key: str) -> str:
     header = f"Enrich object: {object_locator_key}\n\n"
     gaps = ""
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-        _require_object(user.id, object_locator_key, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
+        _require_object(principal, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         missing: list[str] = []
         if not view.business_name:
@@ -249,11 +243,12 @@ def search_sources(
 ) -> str:
     """Search/list Sources (sources:read)."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "sources:read")
+        principal = require_current_principal()
+        principal.require("sources:read")
+        user = principal.user
         lim = SOURCE_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
-        granted = source_ids_for(user.id, "sources:read")
+        granted = source_ids_for(principal, "sources:read")
         visible_ids = ALL_SOURCES if granted.all_sources else granted.source_ids
         records, total = get_source_store().list_sources(
             query_text=query_text,
@@ -277,8 +272,9 @@ def search_sources(
 def get_source(source_locator_key: str) -> str:
     """Get Source detail by locator (sources:read)."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "sources:read")
+        principal = require_current_principal()
+        principal.require("sources:read")
+        user = principal.user
         s = _require_source(user.id, source_locator_key, "sources:read")
         return _dumps(source_service.public_view(s))
     except Exception as exc:  # noqa: BLE001
@@ -295,8 +291,9 @@ def list_objects(
 ) -> str:
     """List Catalog Objects under a Source locator (metadata:read)."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
         source = _require_source(user.id, source_locator_key, "metadata:read")
         lim = CATALOG_OBJECT_LIST.clamp(limit)
         off = max(0, int(offset or 0))
@@ -323,9 +320,10 @@ def list_objects(
 def get_object(object_locator_key: str) -> str:
     """Get Catalog Object with columns, DDL, and object semantics by locator (metadata:read)."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-        _require_object(user.id, object_locator_key, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
+        _require_object(principal, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(_object_payload(view, include_columns=True))
     except Exception as exc:  # noqa: BLE001
@@ -334,9 +332,10 @@ def get_object(object_locator_key: str) -> str:
 @mcp.tool(description=TOOL_DESCRIPTIONS["get_object_semantics"])
 def get_object_semantics(object_locator_key: str) -> str:
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-        _require_object(user.id, object_locator_key, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
+        _require_object(principal, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(
             present_object(view, profile=ObjectPresentProfile.MCP_SUMMARY)
@@ -347,9 +346,10 @@ def get_object_semantics(object_locator_key: str) -> str:
 @mcp.tool(description=TOOL_DESCRIPTIONS["get_object_columns"])
 def get_object_columns(object_locator_key: str) -> str:
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-        _require_object(user.id, object_locator_key, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
+        _require_object(principal, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(
             present_object(view, profile=ObjectPresentProfile.MCP_COLUMNS)
@@ -360,9 +360,10 @@ def get_object_columns(object_locator_key: str) -> str:
 @mcp.tool(description=TOOL_DESCRIPTIONS["get_object_ddl"])
 def get_object_ddl(object_locator_key: str) -> str:
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-        _require_object(user.id, object_locator_key, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
+        _require_object(principal, object_locator_key, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(present_object(view, profile=ObjectPresentProfile.MCP_DDL))
     except Exception as exc:  # noqa: BLE001
@@ -381,9 +382,10 @@ def set_object_semantics(
 ) -> str:
     """Incremental object semantics write (metadata:write, semantic_source=mcp)."""
     try:
-        user, token_id = current_actor()
-        _require(user, "metadata:write")
-        o = _require_object(user.id, object_locator_key, "metadata:write")
+        principal = require_current_principal()
+        principal.require("metadata:write")
+        user, token_id = principal.user, principal.actor_token_id
+        o = _require_object(principal, object_locator_key, "metadata:write")
         data = _mcp_strip_empty(
             {
                 "business_name": business_name,
@@ -420,9 +422,10 @@ def set_column_semantics(
 ) -> str:
     """Batch column semantics under one object locator (metadata:write)."""
     try:
-        user, token_id = current_actor()
-        _require(user, "metadata:write")
-        o = _require_object(user.id, object_locator_key, "metadata:write")
+        principal = require_current_principal()
+        principal.require("metadata:write")
+        user, token_id = principal.user, principal.actor_token_id
+        o = _require_object(principal, object_locator_key, "metadata:write")
         stripped_columns: list[dict[str, Any]] = []
         for item in columns:
             name = item.get("column_name")
@@ -448,9 +451,10 @@ def list_semantics_changes(
     offset: int | None = None,
 ) -> str:
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-        _require_object(user.id, object_locator_key, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
+        _require_object(principal, object_locator_key, "metadata:read")
         lim = SEMANTICS_CHANGE_LIST.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = catalog_reads.list_semantics_changes(
@@ -490,8 +494,9 @@ async def search_objects(
 ) -> str:
     """Cross-Source object search (metadata:read)."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
         source_id = None
         if source_locator_key:
             source_id = _require_source(
@@ -511,7 +516,7 @@ async def search_objects(
             )
 
         found = (
-            await await_admitted(user.id, _run) if embedding_configured() else _run()
+            await principal.admit(_run) if embedding_configured() else _run()
         )
         return _dumps(
             {
@@ -537,8 +542,9 @@ async def search_columns(
 ) -> str:
     """Cross-Source column search (metadata:read)."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
         source_id = None
         if source_locator_key:
             source_id = _require_source(
@@ -558,7 +564,7 @@ async def search_columns(
             )
 
         found = (
-            await await_admitted(user.id, _run) if embedding_configured() else _run()
+            await principal.admit(_run) if embedding_configured() else _run()
         )
         return _dumps(
             {
@@ -583,9 +589,10 @@ def list_joins(
 ) -> str:
     """List joins for an object locator (metadata:read)."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-        o = _require_object(user.id, object_locator_key, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
+        o = _require_object(principal, object_locator_key, "metadata:read")
         lim = JOIN_LIST.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = catalog_joins.list_joins(o.id, limit=lim, offset=off)
@@ -610,11 +617,12 @@ def upsert_join(
 ) -> str:
     """Create a join edge (metadata:write, Join Change attester mcp). Duplicate pairs are refused."""
     try:
-        user, token_id = current_actor()
-        _require(user, "metadata:write")
+        principal = require_current_principal()
+        principal.require("metadata:write")
+        user, token_id = principal.user, principal.actor_token_id
         from_col = catalog_refs.resolve_column_ref(from_column_locator_key)
         to_col = catalog_refs.resolve_column_ref(to_column_locator_key)
-        _require_columns(user.id, [from_col.id, to_col.id], "metadata:write")
+        _require_columns(principal, [from_col.id, to_col.id], "metadata:write")
         record = catalog_joins.create_join(
             from_column_id=from_col.id,
             to_column_id=to_col.id,
@@ -638,9 +646,10 @@ def patch_join(
 ) -> str:
     """Amend a join edge (metadata:write). Does not change first attester."""
     try:
-        user, token_id = current_actor()
-        _require(user, "metadata:write")
-        _require_join_write(user.id, join_id)
+        principal = require_current_principal()
+        principal.require("metadata:write")
+        user, token_id = principal.user, principal.actor_token_id
+        _require_join_write(principal, join_id)
         record = catalog_joins.amend_join(
             join_id=join_id,
             evidence=evidence,
@@ -657,9 +666,10 @@ def patch_join(
 def reject_join(join_id: str) -> str:
     """Reject a join pair (metadata:write). Blocks every writer until restore."""
     try:
-        user, token_id = current_actor()
-        _require(user, "metadata:write")
-        _require_join_write(user.id, join_id)
+        principal = require_current_principal()
+        principal.require("metadata:write")
+        user, token_id = principal.user, principal.actor_token_id
+        _require_join_write(principal, join_id)
         record = catalog_joins.reject_join(
             join_id=join_id,
             actor_user_id=user.id,
@@ -673,9 +683,10 @@ def reject_join(join_id: str) -> str:
 def restore_join(join_id: str) -> str:
     """Lift Join Rejection (metadata:write)."""
     try:
-        user, token_id = current_actor()
-        _require(user, "metadata:write")
-        _require_join_write(user.id, join_id)
+        principal = require_current_principal()
+        principal.require("metadata:write")
+        user, token_id = principal.user, principal.actor_token_id
+        _require_join_write(principal, join_id)
         record = catalog_joins.restore_join(
             join_id=join_id,
             actor_user_id=user.id,
@@ -696,8 +707,9 @@ def upsert_joins(
     change evidence after restore, call patch_join.
     """
     try:
-        user, token_id = current_actor()
-        _require(user, "metadata:write")
+        principal = require_current_principal()
+        principal.require("metadata:write")
+        user, token_id = principal.user, principal.actor_token_id
         normalized: list[dict[str, Any]] = []
         skipped_joins: list[dict[str, Any]] = []
         for item in joins:
@@ -741,7 +753,7 @@ def upsert_joins(
                 }
             )
         _require_columns(
-            user.id,
+            principal,
             [
                 column_id
                 for item in normalized
@@ -772,9 +784,10 @@ def upsert_joins(
 def delete_join(join_id: str) -> str:
     """Remove a human-created, non-rejected edge by id (metadata:write). Delete does not stop automatic re-detection; use reject_join to keep a pair out."""
     try:
-        user, token_id = current_actor()
-        _require(user, "metadata:write")
-        _require_join_write(user.id, join_id)
+        principal = require_current_principal()
+        principal.require("metadata:write")
+        user, token_id = principal.user, principal.actor_token_id
+        _require_join_write(principal, join_id)
         catalog_joins.delete_join(
             join_id=join_id,
             actor_user_id=user.id,
@@ -794,8 +807,9 @@ async def find_join_path(
 ) -> str:
     """Join path lookup from start locator (metadata:read)."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
+        principal = require_current_principal()
+        principal.require("metadata:read")
+        user = principal.user
         catalog_reads.require_join_path_visible(
             user.id, start_locator_key, target_locator_key
         )
@@ -810,7 +824,7 @@ async def find_join_path(
             )
 
         admit = bool((query_text or "").strip()) and not target_locator_key and embedding_configured()
-        result = await await_admitted(user.id, _run) if admit else _run()
+        result = await principal.admit(_run) if admit else _run()
         return _dumps(
             {
                 "paths_found": result.paths_found,
@@ -842,8 +856,9 @@ async def run_sql(
 ) -> str:
     """Run a single read-only SELECT against a Source (query:run)."""
     try:
-        user, token_id = current_actor()
-        _require(user, "query:run")
+        principal = require_current_principal()
+        principal.require("query:run")
+        user, token_id = principal.user, principal.actor_token_id
         source = _require_source(user.id, source_locator_key, "query:run")
 
         def _run() -> query_service.QueryOutcome:
@@ -855,7 +870,7 @@ async def run_sql(
                 actor_token_id=token_id,
             )
 
-        outcome = await await_admitted(user.id, _run)
+        outcome = await principal.admit(_run)
         return _dumps(
             {
                 "columns": outcome.columns,
@@ -876,7 +891,7 @@ def main() -> None:
     if not secret:
         mcp.run()
         return
-    with mcp_authorization(f"Bearer {secret}"):
+    with mcp_authorization(f"Bearer {secret}", surface=ResourceSurface.METADATA_MCP):
         mcp.run()
 
 if __name__ == "__main__":

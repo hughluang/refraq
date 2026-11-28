@@ -31,7 +31,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.locators import format_object_locator  # noqa: E402
-from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import upsert_joins  # noqa: E402
 from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import reset_source_store  # noqa: E402

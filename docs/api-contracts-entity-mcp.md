@@ -4,7 +4,7 @@
 
 This document defines the **Entity MCP endpoint**: the read-only MCP tool face for **Business Entity** data the caller's **Access Grant**s allow, including read-only SQL over Entity `table_name`s.
 
-The product port is MCP Streamable HTTP at the Console-origin path `/mcp/entity`. Auth is **User PAT** in the HTTP `Authorization: Bearer` header only. Tool arguments do not include `authorization`. Session cookies are not credentials on this path. There is no OAuth discovery document and no well-known metadata.
+The product port is MCP Streamable HTTP at the Console-origin path `/mcp/entity`. Auth is **User PAT** (`rfq_pat_`) or an `/mcp/entity`-bound **Delegated Access Token** (`rfq_oat_`, see `docs/business-oauth-delegation.md`) in the HTTP `Authorization: Bearer` header only. Tool arguments do not include `authorization`. Session cookies are not credentials on this path. Unauthenticated `401` responses include the RFC 9728 `WWW-Authenticate` `resource_metadata` challenge pointing to `/.well-known/oauth-protected-resource/mcp/entity` when a trusted site origin is available.
 
 `GET /mcp/entity/catalog` on the API process accepts a Session or a User PAT and no extra Permission. It is the cropped Entity tool list for the Entity endpoint. The Console surface is `/console/mcp/entity`. The overview `/console/mcp` may link here; it does not serve this catalog as if it were Metadata. This catalog is not the Metadata catalog and is not an MCP connection.
 

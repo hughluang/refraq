@@ -115,6 +115,7 @@ class SqlBindingStore:
         row.email = record.email
         row.display_name = record.display_name
         row.last_login_at = record.last_login_at
+        row.scim_deprovisioned_at = record.scim_deprovisioned_at
         session.add(row)
         try:
             session.flush()
@@ -152,6 +153,7 @@ def _row_to_binding(row: FederatedIdentityRow | None) -> BindingRecord | None:
         display_name=row.display_name,
         linked_at=row.linked_at,
         last_login_at=row.last_login_at,
+        scim_deprovisioned_at=row.scim_deprovisioned_at,
     )
 
 

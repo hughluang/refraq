@@ -4,6 +4,8 @@ import { Checkbox, Code, Modal, Stack, Table, Text } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
+import { ScimTokensModal } from "@/features/identity-providers/ScimTokensModal";
+
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentIdentityProviderEnabled } from "@/components/display/statusTone";
 
@@ -56,6 +58,9 @@ export function IdentityProviderList() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] =
     useState<IdentityProviderTestResult | null>(null);
+  const [scimProvider, setScimProvider] = useState<IdentityProvider | null>(
+    null,
+  );
   const deleteConfirm = useConfirmAction<IdentityProvider>();
   const disableConfirm = useConfirmAction<IdentityProvider>();
   const [disableBoundUsers, setDisableBoundUsers] = useState(false);
@@ -300,6 +305,13 @@ export function IdentityProviderList() {
                       onClick: () => void runTest(row),
                     },
                     {
+                      key: "scim",
+                      label: t("identityProviders.scim.title"),
+                      hidden: !canEdit?.can,
+                      safety: "immediate",
+                      onClick: () => setScimProvider(row),
+                    },
+                    {
                       key: "delete",
                       label: t("actions.delete"),
                       color: "red",
@@ -325,6 +337,11 @@ export function IdentityProviderList() {
             setFormOpen(false);
             setEditing(undefined);
           }}
+        />
+
+        <ScimTokensModal
+          provider={scimProvider}
+          onClose={() => setScimProvider(null)}
         />
 
         <Modal

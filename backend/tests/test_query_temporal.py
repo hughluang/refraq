@@ -27,7 +27,7 @@ from backend.jobs.store import reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.core.time import format_instant, utc_now  # noqa: E402
 from backend.metadata.connectors.base import QueryColumn, QueryResult  # noqa: E402
-from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import run_sql  # noqa: E402
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
 

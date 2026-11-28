@@ -7,6 +7,7 @@ from backend.admin.system_parameters import IntConstraint, ParameterSpec, resolv
 __all__ = [
     "ADMIN_PARAMETER_SPECS",
     "admin_session_ttl_hours",
+    "oauth_access_token_ttl_sec",
     "sso_pending_ttl_days",
 ]
 
@@ -44,6 +45,17 @@ ADMIN_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
         label_key="settings.parameter.sso_pending_ttl_days.label",
         help_key="settings.parameter.sso_pending_ttl_days.help",
     ),
+    ParameterSpec(
+        key="oauth_access_token_ttl_sec",
+        constraint=IntConstraint(minimum=60, maximum=3600),
+        seed=900,
+        owner="admin",
+        group="session",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.oauth_access_token_ttl_sec.apply",
+        label_key="settings.parameter.oauth_access_token_ttl_sec.label",
+        help_key="settings.parameter.oauth_access_token_ttl_sec.help",
+    ),
 )
 
 
@@ -53,3 +65,7 @@ def admin_session_ttl_hours() -> int:
 
 def sso_pending_ttl_days() -> int:
     return resolve_int("sso_pending_ttl_days").value
+
+
+def oauth_access_token_ttl_sec() -> int:
+    return resolve_int("oauth_access_token_ttl_sec").value

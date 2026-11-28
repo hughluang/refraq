@@ -38,7 +38,7 @@ from backend.metadata.catalog.structure_refresh import apply_structure_snapshot 
 from backend.metadata.join_detection_jobs.reconcile import build_join_detection_plan  # noqa: E402
 from backend.metadata.join_detection_jobs.resolver import ResolvedJoin  # noqa: E402
 from backend.metadata.join_detection_jobs.service import run_join_detection_job  # noqa: E402
-from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import patch_join as mcp_patch_join  # noqa: E402
 from backend.metadata.mcp_server import reject_join as mcp_reject_join  # noqa: E402
 from backend.metadata.mcp_server import restore_join as mcp_restore_join  # noqa: E402

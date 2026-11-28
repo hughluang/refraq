@@ -23,6 +23,8 @@ All endpoints use JSON success and RFC 9457 Problem Details failures. They accep
   "auto_provision": true,
   "group_claim": "groups",
   "group_allowlist": ["/dept/analytics"],
+  "group_mappings": [{ "external_group": "/dept/analytics", "group_key": "analytics_team" }],
+  "scim_subject_source": "external_id",
   "default_role_id": "role_operator",
   "scopes": ["openid", "profile", "email"],
   "client_id": "refraq",

@@ -8,6 +8,7 @@ import type {
   IdentityProviderTestResult,
   IdentityProviderWrite,
   PendingFederatedIdentity,
+  ScimToken,
 } from "@/features/identity-providers/types";
 
 function pageSuffix(params?: PageQuery): string {
@@ -75,6 +76,30 @@ export function deleteIdentityProvider(
   const qs = disableBoundUsers ? "?disable_bound_users=true" : "";
   return apiClient<{ bound_user_count: number }>(
     `/identity-providers/${id}${qs}`,
+    { method: "DELETE" },
+  );
+}
+
+export function listScimTokens(providerId: string) {
+  return apiClient<{ items: ScimToken[] }>(
+    `/identity-providers/${providerId}/scim-tokens`,
+  );
+}
+
+export function createScimToken(providerId: string, name: string) {
+  return apiClient<{ scim_token: ScimToken; token: string }>(
+    `/identity-providers/${providerId}/scim-tokens`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+  );
+}
+
+export function revokeScimToken(providerId: string, tokenId: string) {
+  return apiClient<void>(
+    `/identity-providers/${providerId}/scim-tokens/${tokenId}`,
     { method: "DELETE" },
   );
 }

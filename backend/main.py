@@ -60,6 +60,8 @@ from backend.admin.routers.time_zones import router as time_zones_router
 from backend.admin.routers.tokens import router as tokens_router
 from backend.admin.routers.users import router as users_router
 from backend.admin.federation.router import router as federation_router
+from backend.admin.oauth.router import router as oauth_router
+from backend.admin.scim.router import router as scim_router
 from backend.admin.subjects import bind_dictionary_codes
 from backend.admin.subjects.router import (
     bind_user_source_access,
@@ -306,6 +308,8 @@ app.include_router(account_router)
 app.include_router(time_zones_router)
 # Federation's literal /users/pending-federated-identities must precede GET /users/{user_id}.
 app.include_router(federation_router)
+app.include_router(oauth_router)
+app.include_router(scim_router)
 app.include_router(users_router)
 app.include_router(subjects_router)
 app.include_router(roles_router)

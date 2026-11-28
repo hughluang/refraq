@@ -51,7 +51,10 @@ export function proxy(request: NextRequest): NextResponse {
     return new NextResponse(null, { status: 404 });
   }
 
-  if (request.nextUrl.pathname.startsWith("/api")) {
+  if (
+    request.nextUrl.pathname.startsWith("/api") ||
+    request.nextUrl.pathname.startsWith("/.well-known/")
+  ) {
     return apiRewriteWithTrustedProto(request);
   }
 

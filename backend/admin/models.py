@@ -82,6 +82,7 @@ class FederatedIdentityRow(Base):
     display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     linked_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    scim_deprovisioned_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
 
 class PendingFederationRow(Base):
@@ -246,3 +247,74 @@ class SubjectAttributeValueRow(Base):
     subject_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(String(256), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class OAuthClientRow(Base):
+    __tablename__ = "oauth_clients"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("identity_providers.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    token_endpoint_auth_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    jwks: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    jwks_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    secret_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    secret_prefix: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    allowed_grant_types: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    allowed_subject_audiences: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    allowed_surfaces: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    allowed_scopes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    token_ttl_sec: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+
+class ScimTokenRow(Base):
+    __tablename__ = "scim_tokens"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("identity_providers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    prefix: Mapped[str] = mapped_column(String(32), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class ScimGroupBindingRow(Base):
+    __tablename__ = "scim_group_bindings"
+    __table_args__ = (
+        UniqueConstraint("provider_id", "external_id", name="uq_scim_group_provider_external"),
+        UniqueConstraint("provider_id", "group_id", name="uq_scim_group_provider_group"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("identity_providers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    external_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    group_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("user_groups.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)

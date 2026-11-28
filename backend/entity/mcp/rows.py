@@ -9,13 +9,10 @@ from typing import Any
 from mcp.types import ToolAnnotations
 from pydantic.json_schema import PydanticJsonSchemaWarning, SkipJsonSchema
 
-from backend.core.admission import await_admitted
-from backend.core.request_id import bind_request_id, get_request_id
-from backend.entity.access.actor_token import actor_token
+from backend.admin.principal import require_current_principal
 from backend.entity.data import service as data_service
-from backend.entity.mcp.actor import current_actor
 from backend.entity.mcp.guidance import TOOL_DESCRIPTIONS
-from backend.entity.mcp.server import _err, _reject_narrow, _require, mcp
+from backend.entity.mcp.server import _err, _reject_narrow, mcp
 
 # Omitted after_row_id keeps offset paging. JSON null is the first keyset page.
 _OMITTED: Any = object()
@@ -70,17 +67,14 @@ async def get_row(
 ) -> str:
     """One row, the same object Entity Data API get returns, wrapped as row."""
     try:
-        user, token_id = current_actor()
-        _require(user, "entity:data_read")
+        principal = require_current_principal()
+        principal.require("entity:data_read")
         _reject_narrow(narrow)
         body = _get_body(row_id, business_key)
-        request_id = get_request_id()
 
-        def _run() -> dict[str, Any]:
-            with actor_token(token_id), bind_request_id(request_id):
-                return data_service.get_row(table_name, body, user)
-
-        row = await await_admitted(user.id, _run)
+        row = await principal.admit(
+            lambda: data_service.get_row(table_name, body, principal.user)
+        )
         return json.dumps({"row": row})
     except Exception as exc:  # noqa: BLE001 — tool failures stay in the envelope
         return _err(exc)
@@ -106,8 +100,8 @@ with warnings.catch_warnings():
     ) -> str:
         """Entity Data API query envelope, offset or keyset, limits not clamped."""
         try:
-            user, token_id = current_actor()
-            _require(user, "entity:data_read")
+            principal = require_current_principal()
+            principal.require("entity:data_read")
             _reject_narrow(narrow)
             body = _query_body(
                 filters=filters,
@@ -118,13 +112,10 @@ with warnings.catch_warnings():
                 include_total=include_total,
                 after_row_id=after_row_id,
             )
-            request_id = get_request_id()
 
-            def _run() -> dict[str, Any]:
-                with actor_token(token_id), bind_request_id(request_id):
-                    return data_service.query_rows(table_name, body, user)
-
-            page = await await_admitted(user.id, _run)
+            page = await principal.admit(
+                lambda: data_service.query_rows(table_name, body, principal.user)
+            )
             return json.dumps(page)
         except Exception as exc:  # noqa: BLE001 — tool failures stay in the envelope
             return _err(exc)

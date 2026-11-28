@@ -29,7 +29,7 @@ from backend.entity.access.records import GrantRecord, ProfileRecord  # noqa: E4
 from backend.entity.access.store import get_access_store  # noqa: E402
 from backend.entity.ids import new_access_grant_id, new_access_profile_id  # noqa: E402
 from backend.entity.lifecycle import PUBLISHING  # noqa: E402
-from backend.entity.mcp.actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.entity.mcp.server import list_entities  # noqa: E402
 from backend.entity.store import get_entity_store  # noqa: E402
 from backend.main import app  # noqa: E402

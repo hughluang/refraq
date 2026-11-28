@@ -37,6 +37,7 @@ from backend.admin.federation.protocols.oidc.discovery import discover
 from backend.admin.federation.schemas import (
     ClaimPendingIn,
     ClaimPendingResponse,
+    GroupMappingIn,
     PendingList,
     PendingOut,
     ProviderCreateIn,
@@ -64,10 +65,15 @@ from backend.admin.federation.service import (
     unfederate_user,
 )
 from backend.admin.federation.spec import ProviderRecord
+from backend.admin.oauth.runtime_store import (
+    OAuthRuntimeStore,
+    get_oauth_runtime_store,
+)
 from backend.admin.parameters import admin_session_ttl_hours
 from backend.admin.system_parameters import resolve_int
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.session_store import SessionStore, get_session_store
+from backend.admin.subjects.store import SubjectStore, get_subject_store
 from backend.admin.user_payload import build_user_summary
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
 from backend.core.browser_host import canonical_browser_host
@@ -111,6 +117,14 @@ def _provider_out(item: ProviderRecord, bound_user_count: int) -> ProviderOut:
         auto_provision=config.auto_provision,
         group_claim=config.group_claim,
         group_allowlist=list(config.group_allowlist),
+        group_mappings=[
+            GroupMappingIn(
+                external_group=mapping.external_group,
+                group_key=mapping.group_key,
+            )
+            for mapping in config.group_mappings
+        ],
+        scim_subject_source=config.scim_subject_source,
         default_role_id=config.default_role_id,
         scopes=list(config.scopes),
         client_id=config.client_id,
@@ -190,6 +204,7 @@ async def callback(
     sessions: SessionStore = Depends(get_session_store),
     bindings: BindingStore = Depends(get_binding_store),
     pending: PendingStore = Depends(get_pending_store),
+    subjects: SubjectStore = Depends(get_subject_store),
 ) -> Response:
     def _clear(target: RedirectResponse) -> RedirectResponse:
         target.delete_cookie(HANDOFF_COOKIE_NAME, **session_cookie_attrs(request))
@@ -218,6 +233,7 @@ async def callback(
                 roles=roles,
                 bindings=bindings,
                 pending=pending,
+                subjects=subjects,
             ),
         )
     except SsoNotAdmitted:
@@ -319,6 +335,7 @@ def update_provider(
     bindings: BindingStore = Depends(get_binding_store),
     users: UserStore = Depends(get_user_store),
     sessions: SessionStore = Depends(get_session_store),
+    oauth_runtime: OAuthRuntimeStore = Depends(get_oauth_runtime_store),
     actor_token_id: str | None = Depends(get_actor_token_id),
     disable_bound_users: bool = False,
 ) -> ProviderResponse:
@@ -335,6 +352,7 @@ def update_provider(
         bindings=bindings,
         users=users,
         sessions=sessions,
+        oauth_runtime=oauth_runtime,
     )
     return ProviderResponse(
         provider=_provider_out(item, len(bindings.list_for_issuer(item.issuer)))
@@ -380,14 +398,18 @@ def remove_provider(
     store: ProviderStore = Depends(get_provider_store),
     bindings: BindingStore = Depends(get_binding_store),
     users: UserStore = Depends(get_user_store),
+    roles: RoleStore = Depends(get_role_store),
     sessions: SessionStore = Depends(get_session_store),
+    oauth_runtime: OAuthRuntimeStore = Depends(get_oauth_runtime_store),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> ProviderDeleteResponse:
     count = delete_provider(
         store=store,
         bindings=bindings,
         users=users,
+        roles=roles,
         sessions=sessions,
+        oauth_runtime=oauth_runtime,
         provider_id=provider_id,
         disable_bound_users=disable_bound_users,
         actor_user_id=caller.id,

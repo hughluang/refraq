@@ -29,6 +29,11 @@ PUBLISHED: dict[str, frozenset[str]] = {
     "admin": frozenset(
         {
             "admin.deps",
+            "admin.principal",
+            "admin.mcp_gate",
+            "admin.lifecycle",
+            "admin.oauth.router",
+            "admin.scim.router",
             "admin.permissions",
             "admin.errors",
             "admin.audit",

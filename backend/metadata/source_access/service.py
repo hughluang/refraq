@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.admin.errors import AuthForbidden
+from backend.admin.principal import Principal
 from backend.admin.role_store import RoleRecord, get_role_store
 from backend.admin.roles import SUPER_ADMIN_KEY
 from backend.admin.roles import effective_permissions as role_effective_permissions
@@ -63,6 +64,7 @@ class _Actor:
     user_id: str | None
     role: RoleRecord | None
     group_ids: frozenset[str]
+    permission_ceiling: frozenset[str] | None = None
 
 
 class _Subjects:
@@ -165,7 +167,12 @@ def list_memberships(*, target: str | None = None) -> tuple[SourceMembership, ..
     return tuple(listed)
 
 
-def allows(user_id: str, source_id: str, permission: str, *more_source_ids: str) -> bool:
+def allows(
+    user_id: Principal | str,
+    source_id: str,
+    permission: str,
+    *more_source_ids: str,
+) -> bool:
     """Whether ``permission`` is held on every given Source.
 
     No level on any Source returns False so the caller can answer with that
@@ -222,11 +229,11 @@ def authorize_source_read_on(*, session: Session, execution_user_id: str, source
         raise AuthForbidden()
 
 
-def effective_level(user_id: str, source_id: str) -> str | None:
+def effective_level(user_id: Principal | str, source_id: str) -> str | None:
     return _level(_actor(user_id), source_id)
 
 
-def effective_permissions(user_id: str, source_id: str) -> frozenset[str]:
+def effective_permissions(user_id: Principal | str, source_id: str) -> frozenset[str]:
     actor = _actor(user_id)
     level = _level(actor, source_id)
     if level is None:
@@ -234,7 +241,7 @@ def effective_permissions(user_id: str, source_id: str) -> frozenset[str]:
     return _LEVEL_KEYS[level] & _held(actor)
 
 
-def source_ids_for(user_id: str, permission: str) -> SourceIdSet:
+def source_ids_for(user_id: Principal | str, permission: str) -> SourceIdSet:
     if permission not in _LADDER_KEYS:
         return _NO_SOURCES
     actor = _actor(user_id)
@@ -311,15 +318,22 @@ def _require_subject(subject_type: str, subject_id: str) -> None:
     raise SourceMembershipSubjectUnknown()
 
 
-def _actor(user_id: str) -> _Actor:
+def _actor(user_or_principal: Principal | str) -> _Actor:
+    if isinstance(user_or_principal, Principal):
+        user_id = user_or_principal.user_id
+        ceiling: frozenset[str] | None = user_or_principal.effective_permissions
+    else:
+        user_id = user_or_principal
+        ceiling = None
     user = get_user_store().get_by_id(user_id)
     if user is None:
-        return _Actor(user_id=None, role=None, group_ids=frozenset())
+        return _Actor(user_id=None, role=None, group_ids=frozenset(), permission_ceiling=ceiling)
     role = get_role_store().get_by_id(user.role_id) if user.role_id else None
     return _Actor(
         user_id=user.id,
         role=role,
         group_ids=frozenset(user_group_ids(user.id)),
+        permission_ceiling=ceiling,
     )
 
 
@@ -344,7 +358,10 @@ def _is_super(actor: _Actor) -> bool:
 def _held(actor: _Actor) -> frozenset[str]:
     if actor.role is None:
         return frozenset()
-    return frozenset(role_effective_permissions(actor.role))
+    role_perms = frozenset(role_effective_permissions(actor.role))
+    if actor.permission_ceiling is not None:
+        return role_perms & actor.permission_ceiling
+    return role_perms
 
 
 def _subject_matches(actor: _Actor, row: StoredMembership) -> bool:

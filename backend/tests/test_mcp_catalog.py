@@ -27,7 +27,7 @@ from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.core.time import format_instant, utc_now  # noqa: E402
 from backend.main import app  # noqa: E402
-from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_catalog import (  # noqa: E402
     MCP_PUBLIC_PATH,
     MCP_TOOLS,

@@ -11,11 +11,16 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator
 
+from backend.admin.principal import current_actor_token_id as principal_actor_token_id
+
 _pat_id: ContextVar[str | None] = ContextVar("entity_access_pat_id", default=None)
 
 
 def current_actor_token_id() -> str | None:
-    return _pat_id.get()
+    local = _pat_id.get()
+    if local is not None:
+        return local
+    return principal_actor_token_id()
 
 
 @contextmanager

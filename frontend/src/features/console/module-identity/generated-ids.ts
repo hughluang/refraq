@@ -27,6 +27,7 @@ export const ModuleId = {
   emailAccounts: "email-accounts",
   httpAccounts: "http-accounts",
   inboundCredentials: "inbound-credentials",
+  oauthClients: "oauth-clients",
   modelServices: "model-services",
   mcp: "mcp",
   account: "account",

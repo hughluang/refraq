@@ -57,7 +57,7 @@ def _call(
     **kwargs: Any,
 ) -> dict[str, Any]:
     from backend.core.request_id import bind_request_id
-    from backend.entity.mcp.actor import mcp_authorization
+    from backend.admin.principal import mcp_authorization
 
     async def _run() -> dict[str, Any]:
         with mcp_authorization(f"Bearer {secret}"):

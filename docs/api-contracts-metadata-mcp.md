@@ -4,7 +4,7 @@
 
 Defines the MCP tool face for the metadata foundation. Tools call the same domain services and **Permission** checks as HTTP APIs.
 
-The product port is MCP revision **2026-07-28 Streamable HTTP** at the Console-origin path `/mcp`. Auth is **User PAT** in the HTTP `Authorization: Bearer` header only. Tool arguments do not include `authorization`. Session cookies are not MCP credentials. There is no OAuth discovery document and no well-known metadata.
+The product port is MCP revision **2026-07-28 Streamable HTTP** at the Console-origin path `/mcp`. Auth is **User PAT** (`rfq_pat_`) or an `/mcp`-bound **Delegated Access Token** (`rfq_oat_`, see `docs/business-oauth-delegation.md`) in the HTTP `Authorization: Bearer` header only. Tool arguments do not include `authorization`. Session cookies are not MCP credentials. Unauthenticated `401` responses include the RFC 9728 `WWW-Authenticate` `resource_metadata` challenge pointing to `/.well-known/oauth-protected-resource/mcp` when a trusted site origin is available.
 
 `GET /mcp/catalog` on the API process accepts a Session or a User PAT and no extra Permission. It is the cropped Metadata tool list for the Metadata endpoint. The Console surface is `/console/mcp/metadata`. The overview `/console/mcp` only distinguishes the two endpoints. This catalog is not the Entity catalog and is not an MCP connection.
 

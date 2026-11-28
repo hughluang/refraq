@@ -7,10 +7,10 @@ import time
 from typing import Any
 
 import httpx
-import jwt
 from jwt import PyJWKSet
 
 from backend.admin.federation.errors import SsoAssertionRejected, SsoProviderUnavailable
+from backend.admin.federation.http_port import OidcHttpPort
 
 JWKS_TTL_SEC = 300.0
 UNKNOWN_KID_COOLDOWN_SEC = 30.0
@@ -36,35 +36,44 @@ def reset_jwks_cache() -> None:
         _kid_cooldown.clear()
 
 
-def _fetch(jwks_uri: str) -> dict[str, Any]:
-    try:
-        response = httpx.get(jwks_uri, timeout=JWKS_TIMEOUT_SEC)
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise SsoProviderUnavailable() from exc
-    data = response.json()
+def _fetch(jwks_uri: str, *, http: OidcHttpPort | None) -> dict[str, Any]:
+    if http is not None:
+        data = http.get_json(jwks_uri)
+    else:
+        try:
+            response = httpx.get(jwks_uri, timeout=JWKS_TIMEOUT_SEC)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise SsoProviderUnavailable() from exc
+        data = response.json()
     if not isinstance(data, dict) or "keys" not in data:
         raise SsoAssertionRejected("JWKS document is invalid")
     return data
 
 
-def _cached(jwks_uri: str, *, force: bool) -> dict[str, Any]:
+def _cached(jwks_uri: str, *, force: bool, http: OidcHttpPort | None) -> dict[str, Any]:
     now = time.monotonic()
     with _lock:
         hit = _cache.get(jwks_uri)
         if not force and hit is not None and hit[0] > now:
             return hit[1]
-    document = _fetch(jwks_uri)
+    document = _fetch(jwks_uri, http=http)
     with _lock:
         _cache[jwks_uri] = (now + JWKS_TTL_SEC, document)
     return document
 
 
-def signing_key(jwks_uri: str, kid: str | None, alg: str) -> Any:
+def signing_key(
+    jwks_uri: str,
+    kid: str | None,
+    alg: str,
+    *,
+    http: OidcHttpPort | None = None,
+) -> Any:
     if alg not in ALLOWED_ALGS:
         raise SsoAssertionRejected("ID token algorithm is not allowed")
-    document = _cached(jwks_uri, force=False)
-    key = _find_key(document, kid)
+    document = _cached(jwks_uri, force=False, http=http)
+    key = find_key_in_jwks(document, kid)
     if key is not None:
         return key
     now = time.monotonic()
@@ -74,14 +83,14 @@ def signing_key(jwks_uri: str, kid: str | None, alg: str) -> Any:
         if until > now:
             raise SsoAssertionRejected("ID token signing key is unknown")
         _kid_cooldown[cooldown_key] = now + UNKNOWN_KID_COOLDOWN_SEC
-    document = _cached(jwks_uri, force=True)
-    key = _find_key(document, kid)
+    document = _cached(jwks_uri, force=True, http=http)
+    key = find_key_in_jwks(document, kid)
     if key is None:
         raise SsoAssertionRejected("ID token signing key is unknown")
     return key
 
 
-def _find_key(document: dict[str, Any], kid: str | None) -> Any | None:
+def find_key_in_jwks(document: dict[str, Any], kid: str | None) -> Any | None:
     try:
         jwks = PyJWKSet.from_dict(document)
     except Exception as exc:

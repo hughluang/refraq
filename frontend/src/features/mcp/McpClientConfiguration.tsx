@@ -58,6 +58,13 @@ export function McpClientConfiguration({ publicPath }: { publicPath: string }) {
   }
 
   const url = origin ? `${origin}${publicPath}` : "";
+  const surfacePath = publicPath.replace(/^\//, "");
+  const resourceMetadataUrl = origin
+    ? `${origin}/.well-known/oauth-protected-resource/${surfacePath}`
+    : "";
+  const oauthServerMetadataUrl = origin
+    ? `${origin}/.well-known/oauth-authorization-server`
+    : "";
   const configuration = origin ? mcpClientConfig(origin, publicPath) : "";
   return (
     <FormSection title={t("mcp.connection.title")} columns={1}>
@@ -70,6 +77,36 @@ export function McpClientConfiguration({ publicPath }: { publicPath: string }) {
         } />
         <DisplayField label={t("mcp.connection.transport")} value="Streamable HTTP · 2026-07-28" />
         <DisplayField label={t("mcp.connection.authorization")} value={t("mcp.connection.bearer")} />
+        {resourceMetadataUrl ? (
+          <DisplayField
+            label={t("mcp.connection.resourceMetadata")}
+            value={
+              <Group gap="sm" wrap="wrap">
+                <Text ff="monospace" size="xs" style={{ overflowWrap: "anywhere" }}>
+                  {resourceMetadataUrl}
+                </Text>
+                <Button size="xs" variant="default" onClick={() => void copy(resourceMetadataUrl)}>
+                  {t("common.copy.label")}
+                </Button>
+              </Group>
+            }
+          />
+        ) : null}
+        {oauthServerMetadataUrl ? (
+          <DisplayField
+            label={t("mcp.connection.oauthDiscovery")}
+            value={
+              <Group gap="sm" wrap="wrap">
+                <Text ff="monospace" size="xs" style={{ overflowWrap: "anywhere" }}>
+                  {oauthServerMetadataUrl}
+                </Text>
+                <Button size="xs" variant="default" onClick={() => void copy(oauthServerMetadataUrl)}>
+                  {t("common.copy.label")}
+                </Button>
+              </Group>
+            }
+          />
+        ) : null}
         <Text size="sm">{t(publicPath === ENTITY_MCP_PUBLIC_PATH ? "mcp.entity.access" : "mcp.metadata.character")}</Text>
         <Stack gap="xs" miw={0}>
           <Group justify="space-between" wrap="wrap">

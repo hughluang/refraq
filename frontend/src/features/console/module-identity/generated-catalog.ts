@@ -525,6 +525,26 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "oauth-clients",
+    "label_key": "oauthClients.title",
+    "icon": "key",
+    "routes": {
+      "list": "/console/oauth-clients",
+      "create": "/console/oauth-clients/new",
+      "edit": "/console/oauth-clients/:id/edit",
+      "show": "/console/oauth-clients/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "oauth_client:read",
+      "create": "oauth_client:write",
+      "edit": "oauth_client:write",
+      "delete": "oauth_client:write",
+      "show": "oauth_client:read",
+      "sample": null
+    }
+  },
+  {
     "id": "model-services",
     "label_key": "modelServices.title",
     "icon": "brain",

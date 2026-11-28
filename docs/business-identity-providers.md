@@ -13,7 +13,7 @@ Related boundaries:
 ## 2. Identity Provider Model
 An **Identity Provider** authenticates a person and asserts identity; it never owns refraq Roles, Permissions, Sessions, or User PATs. This slice implements OIDC only. The provider row stores `protocol=oidc`. Binding and provisioning consume a normalized external assertion, not OIDC wire types. Additional protocols are a future decision.
 
-Each provider has a stable id, unique normalized `issuer`, `protocol=oidc`, display name, enabled state, encrypted protocol configuration, and audit timestamps. The issuer is unique across provider rows and cannot be changed after create, because it is part of the binding key. Configuration includes client credentials, scopes, auto-provisioning, group claim, exact group allowlist, and default Role. Custom claim-name maps beyond `group_claim` are out of scope.
+Each provider has a stable id, unique normalized `issuer`, `protocol=oidc`, display name, enabled state, encrypted protocol configuration, and audit timestamps. The issuer is unique across provider rows and cannot be changed after create, because it is part of the binding key. Configuration includes client credentials, scopes, auto-provisioning, group claim, exact group allowlist, default Role, optional `group_mappings` (mapping exact external group strings to refraq **User Group** keys), and `scim_subject_source` (`external_id` or `user_name`). Custom claim-name maps beyond `group_claim` are out of scope.
 
 ## 3. External Identity Binding
 An **External Subject** is the provider's stable OIDC `sub`. A binding is identified by `(issuer, subject)`, with `subject` limited to the OIDC contract. Each binding belongs to exactly one User, and each User has at most one binding. `provider_id` is only a weak reference so deleting and recreating configuration does not change the identity key.
@@ -23,9 +23,10 @@ An **External Subject** is the provider's stable OIDC `sub`. A binding is identi
 ## 4. OIDC Admission
 After protocol validation, admission evaluates in this order:
 
-1. An existing `(issuer, subject)` binding resolves the User. Disabled Users return `AUTH_ACCOUNT_DISABLED`; Users without `console:access` return `AUTH_CONSOLE_ACCESS_REQUIRED`. If provider auto-provisioning is enabled, exact group matching is required on every login. Failure issues no Session and does not alter the User, pending queue, or PATs.
-2. Without a binding, auto-provisioning may create a User only when exact group matching succeeds, the derived account is unused, and the configured default Role grants `console:access`. It sets `identity_source=oidc`, stores no usable password, assigns the configured default Role once, writes the binding, and issues a refraq Session. A default Role without `console:access` returns `AUTH_CONSOLE_ACCESS_REQUIRED` and creates no User, so the same successful-login rule holds on every path.
-3. Every other valid assertion is recorded or updated as a pending identity and receives no Session.
+1. An existing `(issuer, subject)` binding resolves the User. Bindings marked with `scim_deprovisioned_at` are rejected. Disabled Users return `AUTH_ACCOUNT_DISABLED`. In interactive Console SSO (`mode=console_sso`), Users without `console:access` return `AUTH_CONSOLE_ACCESS_REQUIRED`; in headless OAuth delegation (`mode=headless_oauth`), `console:access` is not required. If provider auto-provisioning is enabled, exact group matching is required on every login/exchange. Failure issues no Session or Delegated Access Token and does not alter the User, pending queue, or PATs.
+2. Without a binding, auto-provisioning may create a User only when exact group matching succeeds, the derived account is unused, and (for `console_sso` only) the configured default Role grants `console:access`. It sets `identity_source=oidc`, stores no usable password, assigns the configured default Role once, writes the binding, and issues a refraq Session (or Delegated Access Token). On `console_sso`, a default Role without `console:access` returns `AUTH_CONSOLE_ACCESS_REQUIRED` and creates no User.
+3. On `console_sso`, every other valid assertion is recorded or updated as a pending identity and receives no Session. On `headless_oauth`, unadmitted assertions are audited and rejected without writing to the interactive pending queue.
+4. When `group_mappings` is configured and groups did not overflow, admission performs a scoped diff sync onto **User Group** memberships: only groups named in the provider's `group_mappings` are added or removed, preserving manually assigned groups.
 
 The derived account order is `preferred_username`, then `email`, then `sub`. An account collision is queued, never silently bound. Group values are exact strings. Missing groups and provider-reported overflow (`_claim_names`, `hasgroups`, or equivalent) are queued rather than treated as allow or ordinary non-membership.
 
@@ -56,10 +57,12 @@ Provider create, update, test, enable, disable, and delete; SSO success and reje
 
 ## 10. Non-Goals
 - SAML, CAS, LDAP synchronization, and other non-OIDC protocols
-- Continuous Role or group-to-Role synchronization
-- RP-initiated logout, back-channel logout, SCIM provisioning, and multi-binding Users
+- Continuous Role synchronization from an Identity Provider
+- RP-initiated logout, back-channel logout, OpenID Shared Signals / CAEP event streams, and multi-binding Users
 - Provider-issued Sessions, Roles, Permissions, or PATs
 - Account Center self-service unfederation
+
+SCIM 2.0 inbound provisioning (`docs/api-contracts-scim.md`) and OAuth 2.0 delegated token issuance (`docs/business-oauth-delegation.md`) are specified in their dedicated documents.
 
 ## 11. References
 - `docs/api-contracts-identity-providers.md`

@@ -37,7 +37,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.connectors.base import QueryResult  # noqa: E402
-from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_guidance import ENRICH_SEMANTICS_BODY  # noqa: E402
 from backend.metadata.mcp_http import create_mcp_http_app  # noqa: E402
 from backend.metadata.mcp_server import (  # noqa: E402

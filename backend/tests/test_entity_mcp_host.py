@@ -26,7 +26,7 @@ from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.core.time import format_instant, utc_now  # noqa: E402
-from backend.entity.mcp.actor import mcp_authorization  # noqa: E402
+from backend.admin.principal import mcp_authorization  # noqa: E402
 from backend.entity.mcp.catalog import (  # noqa: E402
     MCP_TOOLS,
     TOOLS_LIST_TTL_MS,

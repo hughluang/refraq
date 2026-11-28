@@ -533,6 +533,28 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=28,
     ),
     ConsoleModuleSeed(
+        id="oauth-clients",
+        group_id="settings",
+        group_label_key="layout.navGroup.settings",
+        label_key="oauthClients.title",
+        icon="key",
+        routes=ModuleRoutes(
+            list="/console/oauth-clients",
+            create="/console/oauth-clients/new",
+            show="/console/oauth-clients/:id",
+            edit="/console/oauth-clients/:id/edit",
+        ),
+        actions=ModuleActions(
+            list="oauth_client:read",
+            create="oauth_client:write",
+            show="oauth_client:read",
+            edit="oauth_client:write",
+            delete="oauth_client:write",
+        ),
+        group_order=30,
+        module_order=29,
+    ),
+    ConsoleModuleSeed(
         id="model-services",
         group_id="settings",
         group_label_key="layout.navGroup.settings",

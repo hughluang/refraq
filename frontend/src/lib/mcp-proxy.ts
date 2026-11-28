@@ -1,5 +1,8 @@
 /** Same-origin MCP proxies: stream to the MCP process, never expose readyz. */
 
+import { browserFacingHostFromEnv } from "./browser-facing-host";
+import { browserFacingProtoFromEnv } from "./browser-facing-proto";
+
 const TIMEOUT_MARGIN_SEC = 5;
 
 type McpUpstreamSpec = {
@@ -85,10 +88,18 @@ export async function proxyMcpPost(
 ): Promise<Response> {
   const startedAtMs = Date.now();
   const headers = new Headers(request.headers);
+  const incomingHost = headers.get("host");
   headers.delete("host");
   headers.delete("connection");
   headers.delete("content-length");
   headers.delete("transfer-encoding");
+  headers.set("x-forwarded-proto", browserFacingProtoFromEnv());
+  const trustedHost = browserFacingHostFromEnv(process.env, incomingHost);
+  if (trustedHost) {
+    headers.set("x-forwarded-host", trustedHost);
+  } else {
+    headers.delete("x-forwarded-host");
+  }
   const method = request.method.toUpperCase();
   const init: RequestInit & { duplex?: "half" } = {
     method,
@@ -96,8 +107,10 @@ export async function proxyMcpPost(
     redirect: "manual",
     signal: AbortSignal.timeout(timeoutMs),
   };
-  init.body = request.body;
-  init.duplex = "half";
+  if (method !== "GET" && method !== "HEAD" && request.body != null) {
+    init.body = request.body;
+    init.duplex = "half";
+  }
   try {
     const upstream = await fetch(target, init);
     const out = new Headers(upstream.headers);

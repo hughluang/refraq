@@ -30,9 +30,9 @@ from backend.entity.errors import (
     EntityRequestInvalid,
     EntitySearchEmbedFailed,
 )
-from backend.entity.mcp.actor import current_actor
+from backend.admin.principal import require_current_principal
 from backend.entity.mcp.guidance import TOOL_DESCRIPTIONS
-from backend.entity.mcp.server import _entity_item, _err, _require, mcp
+from backend.entity.mcp.server import _entity_item, _err, mcp
 from backend.entity.projection import (
     EntityProjection,
     _digest,
@@ -281,10 +281,10 @@ def _search(user: Any, query_text: str, limit: int) -> dict[str, Any]:
 def search_entities(query_text: str, limit: int | None = None) -> str:
     """Rank serving Entities the caller can read. Scores are cosine similarity."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "entity:data_read")
+        principal = require_current_principal()
+        principal.require("entity:data_read")
         return json.dumps(
-            _search(user, _clean_query(query_text), _clean_limit(limit))
+            _search(principal.user, _clean_query(query_text), _clean_limit(limit))
         )
     except Exception as exc:  # noqa: BLE001 — tool failures stay in the envelope
         return _err(exc)

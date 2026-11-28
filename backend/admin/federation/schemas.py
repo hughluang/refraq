@@ -11,6 +11,12 @@ from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 
 ProtocolName = Literal["oidc"]
+ScimSubjectSource = Literal["external_id", "user_name"]
+
+
+class GroupMappingIn(BaseModel):
+    external_group: str = Field(min_length=1, max_length=256)
+    group_key: str = Field(min_length=1, max_length=63)
 
 
 class ProviderCreateIn(BaseModel):
@@ -24,6 +30,8 @@ class ProviderCreateIn(BaseModel):
     auto_provision: bool = False
     group_claim: str | None = None
     group_allowlist: list[str] | None = None
+    group_mappings: list[GroupMappingIn] | None = None
+    scim_subject_source: ScimSubjectSource | None = None
     default_role_id: str | None = None
 
     def config_payload(self) -> dict[str, object]:
@@ -39,6 +47,10 @@ class ProviderCreateIn(BaseModel):
             data["group_claim"] = self.group_claim
         if self.group_allowlist is not None:
             data["group_allowlist"] = self.group_allowlist
+        if self.group_mappings is not None:
+            data["group_mappings"] = [item.model_dump() for item in self.group_mappings]
+        if self.scim_subject_source is not None:
+            data["scim_subject_source"] = self.scim_subject_source
         if self.default_role_id is not None:
             data["default_role_id"] = self.default_role_id
         return data
@@ -54,6 +66,8 @@ class ProviderPatchIn(BaseModel):
     auto_provision: bool | None = None
     group_claim: str | None = None
     group_allowlist: list[str] | None = None
+    group_mappings: list[GroupMappingIn] | None = None
+    scim_subject_source: ScimSubjectSource | None = None
     default_role_id: str | None = None
 
     def config_payload(self) -> dict[str, object]:
@@ -66,6 +80,12 @@ class ProviderPatchIn(BaseModel):
             "auto_provision": self.auto_provision,
             "group_claim": self.group_claim,
             "group_allowlist": self.group_allowlist,
+            "group_mappings": (
+                [item.model_dump() for item in self.group_mappings]
+                if self.group_mappings is not None
+                else None
+            ),
+            "scim_subject_source": self.scim_subject_source,
             "default_role_id": self.default_role_id,
         }
         for key, value in mapping.items():
@@ -83,6 +103,8 @@ class ProviderOut(BaseModel):
     auto_provision: bool
     group_claim: str
     group_allowlist: list[str]
+    group_mappings: list[GroupMappingIn] = Field(default_factory=list)
+    scim_subject_source: ScimSubjectSource = "external_id"
     default_role_id: str | None
     scopes: list[str]
     client_id: str

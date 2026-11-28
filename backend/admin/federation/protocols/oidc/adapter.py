@@ -12,6 +12,7 @@ import jwt
 
 from backend.admin.federation.assertion import ExternalAssertion
 from backend.admin.federation.errors import SsoAssertionRejected, SsoProviderUnavailable
+from backend.admin.federation.http_port import OidcHttpPort
 from backend.admin.federation.protocols.oidc.claims import assertion_from_claims
 from backend.admin.federation.protocols.oidc.discovery import OidcDiscovery, discover
 from backend.admin.federation.protocols.oidc.jwks import ALLOWED_ALGS, signing_key
@@ -32,8 +33,9 @@ def authorization_url(
     state: str,
     nonce: str,
     code_challenge: str,
+    http: OidcHttpPort | None = None,
 ) -> str:
-    metadata = discover(provider)
+    metadata = discover(provider, http=http)
     scopes = " ".join(dict.fromkeys(["openid", *provider.config.scopes]))
     return metadata.authorization_endpoint + "?" + urlencode(
         {
@@ -66,6 +68,7 @@ def _decode_id_token(
     audience: str,
     nonce: str,
     allowed_algs: tuple[str, ...],
+    http: OidcHttpPort | None = None,
 ) -> dict[str, Any]:
     try:
         header = jwt.get_unverified_header(token)
@@ -77,7 +80,7 @@ def _decode_id_token(
     kid = header.get("kid")
     if kid is not None and not isinstance(kid, str):
         raise SsoAssertionRejected("ID token kid is invalid")
-    key = signing_key(jwks_uri, kid if isinstance(kid, str) else None, alg)
+    key = signing_key(jwks_uri, kid if isinstance(kid, str) else None, alg, http=http)
     try:
         claims = jwt.decode(
             token,
@@ -109,27 +112,32 @@ def exchange(
     code_verifier: str,
     nonce: str,
     response_iss: str | None,
+    http: OidcHttpPort | None = None,
 ) -> ExternalAssertion:
-    metadata = discover(provider)
+    metadata = discover(provider, http=http)
     _require_iss_match(metadata, provider.issuer, response_iss)
-    try:
-        response = httpx.post(
-            metadata.token_endpoint,
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "client_id": provider.config.client_id,
-                "client_secret": provider.config.client_secret,
-                "code_verifier": code_verifier,
-            },
-            timeout=TOKEN_TIMEOUT_SEC,
-        )
-    except httpx.HTTPError as exc:
-        raise SsoProviderUnavailable() from exc
-    if response.status_code >= 400:
-        raise SsoAssertionRejected("OIDC code exchange failed")
-    data = response.json()
+    form_data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": provider.config.client_id,
+        "client_secret": provider.config.client_secret,
+        "code_verifier": code_verifier,
+    }
+    if http is not None:
+        data = http.post_form(metadata.token_endpoint, form_data)
+    else:
+        try:
+            response = httpx.post(
+                metadata.token_endpoint,
+                data=form_data,
+                timeout=TOKEN_TIMEOUT_SEC,
+            )
+        except httpx.HTTPError as exc:
+            raise SsoProviderUnavailable() from exc
+        if response.status_code >= 400:
+            raise SsoAssertionRejected("OIDC code exchange failed")
+        data = response.json()
     token = data.get("id_token") if isinstance(data, dict) else None
     if not isinstance(token, str):
         raise SsoAssertionRejected("ID token is missing")
@@ -140,5 +148,6 @@ def exchange(
         audience=provider.config.client_id,
         nonce=nonce,
         allowed_algs=metadata.id_token_signing_alg_values_supported,
+        http=http,
     )
     return assertion_from_claims(provider, claims)

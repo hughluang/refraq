@@ -10,16 +10,11 @@ from mcp.types import Tool as MCPTool
 from mcp.types import ToolAnnotations
 from pydantic.json_schema import SkipJsonSchema
 
-from backend.admin.deps import resolve_user_permissions
-from backend.admin.errors import AuthForbidden
-from backend.admin.permissions import permissions_include
-from backend.admin.role_store import get_role_store
-from backend.admin.user_store import UserRecord
+from backend.admin.principal import require_current_principal
 from backend.core.errors import AppError
 from backend.core.pagination import ENTITY_LIST
 from backend.entity.access.membership import person_of, readable_entity_ids
 from backend.entity.errors import EntityRequestInvalid
-from backend.entity.mcp.actor import current_actor
 from backend.entity.mcp.describe import describe_for, dictionary_codes
 from backend.entity.mcp.catalog import Execution, TOOLS_LIST_TTL_MS, tools_for_permissions
 from backend.entity.mcp.guidance import SERVER_INSTRUCTIONS, TOOL_DESCRIPTIONS
@@ -39,15 +34,14 @@ def _with_execution(tool: MCPTool, execution: Execution) -> MCPTool:
 
 
 class RefraqEntityMcp(MCPServer):
-    """Entity MCP host: tools/list is cropped to the current PAT's Role."""
+    """Entity MCP host: tools/list is cropped to the current Principal's effective permissions."""
 
     async def list_tools(self) -> list[MCPTool]:
         tools = {tool.name: tool for tool in await super().list_tools()}
-        user, _token_id = current_actor()
-        perms = resolve_user_permissions(user, get_role_store())
+        principal = require_current_principal()
         return [
             _with_execution(tools[spec.name], spec.execution)
-            for spec in tools_for_permissions(perms)
+            for spec in tools_for_permissions(principal.effective_permissions)
         ]
 
 
@@ -59,12 +53,6 @@ mcp = RefraqEntityMcp(
         "prompts/list": CacheHint(ttl_ms=TOOLS_LIST_TTL_MS, scope="private"),
     },
 )
-
-
-def _require(user: UserRecord, permission: str) -> None:
-    perms = resolve_user_permissions(user, get_role_store())
-    if not permissions_include(perms, permission):
-        raise AuthForbidden(f"Missing permission {permission}")
 
 
 def _err(exc: Exception) -> str:
@@ -97,8 +85,9 @@ def list_entities(
 ) -> str:
     """Page serving Entities the caller can read."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "entity:data_read")
+        principal = require_current_principal()
+        principal.require("entity:data_read")
+        user = principal.user
         lim = ENTITY_LIST.clamp(limit)
         off = max(0, int(offset or 0))
         candidates = get_entity_store().list_entity_candidates(
@@ -141,10 +130,10 @@ def describe_entity(
 ) -> str:
     """Describe one Entity as the caller can read it."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "entity:data_read")
+        principal = require_current_principal()
+        principal.require("entity:data_read")
         _reject_narrow(narrow)
-        return json.dumps(describe_for(user, table_name))
+        return json.dumps(describe_for(principal.user, table_name))
     except Exception as exc:  # noqa: BLE001 — tool failures stay in the envelope
         return _err(exc)
 
@@ -163,12 +152,12 @@ def list_dictionary_codes(
 ) -> str:
     """Page codes of one dictionary attribute in the caller's read shape."""
     try:
-        user, _token_id = current_actor()
-        _require(user, "entity:data_read")
+        principal = require_current_principal()
+        principal.require("entity:data_read")
         _reject_narrow(narrow)
         return json.dumps(
             dictionary_codes(
-                user,
+                principal.user,
                 table_name,
                 attribute,
                 query_text=query_text,

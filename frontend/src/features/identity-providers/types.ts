@@ -1,6 +1,15 @@
 import type { JsonSchemaProperty } from "@/lib/json-schema";
 export type IdentityProviderProtocol = "oidc";
 
+export type ScimToken = {
+  id: string;
+  provider_id: string;
+  name: string;
+  prefix: string;
+  last_used_at: string | null;
+  created_at: string;
+};
+
 export type IdentityProvider = {
   id: string;
   protocol: IdentityProviderProtocol;
