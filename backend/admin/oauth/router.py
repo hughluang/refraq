@@ -187,7 +187,7 @@ def list_oauth_clients(
     q: str | None = Query(default=None),
     provider_id: str | None = Query(default=None),
     enabled: bool | None = Query(default=None),
-    page: PageParams = Depends(page_params),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
     _caller: UserRecord = Depends(require_permission("oauth_client:read")),
     store: OAuthClientStore = Depends(get_oauth_client_store),
 ) -> OAuthClientList:

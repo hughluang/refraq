@@ -31,6 +31,8 @@ Permissions: `oauth_client:read` for reads; `oauth_client:write` for mutations.
 | `POST` | `/oauth-clients/{id}/rotate-secret` | `oauth_client:write` | Rotate `client_secret` for secret-based clients (returns plaintext once) |
 | `DELETE` | `/oauth-clients/{id}` | `oauth_client:write` | Delete an OAuth Client and revoke its active tokens |
 
+`GET /oauth-clients` returns an **Offset Page** ordered newest-first (`created_at DESC`, `id DESC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**), optional `q` (case-insensitive literal substring of `name` or `client_id`), optional `provider_id`, and optional `enabled`.
+
 ### 3.1 Client Resource Shape
 
 ```json

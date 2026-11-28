@@ -6,8 +6,7 @@ See docs/conventions-pagination.md and docs/adr/0029-offset-page-as-platform-lis
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, overload
 
 from fastapi import Query
 from pydantic import BaseModel
@@ -16,16 +15,24 @@ T = TypeVar("T")
 S = TypeVar("S")
 
 
-@dataclass(frozen=True, slots=True)
 class PageParams:
-    limit: int
-    offset: int
+    __slots__ = ("limit", "offset")
+
+    def __init__(self, *, limit: int, offset: int) -> None:
+        self.limit = limit
+        self.offset = offset
 
 
-@dataclass(frozen=True, slots=True)
 class PageBounds:
-    default_limit: int
-    max_limit: int
+    """Server-side pagination bounds (intentionally not a Pydantic/dataclass schema)."""
+
+    __slots__ = ("default_limit", "max_limit")
+
+    def __init__(self, default_limit: int, max_limit: int) -> None:
+        if default_limit < 1 or max_limit < default_limit:
+            raise ValueError("PageBounds requires 1 <= default_limit <= max_limit")
+        self.default_limit = default_limit
+        self.max_limit = max_limit
 
     def clamp(self, value: int | None) -> int:
         if value is None:
@@ -49,6 +56,14 @@ class OffsetPage(BaseModel, Generic[T]):
     offset: int
 
 
+@overload
+def page_params(bounds: PageBounds, /) -> Callable[..., PageParams]: ...
+
+
+@overload
+def page_params(*, default_limit: int, max_limit: int) -> Callable[..., PageParams]: ...
+
+
 def page_params(
     bounds: PageBounds | None = None,
     *,
@@ -62,11 +77,11 @@ def page_params(
     if bounds is not None:
         if default_limit is not None or max_limit is not None:
             raise TypeError("pass PageBounds or default_limit/max_limit, not both")
-        lo, hi = bounds.default_limit, bounds.max_limit
     elif default_limit is None or max_limit is None:
         raise TypeError("page_params requires PageBounds or default_limit and max_limit")
     else:
-        lo, hi = default_limit, max_limit
+        bounds = PageBounds(default_limit, max_limit)
+    lo, hi = bounds.default_limit, bounds.max_limit
 
     def dependency(
         limit: int = Query(default=lo, ge=1, le=hi),

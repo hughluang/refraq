@@ -8,11 +8,12 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from backend.admin.models import OAuthClientRow
 from backend.core.config import get_settings
 from backend.core.db import session_scope
+from backend.core.pagination import apply_offset_page, apply_sql_page
 from backend.core.time import utc_now
 
 
@@ -88,9 +89,8 @@ class MemoryOAuthClientStore:
                 for item in items
                 if needle in item.name.lower() or needle in item.client_id.lower()
             ]
-        items.sort(key=lambda item: item.created_at, reverse=True)
-        total = len(items)
-        return items[offset : offset + limit], total
+        items.sort(key=lambda item: (item.created_at, item.id), reverse=True)
+        return apply_offset_page(items, limit=limit, offset=offset)
 
     def get_by_id(self, record_id: str) -> OAuthClientRecord | None:
         with self._lock:
@@ -161,17 +161,19 @@ class SqlOAuthClientStore:
             count_stmt = count_stmt.where(OAuthClientRow.enabled == enabled)
         needle = (q or "").strip()
         if needle:
-            pattern = f"%{needle}%"
-            clause = OAuthClientRow.name.ilike(pattern) | OAuthClientRow.client_id.ilike(pattern)
+            clause = or_(
+                OAuthClientRow.name.icontains(needle, autoescape=True),
+                OAuthClientRow.client_id.icontains(needle, autoescape=True),
+            )
             stmt = stmt.where(clause)
             count_stmt = count_stmt.where(clause)
         with session_scope() as session:
             total = int(session.scalar(count_stmt) or 0)
-            rows = session.scalars(
-                stmt.order_by(OAuthClientRow.created_at.desc())
-                .limit(limit)
-                .offset(offset)
-            ).all()
+            ordered = stmt.order_by(
+                OAuthClientRow.created_at.desc(), OAuthClientRow.id.desc()
+            )
+            paged = apply_sql_page(ordered, limit=limit, offset=offset)
+            rows = session.scalars(paged).all()
             return [_row_to_record(row) for row in rows], total
 
     def get_by_id(self, record_id: str) -> OAuthClientRecord | None:

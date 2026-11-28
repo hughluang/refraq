@@ -225,3 +225,64 @@ def test_schedules_http_envelope_and_source_scope(client: TestClient) -> None:
     assert past.json()["total"] == 2
     over_src = client.get(f"/sources/{a_id}/schedules?limit=201")
     assert over_src.status_code == 422
+
+
+def test_uncalled_page_params_fails_at_route_registration() -> None:
+    from fastapi import APIRouter, Depends
+    from fastapi.exceptions import FastAPIError
+
+    from backend.core.pagination import PageParams, page_params
+
+    router = APIRouter()
+    with pytest.raises(FastAPIError):
+
+        @router.get("/broken")
+        def _broken(page: PageParams = Depends(page_params)) -> dict:  # type: ignore[arg-type]
+            return {"limit": page.limit}
+
+
+def _resolve_schema(schema: dict, components: dict) -> dict:
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
+        name = ref.removeprefix("#/components/schemas/")
+        return components.get(name, {})
+    return schema
+
+
+def test_all_openapi_get_offset_pages_expose_limit_and_offset() -> None:
+    spec = app.openapi()
+    components = (spec.get("components") or {}).get("schemas") or {}
+    checked = 0
+
+    for path, methods in (spec.get("paths") or {}).items():
+        get_op = (methods or {}).get("get")
+        if not isinstance(get_op, dict):
+            continue
+        resp_200 = ((get_op.get("responses") or {}).get("200") or {})
+        content = (resp_200.get("content") or {}).get("application/json") or {}
+        schema = _resolve_schema(content.get("schema") or {}, components)
+        props = schema.get("properties") or {}
+        if not {"items", "total", "limit", "offset"}.issubset(props.keys()):
+            continue
+
+        checked += 1
+        assert "requestBody" not in get_op, f"GET {path} must not have requestBody"
+        query_params = {
+            p["name"]: p
+            for p in (get_op.get("parameters") or [])
+            if p.get("in") == "query"
+        }
+        assert "default_limit" not in query_params, f"GET {path} leaked default_limit"
+        assert "max_limit" not in query_params, f"GET {path} leaked max_limit"
+        assert "limit" in query_params, f"GET {path} missing limit query param"
+        assert "offset" in query_params, f"GET {path} missing offset query param"
+
+        limit_schema = query_params["limit"].get("schema") or {}
+        offset_schema = query_params["offset"].get("schema") or {}
+        assert limit_schema.get("minimum") == 1, f"GET {path} limit minimum != 1"
+        assert isinstance(limit_schema.get("default"), int) and limit_schema["default"] >= 1
+        assert isinstance(limit_schema.get("maximum"), int) and limit_schema["maximum"] >= limit_schema["default"]
+        assert offset_schema.get("minimum") == 0, f"GET {path} offset minimum != 0"
+        assert offset_schema.get("default") == 0, f"GET {path} offset default != 0"
+
+    assert checked >= 15, f"Expected at least 15 Offset Page GET routes, checked {checked}"

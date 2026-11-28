@@ -700,3 +700,168 @@ def test_scim_users_groups_subject_attrs_and_instant_revocation() -> None:
         assert bad_grp_patch.json()["scimType"] == "invalidValue"
 
         assert client.delete(f"/scim/v2/Groups/{grp_id}", headers=headers_a).status_code == 204
+
+
+def test_oauth_clients_http_crud_pagination_filtering_and_tiebreaker() -> None:
+    from contextlib import contextmanager
+    from dataclasses import replace as dc_replace
+
+    from sqlalchemy.dialects import postgresql
+
+    from backend.admin.oauth import store as oauth_store_mod
+    from backend.admin.oauth.store import SqlOAuthClientStore
+
+    with TestClient(app) as client:
+        _admin_headers(client)
+        provider_a = _seed_provider(issuer="https://idp-list-a.example.com")
+        provider_b = _seed_provider(issuer="https://idp-list-b.example.com")
+
+        # Empty list returns Offset Page envelope
+        empty = client.get("/oauth-clients")
+        assert empty.status_code == 200, empty.text
+        assert empty.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
+
+        # Create 3 clients via HTTP
+        c1_resp = client.post(
+            "/oauth-clients",
+            json={
+                "name": "Alpha Client",
+                "provider_id": provider_a.id,
+                "enabled": True,
+                "token_endpoint_auth_method": "client_secret_basic",
+                "allowed_grant_types": [GRANT_TYPE_ID_JAG],
+                "allowed_surfaces": ["entity_mcp"],
+                "allowed_scopes": ["entity:data_read"],
+            },
+        )
+        assert c1_resp.status_code == 201, c1_resp.text
+        c1 = c1_resp.json()["oauth_client"]
+        assert c1_resp.json()["client_secret"].startswith("rfq_cs_")
+        assert c1["client_secret_configured"] is True
+
+        # GET single does not echo secret
+        got = client.get(f"/oauth-clients/{c1['id']}")
+        assert got.status_code == 200
+        assert "client_secret" not in got.json()
+
+        c2_resp = client.post(
+            "/oauth-clients",
+            json={
+                "name": "100% Literal Client",
+                "provider_id": provider_a.id,
+                "enabled": False,
+                "token_endpoint_auth_method": "client_secret_post",
+                "allowed_grant_types": [GRANT_TYPE_ID_JAG],
+                "allowed_surfaces": ["metadata_mcp"],
+                "allowed_scopes": ["metadata:read"],
+            },
+        )
+        assert c2_resp.status_code == 201, c2_resp.text
+        c2 = c2_resp.json()["oauth_client"]
+
+        c3_resp = client.post(
+            "/oauth-clients",
+            json={
+                "name": "Beta Provider B",
+                "provider_id": provider_b.id,
+                "enabled": True,
+                "token_endpoint_auth_method": "client_secret_basic",
+                "allowed_grant_types": [GRANT_TYPE_ID_JAG],
+                "allowed_surfaces": ["api"],
+                "allowed_scopes": ["sources:read"],
+            },
+        )
+        assert c3_resp.status_code == 201, c3_resp.text
+        c3 = c3_resp.json()["oauth_client"]
+
+        # Force identical created_at on c1 and c2 to verify deterministic id DESC tiebreaker
+        store = get_oauth_client_store()
+        same_ts = utc_now()
+        rec1 = store.get_by_id(c1["id"])
+        rec2 = store.get_by_id(c2["id"])
+        assert rec1 is not None and rec2 is not None
+        store.save(dc_replace(rec1, created_at=same_ts))
+        store.save(dc_replace(rec2, created_at=same_ts))
+        expected_tiebreak = sorted([c1["id"], c2["id"]], reverse=True)
+
+        # Default pagination + bounds validation
+        page = client.get("/oauth-clients?limit=2&offset=0")
+        assert page.status_code == 200
+        body = page.json()
+        assert body["total"] == 3
+        assert body["limit"] == 2
+        assert body["offset"] == 0
+        assert len(body["items"]) == 2
+
+        past = client.get("/oauth-clients?offset=99")
+        assert past.status_code == 200
+        assert past.json()["items"] == []
+        assert past.json()["total"] == 3
+
+        oversize = client.get("/oauth-clients?limit=201")
+        assert oversize.status_code == 422
+        assert oversize.json()["code"] == "REQUEST_INVALID"
+
+        # Filters: provider_id, enabled, literal q (with %)
+        by_provider = client.get(f"/oauth-clients?provider_id={provider_a.id}")
+        assert by_provider.status_code == 200
+        assert [item["id"] for item in by_provider.json()["items"]] == expected_tiebreak
+
+        by_enabled = client.get("/oauth-clients?enabled=false")
+        assert by_enabled.status_code == 200
+        assert [item["id"] for item in by_enabled.json()["items"]] == [c2["id"]]
+
+        by_pct = client.get("/oauth-clients?q=%25")
+        assert by_pct.status_code == 200
+        assert [item["id"] for item in by_pct.json()["items"]] == [c2["id"]]
+
+        # PATCH, rotate-secret, DELETE
+        patched = client.patch(f"/oauth-clients/{c1['id']}", json={"name": "Alpha Renamed"})
+        assert patched.status_code == 200
+        assert patched.json()["oauth_client"]["name"] == "Alpha Renamed"
+
+        rotated = client.post(f"/oauth-clients/{c1['id']}/rotate-secret")
+        assert rotated.status_code == 200
+        assert rotated.json()["client_secret"].startswith("rfq_cs_")
+
+        deleted = client.delete(f"/oauth-clients/{c3['id']}")
+        assert deleted.status_code == 204
+        assert client.get(f"/oauth-clients/{c3['id']}").status_code == 404
+
+    # Verify SqlOAuthClientStore compiles autoescaped icontains + (created_at DESC, id DESC)
+    captured_stmts: list[Any] = []
+
+    class _FakeScalars:
+        def all(self) -> list[Any]:
+            return []
+
+    class _FakeSession:
+        def scalar(self, stmt: Any) -> int:
+            captured_stmts.append(stmt)
+            return 0
+
+        def scalars(self, stmt: Any) -> _FakeScalars:
+            captured_stmts.append(stmt)
+            return _FakeScalars()
+
+    @contextmanager
+    def _fake_scope():
+        yield _FakeSession()
+
+    orig_scope = oauth_store_mod.session_scope
+    oauth_store_mod.session_scope = _fake_scope  # type: ignore[assignment]
+    try:
+        SqlOAuthClientStore().list_page(limit=25, offset=5, q="a_b%")
+    finally:
+        oauth_store_mod.session_scope = orig_scope
+
+    assert len(captured_stmts) == 2
+    compiled = str(
+        captured_stmts[1].compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "ESCAPE" in compiled.upper()
+    assert "ORDER BY oauth_clients.created_at DESC, oauth_clients.id DESC" in compiled
+    assert "LIMIT 25 OFFSET 5" in compiled
